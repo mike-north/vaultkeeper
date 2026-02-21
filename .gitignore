@@ -142,3 +142,12 @@ dist
 vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
 .vite/
+
+# Claude
+.claude/settings.local.json
+
+# Scratch area
+scratch/
+**/scratch
+!scratch/.gitkeep
+!**/scratch/.gitkeep
