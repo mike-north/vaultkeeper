@@ -11,7 +11,7 @@ export default tseslint.config(
   {
     languageOptions: {
       parserOptions: {
-        project: ['./tsconfig.json', './tsconfig.test.json'],
+        project: ['./packages/*/tsconfig.json', './packages/*/tsconfig.test.json'],
         tsconfigRootDir: import.meta.dirname,
       },
     },
@@ -60,8 +60,9 @@ export default tseslint.config(
       '**/dist/**',
       '**/node_modules/**',
       '**/coverage/**',
-      'tsup.config.ts',
-      'vitest.config.ts',
+      '**/tsup.config.ts',
+      '**/vitest.config.ts',
+      'vitest.workspace.ts',
       'eslint.config.ts',
       'prettier.config.js',
       '**/scratch/**',
