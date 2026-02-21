@@ -33,10 +33,12 @@ const { response: httpResponse } = await vault.fetch(token, {
   headers: { Authorization: 'Bearer {{secret}}' },
 })
 
-// 4b. Delegated exec — secret injected as env var, never returned
+// 4b. Delegated exec — secret injected via env var, never on the command line
+//     Avoid putting secrets in `args` — process arguments are visible via `ps`.
 const { result } = await vault.exec(token, {
-  command: 'curl',
-  args: ['-H', 'Authorization: Bearer {{secret}}', 'https://api.example.com/data'],
+  command: 'my-api-client',
+  args: ['--use-env-token'],
+  env: { MY_API_TOKEN: '{{secret}}' },
 })
 
 // 4c. Controlled direct access — buffer is zeroed after the callback returns
@@ -77,12 +79,12 @@ const { response } = await vault.fetch(token, {
 
 ### Delegated exec
 
-The secret is substituted for every `{{secret}}` placeholder in `args` and `env` values before the process is spawned.
+The secret is substituted for every `{{secret}}` placeholder in `env` values before the process is spawned. Do **not** pass secrets in CLI arguments — process arguments may be visible to other users via `ps` or collected in logs and telemetry.
 
 ```ts
 const { result } = await vault.exec(token, {
   command: 'my-tool',
-  args: ['--token', '{{secret}}'],
+  args: ['run', '--config', '/etc/my-tool/config.yaml'],
   env: { API_KEY: '{{secret}}' },
   cwd: '/tmp',
 })
@@ -146,10 +148,12 @@ await vault.revokeKey()
 
 ## Trust tiers
 
-Executable identity is verified during `setup()`. The trust tier controls the verification method used.
+Executable identity is verified during `setup()`. A `trustTier` value can be attached to the resulting token as a policy label.
 
-| Tier | Method |
-|------|--------|
+> **Note:** In the current implementation, `trustTier` is recorded in the token claims but does not change which verification mechanism is used. Future versions may introduce tier-specific verification behavior.
+
+| Tier | Intended method |
+|------|-----------------|
 | `1` | Sigstore transparency log |
 | `2` | Registry signature |
 | `3` | TOFU (Trust On First Use) — hash stored in trust manifest |
