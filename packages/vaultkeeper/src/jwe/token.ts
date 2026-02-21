@@ -1,7 +1,5 @@
 /**
  * JWE token creation and decryption using `jose` with `dir` + `A256GCM`.
- *
- * @packageDocumentation
  */
 
 import { CompactEncrypt, compactDecrypt } from 'jose'

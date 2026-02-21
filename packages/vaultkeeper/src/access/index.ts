@@ -1,7 +1,5 @@
 /**
  * Access patterns for secret consumption.
- *
- * @packageDocumentation
  */
 
 export { delegatedFetch } from './delegated-fetch.js'

@@ -36,8 +36,8 @@
     "generate:api-report": "api-extractor run --local"
   },
   "keywords": [],
-  "author": "",
-  "license": "ISC",
+  "author": "Mike North <michael.l.north@gmail.com>",
+  "license": "MIT",
   "publishConfig": {
     "access": "public"
   },

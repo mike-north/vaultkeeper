@@ -2,6 +2,7 @@
   "name": "vaultkeeper-workspace",
   "private": true,
   "description": "Unified, policy-enforced secret storage across OS backends",
+  "license": "MIT",
   "type": "module",
   "scripts": {
     "build": "pnpm -r run build",
@@ -12,7 +13,8 @@
     "check:typecheck": "pnpm -r run check:typecheck",
     "check:lint-ts": "pnpm -r run check:lint-ts",
     "check:api-report": "pnpm -r run check:api-report",
-    "generate:api-report": "pnpm -r run generate:api-report"
+    "generate:api-report": "pnpm -r run generate:api-report",
+    "generate:api-docs": "pnpm generate:api-report && node scripts/collect-api-json.mjs && api-documenter markdown -i tmp/api-documenter -o docs/api"
   },
   "packageManager": "pnpm@10.12.1",
   "engines": {
@@ -22,6 +24,7 @@
     "@changesets/changelog-github": "^0.5.2",
     "@changesets/cli": "^2.29.8",
     "@eslint/js": "^9.0.0",
+    "@microsoft/api-documenter": "^7.29.2",
     "eslint": "^9.0.0",
     "eslint-config-prettier": "^10.0.0",
     "eslint-plugin-n": "^17.0.0",

@@ -1,7 +1,5 @@
 /**
  * Backend abstraction layer types for vaultkeeper.
- *
- * @packageDocumentation
  */
 
 /**

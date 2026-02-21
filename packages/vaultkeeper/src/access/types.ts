@@ -1,7 +1,5 @@
 /**
  * Re-exported types for the access patterns module.
- *
- * @packageDocumentation
  */
 
 export type {

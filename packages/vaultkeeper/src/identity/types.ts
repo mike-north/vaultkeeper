@@ -1,7 +1,5 @@
 /**
  * Types for the executable identity and trust layer.
- *
- * @packageDocumentation
  */
 
 import type { TrustTier, VaultClaims } from '../types.js'

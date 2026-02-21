@@ -1,7 +1,5 @@
 /**
  * Shared types and interfaces for vaultkeeper.
- *
- * @packageDocumentation
  */
 
 /** Trust tier for executable identity verification. */

@@ -1,7 +1,5 @@
 /**
  * JWE token layer barrel export.
- *
- * @packageDocumentation
  */
 
 export { createToken, decryptToken, extractKid } from './token.js'

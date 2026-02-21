@@ -17,6 +17,9 @@ importers:
       '@eslint/js':
         specifier: ^9.0.0
         version: 9.39.3
+      '@microsoft/api-documenter':
+        specifier: ^7.29.2
+        version: 7.29.2(@types/node@22.19.11)
       eslint:
         specifier: ^9.0.0
         version: 9.39.3(jiti@2.6.1)

@@ -1,7 +1,5 @@
 /**
  * Doctor/preflight system barrel export.
- *
- * @packageDocumentation
  */
 
 export { runDoctor } from './runner.js'

@@ -1,7 +1,5 @@
 /**
  * JWE-specific types for vaultkeeper token layer.
- *
- * @packageDocumentation
  */
 
 import type { VaultClaims } from '../types.js'

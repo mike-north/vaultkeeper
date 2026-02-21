@@ -1,7 +1,5 @@
 /**
  * Pre-configured VaultKeeper for consumer tests.
- *
- * @packageDocumentation
  */
 
 import type { VaultConfig } from 'vaultkeeper'

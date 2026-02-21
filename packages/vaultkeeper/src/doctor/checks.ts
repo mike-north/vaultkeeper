@@ -1,7 +1,5 @@
 /**
  * Individual preflight check functions for each system dependency.
- *
- * @packageDocumentation
  */
 
 import { execCommand } from '../util/exec.js'

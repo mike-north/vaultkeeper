@@ -1,7 +1,5 @@
 /**
  * Configuration loading, validation, and defaults for vaultkeeper.
- *
- * @packageDocumentation
  */
 
 import * as fs from 'node:fs/promises'

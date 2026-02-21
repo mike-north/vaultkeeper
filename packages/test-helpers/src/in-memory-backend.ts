@@ -1,7 +1,5 @@
 /**
  * In-memory secret backend for testing.
- *
- * @packageDocumentation
  */
 
 import type { SecretBackend } from 'vaultkeeper'

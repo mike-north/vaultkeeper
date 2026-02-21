@@ -11,8 +11,6 @@
  *
  * Dev-mode bypass: when the executable path is the literal string `"dev"` all
  * hash verification is skipped and Tier 3 unverified is returned immediately.
- *
- * @packageDocumentation
  */
 
 import { hashExecutable } from './hash.js'

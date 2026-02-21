@@ -4,8 +4,6 @@
  * @remarks
  * Stores secrets using Windows Data Protection API (DPAPI) via PowerShell.
  * DPAPI encrypts data using the current user's credentials and machine key.
- *
- * @packageDocumentation
  */
 
 import * as fs from 'node:fs/promises'

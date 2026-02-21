@@ -1,7 +1,5 @@
 /**
  * Doctor/preflight system types.
- *
- * @packageDocumentation
  */
 
 import type { PreflightCheck } from '../types.js'

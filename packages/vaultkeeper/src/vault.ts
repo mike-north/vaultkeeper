@@ -1,7 +1,5 @@
 /**
  * VaultKeeper main class — wires together all vaultkeeper subsystems.
- *
- * @packageDocumentation
  */
 
 import * as crypto from 'node:crypto'

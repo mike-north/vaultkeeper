@@ -1,7 +1,5 @@
 /**
  * Executable identity and trust layer barrel export.
- *
- * @packageDocumentation
  */
 
 export type {

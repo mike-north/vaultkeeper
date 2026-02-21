@@ -1,8 +1,6 @@
 /**
  * Key management for vaultkeeper, including generation, rotation, revocation,
  * and grace-period tracking.
- *
- * @packageDocumentation
  */
 
 import * as crypto from 'node:crypto'
