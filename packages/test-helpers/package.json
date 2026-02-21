@@ -37,6 +37,9 @@
   "keywords": [],
   "author": "",
   "license": "ISC",
+  "publishConfig": {
+    "access": "public"
+  },
   "dependencies": {
     "vaultkeeper": "workspace:*"
   },
