@@ -2,7 +2,10 @@
 
 ## Project overview
 
-vaultkeeper is a TypeScript library providing unified, policy-enforced secret storage across OS credential backends. It is ESM-first with dual CJS/ESM output. The public API is type-checked and validated by API Extractor before each release.
+vaultkeeper is a pnpm workspace monorepo containing two packages:
+
+- **`vaultkeeper`** (`packages/vaultkeeper/`) — TypeScript library providing unified, policy-enforced secret storage across OS credential backends. ESM-first with dual CJS/ESM output. The public API is type-checked and validated by API Extractor.
+- **`@vaultkeeper/test-helpers`** (`packages/test-helpers/`) — Test utilities for vaultkeeper consumers, including an in-memory backend and a pre-configured `TestVault` for fast, hermetic tests.
 
 ## Package manager
 
@@ -13,25 +16,63 @@ Always use `pnpm`. Never use `npm` or `npx`.
 - One-off packages: `pnpm dlx <package>` (not `npx`)
 - TypeScript compiler: `pnpm exec tsc` — never `npx tsc` or `pnpm dlx tsc`
 
+## Workspace structure
+
+```
+vaultkeeper/
+├── pnpm-workspace.yaml
+├── package.json            (private workspace root)
+├── tsconfig.base.json      (shared compiler options)
+├── eslint.config.ts        (shared lint config)
+├── vitest.workspace.ts     (vitest workspace config)
+├── packages/
+│   ├── vaultkeeper/        (main library)
+│   │   ├── package.json
+│   │   ├── tsconfig.json
+│   │   ├── tsup.config.ts
+│   │   ├── api-extractor.json
+│   │   ├── api-report/
+│   │   ├── src/
+│   │   └── test/
+│   └── test-helpers/       (@vaultkeeper/test-helpers)
+│       ├── package.json
+│       ├── tsconfig.json
+│       ├── tsup.config.ts
+│       ├── api-extractor.json
+│       ├── api-report/
+│       ├── src/
+│       └── test/
+```
+
 ## Key scripts
+
+### Workspace-level (run from root)
 
 | Script | Purpose |
 |--------|---------|
-| `pnpm build` | Compile with `tsup` (ESM + CJS dual output to `dist/`) |
-| `pnpm clean` | Remove `dist/` |
-| `pnpm test` | Run all tests once with vitest |
-| `pnpm test:watch` | Run tests in watch mode |
-| `pnpm check` | Run typecheck + lint + API report validation (all three must pass) |
-| `pnpm check:typecheck` | `tsc --noEmit` |
-| `pnpm check:lint-ts` | `eslint .` |
-| `pnpm check:api-report` | `api-extractor run` (validates against committed report) |
-| `pnpm generate:api-report` | `api-extractor run --local` (updates the committed report) |
+| `pnpm build` | Build all packages (recursive) |
+| `pnpm clean` | Clean all packages (recursive) |
+| `pnpm test` | Run all tests across all packages |
+| `pnpm test:watch` | Run tests in watch mode (vitest workspace) |
+| `pnpm check` | Run typecheck + lint + API report validation across all packages |
+| `pnpm check:typecheck` | `tsc --noEmit` in all packages |
+| `pnpm check:lint-ts` | `eslint .` in all packages |
+| `pnpm check:api-report` | Validate API reports in all packages |
+| `pnpm generate:api-report` | Update API reports in all packages |
+
+### Package-level (run with `--filter`)
+
+Use `pnpm --filter <name>` to target a specific package:
+- `pnpm --filter vaultkeeper build`
+- `pnpm --filter @vaultkeeper/test-helpers test`
+
+Each package has the same script names: `build`, `clean`, `test`, `check`, `check:typecheck`, `check:lint-ts`, `check:api-report`, `generate:api-report`.
 
 Run `pnpm check` before declaring any implementation task complete.
 
 When the public API surface changes (new exports, changed signatures, removed types), run `pnpm generate:api-report` and commit the updated files in `api-report/`.
 
-## Source layout
+## Source layout (packages/vaultkeeper)
 
 ```
 src/
@@ -49,19 +90,35 @@ src/
   util/              # Platform detection and shared utilities
 ```
 
-## Test layout
+## Source layout (packages/test-helpers)
 
 ```
-test/
+src/
+  index.ts              # Public exports: InMemoryBackend, TestVault
+  in-memory-backend.ts  # In-memory SecretBackend implementation
+  test-vault.ts         # Pre-configured VaultKeeper for tests
+```
+
+## Test layout
+
+Each package has its own `test/` directory:
+
+```
+packages/vaultkeeper/test/
   unit/              # Pure unit tests, dependencies mocked
   integration/       # Real component boundaries wired together
   e2e/               # Full assembled flow tests
   helpers/           # Shared test fixtures and factory functions
+
+packages/test-helpers/test/
+  unit/              # Tests for InMemoryBackend and TestVault
 ```
 
 Tests use vitest. Test files match `test/**/*.test.ts`. Coverage is collected with `v8`.
 
 ## TypeScript configuration
+
+Shared compiler options live in `tsconfig.base.json` at the root. Each package extends it.
 
 - `target`: ES2022
 - `module` / `moduleResolution`: NodeNext
@@ -77,7 +134,7 @@ Do not add `skipLibCheck: true` without explicit approval. Do not enable `esModu
 
 ## ESLint configuration
 
-ESLint uses `typescript-eslint` with `strictTypeChecked` + `stylisticTypeChecked`. Formatting is handled by Prettier, not ESLint (`eslint-config-prettier` is applied last).
+ESLint uses `typescript-eslint` with `strictTypeChecked` + `stylisticTypeChecked`. Formatting is handled by Prettier, not ESLint (`eslint-config-prettier` is applied last). The config lives at the workspace root and applies to all packages.
 
 Additional plugins active: `eslint-plugin-n` (Node.js built-in usage) and `eslint-plugin-security`.
 
@@ -93,21 +150,21 @@ When ESLint reports an error, fix the code — do not add `// eslint-disable` co
 
 ## API Extractor
 
-API Extractor v7 (`@microsoft/api-extractor`) is configured in `api-extractor.json`. It generates a `.d.ts` rollup at `dist/vaultkeeper-public.d.ts` (referenced by `package.json#types`).
+API Extractor v7 (`@microsoft/api-extractor`) is configured per-package in `api-extractor.json`. Each package generates its own `.d.ts` rollup and API report.
 
 Workflow:
 1. `pnpm build` — produces `dist/*.d.ts` source files
-2. `pnpm generate:api-report` — updates `api-report/vaultkeeper.api.md`
+2. `pnpm generate:api-report` — updates API reports in all packages
 3. Commit `api-report/` when the public API changes
 4. `pnpm check:api-report` (no `--local`) validates the committed report matches the built output; this runs in CI
 
-Every exported symbol in `src/index.ts` must have a `@public` or `@packageDocumentation` JSDoc tag (or be marked `@internal` / `@alpha` / `@beta` if not yet stable).
+Every exported symbol in a package's `src/index.ts` must have a `@public` or `@packageDocumentation` JSDoc tag (or be marked `@internal` / `@alpha` / `@beta` if not yet stable).
 
 ## Conventions
 
 ### Errors
 
-All errors extend `VaultError` (defined in `src/errors.ts`). When adding a new error class:
+All errors extend `VaultError` (defined in `packages/vaultkeeper/src/errors.ts`). When adding a new error class:
 - Extend the closest existing base (e.g. `VaultError` directly if no better parent exists)
 - Set `this.name` in the constructor to match the class name
 - Add strongly-typed extra fields for machine-readable context
@@ -117,13 +174,13 @@ Never throw plain `Error` objects — always use a typed subclass from the error
 
 ### Backends
 
-All backends implement `SecretBackend` from `src/backend/types.ts`. Register new backends with `BackendRegistry.register(type, factory)`. The factory must be a zero-argument function returning a `SecretBackend` instance.
+All backends implement `SecretBackend` from `packages/vaultkeeper/src/backend/types.ts`. Register new backends with `BackendRegistry.register(type, factory)`. The factory must be a zero-argument function returning a `SecretBackend` instance.
 
 Plugin backends (1Password, YubiKey) are flagged with `plugin: true` in `BackendConfig`.
 
 ### JWE tokens
 
-Tokens are compact JWE strings (using the `jose` library). The encrypted payload is `VaultClaims`. Keys are managed by `KeyManager`. Do not roll a custom encryption scheme — use the existing `createToken` / `decryptToken` API in `src/jwe/`.
+Tokens are compact JWE strings (using the `jose` library). The encrypted payload is `VaultClaims`. Keys are managed by `KeyManager`. Do not roll a custom encryption scheme — use the existing `createToken` / `decryptToken` API in `packages/vaultkeeper/src/jwe/`.
 
 ### Access patterns
 
@@ -139,4 +196,4 @@ Tokens are compact JWE strings (using the `jose` library). The encrypted payload
 
 ## Dependency notes
 
-The only runtime dependency is `jose` (JWE/JWT). Everything else is dev-only. Do not add runtime dependencies without discussion — the library is intended to be lean.
+The only runtime dependency for `vaultkeeper` is `jose` (JWE/JWT). The `@vaultkeeper/test-helpers` package depends on `vaultkeeper` via `workspace:*`. Everything else is dev-only. Do not add runtime dependencies without discussion — the library is intended to be lean.
