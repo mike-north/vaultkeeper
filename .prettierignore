@@ -1,0 +1,7 @@
+dist
+node_modules
+coverage
+tmp
+scratch
+api-report
+pnpm-lock.yaml

@@ -1,0 +1,12 @@
+/**
+ * Doctor/preflight system types.
+ *
+ * @packageDocumentation
+ */
+
+import type { PreflightCheck } from '../types.js'
+
+export type { PreflightCheckStatus, PreflightCheck, PreflightResult } from '../types.js'
+
+/** A function that runs a named preflight check. */
+export type DoctorCheckFn = (check: { name: string }) => Promise<PreflightCheck>

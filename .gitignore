@@ -143,6 +143,9 @@ vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
 .vite/
 
+# Build artifacts
+tmp/
+
 # Claude
 .claude/settings.local.json
 
