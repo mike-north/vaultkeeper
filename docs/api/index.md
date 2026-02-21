@@ -33,8 +33,6 @@ Description
 
 </td><td>
 
-Error hierarchy for vaultkeeper.
-
 
 </td></tr>
 </tbody></table>

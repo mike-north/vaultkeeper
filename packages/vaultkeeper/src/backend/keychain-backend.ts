@@ -4,8 +4,6 @@
  * @remarks
  * Stores secrets as base64-encoded generic passwords in the macOS Keychain
  * using the `security` CLI tool. Service name format: `vaultkeeper:<id>`.
- *
- * @packageDocumentation
  */
 
 import { execCommand, execCommandFull } from '../util/exec.js'

@@ -1,7 +1,5 @@
 /**
  * Trust manifest management — load, save, and query approved executable hashes.
- *
- * @packageDocumentation
  */
 
 import * as fs from 'node:fs/promises'

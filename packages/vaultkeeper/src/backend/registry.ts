@@ -4,8 +4,6 @@
  * @remarks
  * The registry maintains a mapping of backend types to factory functions,
  * allowing dynamic creation of backends based on configuration.
- *
- * @packageDocumentation
  */
 
 import type { SecretBackend, BackendFactory } from './types.js'

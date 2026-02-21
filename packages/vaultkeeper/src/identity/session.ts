@@ -4,8 +4,6 @@
  * Tokens are backed by a `WeakMap` whose keys are `CapabilityToken` instances,
  * so the actual claims are never reachable from outside this module. Private
  * class fields enforce that no property on the token object leaks data.
- *
- * @packageDocumentation
  */
 
 import type { VaultClaims } from './types.js'

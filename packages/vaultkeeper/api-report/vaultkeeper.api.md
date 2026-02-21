@@ -548,4 +548,6 @@ export class YubikeyBackend implements SecretBackend {
     readonly type = "yubikey";
 }
 
+// (No @packageDocumentation comment for this package)
+
 ```

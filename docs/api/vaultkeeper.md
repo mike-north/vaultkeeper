@@ -4,8 +4,6 @@
 
 ## vaultkeeper package
 
-Error hierarchy for vaultkeeper.
-
 ## Classes
 
 <table><thead><tr><th>

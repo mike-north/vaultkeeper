@@ -4,8 +4,6 @@
  * @remarks
  * Stores secrets in 1Password using the `op` CLI tool.
  * Each secret is stored as a "Password" item in the specified vault.
- *
- * @packageDocumentation
  */
 
 import { execCommand, execCommandFull } from '../util/exec.js'

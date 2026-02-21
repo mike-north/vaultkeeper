@@ -5,8 +5,6 @@
  * Stores secrets protected by a YubiKey using the `ykman` CLI tool.
  * Secrets are encrypted using the YubiKey's OATH TOTP/HOTP module
  * or PIV slot for hardware-backed protection.
- *
- * @packageDocumentation
  */
 
 import * as fs from 'node:fs/promises'

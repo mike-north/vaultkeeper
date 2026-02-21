@@ -1,7 +1,5 @@
 /**
  * Backend abstraction layer barrel export.
- *
- * @packageDocumentation
  */
 
 export type { SecretBackend, BackendFactory } from './types.js'

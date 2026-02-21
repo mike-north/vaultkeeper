@@ -1,7 +1,5 @@
 /**
  * Doctor runner: orchestrates platform-appropriate checks and aggregates results.
- *
- * @packageDocumentation
  */
 
 import {

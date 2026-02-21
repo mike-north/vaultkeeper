@@ -1,7 +1,5 @@
 /**
  * VaultClaims validation and in-memory token blocklist.
- *
- * @packageDocumentation
  */
 
 import type { VaultClaims } from '../types.js'

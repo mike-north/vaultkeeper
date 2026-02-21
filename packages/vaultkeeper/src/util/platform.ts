@@ -1,7 +1,5 @@
 /**
  * Platform detection utilities.
- *
- * @packageDocumentation
  */
 
 export type Platform = 'darwin' | 'win32' | 'linux'

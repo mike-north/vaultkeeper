@@ -4,8 +4,6 @@
  * @remarks
  * Stores secrets using the `secret-tool` CLI which interfaces with the
  * GNOME Keyring or any other Secret Service API implementation via D-Bus.
- *
- * @packageDocumentation
  */
 
 import { execCommand, execCommandFull } from '../util/exec.js'

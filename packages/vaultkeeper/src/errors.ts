@@ -1,7 +1,5 @@
 /**
  * Error hierarchy for vaultkeeper.
- *
- * @packageDocumentation
  */
 
 /** Base error for all vaultkeeper errors. */

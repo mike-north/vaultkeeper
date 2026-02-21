@@ -1,7 +1,5 @@
 /**
  * Key management types for vaultkeeper.
- *
- * @packageDocumentation
  */
 
 /** A cryptographic key with metadata. */

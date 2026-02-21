@@ -1,7 +1,5 @@
 /**
  * Executable hashing utilities.
- *
- * @packageDocumentation
  */
 
 import * as crypto from 'node:crypto'

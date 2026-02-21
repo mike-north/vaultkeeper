@@ -1,7 +1,5 @@
 /**
  * CLI spawn wrapper for executing external commands.
- *
- * @packageDocumentation
  */
 
 import { spawn } from 'node:child_process'

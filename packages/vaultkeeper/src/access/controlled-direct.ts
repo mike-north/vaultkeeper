@@ -8,8 +8,6 @@
  * - Prevents double-read (throws on second call)
  * - Revokes the proxy synchronously after the first `read()` call completes
  * - Redacts itself from Node.js inspect output
- *
- * @packageDocumentation
  */
 
 import type { SecretAccessor } from '../types.js'

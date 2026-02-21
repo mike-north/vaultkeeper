@@ -3,8 +3,6 @@
  *
  * Replaces `{{secret}}` placeholders in command args and environment values,
  * then executes the command.
- *
- * @packageDocumentation
  */
 
 import { spawn } from 'node:child_process'

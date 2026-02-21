@@ -9,8 +9,6 @@
  *
  * Encrypted file format (all parts base64-encoded, colon-separated):
  *   <iv>:<authTag>:<ciphertext>
- *
- * @packageDocumentation
  */
 
 import * as fs from 'node:fs/promises'

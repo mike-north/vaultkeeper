@@ -1,7 +1,5 @@
 /**
  * Key management barrel export.
- *
- * @packageDocumentation
  */
 
 export { KeyManager } from './manager.js'

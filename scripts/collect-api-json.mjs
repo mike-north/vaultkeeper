@@ -2,12 +2,13 @@
  * Collects .api.json files from all packages into a single directory
  * for api-documenter to consume.
  */
-import { cpSync, mkdirSync, readdirSync } from 'node:fs';
+import { cpSync, mkdirSync, readdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 
 const outputDir = 'tmp/api-documenter';
 const packages = ['packages/vaultkeeper', 'packages/test-helpers'];
 
+rmSync(outputDir, { recursive: true, force: true });
 mkdirSync(outputDir, { recursive: true });
 
 for (const pkg of packages) {
@@ -16,8 +17,9 @@ for (const pkg of packages) {
   try {
     files = readdirSync(apiExtractorDir);
   } catch {
-    console.warn(`Skipping ${pkg}: no api-extractor output found`);
-    continue;
+    throw new Error(
+      `Missing api-extractor output for ${pkg}. Run "pnpm build && pnpm generate:api-report" first.`
+    );
   }
   for (const file of files) {
     if (file.endsWith('.api.json')) {

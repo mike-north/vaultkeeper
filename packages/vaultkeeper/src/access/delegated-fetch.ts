@@ -3,8 +3,6 @@
  *
  * Replaces `{{secret}}` placeholders in the request URL, headers, and body
  * with the actual secret value, then executes the fetch.
- *
- * @packageDocumentation
  */
 
 import type { FetchRequest } from '../types.js'
