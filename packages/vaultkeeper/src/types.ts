@@ -35,7 +35,10 @@ export interface PreflightResult {
   nextSteps: string[]
 }
 
-/** JWE claim payload. @internal */
+/**
+ * JWE claim payload.
+ * @internal
+ */
 export interface VaultClaims {
   /** Unique token ID */
   jti: string
