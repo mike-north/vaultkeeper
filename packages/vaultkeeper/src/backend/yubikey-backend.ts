@@ -3,14 +3,21 @@
  *
  * @remarks
  * Stores secrets protected by a YubiKey using the `ykman` CLI tool.
- * Secrets are encrypted using the YubiKey's OATH TOTP/HOTP module
- * or PIV slot for hardware-backed protection.
+ * Secrets are encrypted using AES-256-GCM with a key derived from the
+ * YubiKey's HMAC-SHA1 challenge-response (slot 2) via HKDF-SHA-256.
+ *
+ * Encrypted file format (version 1, all parts base64-encoded, colon-separated):
+ *   1:<iv>:<authTag>:<ciphertext>
+ *
+ * The leading "1:" version prefix allows future format migrations and enables
+ * detection of legacy CBC files (which lack this prefix).
  */
 
 import * as fs from 'node:fs/promises'
 import * as path from 'node:path'
 import * as os from 'node:os'
-import { execCommand, execCommandFull } from '../util/exec.js'
+import * as crypto from 'node:crypto'
+import { execCommandFull } from '../util/exec.js'
 import { SecretNotFoundError, PluginNotFoundError, DeviceNotPresentError } from '../errors.js'
 import type { SecretBackend } from './types.js'
 
@@ -18,6 +25,14 @@ const YKMAN_INSTALL_URL = 'https://developers.yubico.com/yubikey-manager/'
 const STORAGE_DIR_NAME = path.join('.vaultkeeper', 'yubikey')
 const METADATA_FILE = 'metadata.json'
 const DEVICE_TIMEOUT_MS = 5000
+
+/** AES-256-GCM constants */
+const GCM_IV_BYTES = 12
+const GCM_KEY_BYTES = 32
+const GCM_TAG_LENGTH_BITS = 128
+
+/** Version prefix written at the start of every encrypted file. */
+const FORMAT_VERSION = '1'
 
 interface YubikeyMetadata {
   entries: Record<string, string>
@@ -64,12 +79,113 @@ async function saveMetadata(storageDir: string, metadata: YubikeyMetadata): Prom
 }
 
 /**
+ * Derive a 256-bit AES key from the YubiKey HMAC-SHA1 response using HKDF-SHA-256.
+ *
+ * The HMAC-SHA1 response is 20 bytes — too short and too biased to use
+ * directly as an AES-256 key. HKDF expands it to exactly 32 bytes while
+ * binding the key to the secret `id` via the `info` field.
+ */
+function deriveKey(hmacResponse: string, id: string): Buffer {
+  // The ykman response is a hex string; convert to raw bytes as the IKM.
+  const ikm = Buffer.from(hmacResponse, 'hex')
+  const info = Buffer.from(`vaultkeeper-yubikey:${id}`, 'utf8')
+  // Node's hkdfSync returns an ArrayBuffer; wrap without copying.
+  const keyMaterial = crypto.hkdfSync('sha256', ikm, Buffer.alloc(0), info, GCM_KEY_BYTES)
+  return Buffer.from(keyMaterial)
+}
+
+/**
+ * Encrypt `plaintext` with AES-256-GCM using `key`.
+ * Returns a versioned, colon-separated string: `1:<iv>:<authTag>:<ciphertext>`
+ * (all binary fields base64-encoded).
+ */
+function encryptGcm(key: Buffer, plaintext: string): string {
+  const iv = crypto.randomBytes(GCM_IV_BYTES)
+  const cipher = crypto.createCipheriv('aes-256-gcm', key, iv, {
+    authTagLength: GCM_TAG_LENGTH_BITS / 8,
+  })
+  const encrypted = Buffer.concat([cipher.update(plaintext, 'utf8'), cipher.final()])
+  const authTag = cipher.getAuthTag()
+
+  const encoded = [
+    FORMAT_VERSION,
+    iv.toString('base64'),
+    authTag.toString('base64'),
+    encrypted.toString('base64'),
+  ].join(':')
+
+  // Zero the key buffer now that encryption is complete.
+  key.fill(0)
+
+  return encoded
+}
+
+/**
+ * Decrypt a versioned GCM blob produced by `encryptGcm`.
+ * Throws a descriptive error if the format is unrecognized (e.g. a legacy
+ * AES-256-CBC file created before this fix was applied).
+ */
+function decryptGcm(key: Buffer, encoded: string): string {
+  const parts = encoded.split(':')
+
+  // A legacy CBC file (openssl enc output) is binary and will not match our
+  // version prefix pattern. Detect and surface a clear migration error rather
+  // than a confusing crypto failure.
+  if (parts[0] !== FORMAT_VERSION) {
+    key.fill(0)
+    throw new Error(
+      'Encrypted file uses a legacy format (AES-256-CBC). ' +
+        'Delete the secret and re-store it to migrate to AES-256-GCM.',
+    )
+  }
+
+  if (parts.length !== 4) {
+    key.fill(0)
+    throw new Error(
+      `Invalid encrypted file format: expected ${FORMAT_VERSION}:iv:authTag:ciphertext`,
+    )
+  }
+
+  const [_version, ivB64, authTagB64, ciphertextB64] = parts
+  if (ivB64 === undefined || authTagB64 === undefined || ciphertextB64 === undefined) {
+    key.fill(0)
+    throw new Error('Invalid encrypted file format: missing part')
+  }
+
+  const iv = Buffer.from(ivB64, 'base64')
+  const authTag = Buffer.from(authTagB64, 'base64')
+  const ciphertext = Buffer.from(ciphertextB64, 'base64')
+
+  const decipher = crypto.createDecipheriv('aes-256-gcm', key, iv, {
+    authTagLength: GCM_TAG_LENGTH_BITS / 8,
+  })
+  decipher.setAuthTag(authTag)
+
+  let decrypted: Buffer
+  try {
+    decrypted = Buffer.concat([decipher.update(ciphertext), decipher.final()])
+  } catch (err) {
+    key.fill(0)
+    throw new Error(
+      `GCM authentication failed — ciphertext may be tampered: ${err instanceof Error ? err.message : String(err)}`,
+    )
+  }
+
+  const plaintext = decrypted.toString('utf8')
+  // Zero the key and decrypted buffers now that we have the string.
+  key.fill(0)
+  decrypted.fill(0)
+  return plaintext
+}
+
+/**
  * YubiKey backend via `ykman` CLI.
  *
  * @remarks
  * Requires ykman to be installed and a YubiKey to be connected.
- * Secrets are stored in files encrypted using the YubiKey's challenge-response
- * capability (HMAC-SHA1) via slot 2.
+ * Secrets are stored in files encrypted using AES-256-GCM. The encryption
+ * key is derived from the YubiKey's HMAC-SHA1 challenge-response (slot 2)
+ * via HKDF-SHA-256, binding each secret to its `id`.
  *
  * @internal
  */
@@ -105,40 +221,31 @@ export class YubikeyBackend implements SecretBackend {
     }
   }
 
+  /**
+   * Perform the YubiKey HMAC-SHA1 challenge-response for `id` and return the
+   * raw hex response string. Throws on device failure.
+   */
+  private async challengeResponse(id: string): Promise<string> {
+    const challenge = Buffer.from(`vaultkeeper:${id}`, 'utf8').toString('hex')
+    const responseResult = await execCommandFull('ykman', ['otp', 'calculate', '2', challenge])
+    if (responseResult.exitCode !== 0) {
+      throw new Error(`YubiKey challenge-response failed: ${responseResult.stderr}`)
+    }
+    return responseResult.stdout.trim()
+  }
+
   async store(id: string, secret: string): Promise<void> {
     await this.requireDevice()
 
     const storageDir = getStorageDir()
     await fs.mkdir(storageDir, { recursive: true, mode: 0o700 })
 
-    // Use ykman's OATH module to store a TOTP entry as the challenge key,
-    // and store the actual secret encrypted with challenge-response in a file.
-    // For a pragmatic implementation: use challenge-response slot 2 to derive
-    // a key, then encrypt the secret with openssl using that key.
-    const challenge = Buffer.from(`vaultkeeper:${id}`, 'utf8').toString('hex')
-    const responseResult = await execCommandFull('ykman', [
-      'otp',
-      'calculate',
-      '2',
-      challenge,
-    ])
+    const hmacResponse = await this.challengeResponse(id)
+    const key = deriveKey(hmacResponse, id)
+    const encrypted = encryptGcm(key, secret)
 
-    if (responseResult.exitCode !== 0) {
-      throw new Error(`YubiKey challenge-response failed: ${responseResult.stderr}`)
-    }
-
-    const derivedKey = responseResult.stdout.trim()
     const entryPath = getEntryPath(storageDir, id)
-
-    // Pass the derived key via stdin to avoid exposing it in the process table.
-    // Input to openssl enc is read from stdin when -pass stdin is used;
-    // we prepend the passphrase line followed by the secret via a two-pass approach.
-    // openssl -pass stdin reads the first line as the passphrase and the rest as data.
-    await execCommand(
-      'openssl',
-      ['enc', '-aes-256-cbc', '-pbkdf2', '-pass', 'stdin', '-out', entryPath],
-      { stdin: `${derivedKey}\n${secret}` },
-    )
+    await fs.writeFile(entryPath, encrypted, { mode: 0o600 })
 
     const metadata = await loadMetadata(storageDir)
     metadata.entries[id] = entryPath
@@ -157,37 +264,11 @@ export class YubikeyBackend implements SecretBackend {
       throw new SecretNotFoundError(`Secret not found in YubiKey store: ${id}`)
     }
 
-    const challenge = Buffer.from(`vaultkeeper:${id}`, 'utf8').toString('hex')
-    const responseResult = await execCommandFull('ykman', [
-      'otp',
-      'calculate',
-      '2',
-      challenge,
-    ])
+    const encoded = await fs.readFile(entryPath, 'utf8')
+    const hmacResponse = await this.challengeResponse(id)
+    const key = deriveKey(hmacResponse, id)
 
-    if (responseResult.exitCode !== 0) {
-      throw new Error(`YubiKey challenge-response failed: ${responseResult.stderr}`)
-    }
-
-    const derivedKey = responseResult.stdout.trim()
-
-    // Pass the derived key via stdin to avoid exposing it in the process table.
-    const result = await execCommandFull('openssl', [
-      'enc',
-      '-d',
-      '-aes-256-cbc',
-      '-pbkdf2',
-      '-pass',
-      'stdin',
-      '-in',
-      entryPath,
-    ], { stdin: `${derivedKey}\n` })
-
-    if (result.exitCode !== 0) {
-      throw new Error(`Failed to decrypt YubiKey-protected secret: ${result.stderr}`)
-    }
-
-    return result.stdout
+    return decryptGcm(key, encoded)
   }
 
   async delete(id: string): Promise<void> {
