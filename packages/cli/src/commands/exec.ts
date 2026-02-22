@@ -135,6 +135,8 @@ export async function execCommand(args: string[]): Promise<number> {
           return 1
         }
         jwe = await vault.setup(secret, { executablePath: callerPath })
+        // Write the new token back to cache so subsequent invocations benefit
+        await writeCachedToken(callerPath, secret, jwe)
         const retryResult = await vault.authorize(jwe)
         const retryAccessor = vault.getSecret(retryResult.token)
         retryAccessor.read((buf) => {

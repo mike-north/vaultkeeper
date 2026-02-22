@@ -51,7 +51,7 @@ export async function configCommand(args: string[]): Promise<number> {
           // File doesn't exist — create it
         }
 
-        await fs.writeFile(configPath, DEFAULT_CONFIG + '\n', 'utf8')
+        await fs.writeFile(configPath, DEFAULT_CONFIG + '\n', { encoding: 'utf8', mode: 0o600 })
         process.stdout.write(`Config created at ${configPath}\n`)
         return 0
       } catch (err) {

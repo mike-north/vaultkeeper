@@ -36,15 +36,12 @@ export async function storeCommand(args: string[]): Promise<number> {
       return 1
     }
 
-    // Initialize vault to run doctor checks and register backends
-    const vault = await VaultKeeper.init()
-
-    // [C3 fix] Use the first enabled backend from config, matching
-    // VaultKeeper's internal selection logic, rather than blindly using
-    // BackendRegistry.getTypes()[0] which ignores the enabled flag.
-    // TODO: VaultKeeper should expose a public store() method; until then
-    // we use BackendRegistry.create() with the config-resolved type.
-    void vault // vault used only for init side effects (doctor, backend registration)
+    // Initialize vault to run doctor checks and register backends.
+    // The return value is not used — init() is called for its side effects
+    // (doctor checks and backend registration). TODO: VaultKeeper should expose
+    // a public store() method; until then we use BackendRegistry.create() with
+    // the config-resolved type.
+    await VaultKeeper.init()
     const types = BackendRegistry.getTypes()
     const firstType = types[0]
     if (firstType === undefined) {

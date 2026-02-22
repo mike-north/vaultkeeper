@@ -1,3 +1,4 @@
+import * as path from 'node:path'
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { approveCommand } from '../../../src/commands/approve.js'
 
@@ -67,5 +68,3 @@ describe('approveCommand', () => {
     })
   })
 })
-
-import * as path from 'node:path'
