@@ -20,7 +20,7 @@ const LABEL_PREFIX = 'vaultkeeper: '
  * Only available on Linux with secret-tool installed. Requires a running
  * Secret Service (e.g., GNOME Keyring or KWallet with Secret Service plugin).
  *
- * @public
+ * @internal
  */
 export class SecretToolBackend implements SecretBackend {
   readonly type = 'secret-tool'

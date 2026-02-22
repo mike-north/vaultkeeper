@@ -34,6 +34,7 @@ const claimsStore = new WeakMap<CapabilityToken, VaultClaims>()
  * Create a capability token that wraps `claims`.
  * The claims are stored in a module-private `WeakMap` and cannot be reached
  * without calling `validateCapabilityToken`.
+ * @internal
  */
 export function createCapabilityToken(claims: VaultClaims): CapabilityToken {
   const token = new CapabilityToken()
@@ -47,6 +48,7 @@ export function createCapabilityToken(claims: VaultClaims): CapabilityToken {
  * @throws {AuthorizationDeniedError} if the token was not created by
  *   `createCapabilityToken` in this module (i.e. it has no claims entry
  *   in the store).
+ * @internal
  */
 export function validateCapabilityToken(token: CapabilityToken): VaultClaims {
   const claims = claimsStore.get(token)

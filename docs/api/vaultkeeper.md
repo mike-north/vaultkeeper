@@ -85,28 +85,6 @@ Thrown when a hardware device (e.g. YubiKey or smart card) required for authenti
 </td></tr>
 <tr><td>
 
-[DpapiBackend](./vaultkeeper.dpapibackend.md)
-
-
-</td><td>
-
-Windows DPAPI secret backend.
-
-
-</td></tr>
-<tr><td>
-
-[FileBackend](./vaultkeeper.filebackend.md)
-
-
-</td><td>
-
-Encrypted file fallback backend.
-
-
-</td></tr>
-<tr><td>
-
 [FilesystemError](./vaultkeeper.filesystemerror.md)
 
 
@@ -131,28 +109,6 @@ Callers must re-approve the executable before a new token can be issued for it.
 </td></tr>
 <tr><td>
 
-[KeychainBackend](./vaultkeeper.keychainbackend.md)
-
-
-</td><td>
-
-macOS Keychain secret backend.
-
-
-</td></tr>
-<tr><td>
-
-[KeyManager](./vaultkeeper.keymanager.md)
-
-
-</td><td>
-
-Manage cryptographic keys with rotation and grace-period semantics.
-
-
-</td></tr>
-<tr><td>
-
 [KeyRevokedError](./vaultkeeper.keyrevokederror.md)
 
 
@@ -170,17 +126,6 @@ Thrown when the encryption key referenced by a JWE's `kid` header has been expli
 </td><td>
 
 Thrown when the encryption key that was used to create a JWE has since been rotated out of the grace period and can no longer be used for decryption.
-
-
-</td></tr>
-<tr><td>
-
-[OnePasswordBackend](./vaultkeeper.onepasswordbackend.md)
-
-
-</td><td>
-
-1Password backend via `op` CLI.
 
 
 </td></tr>
@@ -214,17 +159,6 @@ Thrown when a key rotation is requested while a previous rotation is still withi
 </td><td>
 
 Thrown when a requested secret does not exist in the backend store.
-
-
-</td></tr>
-<tr><td>
-
-[SecretToolBackend](./vaultkeeper.secrettoolbackend.md)
-
-
-</td><td>
-
-Linux secret-tool (Secret Service API) backend.
 
 
 </td></tr>
@@ -294,361 +228,6 @@ Main entry point for vaultkeeper. Orchestrates backends, keys, JWE tokens, ident
 
 
 </td></tr>
-<tr><td>
-
-[YubikeyBackend](./vaultkeeper.yubikeybackend.md)
-
-
-</td><td>
-
-YubiKey backend via `ykman` CLI.
-
-
-</td></tr>
-</tbody></table>
-
-## Functions
-
-<table><thead><tr><th>
-
-Function
-
-
-</th><th>
-
-Description
-
-
-</th></tr></thead>
-<tbody><tr><td>
-
-[addTrustedHash(manifest, namespace, hash)](./vaultkeeper.addtrustedhash.md)
-
-
-</td><td>
-
-Return a new manifest that includes `hash` under `namespace`<!-- -->. If the namespace does not yet exist it is created with tier 3 (Unverified). The trust tier of an existing entry is not changed.
-
-
-</td></tr>
-<tr><td>
-
-[blockToken(jti)](./vaultkeeper.blocktoken.md)
-
-
-</td><td>
-
-Adds a JTI to the in-memory blocklist, preventing further use of that token. If the blocklist has reached its maximum size, the oldest entry is evicted first.
-
-
-</td></tr>
-<tr><td>
-
-[checkBash()](./vaultkeeper.checkbash.md)
-
-
-</td><td>
-
-Check that bash is present.
-
-
-</td></tr>
-<tr><td>
-
-[checkOp()](./vaultkeeper.checkop.md)
-
-
-</td><td>
-
-Check that 1Password CLI (op) is present (optional).
-
-
-</td></tr>
-<tr><td>
-
-[checkOpenssl()](./vaultkeeper.checkopenssl.md)
-
-
-</td><td>
-
-Check that openssl is present and &gt;<!-- -->= 1.1.1.
-
-
-</td></tr>
-<tr><td>
-
-[checkPowershell()](./vaultkeeper.checkpowershell.md)
-
-
-</td><td>
-
-Check that PowerShell is present (Windows only).
-
-
-</td></tr>
-<tr><td>
-
-[checkSecretTool()](./vaultkeeper.checksecrettool.md)
-
-
-</td><td>
-
-Check that secret-tool is present (Linux only).
-
-
-</td></tr>
-<tr><td>
-
-[checkSecurity()](./vaultkeeper.checksecurity.md)
-
-
-</td><td>
-
-Check that macOS security CLI is present (macOS only, for Keychain access).
-
-
-</td></tr>
-<tr><td>
-
-[checkYkman()](./vaultkeeper.checkykman.md)
-
-
-</td><td>
-
-Check that ykman (YubiKey Manager CLI) is present (optional).
-
-
-</td></tr>
-<tr><td>
-
-[clearBlocklist()](./vaultkeeper.clearblocklist.md)
-
-
-</td><td>
-
-Clears all blocked JTIs from the in-memory blocklist. Primarily intended for use in tests.
-
-
-</td></tr>
-<tr><td>
-
-[createCapabilityToken(claims)](./vaultkeeper.createcapabilitytoken.md)
-
-
-</td><td>
-
-Create a capability token that wraps `claims`<!-- -->. The claims are stored in a module-private `WeakMap` and cannot be reached without calling `validateCapabilityToken`<!-- -->.
-
-
-</td></tr>
-<tr><td>
-
-[createSecretAccessor(secretValue)](./vaultkeeper.createsecretaccessor.md)
-
-
-</td><td>
-
-Create a `SecretAccessor` for the given secret value.
-
-The accessor is backed by a revocable Proxy with all 13 traps implemented. The proxy is revoked synchronously after the first `read()` call completes (in the `finally` block, after zeroing the buffer). Any subsequent property access will throw a TypeError.
-
-This avoids the `queueMicrotask(revoke)` approach which breaks async callers that `await` between receiving the accessor and calling `.read()`<!-- -->.
-
-
-</td></tr>
-<tr><td>
-
-[createToken(key, claims, options)](./vaultkeeper.createtoken.md)
-
-
-</td><td>
-
-Creates a compact JWE string from the given claims.
-
-Uses `dir` (direct key agreement) with `A256GCM` content encryption. The 256-bit key must be exactly 32 bytes.
-
-
-</td></tr>
-<tr><td>
-
-[decryptToken(key, jwe)](./vaultkeeper.decrypttoken.md)
-
-
-</td><td>
-
-Decrypts a compact JWE string and returns the VaultClaims payload.
-
-
-</td></tr>
-<tr><td>
-
-[delegatedExec(secret, request)](./vaultkeeper.delegatedexec.md)
-
-
-</td><td>
-
-Execute a delegated command with the secret injected into args and env.
-
-
-</td></tr>
-<tr><td>
-
-[delegatedFetch(secret, request)](./vaultkeeper.delegatedfetch.md)
-
-
-</td><td>
-
-Execute a delegated HTTP fetch with the secret injected into the request.
-
-
-</td></tr>
-<tr><td>
-
-[extractKid(jwe)](./vaultkeeper.extractkid.md)
-
-
-</td><td>
-
-Extracts the `kid` header from a compact JWE without decrypting it.
-
-The protected header in compact JWE is the first Base64URL-encoded segment.
-
-
-</td></tr>
-<tr><td>
-
-[getDefaultConfigDir()](./vaultkeeper.getdefaultconfigdir.md)
-
-
-</td><td>
-
-Return the platform-appropriate default config directory.
-
-
-</td></tr>
-<tr><td>
-
-[hashExecutable(filePath)](./vaultkeeper.hashexecutable.md)
-
-
-</td><td>
-
-Compute the SHA-256 digest of the file at `filePath`<!-- -->.
-
-
-</td></tr>
-<tr><td>
-
-[isBlocked(jti)](./vaultkeeper.isblocked.md)
-
-
-</td><td>
-
-Returns true if the given JTI has been blocked.
-
-
-</td></tr>
-<tr><td>
-
-[isTrusted(manifest, namespace, hash)](./vaultkeeper.istrusted.md)
-
-
-</td><td>
-
-Return `true` if `hash` is in the approved list for `namespace`<!-- -->.
-
-
-</td></tr>
-<tr><td>
-
-[loadConfig(configDir)](./vaultkeeper.loadconfig.md)
-
-
-</td><td>
-
-Load the vaultkeeper config from disk, falling back to defaults if the file does not exist.
-
-
-</td></tr>
-<tr><td>
-
-[loadManifest(configDir)](./vaultkeeper.loadmanifest.md)
-
-
-</td><td>
-
-Load the trust manifest from `configDir`<!-- -->. Returns an empty `Map` if the manifest file does not yet exist.
-
-
-</td></tr>
-<tr><td>
-
-[runDoctor(options)](./vaultkeeper.rundoctor.md)
-
-
-</td><td>
-
-Run all platform-appropriate preflight checks and aggregate the results.
-
-
-</td></tr>
-<tr><td>
-
-[saveManifest(configDir, manifest)](./vaultkeeper.savemanifest.md)
-
-
-</td><td>
-
-Persist `manifest` to `configDir`<!-- -->, creating the directory if necessary.
-
-
-</td></tr>
-<tr><td>
-
-[validateCapabilityToken(token)](./vaultkeeper.validatecapabilitytoken.md)
-
-
-</td><td>
-
-Retrieve the `VaultClaims` associated with `token`<!-- -->.
-
-
-</td></tr>
-<tr><td>
-
-[validateClaims(claims, usedCount)](./vaultkeeper.validateclaims.md)
-
-
-</td><td>
-
-Validates all claims in a VaultClaims payload.
-
-Checks performed: - Required fields present (jti, exp, iat, sub, exe, tid, bkd, val, ref) - Token is not expired (exp vs. current time) - Token is not on the blocklist - Usage limit (use) is not exceeded if a positive limit is set - Trust tier (tid) is valid (1, 2, or 3)
-
-
-</td></tr>
-<tr><td>
-
-[validateConfig(config)](./vaultkeeper.validateconfig.md)
-
-
-</td><td>
-
-Validate an unknown value as a VaultConfig, throwing on invalid structure.
-
-
-</td></tr>
-<tr><td>
-
-[verifyTrust(execPath, options)](./vaultkeeper.verifytrust.md)
-
-
-</td><td>
-
-Verify the trust tier of the executable at `execPath`<!-- -->.
-
-
-</td></tr>
 </tbody></table>
 
 ## Interfaces
@@ -672,28 +251,6 @@ Description
 </td><td>
 
 Configuration for a single backend.
-
-
-</td></tr>
-<tr><td>
-
-[CreateTokenOptions](./vaultkeeper.createtokenoptions.md)
-
-
-</td><td>
-
-Options for token creation.
-
-
-</td></tr>
-<tr><td>
-
-[DelegatedFetchResult](./vaultkeeper.delegatedfetchresult.md)
-
-
-</td><td>
-
-Result from a delegated fetch call.
 
 
 </td></tr>
@@ -736,50 +293,6 @@ String values in `url`<!-- -->, `headers`<!-- -->, and `body` may include the pl
 </td></tr>
 <tr><td>
 
-[IdentityInfo](./vaultkeeper.identityinfo.md)
-
-
-</td><td>
-
-Identity information about a verified executable.
-
-
-</td></tr>
-<tr><td>
-
-[KeyMaterial](./vaultkeeper.keymaterial.md)
-
-
-</td><td>
-
-A cryptographic key with metadata.
-
-
-</td></tr>
-<tr><td>
-
-[KeyRotationConfig](./vaultkeeper.keyrotationconfig.md)
-
-
-</td><td>
-
-Configuration for key rotation behavior.
-
-
-</td></tr>
-<tr><td>
-
-[KeyState](./vaultkeeper.keystate.md)
-
-
-</td><td>
-
-The active state of the key pair (current + optional previous in grace period).
-
-
-</td></tr>
-<tr><td>
-
 [PreflightCheck](./vaultkeeper.preflightcheck.md)
 
 
@@ -797,17 +310,6 @@ Result of a preflight check for a single dependency.
 </td><td>
 
 Aggregated result from all preflight checks.
-
-
-</td></tr>
-<tr><td>
-
-[RunDoctorOptions](./vaultkeeper.rundoctoroptions.md)
-
-
-</td><td>
-
-Options for running the doctor.
 
 
 </td></tr>
@@ -848,67 +350,12 @@ Options for the setup operation.
 </td></tr>
 <tr><td>
 
-[TrustManifestEntry](./vaultkeeper.trustmanifestentry.md)
-
-
-</td><td>
-
-Per-namespace entry in the trust manifest.
-
-
-</td></tr>
-<tr><td>
-
-[TrustOptions](./vaultkeeper.trustoptions.md)
-
-
-</td><td>
-
-Options controlling how trust verification is performed.
-
-
-</td></tr>
-<tr><td>
-
-[TrustVerificationResult](./vaultkeeper.trustverificationresult.md)
-
-
-</td><td>
-
-Result returned by `verifyTrust`<!-- -->.
-
-
-</td></tr>
-<tr><td>
-
-[VaultClaims](./vaultkeeper.vaultclaims.md)
-
-
-</td><td>
-
-JWE claim payload.
-
-
-</td></tr>
-<tr><td>
-
 [VaultConfig](./vaultkeeper.vaultconfig.md)
 
 
 </td><td>
 
 Vaultkeeper configuration file structure.
-
-
-</td></tr>
-<tr><td>
-
-[VaultJWEHeader](./vaultkeeper.vaultjweheader.md)
-
-
-</td><td>
-
-JWE protected header parameters used for vaultkeeper tokens. Extends the standard `dir` + `A256GCM` algorithm with a `kid` for key rotation.
 
 
 </td></tr>
@@ -962,17 +409,6 @@ Factory function for creating a SecretBackend instance.
 </td></tr>
 <tr><td>
 
-[DoctorCheckFn](./vaultkeeper.doctorcheckfn.md)
-
-
-</td><td>
-
-A function that runs a named preflight check.
-
-
-</td></tr>
-<tr><td>
-
 [KeyStatus](./vaultkeeper.keystatus.md)
 
 
@@ -984,34 +420,12 @@ Key status in the rotation lifecycle.
 </td></tr>
 <tr><td>
 
-[Platform](./vaultkeeper.platform.md)
-
-
-</td><td>
-
-Platform detection utilities.
-
-
-</td></tr>
-<tr><td>
-
 [PreflightCheckStatus](./vaultkeeper.preflightcheckstatus.md)
 
 
 </td><td>
 
 Status of a preflight check.
-
-
-</td></tr>
-<tr><td>
-
-[TrustManifest](./vaultkeeper.trustmanifest.md)
-
-
-</td><td>
-
-The on-disk trust manifest. Maps a namespace string to its approved-hash entry.
 
 
 </td></tr>

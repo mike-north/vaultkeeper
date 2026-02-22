@@ -5,9 +5,6 @@
 ```ts
 
 // @public
-export function addTrustedHash(manifest: TrustManifest, namespace: string, hash: string): TrustManifest;
-
-// @public
 export class AuthorizationDeniedError extends VaultError {
     constructor(message: string);
 }
@@ -44,94 +41,15 @@ export class BackendUnavailableError extends VaultError {
 }
 
 // @public
-export function blockToken(jti: string): void;
-
-// @public
 export class CapabilityToken {
     constructor();
     toString(): string;
 }
 
 // @public
-export function checkBash(): Promise<PreflightCheck>;
-
-// @public
-export function checkOp(): Promise<PreflightCheck>;
-
-// @public
-export function checkOpenssl(): Promise<PreflightCheck>;
-
-// @public
-export function checkPowershell(): Promise<PreflightCheck>;
-
-// @public
-export function checkSecretTool(): Promise<PreflightCheck>;
-
-// @public
-export function checkSecurity(): Promise<PreflightCheck>;
-
-// @public
-export function checkYkman(): Promise<PreflightCheck>;
-
-// @public
-export function clearBlocklist(): void;
-
-// @public
-export function createCapabilityToken(claims: VaultClaims): CapabilityToken;
-
-// @public
-export function createSecretAccessor(secretValue: string): SecretAccessor;
-
-// @public
-export function createToken(key: Uint8Array, claims: VaultClaims, options?: CreateTokenOptions): Promise<string>;
-
-// @public
-export interface CreateTokenOptions {
-    kid?: string | undefined;
-}
-
-// @public
-export function decryptToken(key: Uint8Array, jwe: string): Promise<VaultClaims>;
-
-// @public
-export function delegatedExec(secret: string, request: ExecRequest): Promise<ExecResult>;
-
-// @public
-export function delegatedFetch(secret: string, request: FetchRequest): Promise<Response>;
-
-// @public
-export interface DelegatedFetchResult {
-    // (undocumented)
-    response: Response;
-}
-
-// @public
 export class DeviceNotPresentError extends VaultError {
     constructor(message: string, timeoutMs: number);
     readonly timeoutMs: number;
-}
-
-// @public
-export type DoctorCheckFn = (check: {
-    name: string;
-}) => Promise<PreflightCheck>;
-
-// @public
-export class DpapiBackend implements SecretBackend {
-    // (undocumented)
-    delete(id: string): Promise<void>;
-    // (undocumented)
-    readonly displayName = "Windows DPAPI";
-    // (undocumented)
-    exists(id: string): Promise<boolean>;
-    // (undocumented)
-    isAvailable(): Promise<boolean>;
-    // (undocumented)
-    retrieve(id: string): Promise<string>;
-    // (undocumented)
-    store(id: string, secret: string): Promise<void>;
-    // (undocumented)
-    readonly type = "dpapi";
 }
 
 // @public
@@ -143,16 +61,11 @@ export interface ExecRequest {
 }
 
 // @public
-interface ExecResult {
+export interface ExecResult {
     exitCode: number;
     stderr: string;
     stdout: string;
 }
-export { ExecResult as DelegatedExecResult }
-export { ExecResult }
-
-// @public
-export function extractKid(jwe: string): string | undefined;
 
 // @public
 export interface FetchRequest {
@@ -163,24 +76,6 @@ export interface FetchRequest {
 }
 
 // @public
-export class FileBackend implements SecretBackend {
-    // (undocumented)
-    delete(id: string): Promise<void>;
-    // (undocumented)
-    readonly displayName = "Encrypted File Store";
-    // (undocumented)
-    exists(id: string): Promise<boolean>;
-    // (undocumented)
-    isAvailable(): Promise<boolean>;
-    // (undocumented)
-    retrieve(id: string): Promise<string>;
-    // (undocumented)
-    store(id: string, secret: string): Promise<void>;
-    // (undocumented)
-    readonly type = "file";
-}
-
-// @public
 export class FilesystemError extends VaultError {
     constructor(message: string, filePath: string, permission: string);
     readonly path: string;
@@ -188,66 +83,10 @@ export class FilesystemError extends VaultError {
 }
 
 // @public
-export function getDefaultConfigDir(): string;
-
-// @public
-export function hashExecutable(filePath: string): Promise<string>;
-
-// @public
-export interface IdentityInfo {
-    hash: string;
-    trustTier: TrustTier;
-    verified: boolean;
-}
-
-// @public
 export class IdentityMismatchError extends VaultError {
     constructor(message: string, previousHash: string, currentHash: string);
     readonly currentHash: string;
     readonly previousHash: string;
-}
-
-// @public
-export function isBlocked(jti: string): boolean;
-
-// @public
-export function isTrusted(manifest: TrustManifest, namespace: string, hash: string): boolean;
-
-// @public
-export class KeychainBackend implements SecretBackend {
-    // (undocumented)
-    delete(id: string): Promise<void>;
-    // (undocumented)
-    readonly displayName = "macOS Keychain";
-    // (undocumented)
-    exists(id: string): Promise<boolean>;
-    // (undocumented)
-    isAvailable(): Promise<boolean>;
-    // (undocumented)
-    retrieve(id: string): Promise<string>;
-    // (undocumented)
-    store(id: string, secret: string): Promise<void>;
-    // (undocumented)
-    readonly type = "keychain";
-}
-
-// @public
-export class KeyManager {
-    findKeyById(kid: string): KeyMaterial | undefined;
-    generateKey(): KeyMaterial;
-    getCurrentKey(): KeyMaterial;
-    getPreviousKey(): KeyMaterial | undefined;
-    init(): Promise<void>;
-    isInGracePeriod(): boolean;
-    revokeKey(): void;
-    rotateKey(gracePeriodMs: number): void;
-}
-
-// @public
-export interface KeyMaterial {
-    createdAt: Date;
-    id: string;
-    key: Uint8Array;
 }
 
 // @public
@@ -261,46 +100,7 @@ export class KeyRotatedError extends VaultError {
 }
 
 // @public
-export interface KeyRotationConfig {
-    gracePeriodMs: number;
-}
-
-// @public
-export interface KeyState {
-    current: KeyMaterial;
-    previous?: KeyMaterial;
-}
-
-// @public
 export type KeyStatus = 'current' | 'previous' | 'deprecated';
-
-// @public
-export function loadConfig(configDir?: string): Promise<VaultConfig>;
-
-// @public
-export function loadManifest(configDir: string): Promise<TrustManifest>;
-
-// @public
-export class OnePasswordBackend implements SecretBackend {
-    constructor(vault?: string);
-    // (undocumented)
-    delete(id: string): Promise<void>;
-    // (undocumented)
-    readonly displayName = "1Password";
-    // (undocumented)
-    exists(id: string): Promise<boolean>;
-    // (undocumented)
-    isAvailable(): Promise<boolean>;
-    // (undocumented)
-    retrieve(id: string): Promise<string>;
-    // (undocumented)
-    store(id: string, secret: string): Promise<void>;
-    // (undocumented)
-    readonly type = "1password";
-}
-
-// @public
-export type Platform = 'darwin' | 'win32' | 'linux';
 
 // @public
 export class PluginNotFoundError extends VaultError {
@@ -334,17 +134,6 @@ export class RotationInProgressError extends VaultError {
 }
 
 // @public
-export function runDoctor(options?: RunDoctorOptions): Promise<PreflightResult>;
-
-// @public
-export interface RunDoctorOptions {
-    platform?: Platform;
-}
-
-// @public
-export function saveManifest(configDir: string, manifest: TrustManifest): Promise<void>;
-
-// @public
 export interface SecretAccessor {
     read(callback: (buf: Buffer) => void): void;
 }
@@ -363,24 +152,6 @@ export interface SecretBackend {
 // @public
 export class SecretNotFoundError extends VaultError {
     constructor(message: string);
-}
-
-// @public
-export class SecretToolBackend implements SecretBackend {
-    // (undocumented)
-    delete(id: string): Promise<void>;
-    // (undocumented)
-    readonly displayName = "Linux Secret Service (secret-tool)";
-    // (undocumented)
-    exists(id: string): Promise<boolean>;
-    // (undocumented)
-    isAvailable(): Promise<boolean>;
-    // (undocumented)
-    retrieve(id: string): Promise<string>;
-    // (undocumented)
-    store(id: string, secret: string): Promise<void>;
-    // (undocumented)
-    readonly type = "secret-tool";
 }
 
 // @public
@@ -410,57 +181,11 @@ export class TokenRevokedError extends VaultError {
 }
 
 // @public
-export type TrustManifest = Map<string, TrustManifestEntry>;
-
-// @public
-export interface TrustManifestEntry {
-    hashes: string[];
-    trustTier: TrustTier;
-}
-
-// @public
-export interface TrustOptions {
-    configDir?: string | undefined;
-    namespace?: string | undefined;
-    skipSigstore?: boolean | undefined;
-}
-
-// @public
 export type TrustTier = 1 | 2 | 3;
-
-// @public
-export interface TrustVerificationResult {
-    identity: IdentityInfo;
-    reason: string;
-    tofuConflict: boolean;
-}
 
 // @public
 export class UsageLimitExceededError extends VaultError {
     constructor(message: string);
-}
-
-// @public
-export function validateCapabilityToken(token: CapabilityToken): VaultClaims;
-
-// @public
-export function validateClaims(claims: VaultClaims, usedCount?: number): void;
-
-// @public
-export function validateConfig(config: unknown): VaultConfig;
-
-// @public
-export interface VaultClaims {
-    bkd: string;
-    exe: string;
-    exp: number;
-    iat: number;
-    jti: string;
-    ref: string;
-    sub: string;
-    tid: TrustTier;
-    use: number | null;
-    val: string;
 }
 
 // @public
@@ -482,13 +207,6 @@ export interface VaultConfig {
 // @public
 export class VaultError extends Error {
     constructor(message: string);
-}
-
-// @public
-export interface VaultJWEHeader {
-    alg: 'dir';
-    enc: 'A256GCM';
-    kid?: string | undefined;
 }
 
 // @public
@@ -525,27 +243,6 @@ export interface VaultKeeperOptions {
 export interface VaultResponse {
     keyStatus: KeyStatus;
     rotatedJwt?: string | undefined;
-}
-
-// @public
-export function verifyTrust(execPath: string, options?: TrustOptions): Promise<TrustVerificationResult>;
-
-// @public
-export class YubikeyBackend implements SecretBackend {
-    // (undocumented)
-    delete(id: string): Promise<void>;
-    // (undocumented)
-    readonly displayName = "YubiKey";
-    // (undocumented)
-    exists(id: string): Promise<boolean>;
-    // (undocumented)
-    isAvailable(): Promise<boolean>;
-    // (undocumented)
-    retrieve(id: string): Promise<string>;
-    // (undocumented)
-    store(id: string, secret: string): Promise<void>;
-    // (undocumented)
-    readonly type = "yubikey";
 }
 
 // (No @packageDocumentation comment for this package)

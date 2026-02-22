@@ -102,7 +102,7 @@ function decryptGcm(key: Buffer, encoded: string): string {
  * using Node.js native crypto — no external tools required.
  * Not as secure as OS-native keystores, but provides a portable fallback.
  *
- * @public
+ * @internal
  */
 export class FileBackend implements SecretBackend {
   readonly type = 'file'

@@ -9,10 +9,16 @@ export type {
   SecretAccessor,
 } from '../types.js'
 
-/** Result from a delegated fetch call. */
+/**
+ * Result from a delegated fetch call.
+ * @internal
+ */
 export interface DelegatedFetchResult {
   response: Response
 }
 
-/** Result from a delegated exec call (alias for ExecResult). */
+/**
+ * Result from a delegated exec call (alias for ExecResult).
+ * @internal
+ */
 export type { ExecResult as DelegatedExecResult } from '../types.js'

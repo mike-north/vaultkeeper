@@ -31,6 +31,7 @@ function replaceInRecord(
  * @param secret - The secret value to inject
  * @param request - The exec request template with `{{secret}}` placeholders
  * @returns The command result (stdout, stderr, exitCode)
+ * @internal
  */
 export function delegatedExec(
   secret: string,

@@ -21,7 +21,7 @@ const OP_INSTALL_URL = 'https://1password.com/downloads/command-line/'
  * Requires the 1Password CLI (`op`) to be installed and authenticated.
  * Secrets are stored as Password items in the default vault or a configured vault.
  *
- * @public
+ * @internal
  */
 export class OnePasswordBackend implements SecretBackend {
   readonly type = '1password'

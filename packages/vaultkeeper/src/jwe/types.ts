@@ -7,6 +7,7 @@ import type { VaultClaims } from '../types.js'
 /**
  * JWE protected header parameters used for vaultkeeper tokens.
  * Extends the standard `dir` + `A256GCM` algorithm with a `kid` for key rotation.
+ * @internal
  */
 export interface VaultJWEHeader {
   /** Key Agreement algorithm — always "dir" (direct key agreement) */

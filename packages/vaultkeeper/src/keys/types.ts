@@ -2,7 +2,10 @@
  * Key management types for vaultkeeper.
  */
 
-/** A cryptographic key with metadata. */
+/**
+ * A cryptographic key with metadata.
+ * @internal
+ */
 export interface KeyMaterial {
   /** Unique identifier, format: `k-{timestamp}` */
   id: string
@@ -12,7 +15,10 @@ export interface KeyMaterial {
   createdAt: Date
 }
 
-/** The active state of the key pair (current + optional previous in grace period). */
+/**
+ * The active state of the key pair (current + optional previous in grace period).
+ * @internal
+ */
 export interface KeyState {
   /** The currently active key for encryption */
   current: KeyMaterial
@@ -20,7 +26,10 @@ export interface KeyState {
   previous?: KeyMaterial
 }
 
-/** Configuration for key rotation behavior. */
+/**
+ * Configuration for key rotation behavior.
+ * @internal
+ */
 export interface KeyRotationConfig {
   /** How long (in milliseconds) the previous key remains valid after rotation */
   gracePeriodMs: number
