@@ -4,11 +4,11 @@
 
 ```ts
 
-import { SecretBackend } from 'vaultkeeper';
+import { ListableBackend } from 'vaultkeeper';
 import { VaultKeeper } from 'vaultkeeper';
 
 // @public
-export class InMemoryBackend implements SecretBackend {
+export class InMemoryBackend implements ListableBackend {
     clear(): void;
     // (undocumented)
     delete(id: string): Promise<void>;
@@ -18,6 +18,8 @@ export class InMemoryBackend implements SecretBackend {
     exists(id: string): Promise<boolean>;
     // (undocumented)
     isAvailable(): Promise<boolean>;
+    // (undocumented)
+    list(): Promise<string[]>;
     // (undocumented)
     retrieve(id: string): Promise<string>;
     get size(): number;

@@ -90,6 +90,9 @@ export class IdentityMismatchError extends VaultError {
 }
 
 // @public
+export function isListableBackend(backend: SecretBackend): backend is ListableBackend;
+
+// @public
 export class KeyRevokedError extends VaultError {
     constructor(message: string);
 }
@@ -101,6 +104,11 @@ export class KeyRotatedError extends VaultError {
 
 // @public
 export type KeyStatus = 'current' | 'previous' | 'deprecated';
+
+// @public
+export interface ListableBackend extends SecretBackend {
+    list(): Promise<string[]>;
+}
 
 // @public
 export class PluginNotFoundError extends VaultError {
