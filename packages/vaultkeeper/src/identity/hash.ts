@@ -10,6 +10,7 @@ import * as fs from 'node:fs'
  *
  * @param filePath - Absolute or relative path to the binary to hash.
  * @returns Hex-encoded SHA-256 digest string.
+ * @internal
  */
 export function hashExecutable(filePath: string): Promise<string> {
   return new Promise<string>((resolve, reject) => {

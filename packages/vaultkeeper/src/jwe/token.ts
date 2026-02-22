@@ -11,6 +11,7 @@ const ENCRYPTION = 'A256GCM'
 
 /**
  * Options for token creation.
+ * @internal
  */
 export interface CreateTokenOptions {
   /** Optional key ID to embed in the JWE header for rotation tracking. */
@@ -27,6 +28,7 @@ export interface CreateTokenOptions {
  * @param claims - VaultClaims payload to encrypt
  * @param options - Optional token creation options
  * @returns Compact JWE string
+ * @internal
  */
 export async function createToken(
   key: Uint8Array,
@@ -86,6 +88,7 @@ function parseVaultClaims(raw: unknown): VaultClaims | undefined {
  * @param jwe - Compact JWE string to decrypt
  * @returns Decrypted VaultClaims
  * @throws VaultError if decryption fails or the payload is malformed
+ * @internal
  */
 export async function decryptToken(key: Uint8Array, jwe: string): Promise<VaultClaims> {
   let plaintext: Uint8Array
@@ -120,6 +123,7 @@ export async function decryptToken(key: Uint8Array, jwe: string): Promise<VaultC
  * @param jwe - Compact JWE string
  * @returns The kid value, or undefined if not present
  * @throws VaultError if the JWE structure is invalid
+ * @internal
  */
 export function extractKid(jwe: string): string | undefined {
   const parts = jwe.split('.')

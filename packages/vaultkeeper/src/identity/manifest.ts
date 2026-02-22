@@ -44,6 +44,7 @@ function isTrustManifestEntry(value: unknown): value is TrustManifestEntry {
 /**
  * Load the trust manifest from `configDir`.
  * Returns an empty `Map` if the manifest file does not yet exist.
+ * @internal
  */
 export async function loadManifest(configDir: string): Promise<TrustManifest> {
   const manifestPath = path.join(configDir, MANIFEST_FILENAME)
@@ -79,6 +80,7 @@ export async function loadManifest(configDir: string): Promise<TrustManifest> {
 
 /**
  * Persist `manifest` to `configDir`, creating the directory if necessary.
+ * @internal
  */
 export async function saveManifest(configDir: string, manifest: TrustManifest): Promise<void> {
   await fs.mkdir(configDir, { recursive: true })
@@ -95,6 +97,7 @@ export async function saveManifest(configDir: string, manifest: TrustManifest): 
  * Return a new manifest that includes `hash` under `namespace`.
  * If the namespace does not yet exist it is created with tier 3 (Unverified).
  * The trust tier of an existing entry is not changed.
+ * @internal
  */
 export function addTrustedHash(manifest: TrustManifest, namespace: string, hash: string): TrustManifest {
   const next = new Map(manifest)
@@ -109,6 +112,7 @@ export function addTrustedHash(manifest: TrustManifest, namespace: string, hash:
 
 /**
  * Return `true` if `hash` is in the approved list for `namespace`.
+ * @internal
  */
 export function isTrusted(manifest: TrustManifest, namespace: string, hash: string): boolean {
   const entry = manifest.get(namespace)

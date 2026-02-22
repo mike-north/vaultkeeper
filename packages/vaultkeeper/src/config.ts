@@ -7,7 +7,10 @@ import * as path from 'node:path'
 import * as os from 'node:os'
 import type { VaultConfig, BackendConfig, TrustTier } from './types.js'
 
-/** Return the platform-appropriate default config directory. */
+/**
+ * Return the platform-appropriate default config directory.
+ * @internal
+ */
 export function getDefaultConfigDir(): string {
   if (process.platform === 'win32') {
     const appData = process.env.APPDATA
@@ -74,6 +77,7 @@ function validateBackendEntry(entry: unknown, index: number): BackendConfig {
 
 /**
  * Validate an unknown value as a VaultConfig, throwing on invalid structure.
+ * @internal
  */
 export function validateConfig(config: unknown): VaultConfig {
   if (!isObject(config)) {
@@ -150,6 +154,7 @@ export function validateConfig(config: unknown): VaultConfig {
  * does not exist.
  *
  * @param configDir - Directory containing config.json. Defaults to platform-appropriate path.
+ * @internal
  */
 export async function loadConfig(configDir?: string): Promise<VaultConfig> {
   const dir = configDir ?? getDefaultConfigDir()

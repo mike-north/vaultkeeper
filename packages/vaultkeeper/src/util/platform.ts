@@ -2,6 +2,9 @@
  * Platform detection utilities.
  */
 
+/**
+ * @internal
+ */
 export type Platform = 'darwin' | 'win32' | 'linux'
 
 /** Get the current platform. */

@@ -7,7 +7,10 @@ import * as crypto from 'node:crypto'
 import { RotationInProgressError, SetupError } from '../errors.js'
 import type { KeyMaterial, KeyState } from './types.js'
 
-/** Manage cryptographic keys with rotation and grace-period semantics. */
+/**
+ * Manage cryptographic keys with rotation and grace-period semantics.
+ * @internal
+ */
 export class KeyManager {
   #state: KeyState | undefined = undefined
   #gracePeriodTimer: ReturnType<typeof setTimeout> | undefined = undefined

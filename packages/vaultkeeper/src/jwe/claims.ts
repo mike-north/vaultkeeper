@@ -32,6 +32,7 @@ const blocklist = new Map<string, true>()
  * If the blocklist has reached its maximum size, the oldest entry is evicted first.
  *
  * @param jti - The unique token ID to block
+ * @internal
  */
 export function blockToken(jti: string): void {
   if (blocklist.has(jti)) {
@@ -52,6 +53,7 @@ export function blockToken(jti: string): void {
  * Returns true if the given JTI has been blocked.
  *
  * @param jti - The unique token ID to check
+ * @internal
  */
 export function isBlocked(jti: string): boolean {
   return blocklist.has(jti)
@@ -60,6 +62,7 @@ export function isBlocked(jti: string): boolean {
 /**
  * Clears all blocked JTIs from the in-memory blocklist.
  * Primarily intended for use in tests.
+ * @internal
  */
 export function clearBlocklist(): void {
   blocklist.clear()
@@ -67,6 +70,7 @@ export function clearBlocklist(): void {
 
 /**
  * Validates all claims in a VaultClaims payload.
+ * @internal
  *
  * Checks performed:
  * - Required fields present (jti, exp, iat, sub, exe, tid, bkd, val, ref)

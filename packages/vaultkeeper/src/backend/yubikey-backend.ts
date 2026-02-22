@@ -71,7 +71,7 @@ async function saveMetadata(storageDir: string, metadata: YubikeyMetadata): Prom
  * Secrets are stored in files encrypted using the YubiKey's challenge-response
  * capability (HMAC-SHA1) via slot 2.
  *
- * @public
+ * @internal
  */
 export class YubikeyBackend implements SecretBackend {
   readonly type = 'yubikey'

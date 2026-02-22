@@ -48,6 +48,7 @@ async function trySigstore(execPath: string): Promise<boolean> {
  *
  * @param execPath - Path to the executable, or `"dev"` to enable dev-mode bypass.
  * @param options  - Optional trust configuration.
+ * @internal
  */
 export async function verifyTrust(
   execPath: string,

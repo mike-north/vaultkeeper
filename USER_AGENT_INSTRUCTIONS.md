@@ -141,7 +141,7 @@ interface BackendConfig {
 
 ### Config file location
 
-`loadConfig()` and `VaultKeeper.init()` look for `config.json` inside the platform-appropriate directory returned by `getDefaultConfigDir()`:
+`VaultKeeper.init()` looks for `config.json` inside the platform-appropriate directory:
 
 | Platform | Path |
 |----------|------|
@@ -149,21 +149,6 @@ interface BackendConfig {
 | Windows | `%APPDATA%\vaultkeeper\config.json` (falls back to `~/AppData/Roaming/vaultkeeper/config.json`) |
 
 Override the directory with `VaultKeeperOptions.configDir` or by passing a `VaultConfig` object directly via `VaultKeeperOptions.config`.
-
-### Loading and validating config manually
-
-```ts
-import { loadConfig, validateConfig, getDefaultConfigDir } from 'vaultkeeper'
-
-// Load from default location:
-const config = await loadConfig()
-
-// Load from a custom directory:
-const config = await loadConfig('/my/dir')
-
-// Validate a raw parsed JSON object (throws on invalid structure):
-const config = validateConfig(rawParsedJson)
-```
 
 ---
 
@@ -286,14 +271,14 @@ Key properties of `SecretAccessor`:
 
 Six backends are available. vaultkeeper uses the first enabled backend in the `backends` array.
 
-| Type | Class | Platform | Plugin | Storage |
-|------|-------|----------|--------|---------|
-| `keychain` | `KeychainBackend` | macOS only | No | macOS Keychain via `security` CLI |
-| `dpapi` | `DpapiBackend` | Windows only | No | Windows DPAPI via PowerShell; blobs stored in `~/.vaultkeeper/dpapi/` |
-| `secret-tool` | `SecretToolBackend` | Linux only | No | GNOME Keyring / libsecret via `secret-tool` CLI |
-| `file` | `FileBackend` | All | No | AES-256-GCM encrypted file; default path `~/.config/vaultkeeper/secrets/` |
-| `1password` | `OnePasswordBackend` | All | Yes | 1Password via `op` CLI |
-| `yubikey` | `YubikeyBackend` | All | Yes | YubiKey PIV via `ykman` CLI |
+| Type | Platform | Plugin | Storage |
+|------|----------|--------|---------|
+| `keychain` | macOS only | No | macOS Keychain via `security` CLI |
+| `dpapi` | Windows only | No | Windows DPAPI via PowerShell; blobs stored in `~/.vaultkeeper/dpapi/` |
+| `secret-tool` | Linux only | No | GNOME Keyring / libsecret via `secret-tool` CLI |
+| `file` | All | No | AES-256-GCM encrypted file; default path `~/.config/vaultkeeper/secrets/` |
+| `1password` | All | Yes | 1Password via `op` CLI |
+| `yubikey` | All | Yes | YubiKey PIV via `ykman` CLI |
 
 Plugin backends (`1password`, `yubikey`) require an external binary and are flagged with `plugin: true` in `BackendConfig`. If the binary is not installed, `store()` and `retrieve()` throw `PluginNotFoundError` with a `.plugin` field (the binary name) and an `.installUrl` field.
 
@@ -389,32 +374,6 @@ await vault.setDevelopmentMode('/absolute/path/to/dev-server', false) // remove
 ```
 
 Development mode should never be used in production. It exists for local workflows where binaries are rebuilt frequently.
-
-### Identity API (advanced)
-
-The following functions are exported for advanced use cases such as building custom approval flows:
-
-```ts
-import {
-  hashExecutable,
-  loadManifest,
-  saveManifest,
-  addTrustedHash,
-  isTrusted,
-  verifyTrust,
-} from 'vaultkeeper'
-
-// Compute hash without verifying:
-const hash = await hashExecutable('/path/to/binary')
-
-// Check whether a hash is approved in the manifest:
-const trusted = await isTrusted('/path/to/binary', { configDir: '/my/dir' })
-
-// Full trust verification (used internally by setup()):
-const result = await verifyTrust('/path/to/binary', { configDir: '/my/dir' })
-// result.tofuConflict === true means the hash changed
-// result.identity.hash is the current hash
-```
 
 ---
 
@@ -612,10 +571,6 @@ describe('my vault consumer', () => {
 ```ts
 // Run as a static method without initializing a full vault:
 const result = await VaultKeeper.doctor()
-
-// Or call runDoctor() directly:
-import { runDoctor } from 'vaultkeeper'
-const result = await runDoctor()
 ```
 
 `VaultKeeper.init()` runs the doctor automatically unless `skipDoctor: true` is passed. If `result.ready` is `false`, `init()` throws a `VaultError` with a message listing the required steps.
@@ -636,41 +591,6 @@ interface PreflightCheck {
   version?: string    // detected version, when found
   reason?: string     // human-readable explanation when status is not 'ok'
 }
-```
-
-### Checks by platform
-
-| Check function | Required on | Tool checked |
-|----------------|-------------|--------------|
-| `checkOpenssl` | All | `openssl` |
-| `checkSecurity` | macOS | `security` CLI |
-| `checkBash` | macOS (optional), Linux (required) | `bash` |
-| `checkPowershell` | Windows | `powershell` |
-| `checkSecretTool` | Linux | `secret-tool` |
-| `checkOp` | All (optional) | `op` (1Password CLI) |
-| `checkYkman` | All (optional) | `ykman` (YubiKey manager) |
-
-All check functions are exported and can be called individually for custom preflight logic:
-
-```ts
-import { checkOpenssl, checkOp } from 'vaultkeeper'
-
-const opensslCheck = await checkOpenssl()
-// { name: 'openssl', status: 'ok', version: '3.1.2' }
-```
-
-### DoctorCheckFn type
-
-If you implement a custom check function, it must satisfy `DoctorCheckFn`:
-
-```ts
-import type { DoctorCheckFn } from 'vaultkeeper'
-
-const myCheck: DoctorCheckFn = async () => ({
-  name: 'my-tool',
-  status: 'ok',
-  version: '1.0.0',
-})
 ```
 
 ---
@@ -759,7 +679,7 @@ accessor.read((buf) => {
 
 ### Do not construct JWE claims manually
 
-Use `vault.setup()` to create JWE tokens. Do not call `createToken()` directly with hand-crafted `VaultClaims` objects — the `val` field must come from the backend's `retrieve()` call to ensure it is the stored secret and not an arbitrary value.
+Use `vault.setup()` to create JWE tokens. Do not attempt to construct JWE tokens manually — the `val` field must come from the backend's `retrieve()` call to ensure it is the stored secret and not an arbitrary value.
 
 ---
 
@@ -792,7 +712,7 @@ To read the secret multiple times in a single flow, either:
 
 ### The blocklist is in-memory only
 
-`blockToken()` (called internally when a use-limited token is exhausted) adds the JTI to a module-level `Set`. This blocklist is not persisted to disk and is not shared across processes. If you restart the process, blocked JTIs are forgotten. For production use cases that require a durable revocation list, store revoked JTIs in a database and check them before calling `authorize()`.
+When a use-limited token is exhausted, its JTI is added internally to a module-level `Set`. This blocklist is not persisted to disk and is not shared across processes. If you restart the process, blocked JTIs are forgotten. For production use cases that require a durable revocation list, store revoked JTIs in a database and check them before calling `authorize()`.
 
 ### RotationInProgressError when stacking rotations
 

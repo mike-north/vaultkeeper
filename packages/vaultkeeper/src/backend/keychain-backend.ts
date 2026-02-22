@@ -20,7 +20,7 @@ const SERVICE_PREFIX = 'vaultkeeper:'
  * Only available on Darwin (macOS). Uses `security` CLI to store/retrieve
  * generic passwords. Secrets are base64-encoded before storage.
  *
- * @public
+ * @internal
  */
 export class KeychainBackend implements SecretBackend {
   readonly type = 'keychain'

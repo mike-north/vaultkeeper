@@ -43,6 +43,7 @@ class SecretAccessorTarget implements SecretAccessorInternal {
 
 /**
  * Create a `SecretAccessor` for the given secret value.
+ * @internal
  *
  * The accessor is backed by a revocable Proxy with all 13 traps implemented.
  * The proxy is revoked synchronously after the first `read()` call completes

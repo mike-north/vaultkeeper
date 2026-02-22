@@ -30,7 +30,10 @@ function versionGte(
   return a[2] >= b[2]
 }
 
-/** Check that openssl is present and >= 1.1.1. */
+/**
+ * Check that openssl is present and >= 1.1.1.
+ * @internal
+ */
 export async function checkOpenssl(): Promise<PreflightCheck> {
   const name = 'openssl'
   try {
@@ -58,7 +61,10 @@ export async function checkOpenssl(): Promise<PreflightCheck> {
   }
 }
 
-/** Check that bash is present. */
+/**
+ * Check that bash is present.
+ * @internal
+ */
 export async function checkBash(): Promise<PreflightCheck> {
   const name = 'bash'
   try {
@@ -70,7 +76,10 @@ export async function checkBash(): Promise<PreflightCheck> {
   }
 }
 
-/** Check that PowerShell is present (Windows only). */
+/**
+ * Check that PowerShell is present (Windows only).
+ * @internal
+ */
 export async function checkPowershell(): Promise<PreflightCheck> {
   const name = 'powershell'
   try {
@@ -85,7 +94,10 @@ export async function checkPowershell(): Promise<PreflightCheck> {
   }
 }
 
-/** Check that macOS security CLI is present (macOS only, for Keychain access). */
+/**
+ * Check that macOS security CLI is present (macOS only, for Keychain access).
+ * @internal
+ */
 export async function checkSecurity(): Promise<PreflightCheck> {
   const name = 'security'
   try {
@@ -107,7 +119,10 @@ export async function checkSecurity(): Promise<PreflightCheck> {
   }
 }
 
-/** Check that secret-tool is present (Linux only). */
+/**
+ * Check that secret-tool is present (Linux only).
+ * @internal
+ */
 export async function checkSecretTool(): Promise<PreflightCheck> {
   const name = 'secret-tool'
   try {
@@ -122,7 +137,10 @@ export async function checkSecretTool(): Promise<PreflightCheck> {
   }
 }
 
-/** Check that 1Password CLI (op) is present (optional). */
+/**
+ * Check that 1Password CLI (op) is present (optional).
+ * @internal
+ */
 export async function checkOp(): Promise<PreflightCheck> {
   const name = 'op'
   try {
@@ -137,7 +155,10 @@ export async function checkOp(): Promise<PreflightCheck> {
   }
 }
 
-/** Check that ykman (YubiKey Manager CLI) is present (optional). */
+/**
+ * Check that ykman (YubiKey Manager CLI) is present (optional).
+ * @internal
+ */
 export async function checkYkman(): Promise<PreflightCheck> {
   const name = 'ykman'
   try {

@@ -15,7 +15,10 @@ import { currentPlatform } from '../util/platform.js'
 import type { PreflightCheck, PreflightResult } from '../types.js'
 import type { Platform } from '../util/platform.js'
 
-/** Options for running the doctor. */
+/**
+ * Options for running the doctor.
+ * @internal
+ */
 export interface RunDoctorOptions {
   /** Override the platform detection (useful for testing). */
   platform?: Platform
@@ -35,6 +38,7 @@ interface ResolvedEntry {
 
 /**
  * Run all platform-appropriate preflight checks and aggregate the results.
+ * @internal
  */
 export async function runDoctor(options?: RunDoctorOptions): Promise<PreflightResult> {
   const platform = options?.platform ?? currentPlatform()

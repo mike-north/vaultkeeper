@@ -30,6 +30,7 @@ function replaceInRecord(
  * @param secret - The secret value to inject
  * @param request - The fetch request template with `{{secret}}` placeholders
  * @returns The fetch Response
+ * @internal
  */
 export async function delegatedFetch(
   secret: string,

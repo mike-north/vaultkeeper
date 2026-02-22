@@ -6,7 +6,10 @@ import type { TrustTier, VaultClaims } from '../types.js'
 
 export type { TrustTier }
 
-/** Identity information about a verified executable. */
+/**
+ * Identity information about a verified executable.
+ * @internal
+ */
 export interface IdentityInfo {
   /** SHA-256 hex digest of the executable binary. */
   hash: string
@@ -16,7 +19,10 @@ export interface IdentityInfo {
   verified: boolean
 }
 
-/** Result returned by `verifyTrust`. */
+/**
+ * Result returned by `verifyTrust`.
+ * @internal
+ */
 export interface TrustVerificationResult {
   /** The computed identity information. */
   identity: IdentityInfo
@@ -31,6 +37,7 @@ export interface TrustVerificationResult {
 
 /**
  * Options controlling how trust verification is performed.
+ * @internal
  */
 export interface TrustOptions {
   /**
@@ -52,6 +59,7 @@ export interface TrustOptions {
 
 /**
  * Per-namespace entry in the trust manifest.
+ * @internal
  */
 export interface TrustManifestEntry {
   /** Approved hashes for this namespace. */
@@ -63,6 +71,7 @@ export interface TrustManifestEntry {
 /**
  * The on-disk trust manifest.
  * Maps a namespace string to its approved-hash entry.
+ * @internal
  */
 export type TrustManifest = Map<string, TrustManifestEntry>
 

@@ -31,7 +31,7 @@ function getEntryPath(storageDir: string, id: string): string {
  * [System.Security.Cryptography.ProtectedData] to encrypt/decrypt secrets.
  * Encrypted blobs are stored in ~/.vaultkeeper/dpapi/.
  *
- * @public
+ * @internal
  */
 export class DpapiBackend implements SecretBackend {
   readonly type = 'dpapi'
