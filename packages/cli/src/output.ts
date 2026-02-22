@@ -6,7 +6,7 @@
 
 /** Check if stdout is a TTY at call time (not module load time). */
 function isTTY(): boolean {
-  return process.stdout.isTTY ?? false
+  return process.stdout.isTTY
 }
 
 /** Wrap text in ANSI bold if stdout is a TTY. */
