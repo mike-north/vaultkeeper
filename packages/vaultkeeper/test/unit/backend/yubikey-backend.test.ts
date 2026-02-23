@@ -252,8 +252,8 @@ describe('YubikeyBackend', () => {
     })
 
     it('should give a clear error for a legacy AES-256-CBC encrypted file', async () => {
-      // A legacy file does not start with "1:" — simulate binary openssl output
-      // (or any content that lacks the version prefix).
+      // A legacy file does not start with a numeric version prefix — simulate
+      // binary openssl enc output (e.g. "Salted__...") or any non-versioned content.
       const legacyContent = 'Salted__somebinarycbcdata'
 
       mockDeviceAvailable()
@@ -262,6 +262,38 @@ describe('YubikeyBackend', () => {
       mockFs.readFile.mockResolvedValue(legacyContent)
 
       await expect(backend.retrieve('legacy-secret')).rejects.toThrow(/legacy format.*AES-256-CBC/)
+    })
+
+    it('should give a clear "unsupported version" error for a future format version', async () => {
+      // Regression: previously any non-current version was treated as "legacy
+      // CBC". A file starting with a numeric version that is not FORMAT_VERSION
+      // should instead produce an "unsupported version" error so users know to
+      // upgrade vaultkeeper rather than being told to migrate from CBC.
+      const futureVersionBlob = '42:aXY=:dGFn:Y2lwaGVydGV4dA=='
+
+      mockDeviceAvailable()
+      mockChallengeResponse(FAKE_HMAC_RESPONSE)
+      mockFs.access.mockResolvedValue(undefined)
+      mockFs.readFile.mockResolvedValue(futureVersionBlob)
+
+      await expect(backend.retrieve('future-secret')).rejects.toThrow(
+        /[Uu]nsupported.*version.*42/,
+      )
+    })
+
+    it('should give a clear error for an invalid HMAC response (not 40 hex chars)', async () => {
+      // Regression: a truncated or malformed ykman response should produce a
+      // descriptive error from deriveKey rather than silently generating a bad key.
+      const id = 'my-secret'
+      const blob = makeEncryptedBlob('value', id)
+
+      mockDeviceAvailable()
+      // Return a response that is only 8 hex chars — far too short.
+      mockChallengeResponse('deadbeef')
+      mockFs.access.mockResolvedValue(undefined)
+      mockFs.readFile.mockResolvedValue(blob)
+
+      await expect(backend.retrieve(id)).rejects.toThrow(/Invalid YubiKey HMAC response/)
     })
   })
 

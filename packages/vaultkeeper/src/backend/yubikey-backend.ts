@@ -78,16 +78,31 @@ async function saveMetadata(storageDir: string, metadata: YubikeyMetadata): Prom
   await fs.writeFile(metaPath, JSON.stringify(metadata, null, 2), { mode: 0o600 })
 }
 
+/** Expected byte length of a YubiKey HMAC-SHA1 response (20 bytes = 40 hex chars). */
+const HMAC_RESPONSE_HEX_LENGTH = 40
+
+/** Regex for a valid HMAC-SHA1 hex response: exactly 40 lowercase or uppercase hex digits. */
+const HMAC_RESPONSE_RE = /^[0-9a-fA-F]{40}$/
+
 /**
  * Derive a 256-bit AES key from the YubiKey HMAC-SHA1 response using HKDF-SHA-256.
  *
  * The HMAC-SHA1 response is 20 bytes — too short and too biased to use
  * directly as an AES-256 key. HKDF expands it to exactly 32 bytes while
  * binding the key to the secret `id` via the `info` field.
+ *
+ * Throws if `hmacResponse` is not exactly 40 hex characters (20 bytes), which
+ * would indicate a malformed or truncated ykman response.
  */
 function deriveKey(hmacResponse: string, id: string): Buffer {
+  const trimmed = hmacResponse.trim()
+  if (!HMAC_RESPONSE_RE.test(trimmed)) {
+    throw new Error(
+      `Invalid YubiKey HMAC response: expected exactly ${String(HMAC_RESPONSE_HEX_LENGTH)} hex characters (20 bytes), got ${String(trimmed.length)} characters`,
+    )
+  }
   // The ykman response is a hex string; convert to raw bytes as the IKM.
-  const ikm = Buffer.from(hmacResponse, 'hex')
+  const ikm = Buffer.from(trimmed, 'hex')
   const info = Buffer.from(`vaultkeeper-yubikey:${id}`, 'utf8')
   // Node's hkdfSync returns an ArrayBuffer; wrap without copying.
   const keyMaterial = crypto.hkdfSync('sha256', ikm, Buffer.alloc(0), info, GCM_KEY_BYTES)
@@ -98,44 +113,74 @@ function deriveKey(hmacResponse: string, id: string): Buffer {
  * Encrypt `plaintext` with AES-256-GCM using `key`.
  * Returns a versioned, colon-separated string: `1:<iv>:<authTag>:<ciphertext>`
  * (all binary fields base64-encoded).
+ *
+ * The key and all intermediate buffers are zeroed in the finally block,
+ * guaranteeing cleanup even if `createCipheriv` or `cipher.final()` throws.
  */
 function encryptGcm(key: Buffer, plaintext: string): string {
   const iv = crypto.randomBytes(GCM_IV_BYTES)
-  const cipher = crypto.createCipheriv('aes-256-gcm', key, iv, {
-    authTagLength: GCM_TAG_LENGTH_BITS / 8,
-  })
-  const encrypted = Buffer.concat([cipher.update(plaintext, 'utf8'), cipher.final()])
-  const authTag = cipher.getAuthTag()
+  let encrypted: Buffer | undefined
+  let authTag: Buffer | undefined
+  try {
+    const cipher = crypto.createCipheriv('aes-256-gcm', key, iv, {
+      authTagLength: GCM_TAG_LENGTH_BITS / 8,
+    })
+    encrypted = Buffer.concat([cipher.update(plaintext, 'utf8'), cipher.final()])
+    authTag = cipher.getAuthTag()
 
-  const encoded = [
-    FORMAT_VERSION,
-    iv.toString('base64'),
-    authTag.toString('base64'),
-    encrypted.toString('base64'),
-  ].join(':')
-
-  // Zero the key buffer now that encryption is complete.
-  key.fill(0)
-
-  return encoded
+    return [
+      FORMAT_VERSION,
+      iv.toString('base64'),
+      authTag.toString('base64'),
+      encrypted.toString('base64'),
+    ].join(':')
+  } finally {
+    // Zero all secret material regardless of success or failure.
+    key.fill(0)
+    iv.fill(0)
+    encrypted?.fill(0)
+    authTag?.fill(0)
+  }
 }
 
 /**
  * Decrypt a versioned GCM blob produced by `encryptGcm`.
- * Throws a descriptive error if the format is unrecognized (e.g. a legacy
- * AES-256-CBC file created before this fix was applied).
+ *
+ * Version detection distinguishes three cases:
+ * - First segment is a number matching `FORMAT_VERSION` → current format, proceed.
+ * - First segment is a different number → unsupported future version, throw a
+ *   clear "unsupported version N" error.
+ * - First segment is not a number at all → legacy/corrupt format (e.g. an
+ *   AES-256-CBC file written before this implementation), throw a migration error.
+ *
+ * The key buffer is always zeroed in a finally block, guaranteeing cleanup even
+ * if `createDecipheriv` or `setAuthTag` throws before the decrypt attempt.
  */
 function decryptGcm(key: Buffer, encoded: string): string {
   const parts = encoded.split(':')
+  const versionSegment = parts[0] ?? ''
 
-  // A legacy CBC file (openssl enc output) is binary and will not match our
-  // version prefix pattern. Detect and surface a clear migration error rather
-  // than a confusing crypto failure.
-  if (parts[0] !== FORMAT_VERSION) {
+  // Determine whether the first segment is a numeric version prefix at all.
+  const parsedVersion = parseInt(versionSegment, 10)
+  const isNumericVersion =
+    String(parsedVersion) === versionSegment && !Number.isNaN(parsedVersion)
+
+  if (!isNumericVersion) {
+    // No recognisable version prefix — treat as legacy CBC or corrupt file.
     key.fill(0)
     throw new Error(
       'Encrypted file uses a legacy format (AES-256-CBC). ' +
         'Delete the secret and re-store it to migrate to AES-256-GCM.',
+    )
+  }
+
+  if (versionSegment !== FORMAT_VERSION) {
+    // A future format version this binary does not know how to decode.
+    key.fill(0)
+    throw new Error(
+      `Unsupported encrypted file version: ${versionSegment}. ` +
+        `This vaultkeeper build only supports version ${FORMAT_VERSION}. ` +
+        'Upgrade vaultkeeper to read this secret.',
     )
   }
 
@@ -152,30 +197,32 @@ function decryptGcm(key: Buffer, encoded: string): string {
     throw new Error('Invalid encrypted file format: missing part')
   }
 
-  const iv = Buffer.from(ivB64, 'base64')
-  const authTag = Buffer.from(authTagB64, 'base64')
-  const ciphertext = Buffer.from(ciphertextB64, 'base64')
-
-  const decipher = crypto.createDecipheriv('aes-256-gcm', key, iv, {
-    authTagLength: GCM_TAG_LENGTH_BITS / 8,
-  })
-  decipher.setAuthTag(authTag)
-
-  let decrypted: Buffer
+  let decrypted: Buffer | undefined
   try {
-    decrypted = Buffer.concat([decipher.update(ciphertext), decipher.final()])
-  } catch (err) {
-    key.fill(0)
-    throw new Error(
-      `GCM authentication failed — ciphertext may be tampered: ${err instanceof Error ? err.message : String(err)}`,
-    )
-  }
+    const iv = Buffer.from(ivB64, 'base64')
+    const authTag = Buffer.from(authTagB64, 'base64')
+    const ciphertext = Buffer.from(ciphertextB64, 'base64')
 
-  const plaintext = decrypted.toString('utf8')
-  // Zero the key and decrypted buffers now that we have the string.
-  key.fill(0)
-  decrypted.fill(0)
-  return plaintext
+    const decipher = crypto.createDecipheriv('aes-256-gcm', key, iv, {
+      authTagLength: GCM_TAG_LENGTH_BITS / 8,
+    })
+    decipher.setAuthTag(authTag)
+
+    try {
+      decrypted = Buffer.concat([decipher.update(ciphertext), decipher.final()])
+    } catch (err) {
+      throw new Error(
+        `GCM authentication failed — ciphertext may be tampered: ${err instanceof Error ? err.message : String(err)}`,
+      )
+    }
+
+    const plaintext = decrypted.toString('utf8')
+    return plaintext
+  } finally {
+    // Zero all secret material regardless of success or failure.
+    key.fill(0)
+    decrypted?.fill(0)
+  }
 }
 
 /**
