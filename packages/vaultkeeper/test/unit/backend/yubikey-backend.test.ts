@@ -203,4 +203,30 @@ describe('YubikeyBackend', () => {
       expect(result).toBe(false)
     })
   })
+
+  describe('list', () => {
+    it('should return all entry keys from metadata file', async () => {
+      const metadata = { entries: { 'my-secret': '/path/a.enc', 'another-secret': '/path/b.enc' } }
+      mockFs.readFile.mockResolvedValue(JSON.stringify(metadata))
+
+      const result = await backend.list()
+      expect(result).toEqual(['my-secret', 'another-secret'])
+    })
+
+    it('should return empty array when metadata file does not exist', async () => {
+      // loadMetadata catches errors and returns { entries: {} }
+      mockFs.readFile.mockRejectedValue(Object.assign(new Error('ENOENT'), { code: 'ENOENT' }))
+
+      const result = await backend.list()
+      expect(result).toEqual([])
+    })
+
+    it('should return empty array when metadata has no entries', async () => {
+      const metadata = { entries: {} }
+      mockFs.readFile.mockResolvedValue(JSON.stringify(metadata))
+
+      const result = await backend.list()
+      expect(result).toEqual([])
+    })
+  })
 })

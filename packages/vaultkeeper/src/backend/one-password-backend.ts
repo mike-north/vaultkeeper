@@ -174,7 +174,12 @@ export class OnePasswordBackend implements ListableBackend {
       return []
     }
 
-    const parsed: unknown = JSON.parse(result.stdout)
+    let parsed: unknown
+    try {
+      parsed = JSON.parse(result.stdout)
+    } catch {
+      return []
+    }
     if (!Array.isArray(parsed)) {
       return []
     }
