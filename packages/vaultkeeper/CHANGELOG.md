@@ -1,5 +1,17 @@
 # vaultkeeper
 
+## 0.3.0
+
+### Minor Changes
+
+- [#10](https://github.com/mike-north/vaultkeeper/pull/10) [`a000092`](https://github.com/mike-north/vaultkeeper/commit/a000092848e94e130893d145d07a8b8bf6fc1ead) Thanks [@mike-north](https://github.com/mike-north)! - Add `BackendRegistry.getAvailableTypes()` for discovering which secret backends are available on the current system.
+
+- [#9](https://github.com/mike-north/vaultkeeper/pull/9) [`c2c4e8c`](https://github.com/mike-north/vaultkeeper/commit/c2c4e8cfd94e624b4ad7dfd2f3b22a6046d91c8e) Thanks [@mike-north](https://github.com/mike-north)! - Add `ListableBackend` interface with `list()` method for enumerating stored secrets, implemented on all backends. Add `isListableBackend()` type guard. `InMemoryBackend` now also implements `ListableBackend`.
+
+### Patch Changes
+
+- [#11](https://github.com/mike-north/vaultkeeper/pull/11) [`7398ff6`](https://github.com/mike-north/vaultkeeper/commit/7398ff6352b8d3e39e562ace50b8caa8ef998882) Thanks [@mike-north](https://github.com/mike-north)! - Fix YubiKey backend encryption: replace AES-256-CBC (openssl CLI) with AES-256-GCM (Node.js crypto) per project security policy. Legacy CBC-encrypted files are detected with a clear migration error.
+
 ## 0.2.0
 
 ### Minor Changes
