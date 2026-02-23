@@ -10,6 +10,7 @@ vi.mock('node:fs/promises', () => ({
   mkdir: vi.fn(),
   access: vi.fn(),
   unlink: vi.fn(),
+  readdir: vi.fn(),
 }))
 
 import * as fs from 'node:fs/promises'
@@ -152,6 +153,33 @@ describe('DpapiBackend', () => {
 
       const result = await backend.exists('missing')
       expect(result).toBe(false)
+    })
+  })
+
+  describe('list', () => {
+    it('should return decoded secret ids for all .enc files', async () => {
+      const id1 = 'my-secret'
+      const id2 = 'another-secret'
+      const hex1 = Buffer.from(id1, 'utf8').toString('hex')
+      const hex2 = Buffer.from(id2, 'utf8').toString('hex')
+      mockFs.readdir.mockResolvedValue([`${hex1}.enc`, `${hex2}.enc`, 'other.txt'])
+
+      const result = await backend.list()
+      expect(result).toEqual([id1, id2])
+    })
+
+    it('should return empty array when storage directory does not exist', async () => {
+      mockFs.readdir.mockRejectedValue(Object.assign(new Error('ENOENT'), { code: 'ENOENT' }))
+
+      const result = await backend.list()
+      expect(result).toEqual([])
+    })
+
+    it('should return empty array when directory contains no .enc files', async () => {
+      mockFs.readdir.mockResolvedValue(['readme.txt', 'metadata.json'])
+
+      const result = await backend.list()
+      expect(result).toEqual([])
     })
   })
 })

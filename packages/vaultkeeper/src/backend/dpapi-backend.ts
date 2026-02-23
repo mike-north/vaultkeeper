@@ -11,7 +11,7 @@ import * as path from 'node:path'
 import * as os from 'node:os'
 import { execCommand, execCommandFull } from '../util/exec.js'
 import { SecretNotFoundError } from '../errors.js'
-import type { SecretBackend } from './types.js'
+import type { ListableBackend } from './types.js'
 
 function getStoragePath(): string {
   return path.join(os.homedir(), '.vaultkeeper', 'dpapi')
@@ -33,7 +33,7 @@ function getEntryPath(storageDir: string, id: string): string {
  *
  * @internal
  */
-export class DpapiBackend implements SecretBackend {
+export class DpapiBackend implements ListableBackend {
   readonly type = 'dpapi'
   readonly displayName = 'Windows DPAPI'
 
@@ -116,5 +116,18 @@ export class DpapiBackend implements SecretBackend {
     } catch {
       return false
     }
+  }
+
+  async list(): Promise<string[]> {
+    const storageDir = getStoragePath()
+    let entries: string[]
+    try {
+      entries = await fs.readdir(storageDir)
+    } catch {
+      return []
+    }
+    return entries
+      .filter((f) => f.endsWith('.enc'))
+      .map((f) => Buffer.from(f.slice(0, -4), 'hex').toString('utf8'))
   }
 }

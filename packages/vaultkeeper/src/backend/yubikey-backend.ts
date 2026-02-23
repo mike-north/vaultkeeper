@@ -12,7 +12,7 @@ import * as path from 'node:path'
 import * as os from 'node:os'
 import { execCommand, execCommandFull } from '../util/exec.js'
 import { SecretNotFoundError, PluginNotFoundError, DeviceNotPresentError } from '../errors.js'
-import type { SecretBackend } from './types.js'
+import type { ListableBackend } from './types.js'
 
 const YKMAN_INSTALL_URL = 'https://developers.yubico.com/yubikey-manager/'
 const STORAGE_DIR_NAME = path.join('.vaultkeeper', 'yubikey')
@@ -73,7 +73,7 @@ async function saveMetadata(storageDir: string, metadata: YubikeyMetadata): Prom
  *
  * @internal
  */
-export class YubikeyBackend implements SecretBackend {
+export class YubikeyBackend implements ListableBackend {
   readonly type = 'yubikey'
   readonly displayName = 'YubiKey'
 
@@ -221,5 +221,11 @@ export class YubikeyBackend implements SecretBackend {
     } catch {
       return false
     }
+  }
+
+  async list(): Promise<string[]> {
+    const storageDir = getStorageDir()
+    const metadata = await loadMetadata(storageDir)
+    return Object.keys(metadata.entries)
   }
 }

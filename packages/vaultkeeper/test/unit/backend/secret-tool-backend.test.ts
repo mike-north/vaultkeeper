@@ -145,4 +145,42 @@ describe('SecretToolBackend', () => {
       expect(result).toBe(false)
     })
   })
+
+  describe('list', () => {
+    it('should parse vaultkeeper-id attributes from secret-tool search output', async () => {
+      const stdout = [
+        '[/org/freedesktop/secrets/collection/login/1]',
+        'label = vaultkeeper: my-secret',
+        'secret = ',
+        'created = 2024-01-01 00:00:00',
+        'modified = 2024-01-01 00:00:00',
+        'schema: org.freedesktop.Secret.Generic',
+        'attribute.vaultkeeper-id = my-secret',
+        '',
+        '[/org/freedesktop/secrets/collection/login/2]',
+        'label = vaultkeeper: another-secret',
+        'secret = ',
+        'attribute.vaultkeeper-id = another-secret',
+      ].join('\n')
+
+      mockExecCommandFull.mockResolvedValue(makeResult(0, stdout))
+
+      const result = await backend.list()
+      expect(result).toEqual(['my-secret', 'another-secret'])
+    })
+
+    it('should return empty array when secret-tool search command fails', async () => {
+      mockExecCommandFull.mockResolvedValue(makeResult(1, '', 'No matching items found'))
+
+      const result = await backend.list()
+      expect(result).toEqual([])
+    })
+
+    it('should return empty array when search output has no matching entries', async () => {
+      mockExecCommandFull.mockResolvedValue(makeResult(0, 'No items found\n'))
+
+      const result = await backend.list()
+      expect(result).toEqual([])
+    })
+  })
 })

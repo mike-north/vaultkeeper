@@ -5,6 +5,7 @@ vi.mock('node:fs/promises', () => ({
   access: vi.fn(),
   unlink: vi.fn(),
   readFile: vi.fn(),
+  readdir: vi.fn(),
   writeFile: vi.fn(),
 }))
 
@@ -159,6 +160,35 @@ describe('FileBackend', () => {
 
       const result = await backend.exists('missing')
       expect(result).toBe(false)
+    })
+  })
+
+  describe('list', () => {
+    it('should return decoded secret IDs from .enc filenames', async () => {
+      const id1Hex = Buffer.from('secret-1', 'utf8').toString('hex')
+      const id2Hex = Buffer.from('secret-2', 'utf8').toString('hex')
+      mockFs.readdir.mockResolvedValue([
+        `${id1Hex}.enc`,
+        `${id2Hex}.enc`,
+        '.key', // should be filtered out
+      ])
+
+      const result = await backend.list()
+      expect(result).toEqual(['secret-1', 'secret-2'])
+    })
+
+    it('should return an empty array when storage directory does not exist', async () => {
+      mockFs.readdir.mockRejectedValue(new Error('ENOENT'))
+
+      const result = await backend.list()
+      expect(result).toEqual([])
+    })
+
+    it('should return an empty array when no .enc files exist', async () => {
+      mockFs.readdir.mockResolvedValue(['.key'])
+
+      const result = await backend.list()
+      expect(result).toEqual([])
     })
   })
 })

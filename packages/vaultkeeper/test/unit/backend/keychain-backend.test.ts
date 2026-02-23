@@ -173,4 +173,42 @@ describe('KeychainBackend', () => {
       expect(result).toBe(false)
     })
   })
+
+  describe('list', () => {
+    it('should parse service names from dump-keychain output', async () => {
+      const dumpOutput = [
+        'keychain: "/Users/test/Library/Keychains/login.keychain-db"',
+        'class: "genp"',
+        '    0x00000007 <blob>="vaultkeeper:api-key"',
+        '    "acct"<blob>="vaultkeeper"',
+        'class: "genp"',
+        '    0x00000007 <blob>="vaultkeeper:db-password"',
+        '    "acct"<blob>="vaultkeeper"',
+        'class: "genp"',
+        '    0x00000007 <blob>="some-other-service"',
+      ].join('\n')
+      mockExecCommandFull.mockResolvedValue(makeResult(0, dumpOutput))
+
+      const result = await backend.list()
+      expect(result).toEqual(['api-key', 'db-password'])
+    })
+
+    it('should return an empty array when dump-keychain fails', async () => {
+      mockExecCommandFull.mockResolvedValue(makeResult(1, '', 'error'))
+
+      const result = await backend.list()
+      expect(result).toEqual([])
+    })
+
+    it('should return an empty array when no vaultkeeper entries exist', async () => {
+      const dumpOutput = [
+        'class: "genp"',
+        '    0x00000007 <blob>="some-other-service"',
+      ].join('\n')
+      mockExecCommandFull.mockResolvedValue(makeResult(0, dumpOutput))
+
+      const result = await backend.list()
+      expect(result).toEqual([])
+    })
+  })
 })

@@ -38,8 +38,8 @@ export type {
   BackendConfig,
 } from './types.js'
 
-export type { SecretBackend, BackendFactory } from './backend/index.js'
-export { BackendRegistry } from './backend/index.js'
+export type { SecretBackend, BackendFactory, ListableBackend } from './backend/index.js'
+export { BackendRegistry, isListableBackend } from './backend/index.js'
 
 export { CapabilityToken } from './identity/index.js'
 

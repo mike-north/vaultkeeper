@@ -8,7 +8,7 @@
 
 import { execCommand, execCommandFull } from '../util/exec.js'
 import { SecretNotFoundError } from '../errors.js'
-import type { SecretBackend } from './types.js'
+import type { ListableBackend } from './types.js'
 
 const ATTRIBUTE_KEY = 'vaultkeeper-id'
 const LABEL_PREFIX = 'vaultkeeper: '
@@ -22,7 +22,7 @@ const LABEL_PREFIX = 'vaultkeeper: '
  *
  * @internal
  */
-export class SecretToolBackend implements SecretBackend {
+export class SecretToolBackend implements ListableBackend {
   readonly type = 'secret-tool'
   readonly displayName = 'Linux Secret Service (secret-tool)'
 
@@ -65,5 +65,27 @@ export class SecretToolBackend implements SecretBackend {
   async exists(id: string): Promise<boolean> {
     const result = await execCommandFull('secret-tool', ['lookup', ATTRIBUTE_KEY, id])
     return result.exitCode === 0 && result.stdout.trim() !== ''
+  }
+
+  async list(): Promise<string[]> {
+    const result = await execCommandFull('secret-tool', [
+      'search',
+      ATTRIBUTE_KEY,
+      '',
+    ])
+    if (result.exitCode !== 0) {
+      return []
+    }
+    const ids: string[] = []
+    const attrPattern = new RegExp(`attribute\\.${ATTRIBUTE_KEY} = (.+)`, 'g')
+    let match: RegExpExecArray | null = attrPattern.exec(result.stdout)
+    while (match !== null) {
+      const id = match[1]
+      if (id !== undefined) {
+        ids.push(id)
+      }
+      match = attrPattern.exec(result.stdout)
+    }
+    return ids
   }
 }

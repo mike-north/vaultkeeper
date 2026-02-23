@@ -16,7 +16,7 @@ import * as path from 'node:path'
 import * as os from 'node:os'
 import * as crypto from 'node:crypto'
 import { SecretNotFoundError, FilesystemError } from '../errors.js'
-import type { SecretBackend } from './types.js'
+import type { ListableBackend } from './types.js'
 
 const STORAGE_DIR_NAME = path.join('.vaultkeeper', 'file')
 const KEY_FILE = '.key'
@@ -104,7 +104,7 @@ function decryptGcm(key: Buffer, encoded: string): string {
  *
  * @internal
  */
-export class FileBackend implements SecretBackend {
+export class FileBackend implements ListableBackend {
   readonly type = 'file'
   readonly displayName = 'Encrypted File Store'
 
@@ -176,5 +176,18 @@ export class FileBackend implements SecretBackend {
     } catch {
       return false
     }
+  }
+
+  async list(): Promise<string[]> {
+    const storageDir = getStorageDir()
+    let entries: string[]
+    try {
+      entries = await fs.readdir(storageDir)
+    } catch {
+      return []
+    }
+    return entries
+      .filter((f) => f.endsWith('.enc'))
+      .map((f) => Buffer.from(f.slice(0, -4), 'hex').toString('utf8'))
   }
 }

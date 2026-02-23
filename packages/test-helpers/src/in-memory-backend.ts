@@ -2,7 +2,7 @@
  * In-memory secret backend for testing.
  */
 
-import type { SecretBackend } from 'vaultkeeper'
+import type { ListableBackend } from 'vaultkeeper'
 
 /**
  * A fully in-memory `SecretBackend` for testing.
@@ -13,7 +13,7 @@ import type { SecretBackend } from 'vaultkeeper'
  *
  * @public
  */
-export class InMemoryBackend implements SecretBackend {
+export class InMemoryBackend implements ListableBackend {
   readonly type = 'memory'
   readonly displayName = 'In-Memory Backend'
   readonly #store = new Map<string, string>()
@@ -47,6 +47,11 @@ export class InMemoryBackend implements SecretBackend {
   /** @public */
   exists(id: string): Promise<boolean> {
     return Promise.resolve(this.#store.has(id))
+  }
+
+  /** @public */
+  list(): Promise<string[]> {
+    return Promise.resolve([...this.#store.keys()])
   }
 
   /**

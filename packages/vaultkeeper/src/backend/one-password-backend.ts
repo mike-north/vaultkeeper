@@ -8,7 +8,11 @@
 
 import { execCommand, execCommandFull } from '../util/exec.js'
 import { SecretNotFoundError, PluginNotFoundError } from '../errors.js'
-import type { SecretBackend } from './types.js'
+import type { ListableBackend } from './types.js'
+
+function hasStringTitle(value: unknown): value is { title: string } {
+  return value !== null && typeof value === 'object' && 'title' in value && typeof value.title === 'string'
+}
 
 const ITEM_CATEGORY = 'Password'
 const TAG = 'vaultkeeper'
@@ -23,7 +27,7 @@ const OP_INSTALL_URL = 'https://1password.com/downloads/command-line/'
  *
  * @internal
  */
-export class OnePasswordBackend implements SecretBackend {
+export class OnePasswordBackend implements ListableBackend {
   readonly type = '1password'
   readonly displayName = '1Password'
 
@@ -150,5 +154,41 @@ export class OnePasswordBackend implements SecretBackend {
     ])
 
     return result.exitCode === 0
+  }
+
+  async list(): Promise<string[]> {
+    if (!(await this.isAvailable())) {
+      return []
+    }
+
+    const result = await execCommandFull('op', [
+      'item',
+      'list',
+      '--tags',
+      TAG,
+      '--format=json',
+      ...this.vaultArgs(),
+    ])
+
+    if (result.exitCode !== 0) {
+      return []
+    }
+
+    let parsed: unknown
+    try {
+      parsed = JSON.parse(result.stdout)
+    } catch {
+      return []
+    }
+    if (!Array.isArray(parsed)) {
+      return []
+    }
+    const ids: string[] = []
+    for (const item of parsed) {
+      if (hasStringTitle(item)) {
+        ids.push(item.title)
+      }
+    }
+    return ids
   }
 }

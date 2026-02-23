@@ -177,4 +177,60 @@ describe('OnePasswordBackend', () => {
       expect(result).toBe(false)
     })
   })
+
+  describe('list', () => {
+    it('should return item titles from successful JSON response', async () => {
+      const jsonOutput = JSON.stringify([
+        { title: 'my-secret', id: 'abc123' },
+        { title: 'another-secret', id: 'def456' },
+      ])
+
+      mockExecCommandFull
+        .mockResolvedValueOnce(makeResult(0)) // isAvailable
+        .mockResolvedValueOnce(makeResult(0, jsonOutput)) // item list
+
+      const result = await backend.list()
+      expect(result).toEqual(['my-secret', 'another-secret'])
+    })
+
+    it('should return empty array when op is not available', async () => {
+      mockExecCommandFull.mockRejectedValue(new Error('command not found: op'))
+
+      const result = await backend.list()
+      expect(result).toEqual([])
+    })
+
+    it('should return empty array when op list command fails', async () => {
+      mockExecCommandFull
+        .mockResolvedValueOnce(makeResult(0)) // isAvailable
+        .mockResolvedValueOnce(makeResult(1, '', '[ERROR] not signed in')) // item list
+
+      const result = await backend.list()
+      expect(result).toEqual([])
+    })
+
+    it('should return empty array when op returns invalid JSON', async () => {
+      mockExecCommandFull
+        .mockResolvedValueOnce(makeResult(0)) // isAvailable
+        .mockResolvedValueOnce(makeResult(0, 'not valid json {{{')) // item list
+
+      const result = await backend.list()
+      expect(result).toEqual([])
+    })
+
+    it('should skip items without a string title', async () => {
+      const jsonOutput = JSON.stringify([
+        { title: 'valid-secret', id: 'abc123' },
+        { id: 'no-title-item' },
+        { title: 42, id: 'numeric-title' },
+      ])
+
+      mockExecCommandFull
+        .mockResolvedValueOnce(makeResult(0)) // isAvailable
+        .mockResolvedValueOnce(makeResult(0, jsonOutput)) // item list
+
+      const result = await backend.list()
+      expect(result).toEqual(['valid-secret'])
+    })
+  })
 })

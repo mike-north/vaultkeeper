@@ -59,3 +59,23 @@ export interface SecretBackend {
    */
   exists(id: string): Promise<boolean>
 }
+
+/**
+ * Backend that can enumerate stored secret IDs.
+ * @public
+ */
+export interface ListableBackend extends SecretBackend {
+  /**
+   * List IDs of all secrets managed by this backend.
+   * @returns Array of secret identifiers
+   */
+  list(): Promise<string[]>
+}
+
+/**
+ * Type guard for backends that support listing.
+ * @public
+ */
+export function isListableBackend(backend: SecretBackend): backend is ListableBackend {
+  return 'list' in backend && typeof backend.list === 'function'
+}

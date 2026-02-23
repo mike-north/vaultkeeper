@@ -8,7 +8,7 @@
 
 import { execCommand, execCommandFull } from '../util/exec.js'
 import { SecretNotFoundError } from '../errors.js'
-import type { SecretBackend } from './types.js'
+import type { ListableBackend } from './types.js'
 
 const ACCOUNT = 'vaultkeeper'
 const SERVICE_PREFIX = 'vaultkeeper:'
@@ -22,7 +22,7 @@ const SERVICE_PREFIX = 'vaultkeeper:'
  *
  * @internal
  */
-export class KeychainBackend implements SecretBackend {
+export class KeychainBackend implements ListableBackend {
   readonly type = 'keychain'
   readonly displayName = 'macOS Keychain'
 
@@ -101,5 +101,25 @@ export class KeychainBackend implements SecretBackend {
       service,
     ])
     return result.exitCode === 0
+  }
+
+  async list(): Promise<string[]> {
+    const result = await execCommandFull('security', [
+      'dump-keychain',
+    ])
+    if (result.exitCode !== 0) {
+      return []
+    }
+    const ids: string[] = []
+    const servicePattern = /0x00000007 <blob>="vaultkeeper:([^"]+)"/g
+    let match: RegExpExecArray | null = servicePattern.exec(result.stdout)
+    while (match !== null) {
+      const id = match[1]
+      if (id !== undefined) {
+        ids.push(id)
+      }
+      match = servicePattern.exec(result.stdout)
+    }
+    return ids
   }
 }
