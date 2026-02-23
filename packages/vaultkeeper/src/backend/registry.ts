@@ -58,4 +58,32 @@ export class BackendRegistry {
   static getTypes(): string[] {
     return Array.from(this.backends.keys())
   }
+
+  /**
+   * Returns backend types that are available on the current system.
+   *
+   * @remarks
+   * Creates each registered backend via its factory, calls `isAvailable()`,
+   * and returns only the type identifiers whose backend reports availability.
+   * If a backend's `isAvailable()` call throws, that backend is excluded from
+   * the result rather than propagating the error.
+   *
+   * @returns Promise resolving to an array of available backend type identifiers
+   * @public
+   */
+  static async getAvailableTypes(): Promise<string[]> {
+    const entries = Array.from(this.backends.entries())
+    const results = await Promise.all(
+      entries.map(async ([type, factory]) => {
+        try {
+          const backend = factory()
+          const available = await backend.isAvailable()
+          return available ? type : null
+        } catch {
+          return null
+        }
+      }),
+    )
+    return results.filter((type): type is string => type !== null)
+  }
 }

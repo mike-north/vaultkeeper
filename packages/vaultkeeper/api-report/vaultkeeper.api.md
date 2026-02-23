@@ -29,6 +29,7 @@ export class BackendLockedError extends VaultError {
 // @public
 export class BackendRegistry {
     static create(type: string): SecretBackend;
+    static getAvailableTypes(): Promise<string[]>;
     static getTypes(): string[];
     static register(type: string, factory: BackendFactory): void;
 }
