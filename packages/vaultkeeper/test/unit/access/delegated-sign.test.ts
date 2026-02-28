@@ -7,6 +7,7 @@
 import * as crypto from 'node:crypto'
 import { describe, it, expect, beforeAll } from 'vitest'
 import { delegatedSign } from '../../../src/access/delegated-sign.js'
+import { InvalidAlgorithmError } from '../../../src/errors.js'
 
 // Hoist key generation to avoid regenerating on every test (RSA is slow).
 let ed25519Private: string
@@ -96,6 +97,23 @@ describe('delegatedSign', () => {
     })
   })
 
+  describe('algorithm case normalization', () => {
+    it('accepts uppercase algorithm names', () => {
+      const data = 'case test'
+      const result = delegatedSign(rsaPrivate, { data, algorithm: 'SHA256' })
+
+      expect(result.algorithm).toBe('sha256')
+
+      const valid = crypto.verify(
+        'sha256',
+        Buffer.from(data),
+        crypto.createPublicKey(rsaPublic),
+        Buffer.from(result.signature, 'base64'),
+      )
+      expect(valid).toBe(true)
+    })
+  })
+
   describe('negative cases', () => {
     it('throws on invalid PEM', () => {
       expect(() =>
@@ -115,16 +133,16 @@ describe('delegatedSign', () => {
       expect(r1.signature).not.toBe(r2.signature)
     })
 
-    it('throws for weak algorithm (md5)', () => {
+    it('throws InvalidAlgorithmError for weak algorithm (md5)', () => {
       expect(() =>
         delegatedSign(rsaPrivate, { data: 'test', algorithm: 'md5' }),
-      ).toThrow(/Unsupported signing algorithm/)
+      ).toThrow(InvalidAlgorithmError)
     })
 
-    it('throws for weak algorithm (sha1)', () => {
+    it('throws InvalidAlgorithmError for weak algorithm (sha1)', () => {
       expect(() =>
         delegatedSign(rsaPrivate, { data: 'test', algorithm: 'sha1' }),
-      ).toThrow(/Unsupported signing algorithm/)
+      ).toThrow(InvalidAlgorithmError)
     })
   })
 

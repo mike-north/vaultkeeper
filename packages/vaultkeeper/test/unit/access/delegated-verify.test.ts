@@ -7,6 +7,7 @@
 import * as crypto from 'node:crypto'
 import { describe, it, expect, beforeAll } from 'vitest'
 import { delegatedVerify } from '../../../src/access/delegated-verify.js'
+import { InvalidAlgorithmError } from '../../../src/errors.js'
 
 let ed25519Private: string
 let ed25519Public: string
@@ -107,22 +108,62 @@ describe('delegatedVerify', () => {
       ).toBe(false)
     })
 
-    it('throws for weak algorithm (md5)', () => {
+    it('throws InvalidAlgorithmError for weak algorithm (md5)', () => {
       const data = 'test'
       const signature = signRsa(data)
 
       expect(() =>
         delegatedVerify({ data, signature, publicKey: rsaPublic, algorithm: 'md5' }),
-      ).toThrow(/Unsupported signing algorithm/)
+      ).toThrow(InvalidAlgorithmError)
     })
 
-    it('throws for weak algorithm (sha1)', () => {
+    it('throws InvalidAlgorithmError for weak algorithm (sha1)', () => {
       const data = 'test'
       const signature = signRsa(data)
 
       expect(() =>
         delegatedVerify({ data, signature, publicKey: rsaPublic, algorithm: 'sha1' }),
-      ).toThrow(/Unsupported signing algorithm/)
+      ).toThrow(InvalidAlgorithmError)
+    })
+  })
+
+  describe('private key rejection', () => {
+    it('returns false when a private key PEM is passed as publicKey', () => {
+      const data = 'test'
+      const signature = signEd25519(data)
+
+      expect(
+        delegatedVerify({ data, signature, publicKey: ed25519Private }),
+      ).toBe(false)
+    })
+
+    it('returns false when an RSA private key PEM is passed as publicKey', () => {
+      const data = 'test'
+      const signature = signRsa(data)
+
+      expect(
+        delegatedVerify({ data, signature, publicKey: rsaPrivate }),
+      ).toBe(false)
+    })
+  })
+
+  describe('algorithm case normalization', () => {
+    it('accepts uppercase algorithm names', () => {
+      const data = 'case test'
+      const signature = signRsa(data, 'sha256')
+
+      expect(
+        delegatedVerify({ data, signature, publicKey: rsaPublic, algorithm: 'SHA256' }),
+      ).toBe(true)
+    })
+
+    it('accepts mixed-case algorithm names', () => {
+      const data = 'case test'
+      const signature = signRsa(data, 'sha512')
+
+      expect(
+        delegatedVerify({ data, signature, publicKey: rsaPublic, algorithm: 'Sha512' }),
+      ).toBe(true)
     })
   })
 

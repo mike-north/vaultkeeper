@@ -3,7 +3,8 @@
  *
  * Receives a PEM-encoded private key from VaultKeeper internals,
  * creates a signature over the provided data, and returns the
- * base64-encoded signature. The private key never leaves this module.
+ * base64-encoded signature. The key is not exposed to the caller —
+ * it flows in but does not flow out.
  */
 
 import * as crypto from 'node:crypto'
