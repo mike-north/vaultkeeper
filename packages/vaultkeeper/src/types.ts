@@ -154,6 +154,60 @@ export interface SecretAccessor {
   read(callback: (buf: Buffer) => void): void
 }
 
+/**
+ * Request for delegated signing.
+ *
+ * The `data` field is the payload to sign. Strings are UTF-8-encoded
+ * before signing.
+ */
+export interface SignRequest {
+  /** The data to sign. Strings are treated as UTF-8. */
+  data: string | Buffer
+  /**
+   * Override the hash algorithm (e.g. `'sha256'`, `'sha512'`).
+   * Ignored for Ed25519/Ed448 keys where the algorithm is implicit.
+   * Non-Edwards keys (RSA, EC) default to `'sha256'` when omitted.
+   */
+  algorithm?: string | undefined
+}
+
+/** Result from a delegated signing operation. */
+export interface SignResult {
+  /** Base64-encoded signature. */
+  signature: string
+  /**
+   * Algorithm label describing how the signature was produced.
+   * For Edwards keys this is the key type (e.g. `'ed25519'`).
+   * For other keys this matches the `algorithm` field from the request
+   * (or the default `'sha256'`).
+   */
+  algorithm: string
+}
+
+/**
+ * Request for signature verification.
+ *
+ * This is a static operation that only requires public key material —
+ * no VaultKeeper instance or capability token is needed.
+ */
+export interface VerifyRequest {
+  /** The original data that was signed. Strings are treated as UTF-8. */
+  data: string | Buffer
+  /** Base64-encoded signature to verify. */
+  signature: string
+  /**
+   * PEM-encoded public key (SPKI format).
+   *
+   * Accepts any format supported by `crypto.createPublicKey()`.
+   */
+  publicKey: string
+  /**
+   * Override the hash algorithm. Ignored for Ed25519/Ed448 keys.
+   * Non-Edwards keys default to `'sha256'` when omitted.
+   */
+  algorithm?: string | undefined
+}
+
 /** Vaultkeeper configuration file structure. */
 export interface VaultConfig {
   /** Config schema version. Currently must be `1`. */

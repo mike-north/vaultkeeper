@@ -34,6 +34,9 @@ export type {
   ExecRequest,
   ExecResult,
   SecretAccessor,
+  SignRequest,
+  SignResult,
+  VerifyRequest,
   VaultConfig,
   BackendConfig,
 } from './types.js'
