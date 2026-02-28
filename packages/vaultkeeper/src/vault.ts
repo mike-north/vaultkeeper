@@ -13,6 +13,9 @@ import type {
   SecretAccessor,
   PreflightResult,
   TrustTier,
+  SignRequest,
+  SignResult,
+  VerifyRequest,
 } from './types.js'
 import { loadConfig, getDefaultConfigDir } from './config.js'
 import { KeyManager } from './keys/manager.js'
@@ -28,6 +31,8 @@ import {
 import { delegatedFetch } from './access/delegated-fetch.js'
 import { delegatedExec } from './access/delegated-exec.js'
 import { createSecretAccessor } from './access/controlled-direct.js'
+import { delegatedSign } from './access/delegated-sign.js'
+import { delegatedVerify } from './access/delegated-verify.js'
 import { runDoctor } from './doctor/runner.js'
 import {
   IdentityMismatchError,
@@ -271,6 +276,52 @@ export class VaultKeeper {
   getSecret(token: CapabilityToken): SecretAccessor {
     const claims = validateCapabilityToken(token)
     return createSecretAccessor(claims.val)
+  }
+
+  /**
+   * Sign data using the private key embedded in a capability token.
+   *
+   * The signing key is extracted from the token's encrypted claims, used
+   * for a single `crypto.sign()` call, and never exposed to the caller.
+   * The algorithm is auto-detected from the key type unless overridden
+   * in the request.
+   *
+   * @param token - A `CapabilityToken` obtained from `authorize()`.
+   * @param request - The data to sign and optional algorithm override.
+   * @returns The base64-encoded signature and algorithm label, together
+   *   with the vault metadata (`vaultResponse`).
+   * @throws {VaultError} If `token` is invalid or was not created by this
+   *   vault instance.
+   */
+  async sign(
+    token: CapabilityToken,
+    request: SignRequest,
+  ): Promise<{ result: SignResult; vaultResponse: VaultResponse }> {
+    const claims = validateCapabilityToken(token)
+    const result = delegatedSign(claims.val, request)
+    await Promise.resolve()
+    return {
+      result,
+      vaultResponse: { keyStatus: 'current' },
+    }
+  }
+
+  /**
+   * Verify a signature using a public key.
+   *
+   * This is a static method — no VaultKeeper instance, secrets, or
+   * capability tokens are required. It is safe to call from CI or any
+   * context that has access to public key material.
+   *
+   * Never throws. Returns `false` for invalid key material, malformed
+   * signatures, or any verification failure.
+   *
+   * @param request - The data, signature, public key, and optional
+   *   algorithm override.
+   * @returns `true` if the signature is valid, `false` otherwise.
+   */
+  static verify(request: VerifyRequest): boolean {
+    return delegatedVerify(request)
   }
 
   /**

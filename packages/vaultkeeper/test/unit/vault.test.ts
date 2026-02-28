@@ -6,6 +6,8 @@ import type { SecretBackend } from '../../src/backend/types.js'
 import { clearBlocklist } from '../../src/jwe/claims.js'
 import * as delegatedFetchModule from '../../src/access/delegated-fetch.js'
 import * as delegatedExecModule from '../../src/access/delegated-exec.js'
+import * as delegatedSignModule from '../../src/access/delegated-sign.js'
+import * as delegatedVerifyModule from '../../src/access/delegated-verify.js'
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -224,6 +226,44 @@ describe('VaultKeeper', () => {
       expect(execSpy).toHaveBeenCalledWith('hunter2', expect.objectContaining({ command: 'echo' }))
       expect(result.exitCode).toBe(0)
       expect(vaultResponse.keyStatus).toBe('current')
+    })
+  })
+
+  describe('sign', () => {
+    it('delegates to delegatedSign and returns the result with current keyStatus', async () => {
+      const vault = await initVault()
+      const jwe = await vault.setup('my-secret', { executablePath: 'dev' })
+      const { token } = await vault.authorize(jwe)
+
+      const mockResult = { signature: 'c2lnbmF0dXJl', algorithm: 'ed25519' }
+      const signSpy = vi
+        .spyOn(delegatedSignModule, 'delegatedSign')
+        .mockReturnValue(mockResult)
+
+      const { result, vaultResponse } = await vault.sign(token, { data: 'test-data' })
+
+      expect(signSpy).toHaveBeenCalledOnce()
+      const [calledSecret] = signSpy.mock.calls[0] ?? []
+      expect(calledSecret).toBe('hunter2')
+      expect(result).toBe(mockResult)
+      expect(vaultResponse.keyStatus).toBe('current')
+    })
+  })
+
+  describe('verify', () => {
+    it('delegates to delegatedVerify', () => {
+      const verifySpy = vi
+        .spyOn(delegatedVerifyModule, 'delegatedVerify')
+        .mockReturnValue(true)
+
+      const result = VaultKeeper.verify({
+        data: 'test',
+        signature: 'sig',
+        publicKey: 'pem',
+      })
+
+      expect(verifySpy).toHaveBeenCalledOnce()
+      expect(result).toBe(true)
     })
   })
 

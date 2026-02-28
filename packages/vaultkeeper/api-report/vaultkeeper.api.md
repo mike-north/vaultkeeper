@@ -179,6 +179,18 @@ export interface SetupOptions {
 }
 
 // @public
+export interface SignRequest {
+    algorithm?: string | undefined;
+    data: string | Buffer;
+}
+
+// @public
+export interface SignResult {
+    algorithm: string;
+    signature: string;
+}
+
+// @public
 export class TokenExpiredError extends VaultError {
     constructor(message: string, canRefresh: boolean);
     readonly canRefresh: boolean;
@@ -239,6 +251,11 @@ export class VaultKeeper {
     rotateKey(): Promise<void>;
     setDevelopmentMode(executablePath: string, enabled: boolean): Promise<void>;
     setup(secretName: string, options?: SetupOptions): Promise<string>;
+    sign(token: CapabilityToken, request: SignRequest): Promise<{
+        result: SignResult;
+        vaultResponse: VaultResponse;
+    }>;
+    static verify(request: VerifyRequest): boolean;
 }
 
 // @public
@@ -252,6 +269,14 @@ export interface VaultKeeperOptions {
 export interface VaultResponse {
     keyStatus: KeyStatus;
     rotatedJwt?: string | undefined;
+}
+
+// @public
+export interface VerifyRequest {
+    algorithm?: string | undefined;
+    data: string | Buffer;
+    publicKey: string;
+    signature: string;
 }
 
 // (No @packageDocumentation comment for this package)
