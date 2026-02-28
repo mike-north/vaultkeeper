@@ -1,5 +1,13 @@
 # vaultkeeper
 
+## 0.4.0
+
+### Minor Changes
+
+- [#13](https://github.com/mike-north/vaultkeeper/pull/13) [`a1d2e57`](https://github.com/mike-north/vaultkeeper/commit/a1d2e57fe3b2132d63755c31acc332b90ae7a799) Thanks [@mike-north](https://github.com/mike-north)! - Add delegated signing and static verification to VaultKeeper.
+
+  `VaultKeeper.sign()` signs arbitrary data using a private key stored in the vault, returning a base64-encoded signature without exposing the key to the caller. `VaultKeeper.verify()` is a static method that verifies a signature against a public key and requires no VaultKeeper instance. New exported types: `SignRequest`, `SignResult`, `VerifyRequest`.
+
 ## 0.3.0
 
 ### Minor Changes

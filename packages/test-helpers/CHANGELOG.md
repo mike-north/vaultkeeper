@@ -1,5 +1,12 @@
 # @vaultkeeper/test-helpers
 
+## 0.2.1
+
+### Patch Changes
+
+- Updated dependencies [[`a1d2e57`](https://github.com/mike-north/vaultkeeper/commit/a1d2e57fe3b2132d63755c31acc332b90ae7a799)]:
+  - vaultkeeper@0.4.0
+
 ## 0.2.0
 
 ### Minor Changes
