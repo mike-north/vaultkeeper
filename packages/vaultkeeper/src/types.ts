@@ -196,9 +196,10 @@ export interface VerifyRequest {
   /** Base64-encoded signature to verify. */
   signature: string
   /**
-   * PEM-encoded public key (SPKI format).
+   * PEM-encoded public key (SPKI format) as a string.
    *
-   * Accepts any format supported by `crypto.createPublicKey()`.
+   * Other `KeyLike` formats supported by `crypto.createPublicKey()` are not
+   * accepted by this interface.
    */
   publicKey: string
   /**

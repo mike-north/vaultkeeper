@@ -36,7 +36,11 @@ beforeEach(() => {
 })
 
 async function createVault(): Promise<VaultKeeper> {
-  return VaultKeeper.init({ skipDoctor: true, config: TEST_CONFIG })
+  return VaultKeeper.init({
+    skipDoctor: true,
+    config: TEST_CONFIG,
+    configDir: '/tmp/vk-sign-integration',
+  })
 }
 
 describe('VaultKeeper sign/verify integration', () => {

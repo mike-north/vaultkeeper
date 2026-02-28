@@ -33,7 +33,10 @@ export function delegatedVerify(request: VerifyRequest): boolean {
   const sig = Buffer.from(request.signature, 'base64')
 
   try {
-    return crypto.verify(signAlg, Buffer.from(request.data), key, sig)
+    const data = Buffer.isBuffer(request.data)
+      ? request.data
+      : Buffer.from(request.data)
+    return crypto.verify(signAlg, data, key, sig)
   } catch {
     return false
   }

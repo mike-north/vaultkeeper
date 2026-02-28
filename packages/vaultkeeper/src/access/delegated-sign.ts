@@ -28,7 +28,10 @@ export function delegatedSign(
   const key = crypto.createPrivateKey(secretPem)
   const { signAlg, label } = resolveAlgorithmForKey(key, request.algorithm)
 
-  const signature = crypto.sign(signAlg, Buffer.from(request.data), key)
+  const data = Buffer.isBuffer(request.data)
+    ? request.data
+    : Buffer.from(request.data)
+  const signature = crypto.sign(signAlg, data, key)
 
   return {
     signature: signature.toString('base64'),
