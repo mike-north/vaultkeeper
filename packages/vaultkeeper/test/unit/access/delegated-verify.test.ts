@@ -106,5 +106,41 @@ describe('delegatedVerify', () => {
         delegatedVerify({ data: 'data', signature: 'AAAA', publicKey: 'not-a-pem' }),
       ).toBe(false)
     })
+
+    it('throws for weak algorithm (md5)', () => {
+      const data = 'test'
+      const signature = signRsa(data)
+
+      expect(() =>
+        delegatedVerify({ data, signature, publicKey: rsaPublic, algorithm: 'md5' }),
+      ).toThrow(/Unsupported signing algorithm/)
+    })
+
+    it('throws for weak algorithm (sha1)', () => {
+      const data = 'test'
+      const signature = signRsa(data)
+
+      expect(() =>
+        delegatedVerify({ data, signature, publicKey: rsaPublic, algorithm: 'sha1' }),
+      ).toThrow(/Unsupported signing algorithm/)
+    })
+  })
+
+  describe('edge cases', () => {
+    it('verifies signature over empty string', () => {
+      const data = ''
+      const signature = signEd25519(data)
+
+      expect(delegatedVerify({ data, signature, publicKey: ed25519Public })).toBe(true)
+    })
+
+    it('verifies signature over empty Buffer', () => {
+      const data = Buffer.alloc(0)
+      const signature = crypto
+        .sign(null, data, crypto.createPrivateKey(ed25519Private))
+        .toString('base64')
+
+      expect(delegatedVerify({ data, signature, publicKey: ed25519Public })).toBe(true)
+    })
   })
 })

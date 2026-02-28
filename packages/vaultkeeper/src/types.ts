@@ -164,9 +164,10 @@ export interface SignRequest {
   /** The data to sign. Strings are treated as UTF-8. */
   data: string | Buffer
   /**
-   * Override the hash algorithm (e.g. `'sha256'`, `'sha512'`).
+   * Override the hash algorithm (`'sha256'`, `'sha384'`, or `'sha512'`).
    * Ignored for Ed25519/Ed448 keys where the algorithm is implicit.
    * Non-Edwards keys (RSA, EC) default to `'sha256'` when omitted.
+   * Weak algorithms (e.g. `'md5'`, `'sha1'`) are rejected.
    */
   algorithm?: string | undefined
 }

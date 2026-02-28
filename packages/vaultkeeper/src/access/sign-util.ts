@@ -4,6 +4,14 @@
  */
 
 import type { KeyObject } from 'node:crypto'
+import { VaultError } from '../errors.js'
+
+/**
+ * Allowlist of hash algorithms accepted for non-Edwards keys.
+ * Prevents algorithm downgrade attacks (e.g. callers requesting `'md5'`).
+ * @internal
+ */
+const ALLOWED_ALGORITHMS = new Set(['sha256', 'sha384', 'sha512'])
 
 /**
  * Resolve the algorithm parameter for `crypto.sign()` / `crypto.verify()`
@@ -16,6 +24,7 @@ import type { KeyObject } from 'node:crypto'
  * @param override - Caller-provided algorithm override (ignored for Edwards curves)
  * @returns `signAlg` is passed to the Node.js crypto API; `label` is the
  *   human-readable algorithm name returned to the caller.
+ * @throws {VaultError} If `override` is not in the allowed algorithm set.
  * @internal
  */
 export function resolveAlgorithmForKey(
@@ -27,5 +36,10 @@ export function resolveAlgorithmForKey(
     return { signAlg: null, label: keyType }
   }
   const alg = override ?? 'sha256'
+  if (!ALLOWED_ALGORITHMS.has(alg)) {
+    throw new VaultError(
+      `Unsupported signing algorithm '${alg}'. Allowed: ${[...ALLOWED_ALGORITHMS].join(', ')}`,
+    )
+  }
   return { signAlg: alg, label: alg }
 }

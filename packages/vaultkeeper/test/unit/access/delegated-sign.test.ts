@@ -114,5 +114,46 @@ describe('delegatedSign', () => {
       const r2 = delegatedSign(ed25519Private, { data: 'b' })
       expect(r1.signature).not.toBe(r2.signature)
     })
+
+    it('throws for weak algorithm (md5)', () => {
+      expect(() =>
+        delegatedSign(rsaPrivate, { data: 'test', algorithm: 'md5' }),
+      ).toThrow(/Unsupported signing algorithm/)
+    })
+
+    it('throws for weak algorithm (sha1)', () => {
+      expect(() =>
+        delegatedSign(rsaPrivate, { data: 'test', algorithm: 'sha1' }),
+      ).toThrow(/Unsupported signing algorithm/)
+    })
+  })
+
+  describe('edge cases', () => {
+    it('signs empty string data', () => {
+      const result = delegatedSign(ed25519Private, { data: '' })
+      expect(result.signature).toBeTruthy()
+
+      const valid = crypto.verify(
+        null,
+        Buffer.from(''),
+        crypto.createPublicKey(ed25519Public),
+        Buffer.from(result.signature, 'base64'),
+      )
+      expect(valid).toBe(true)
+    })
+
+    it('signs empty Buffer data', () => {
+      const data = Buffer.alloc(0)
+      const result = delegatedSign(ed25519Private, { data })
+      expect(result.signature).toBeTruthy()
+
+      const valid = crypto.verify(
+        null,
+        data,
+        crypto.createPublicKey(ed25519Public),
+        Buffer.from(result.signature, 'base64'),
+      )
+      expect(valid).toBe(true)
+    })
   })
 })
