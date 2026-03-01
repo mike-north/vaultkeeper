@@ -248,4 +248,6 @@ export interface BackendConfig {
   plugin?: boolean | undefined
   /** Filesystem path used by file-based backends. */
   path?: string | undefined
+  /** Backend-specific options collected during interactive setup. */
+  options?: Record<string, string> | undefined
 }

@@ -29,6 +29,16 @@ export function delegatedVerify(request: VerifyRequest): boolean {
     return false
   }
 
+  // Reject private key material passed as publicKey — crypto.createPublicKey()
+  // silently derives the public component from a private key PEM, which could
+  // mask a consumer misconfiguration. We check the raw PEM text because
+  // createPublicKey() converts private keys to public KeyObjects transparently.
+  if (typeof request.publicKey === 'string' && request.publicKey.includes('PRIVATE KEY')) {
+    return false
+  }
+
+  // NOTE: resolveAlgorithmForKey throws for disallowed algorithms (e.g. 'md5').
+  // That error must propagate — do NOT wrap this call in a try/catch.
   const { signAlg } = resolveAlgorithmForKey(key, request.algorithm)
   const sig = Buffer.from(request.signature, 'base64')
 

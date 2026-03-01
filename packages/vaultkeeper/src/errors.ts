@@ -214,6 +214,29 @@ export class IdentityMismatchError extends VaultError {
 // --- Infrastructure Failures ---
 
 /**
+ * Thrown when a caller requests a signing/verification algorithm that is not
+ * in the allowed set (e.g. `'md5'`).
+ */
+export class InvalidAlgorithmError extends VaultError {
+  /**
+   * The algorithm that was requested.
+   */
+  readonly algorithm: string
+
+  /**
+   * The set of algorithms that are allowed.
+   */
+  readonly allowed: string[]
+
+  constructor(message: string, algorithm: string, allowed: string[]) {
+    super(message)
+    this.name = 'InvalidAlgorithmError'
+    this.algorithm = algorithm
+    this.allowed = allowed
+  }
+}
+
+/**
  * Thrown during initialization when a required system dependency (e.g. OpenSSL
  * or a native credential helper) is missing or incompatible.
  */

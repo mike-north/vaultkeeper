@@ -72,6 +72,22 @@ function validateBackendEntry(entry: unknown, index: number): BackendConfig {
     result.path = entry.path
   }
 
+  if (entry.options !== undefined) {
+    if (!isObject(entry.options)) {
+      throw new Error(`backends[${String(index)}].options must be an object`)
+    }
+    const opts: Record<string, string> = {}
+    for (const [k, v] of Object.entries(entry.options)) {
+      if (typeof v !== 'string') {
+        throw new Error(
+          `backends[${String(index)}].options["${k}"] must be a string`,
+        )
+      }
+      opts[k] = v
+    }
+    result.options = opts
+  }
+
   return result
 }
 

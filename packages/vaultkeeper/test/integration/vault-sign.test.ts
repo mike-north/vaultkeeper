@@ -7,6 +7,8 @@
  */
 
 import * as crypto from 'node:crypto'
+import * as os from 'node:os'
+import * as path from 'node:path'
 import { describe, it, expect, beforeEach } from 'vitest'
 import { VaultKeeper, BackendRegistry } from '../../src/index.js'
 import type { VaultConfig, SecretBackend } from '../../src/index.js'
@@ -39,7 +41,7 @@ async function createVault(): Promise<VaultKeeper> {
   return VaultKeeper.init({
     skipDoctor: true,
     config: TEST_CONFIG,
-    configDir: '/tmp/vk-sign-integration',
+    configDir: path.join(os.tmpdir(), 'vk-sign-integration'),
   })
 }
 

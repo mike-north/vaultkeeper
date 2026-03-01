@@ -12,6 +12,7 @@ export class AuthorizationDeniedError extends VaultError {
 // @public
 export interface BackendConfig {
     enabled: boolean;
+    options?: Record<string, string> | undefined;
     path?: string | undefined;
     plugin?: boolean | undefined;
     type: string;
@@ -28,11 +29,21 @@ export class BackendLockedError extends VaultError {
 
 // @public
 export class BackendRegistry {
+    // @internal
+    static clearBackends(): void;
+    // @internal
+    static clearSetups(): void;
     static create(type: string): SecretBackend;
     static getAvailableTypes(): Promise<string[]>;
+    static getSetup(type: string): BackendSetupFactory | undefined;
     static getTypes(): string[];
+    static hasSetup(type: string): boolean;
     static register(type: string, factory: BackendFactory): void;
+    static registerSetup(type: string, factory: BackendSetupFactory): void;
 }
+
+// @public
+export type BackendSetupFactory = () => AsyncGenerator<SetupQuestion, SetupResult, string>;
 
 // @public
 export class BackendUnavailableError extends VaultError {
@@ -88,6 +99,13 @@ export class IdentityMismatchError extends VaultError {
     constructor(message: string, previousHash: string, currentHash: string);
     readonly currentHash: string;
     readonly previousHash: string;
+}
+
+// @public
+export class InvalidAlgorithmError extends VaultError {
+    constructor(message: string, algorithm: string, allowed: string[]);
+    readonly algorithm: string;
+    readonly allowed: string[];
 }
 
 // @public
@@ -164,6 +182,12 @@ export class SecretNotFoundError extends VaultError {
 }
 
 // @public
+export interface SetupChoice {
+    readonly label: string;
+    readonly value: string;
+}
+
+// @public
 export class SetupError extends VaultError {
     constructor(message: string, dependency: string);
     readonly dependency: string;
@@ -176,6 +200,18 @@ export interface SetupOptions {
     trustTier?: TrustTier | undefined;
     ttlMinutes?: number | undefined;
     useLimit?: number | null | undefined;
+}
+
+// @public
+export interface SetupQuestion {
+    readonly choices?: readonly SetupChoice[];
+    readonly key: string;
+    readonly prompt: string;
+}
+
+// @public
+export interface SetupResult {
+    readonly options: Record<string, string>;
 }
 
 // @public
