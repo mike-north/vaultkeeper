@@ -396,6 +396,22 @@ describe('createOnePasswordSetup', () => {
     await assertion
   })
 
+  it('includes underlying error detail when op vault list fails', async () => {
+    mockExecCommand
+      .mockResolvedValueOnce(
+        makeAccountListJson([
+          { account_uuid: 'uuid-1', url: 'https://a.1password.com', email: 'alice@example.com' },
+        ]),
+      )
+      .mockResolvedValueOnce(makeAccountGetJson({ name: 'Alice' }))
+      .mockRejectedValueOnce(new Error('connect ECONNREFUSED'))
+
+    const gen = createOnePasswordSetup()
+    const assertion = expect(driveGenerator(gen, [])).rejects.toThrow('connect ECONNREFUSED')
+    await vi.runAllTimersAsync()
+    await assertion
+  })
+
   it('thrown SetupError for op CLI failure has correct dependency', async () => {
     mockExecCommand
       .mockResolvedValueOnce(

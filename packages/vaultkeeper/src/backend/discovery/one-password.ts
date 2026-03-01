@@ -205,9 +205,10 @@ export async function* createOnePasswordSetup(): AsyncGenerator<SetupQuestion, S
   let vaults: SetupChoice[]
   try {
     vaults = await listVaults(selectedAccount)
-  } catch {
+  } catch (error: unknown) {
+    const detail = error instanceof Error ? error.message : String(error)
     throw new SetupError(
-      `Could not list vaults for 1Password account (${selectedAccount}). Ensure the \`op\` CLI is working and you are authenticated.`,
+      `Could not list vaults for 1Password account (${selectedAccount}): ${detail}`,
       '1Password CLI (op)',
     )
   }
