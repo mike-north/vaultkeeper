@@ -34,6 +34,7 @@ export class BackendRegistry {
     // @internal
     static clearSetups(): void;
     static create(type: string): SecretBackend;
+    static getAvailableTypes(): Promise<string[]>;
     static getSetup(type: string): BackendSetupFactory | undefined;
     static getTypes(): string[];
     static hasSetup(type: string): boolean;
@@ -108,6 +109,9 @@ export class InvalidAlgorithmError extends VaultError {
 }
 
 // @public
+export function isListableBackend(backend: SecretBackend): backend is ListableBackend;
+
+// @public
 export class KeyRevokedError extends VaultError {
     constructor(message: string);
 }
@@ -119,6 +123,11 @@ export class KeyRotatedError extends VaultError {
 
 // @public
 export type KeyStatus = 'current' | 'previous' | 'deprecated';
+
+// @public
+export interface ListableBackend extends SecretBackend {
+    list(): Promise<string[]>;
+}
 
 // @public
 export class PluginNotFoundError extends VaultError {
