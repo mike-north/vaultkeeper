@@ -31,7 +31,8 @@ export function delegatedVerify(request: VerifyRequest): boolean {
 
   // Reject private key material passed as publicKey — crypto.createPublicKey()
   // silently derives the public component from a private key PEM, which could
-  // mask a consumer misconfiguration.
+  // mask a consumer misconfiguration. We check the raw PEM text because
+  // createPublicKey() converts private keys to public KeyObjects transparently.
   if (typeof request.publicKey === 'string' && request.publicKey.includes('PRIVATE KEY')) {
     return false
   }

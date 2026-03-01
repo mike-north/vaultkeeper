@@ -318,7 +318,7 @@ export class VaultKeeper {
    * context that has access to public key material.
    *
    * Returns `false` for invalid key material, malformed signatures, or
-   * any verification failure.
+   * any verification failure (except disallowed algorithms, which throw).
    *
    * @throws {InvalidAlgorithmError} If `request.algorithm` is not in the
    *   allowed set (e.g. `'md5'`).
