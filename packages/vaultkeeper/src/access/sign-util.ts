@@ -38,7 +38,7 @@ export function resolveAlgorithmForKey(
   const alg = (override ?? 'sha256').toLowerCase()
   if (!ALLOWED_ALGORITHMS.has(alg)) {
     throw new InvalidAlgorithmError(
-      `Unsupported signing algorithm '${alg}'. Allowed: ${[...ALLOWED_ALGORITHMS].join(', ')}`,
+      `Unsupported algorithm '${alg}'. Allowed: ${[...ALLOWED_ALGORITHMS].join(', ')}`,
       alg,
       [...ALLOWED_ALGORITHMS],
     )
