@@ -4,6 +4,7 @@
 
 export type { SecretBackend, BackendFactory, ListableBackend } from './types.js'
 export { isListableBackend } from './types.js'
+export type { SetupQuestion, SetupChoice, SetupResult, BackendSetupFactory } from './setup-types.js'
 export { BackendRegistry } from './registry.js'
 export { KeychainBackend } from './keychain-backend.js'
 export { DpapiBackend } from './dpapi-backend.js'

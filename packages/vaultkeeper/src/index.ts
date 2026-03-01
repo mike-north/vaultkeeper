@@ -18,6 +18,7 @@ export {
   TokenRevokedError,
   UsageLimitExceededError,
   IdentityMismatchError,
+  InvalidAlgorithmError,
   SetupError,
   FilesystemError,
   RotationInProgressError,
@@ -42,6 +43,12 @@ export type {
 } from './types.js'
 
 export type { SecretBackend, BackendFactory, ListableBackend } from './backend/index.js'
+export type {
+  SetupQuestion,
+  SetupChoice,
+  SetupResult,
+  BackendSetupFactory,
+} from './backend/index.js'
 export { BackendRegistry, isListableBackend } from './backend/index.js'
 
 export { CapabilityToken } from './identity/index.js'

@@ -47,6 +47,32 @@ describe('validateConfig', () => {
     expect(result.backends[0]?.path).toBe('/opt/plugin.js')
   })
 
+  it('should accept backend with valid options object', () => {
+    const input = validConfigJson()
+    input.backends = [{ type: 'file', enabled: true, options: { region: 'us-east-1', vault: 'my-vault' } }]
+    const result = validateConfig(input)
+    expect(result.backends[0]?.options).toEqual({ region: 'us-east-1', vault: 'my-vault' })
+  })
+
+  it('should accept backend without options (options is optional)', () => {
+    const input = validConfigJson()
+    // No options field — should parse fine
+    const result = validateConfig(input)
+    expect(result.backends[0]?.options).toBeUndefined()
+  })
+
+  it('should reject backend with non-object options', () => {
+    const input = validConfigJson()
+    input.backends = [{ type: 'file', enabled: true, options: 'not-an-object' }]
+    expect(() => validateConfig(input)).toThrow('options must be an object')
+  })
+
+  it('should reject backend with options containing non-string values', () => {
+    const input = validConfigJson()
+    input.backends = [{ type: 'file', enabled: true, options: { count: 42 } }]
+    expect(() => validateConfig(input)).toThrow('must be a string')
+  })
+
   // Negative tests
   it('should reject non-object', () => {
     expect(() => validateConfig('string')).toThrow('Config must be an object')

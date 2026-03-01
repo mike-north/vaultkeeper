@@ -292,6 +292,8 @@ export class VaultKeeper {
    *   with the vault metadata (`vaultResponse`).
    * @throws {VaultError} If `token` is invalid or was not created by this
    *   vault instance.
+   * @throws {InvalidAlgorithmError} If `request.algorithm` is not in the
+   *   allowed set (e.g. `'md5'`).
    */
   async sign(
     token: CapabilityToken,
@@ -299,6 +301,8 @@ export class VaultKeeper {
   ): Promise<{ result: SignResult; vaultResponse: VaultResponse }> {
     const claims = validateCapabilityToken(token)
     const result = delegatedSign(claims.val, request)
+    // Await to satisfy require-await; sign() is async for API consistency
+    // with fetch()/exec() and to reserve the right to check vaultResponse.rotatedJwt.
     await Promise.resolve()
     return {
       result,
@@ -313,8 +317,11 @@ export class VaultKeeper {
    * capability tokens are required. It is safe to call from CI or any
    * context that has access to public key material.
    *
-   * Never throws. Returns `false` for invalid key material, malformed
-   * signatures, or any verification failure.
+   * Returns `false` for invalid key material, malformed signatures, or
+   * any verification failure.
+   *
+   * @throws {InvalidAlgorithmError} If `request.algorithm` is not in the
+   *   allowed set (e.g. `'md5'`).
    *
    * @param request - The data, signature, public key, and optional
    *   algorithm override.

@@ -7,6 +7,7 @@
  */
 
 import type { SecretBackend, BackendFactory } from './types.js'
+import type { BackendSetupFactory } from './setup-types.js'
 import { BackendUnavailableError } from '../errors.js'
 
 /**
@@ -22,6 +23,7 @@ import { BackendUnavailableError } from '../errors.js'
 // eslint-disable-next-line @typescript-eslint/no-extraneous-class
 export class BackendRegistry {
   private static backends = new Map<string, BackendFactory>()
+  private static setups = new Map<string, BackendSetupFactory>()
 
   /**
    * Register a backend factory.
@@ -36,7 +38,7 @@ export class BackendRegistry {
    * Create a backend instance by type.
    * @param type - Backend type identifier
    * @returns A SecretBackend instance
-   * @throws Error if the backend type is not registered
+   * @throws {@link BackendUnavailableError} if the backend type is not registered
    */
   static create(type: string): SecretBackend {
     const factory = this.backends.get(type)
@@ -85,5 +87,50 @@ export class BackendRegistry {
       }),
     )
     return results.filter((type): type is string => type !== null)
+  }
+
+  /**
+   * Register a setup factory for a backend type.
+   * @param type - Backend type identifier
+   * @param factory - Factory function that creates a setup generator
+   */
+  static registerSetup(type: string, factory: BackendSetupFactory): void {
+    this.setups.set(type, factory)
+  }
+
+  /**
+   * Get the setup factory for a backend type, if one is registered.
+   * @param type - Backend type identifier
+   * @returns The setup factory, or `undefined` if none is registered
+   */
+  static getSetup(type: string): BackendSetupFactory | undefined {
+    return this.setups.get(type)
+  }
+
+  /**
+   * Check whether a setup factory is registered for the given backend type.
+   * @param type - Backend type identifier
+   * @returns `true` if a setup factory is registered
+   */
+  static hasSetup(type: string): boolean {
+    return this.setups.has(type)
+  }
+
+  /**
+   * Clear all registered backend factories.
+   * Intended for use in tests only.
+   * @internal
+   */
+  static clearBackends(): void {
+    this.backends.clear()
+  }
+
+  /**
+   * Clear all registered setup factories.
+   * Intended for use in tests only.
+   * @internal
+   */
+  static clearSetups(): void {
+    this.setups.clear()
   }
 }
