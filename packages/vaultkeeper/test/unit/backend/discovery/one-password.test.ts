@@ -222,12 +222,10 @@ describe('listVaults', () => {
     ])
   })
 
-  it('returns empty array when op vault list fails', async () => {
+  it('throws when op vault list fails', async () => {
     mockExecCommand.mockRejectedValue(new Error('op not found'))
 
-    const choices = await listVaults('uuid-1')
-
-    expect(choices).toHaveLength(0)
+    await expect(listVaults('uuid-1')).rejects.toThrow('op not found')
   })
 
   it('returns empty array when JSON is an empty array', async () => {
@@ -377,6 +375,72 @@ describe('createOnePasswordSetup', () => {
 
     const gen = createOnePasswordSetup()
     const assertion = expect(driveGenerator(gen, [])).rejects.toBeInstanceOf(SetupError)
+    await vi.runAllTimersAsync()
+    await assertion
+  })
+
+  it('throws SetupError with CLI dependency when op vault list fails', async () => {
+    mockExecCommand
+      .mockResolvedValueOnce(
+        makeAccountListJson([
+          { account_uuid: 'uuid-1', url: 'https://a.1password.com', email: 'alice@example.com' },
+        ]),
+      )
+      .mockResolvedValueOnce(makeAccountGetJson({ name: 'Alice' }))
+      // vault list command fails
+      .mockRejectedValueOnce(new Error('op CLI not authenticated'))
+
+    const gen = createOnePasswordSetup()
+    const assertion = expect(driveGenerator(gen, [])).rejects.toThrow('Could not list vaults')
+    await vi.runAllTimersAsync()
+    await assertion
+  })
+
+  it('thrown SetupError for op CLI failure has correct dependency', async () => {
+    mockExecCommand
+      .mockResolvedValueOnce(
+        makeAccountListJson([
+          { account_uuid: 'uuid-1', url: 'https://a.1password.com', email: 'alice@example.com' },
+        ]),
+      )
+      .mockResolvedValueOnce(makeAccountGetJson({ name: 'Alice' }))
+      // vault list command fails
+      .mockRejectedValueOnce(new Error('op CLI not authenticated'))
+
+    const gen = createOnePasswordSetup()
+    const assertion = expect(driveGenerator(gen, [])).rejects.toHaveProperty('dependency', '1Password CLI (op)')
+    await vi.runAllTimersAsync()
+    await assertion
+  })
+
+  it('thrown SetupError for zero vaults has correct dependency', async () => {
+    mockExecCommand
+      .mockResolvedValueOnce(
+        makeAccountListJson([
+          { account_uuid: 'uuid-1', url: 'https://a.1password.com', email: 'alice@example.com' },
+        ]),
+      )
+      .mockResolvedValueOnce(makeAccountGetJson({ name: 'Alice' }))
+      .mockResolvedValueOnce('[]')
+
+    const gen = createOnePasswordSetup()
+    const assertion = expect(driveGenerator(gen, [])).rejects.toThrow('No vaults found')
+    await vi.runAllTimersAsync()
+    await assertion
+  })
+
+  it('thrown SetupError for zero vaults has correct dependency value', async () => {
+    mockExecCommand
+      .mockResolvedValueOnce(
+        makeAccountListJson([
+          { account_uuid: 'uuid-1', url: 'https://a.1password.com', email: 'alice@example.com' },
+        ]),
+      )
+      .mockResolvedValueOnce(makeAccountGetJson({ name: 'Alice' }))
+      .mockResolvedValueOnce('[]')
+
+    const gen = createOnePasswordSetup()
+    const assertion = expect(driveGenerator(gen, [])).rejects.toHaveProperty('dependency', '1Password CLI (op)')
     await vi.runAllTimersAsync()
     await assertion
   })

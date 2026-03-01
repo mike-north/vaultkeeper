@@ -1,4 +1,4 @@
-import { describe, it, expect, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { BackendRegistry } from '../../../src/backend/registry.js'
 import { BackendUnavailableError } from '../../../src/errors.js'
 import type { SecretBackend } from '../../../src/backend/types.js'
@@ -17,6 +17,10 @@ function makeMockBackend(type: string): SecretBackend {
 }
 
 describe('BackendRegistry', () => {
+  beforeEach(() => {
+    BackendRegistry.clearBackends()
+  })
+
   afterEach(() => {
     BackendRegistry.clearBackends()
   })

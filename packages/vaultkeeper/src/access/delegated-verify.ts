@@ -13,15 +13,20 @@ import { resolveAlgorithmForKey } from './sign-util.js'
 /**
  * Verify a signature using a public key.
  *
+ * Returns `false` for invalid key material, malformed signatures, or any
+ * verification failure. The one exception is disallowed algorithms (e.g.
+ * `'md5'`, `'sha1'`), which throw {@link InvalidAlgorithmError} so that
+ * callers cannot silently downgrade to a weak hash.
+ *
  * @param request - The verify request (data, signature, publicKey, optional algorithm)
  * @returns `true` if the signature is valid, `false` otherwise
+ * @throws {InvalidAlgorithmError} If `request.algorithm` is not in the allowed set.
  * @internal
  */
 export function delegatedVerify(request: VerifyRequest): boolean {
   // Invalid key material or malformed signatures are treated as verification
-  // failures (return false) rather than thrown errors. This provides a uniform
-  // boolean return contract — callers can trust that `true` means "valid" and
-  // `false` means "not valid for any reason" without needing error handling.
+  // failures (return false) rather than thrown errors. Disallowed algorithms
+  // are the deliberate exception — see resolveAlgorithmForKey below.
   let key: crypto.KeyObject
   try {
     key = crypto.createPublicKey(request.publicKey)
