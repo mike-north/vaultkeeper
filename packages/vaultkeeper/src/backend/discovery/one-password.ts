@@ -149,23 +149,15 @@ export async function listAccounts(): Promise<SetupChoice[]> {
  * {@link SetupChoice} per vault where `value` is the vault `id` and `label`
  * is the vault `name`.
  *
+ * Unlike {@link listAccounts}, this function lets errors propagate so that
+ * the caller can distinguish "op CLI failed" from "account has zero vaults".
+ *
+ * @throws If the `op` CLI command fails or returns unparseable output.
  * @internal
  */
 export async function listVaults(accountUuid: string): Promise<SetupChoice[]> {
-  let json: string
-  try {
-    json = await execCommand('op', ['vault', 'list', '--account', accountUuid, '--format=json'])
-  } catch {
-    return []
-  }
-
-  let vaults: OpVaultListEntry[]
-  try {
-    vaults = parseJsonArray(json, isOpVaultListEntry)
-  } catch {
-    return []
-  }
-
+  const json = await execCommand('op', ['vault', 'list', '--account', accountUuid, '--format=json'])
+  const vaults = parseJsonArray(json, isOpVaultListEntry)
   return vaults.map((v) => ({ value: v.id, label: v.name }))
 }
 
@@ -210,12 +202,21 @@ export async function* createOnePasswordSetup(): AsyncGenerator<SetupQuestion, S
     selectedAccount = yield accountQuestion
   }
 
-  const vaults = await listVaults(selectedAccount)
+  let vaults: SetupChoice[]
+  try {
+    vaults = await listVaults(selectedAccount)
+  } catch (error: unknown) {
+    const detail = error instanceof Error ? error.message : String(error)
+    throw new SetupError(
+      `Could not list vaults for 1Password account (${selectedAccount}): ${detail}`,
+      '1Password CLI (op)',
+    )
+  }
 
   if (vaults.length === 0) {
     throw new SetupError(
       `No vaults found in the selected 1Password account (${selectedAccount}). Ensure the account has at least one vault.`,
-      '1Password vault',
+      '1Password CLI (op)',
     )
   }
 
