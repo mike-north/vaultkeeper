@@ -198,36 +198,67 @@ interface MockChildProcess {
   stdout: {
     on: (event: string, cb: (chunk: Buffer) => void) => void
   }
-  on: (event: string, cb: (errOrNothing?: Error) => void) => void
+  stderr: {
+    on: (event: string, cb: (chunk: Buffer) => void) => void
+  }
+  on: (event: string, cb: (...args: unknown[]) => void) => void
+}
+
+interface WorkerProcessOptions {
+  stdout?: string
+  stderr?: string
+  exitCode?: number | null
 }
 
 /**
- * Set up a mock child process whose stdout emits `data` and then fires `close`.
+ * Set up a mock child process whose stdout/stderr emit `data` and then fires `close`.
  */
-function makeWorkerProcess(stdoutData: string): MockChildProcess {
-  const dataListeners: ((chunk: Buffer) => void)[] = []
-  const closeListeners: ((errOrNothing?: Error) => void)[] = []
+function makeWorkerProcess(stdoutDataOrOptions: string | WorkerProcessOptions): MockChildProcess {
+  const opts: WorkerProcessOptions = typeof stdoutDataOrOptions === 'string'
+    ? { stdout: stdoutDataOrOptions }
+    : stdoutDataOrOptions
+  const stdoutData = opts.stdout ?? ''
+  const stderrData = opts.stderr ?? ''
+  const exitCode = opts.exitCode ?? 0
+
+  const stdoutListeners: ((chunk: Buffer) => void)[] = []
+  const stderrListeners: ((chunk: Buffer) => void)[] = []
+  const closeListeners: ((...args: unknown[]) => void)[] = []
 
   const stdout = {
     on: vi.fn((event: string, cb: (chunk: Buffer) => void) => {
-      if (event === 'data') dataListeners.push(cb)
+      if (event === 'data') stdoutListeners.push(cb)
+    }),
+  }
+
+  const stderr = {
+    on: vi.fn((event: string, cb: (chunk: Buffer) => void) => {
+      if (event === 'data') stderrListeners.push(cb)
     }),
   }
 
   const proc: MockChildProcess = {
     stdout,
-    on: vi.fn((event: string, cb: (errOrNothing?: Error) => void) => {
+    stderr,
+    on: vi.fn((event: string, cb: (...args: unknown[]) => void) => {
       if (event === 'close') closeListeners.push(cb)
     }),
   }
 
   // Schedule emission after mock resolves
   setTimeout(() => {
-    for (const listener of dataListeners) {
-      listener(Buffer.from(stdoutData, 'utf8'))
+    if (stdoutData !== '') {
+      for (const listener of stdoutListeners) {
+        listener(Buffer.from(stdoutData, 'utf8'))
+      }
+    }
+    if (stderrData !== '') {
+      for (const listener of stderrListeners) {
+        listener(Buffer.from(stderrData, 'utf8'))
+      }
     }
     for (const listener of closeListeners) {
-      listener()
+      listener(exitCode)
     }
   }, 0)
 
@@ -235,15 +266,15 @@ function makeWorkerProcess(stdoutData: string): MockChildProcess {
 }
 
 function makeWorkerErrorProcess(spawnErr: Error): MockChildProcess {
-  const errorListeners: ((errOrNothing?: Error) => void)[] = []
+  const errorListeners: ((...args: unknown[]) => void)[] = []
 
-  const stdout = {
-    on: vi.fn(),
-  }
+  const stdout = { on: vi.fn() }
+  const stderr = { on: vi.fn() }
 
   const proc: MockChildProcess = {
     stdout,
-    on: vi.fn((event: string, cb: (errOrNothing?: Error) => void) => {
+    stderr,
+    on: vi.fn((event: string, cb: (...args: unknown[]) => void) => {
       if (event === 'error') errorListeners.push(cb)
     }),
   }
@@ -639,6 +670,22 @@ describe('OnePasswordBackend', () => {
       mockSpawn.mockReturnValue(proc)
 
       await expect(backend.retrieve('my-secret')).rejects.toBeInstanceOf(SecretNotFoundError)
+    })
+
+    it('should throw Error with stderr when worker crashes with no stdout', async () => {
+      const backend = makePerAccessBackend()
+      const proc = makeWorkerProcess({ stdout: '', stderr: 'Error: Cannot find module @1password/sdk', exitCode: 1 })
+      mockSpawn.mockReturnValue(proc)
+
+      await expect(backend.retrieve('my-secret')).rejects.toThrow('Cannot find module @1password/sdk')
+    })
+
+    it('should throw Error with exit code when worker crashes with no stdout or stderr', async () => {
+      const backend = makePerAccessBackend()
+      const proc = makeWorkerProcess({ stdout: '', stderr: '', exitCode: 137 })
+      mockSpawn.mockReturnValue(proc)
+
+      await expect(backend.retrieve('my-secret')).rejects.toThrow('exit code 137')
     })
   })
 

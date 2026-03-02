@@ -342,16 +342,29 @@ export class OnePasswordBackend implements ListableBackend {
       const child = spawn(
         process.execPath,
         [workerPath, accountArg, this.vaultId, id],
-        { stdio: ['ignore', 'pipe', 'ignore'] },
+        { stdio: ['ignore', 'pipe', 'pipe'] },
       )
 
-      const chunks: Buffer[] = []
+      const stdoutChunks: Buffer[] = []
+      const stderrChunks: Buffer[] = []
       child.stdout.on('data', (chunk: Buffer) => {
-        chunks.push(chunk)
+        stdoutChunks.push(chunk)
+      })
+      child.stderr.on('data', (chunk: Buffer) => {
+        stderrChunks.push(chunk)
       })
 
-      child.on('close', () => {
-        const raw = Buffer.concat(chunks).toString('utf8').trim()
+      child.on('close', (code) => {
+        const raw = Buffer.concat(stdoutChunks).toString('utf8').trim()
+
+        // If worker produced no stdout, use exit code + stderr for diagnostics
+        if (raw === '') {
+          const stderr = Buffer.concat(stderrChunks).toString('utf8').trim()
+          const detail = stderr !== '' ? stderr : `exit code ${String(code)}`
+          reject(new Error(`1Password per-access worker crashed for secret ${id}: ${detail}`))
+          return
+        }
+
         let parsed: unknown
         try {
           parsed = JSON.parse(raw)
