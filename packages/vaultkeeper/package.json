@@ -42,6 +42,7 @@
     "access": "public"
   },
   "dependencies": {
+    "@1password/sdk": "^0.4.0",
     "jose": "^6.0.0"
   },
   "devDependencies": {
