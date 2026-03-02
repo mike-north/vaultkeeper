@@ -244,6 +244,16 @@ describe('createOnePasswordSetup', () => {
   // -------------------------------------------------------------------------
 
   describe('error cases', () => {
+    it('throws SetupError when account name is empty', async () => {
+      const gen = createOnePasswordSetup()
+      await expect(driveGenerator(gen, ['', 'session'])).rejects.toBeInstanceOf(SetupError)
+    })
+
+    it('throws SetupError when account name is whitespace-only', async () => {
+      const gen = createOnePasswordSetup()
+      await expect(driveGenerator(gen, ['   ', 'session'])).rejects.toBeInstanceOf(SetupError)
+    })
+
     it('throws SetupError when SDK client creation fails', async () => {
       mockCreateClient.mockRejectedValueOnce(new Error('biometric auth failed'))
 

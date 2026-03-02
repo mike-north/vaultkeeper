@@ -116,6 +116,11 @@ export class OnePasswordBackend implements ListableBackend {
         'per-access mode requires desktop biometric authentication and cannot be used with a service account token',
       )
     }
+    if (options.account !== undefined && options.serviceAccountToken !== undefined) {
+      throw new Error(
+        'account and serviceAccountToken are mutually exclusive — provide one or the other, not both',
+      )
+    }
     this.vaultId = options.vault
     this.sessionTimeoutMs = options.sessionTimeoutMs ?? SESSION_TIMEOUT_MS
     if (options.account !== undefined) {
@@ -269,13 +274,24 @@ export class OnePasswordBackend implements ListableBackend {
     const existing = await this.findItem(client, id)
 
     if (existing !== undefined) {
-      // Update the existing item's password field in-place
-      const updatedFields = existing.fields.map((f) => {
-        if (f.title === PASSWORD_FIELD_TITLE) {
-          return { ...f, value: secret }
-        }
-        return f
-      })
+      // Update the existing item's password field, or append one if missing
+      const hasPasswordField = existing.fields.some((f) => f.title === PASSWORD_FIELD_TITLE)
+      const updatedFields = hasPasswordField
+        ? existing.fields.map((f) => {
+            if (f.title === PASSWORD_FIELD_TITLE) {
+              return { ...f, value: secret }
+            }
+            return f
+          })
+        : [
+            ...existing.fields,
+            {
+              id: 'password',
+              title: PASSWORD_FIELD_TITLE,
+              fieldType: ItemFieldType.Concealed,
+              value: secret,
+            },
+          ]
       await client.items.put({ ...existing, fields: updatedFields })
     } else {
       await client.items.create({
@@ -367,10 +383,8 @@ export class OnePasswordBackend implements ListableBackend {
       })
 
       child.on('error', (err) => {
-        reject(new PluginNotFoundError(
-          `Failed to spawn 1Password worker: ${String(err)}`,
-          '@1password/sdk',
-          SDK_INSTALL_URL,
+        reject(new Error(
+          `Failed to spawn 1Password per-access worker at ${workerPath}: ${String(err)}`,
         ))
       })
     })

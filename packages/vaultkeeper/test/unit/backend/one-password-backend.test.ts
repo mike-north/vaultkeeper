@@ -93,7 +93,6 @@ vi.mock('node:child_process', () => ({
 import { OnePasswordBackend } from '../../../src/backend/one-password-backend.js'
 import {
   SecretNotFoundError,
-  PluginNotFoundError,
   BackendLockedError,
   AuthorizationDeniedError,
 } from '../../../src/errors.js'
@@ -284,6 +283,17 @@ describe('OnePasswordBackend', () => {
           }),
       ).toThrow('per-access mode requires desktop biometric authentication')
     })
+
+    it('should throw when both account and serviceAccountToken are provided', () => {
+      expect(
+        () =>
+          new OnePasswordBackend({
+            vault: VAULT_ID,
+            account: 'my-account',
+            serviceAccountToken: 'token',
+          }),
+      ).toThrow('account and serviceAccountToken are mutually exclusive')
+    })
   })
 
   // ---- isAvailable ----
@@ -418,6 +428,30 @@ describe('OnePasswordBackend', () => {
       const putFields: unknown = putArg !== null && typeof putArg === 'object' && 'fields' in putArg ? putArg.fields : undefined
       expect(putFields).toEqual(
         expect.arrayContaining([expect.objectContaining({ title: 'password', value: 'new-value' })]),
+      )
+    })
+
+    it('should append a password field when updating an item that is missing one', async () => {
+      const backend = makeSessionBackend()
+      const itemWithoutPassword = {
+        id: 'item-1',
+        title: 'my-secret',
+        tags: ['vaultkeeper'],
+        fields: [{ id: 'notes', title: 'notes', fieldType: 'Text', value: 'some note' }],
+        vaultId: VAULT_ID,
+        category: 'Password',
+        version: 1,
+      }
+      mockList.mockResolvedValue([makeOverview('item-1', 'my-secret')])
+      mockGet.mockResolvedValue(itemWithoutPassword)
+
+      await backend.store('my-secret', 'new-value')
+
+      expect(mockPut).toHaveBeenCalledTimes(1)
+      const putArg: unknown = mockPut.mock.calls[0]?.[0]
+      const putFields: unknown = putArg !== null && typeof putArg === 'object' && 'fields' in putArg ? putArg.fields : undefined
+      expect(putFields).toEqual(
+        expect.arrayContaining([expect.objectContaining({ title: 'password', value: 'new-value', fieldType: 'Concealed' })]),
       )
     })
 
@@ -583,12 +617,12 @@ describe('OnePasswordBackend', () => {
       await expect(backend.retrieve('my-secret')).rejects.toBeInstanceOf(SecretNotFoundError)
     })
 
-    it('should throw PluginNotFoundError when spawn itself errors', async () => {
+    it('should throw Error with worker path when spawn itself errors', async () => {
       const backend = makePerAccessBackend()
       const proc = makeWorkerErrorProcess(new Error('spawn ENOENT'))
       mockSpawn.mockReturnValue(proc)
 
-      await expect(backend.retrieve('my-secret')).rejects.toBeInstanceOf(PluginNotFoundError)
+      await expect(backend.retrieve('my-secret')).rejects.toThrow('Failed to spawn 1Password per-access worker')
     })
 
     it('should throw SecretNotFoundError when worker returns unparseable output', async () => {

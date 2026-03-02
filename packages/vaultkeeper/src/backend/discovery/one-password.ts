@@ -66,6 +66,10 @@ export async function* createOnePasswordSetup(): AsyncGenerator<SetupQuestion, S
   }
   const accountName = yield accountQuestion
 
+  if (accountName.trim() === '') {
+    throw new SetupError('Account name cannot be empty', '1Password SDK')
+  }
+
   const client = await createSdkClient(accountName)
   const vaultOverviews = await listVaultsFromClient(client)
 
