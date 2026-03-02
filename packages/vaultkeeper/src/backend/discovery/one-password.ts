@@ -4,237 +4,112 @@
  * @internal
  */
 
-import { execCommand } from '../../util/exec.js'
+import { createClient, DesktopAuth } from '@1password/sdk'
+import type { Client, VaultOverview } from '@1password/sdk'
 import { SetupError } from '../../errors.js'
 import type { SetupChoice, SetupQuestion, SetupResult } from '../setup-types.js'
 
-/** Minimum shape we expect from `op account list --format=json`. */
-interface OpAccountListEntry {
-  account_uuid: string
-  url: string
-  email: string
-}
+const INTEGRATION_NAME = 'vaultkeeper'
+const INTEGRATION_VERSION = '0.4.0'
 
-/** Minimum shape we expect from `op account get --format=json`. */
-interface OpAccountGetEntry {
-  name: string
-}
-
-/** Minimum shape we expect from `op vault list --format=json`. */
-interface OpVaultListEntry {
-  id: string
-  name: string
-}
-
-const RETRY_COUNT = 2
-const RETRY_DELAY_MS = 500
-
-function isOpAccountListEntry(value: unknown): value is OpAccountListEntry {
-  if (typeof value !== 'object' || value === null) return false
-  return (
-    'account_uuid' in value &&
-    typeof value.account_uuid === 'string' &&
-    'url' in value &&
-    typeof value.url === 'string' &&
-    'email' in value &&
-    typeof value.email === 'string'
-  )
-}
-
-function isOpAccountGetEntry(value: unknown): value is OpAccountGetEntry {
-  if (typeof value !== 'object' || value === null) return false
-  return 'name' in value && typeof value.name === 'string'
-}
-
-function isOpVaultListEntry(value: unknown): value is OpVaultListEntry {
-  if (typeof value !== 'object' || value === null) return false
-  return (
-    'id' in value &&
-    typeof value.id === 'string' &&
-    'name' in value &&
-    typeof value.name === 'string'
-  )
-}
-
-function parseJsonArray<T>(
-  json: string,
-  guard: (v: unknown) => v is T,
-): T[] {
-  const parsed: unknown = JSON.parse(json)
-  if (!Array.isArray(parsed)) return []
-  return parsed.filter(guard)
-}
-
-async function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms))
-}
-
-async function execWithRetry(
-  command: string,
-  args: string[],
-  retries: number,
-  delayMs: number,
-): Promise<string> {
-  let lastError: unknown
-  for (let attempt = 0; attempt <= retries; attempt++) {
-    try {
-      return await execCommand(command, args)
-    } catch (err) {
-      lastError = err
-      if (attempt < retries) {
-        await delay(delayMs)
-      }
-    }
-  }
-  throw lastError
-}
-
-/**
- * Lists all 1Password accounts available via the `op` CLI.
- *
- * Runs `op account list --format=json` and, for each account, fetches its
- * full name via `op account get`. Returns one {@link SetupChoice} per account
- * where `value` is the `account_uuid` and `label` is `"name (email)"`.
- *
- * Implements retry logic: up to 2 retries (3 total attempts) with a 500 ms delay on failure.
- * Returns an empty array if the `op` CLI fails after all retries.
- *
- * @internal
- */
-export async function listAccounts(): Promise<SetupChoice[]> {
-  let listJson: string
+async function createSdkClient(accountName: string): Promise<Client> {
   try {
-    listJson = await execWithRetry('op', ['account', 'list', '--format=json'], RETRY_COUNT, RETRY_DELAY_MS)
-  } catch {
-    return []
+    return await createClient({
+      auth: new DesktopAuth(accountName),
+      integrationName: INTEGRATION_NAME,
+      integrationVersion: INTEGRATION_VERSION,
+    })
+  } catch (error: unknown) {
+    const detail = error instanceof Error ? error.message : String(error)
+    throw new SetupError(
+      `Could not connect to 1Password for account "${accountName}": ${detail}`,
+      '1Password SDK',
+    )
   }
-
-  let accounts: OpAccountListEntry[]
-  try {
-    accounts = parseJsonArray(listJson, isOpAccountListEntry)
-  } catch {
-    return []
-  }
-
-  const choices: SetupChoice[] = []
-  for (const account of accounts) {
-    let label = account.email
-    try {
-      const getJson = await execWithRetry(
-        'op',
-        ['account', 'get', '--account', account.account_uuid, '--format=json'],
-        RETRY_COUNT,
-        RETRY_DELAY_MS,
-      )
-      // `op account get` returns a single JSON object, not an array;
-      // wrap it so parseJsonArray can process it uniformly.
-      const detail = parseJsonArray(`[${getJson}]`, isOpAccountGetEntry)
-      const entry = detail[0]
-      if (entry !== undefined) {
-        label = `${entry.name} (${account.email})`
-      }
-    } catch {
-      // Fall back to email-only label if detail fetch fails
-    }
-    choices.push({ value: account.account_uuid, label })
-  }
-
-  return choices
 }
 
-/**
- * Lists all vaults in the given 1Password account.
- *
- * Runs `op vault list --account <uuid> --format=json` and returns one
- * {@link SetupChoice} per vault where `value` is the vault `id` and `label`
- * is the vault `name`.
- *
- * Unlike {@link listAccounts}, this function lets errors propagate so that
- * the caller can distinguish "op CLI failed" from "account has zero vaults".
- *
- * @throws If the `op` CLI command fails or returns unparseable output.
- * @internal
- */
-export async function listVaults(accountUuid: string): Promise<SetupChoice[]> {
-  const json = await execCommand('op', ['vault', 'list', '--account', accountUuid, '--format=json'])
-  const vaults = parseJsonArray(json, isOpVaultListEntry)
-  return vaults.map((v) => ({ value: v.id, label: v.name }))
+async function listVaultsFromClient(client: Client): Promise<VaultOverview[]> {
+  try {
+    return await client.vaults.list()
+  } catch (error: unknown) {
+    const detail = error instanceof Error ? error.message : String(error)
+    throw new SetupError(
+      `Could not list vaults from 1Password: ${detail}`,
+      '1Password SDK',
+    )
+  }
 }
 
 /**
  * Creates a setup generator for the 1Password backend.
  *
  * Behaviour:
- * - If no accounts are found, throws {@link SetupError}.
- * - If exactly one account is found, auto-selects it without prompting.
- * - If multiple accounts are found, yields an account selection question.
- * - If no vaults are found in the selected account, throws {@link SetupError}.
+ * - Asks for an account name (free-form string input).
+ * - Creates a temporary SDK client using `DesktopAuth`, triggering biometric
+ *   authentication.
+ * - If SDK client creation fails, throws {@link SetupError}.
+ * - Lists vaults via the SDK. If vault listing fails, throws {@link SetupError}.
+ * - If no vaults are found, throws {@link SetupError}.
  * - If exactly one vault is found, auto-selects it without prompting.
  * - If multiple vaults are found, yields a vault selection question.
+ * - Yields an access mode question.
  *
- * Returns a {@link SetupResult} whose `options` contains `account` and `vault`.
+ * Returns a {@link SetupResult} whose `options` contains `account`, `vault`,
+ * and `accessMode`.
  *
  * @internal
  */
 export async function* createOnePasswordSetup(): AsyncGenerator<SetupQuestion, SetupResult, string> {
-  const accounts = await listAccounts()
+  const accountQuestion: SetupQuestion = {
+    key: 'account',
+    prompt: 'Enter your 1Password account name',
+  }
+  const accountName = yield accountQuestion
 
-  if (accounts.length === 0) {
+  if (accountName.trim() === '') {
+    throw new SetupError('Account name cannot be empty', '1Password SDK')
+  }
+
+  const client = await createSdkClient(accountName)
+  const vaultOverviews = await listVaultsFromClient(client)
+
+  if (vaultOverviews.length === 0) {
     throw new SetupError(
-      'No 1Password accounts found. Ensure that the `op` CLI is installed and you are signed in.',
-      '1Password CLI (op)',
+      `No vaults found in the 1Password account "${accountName}". Ensure the account has at least one vault.`,
+      '1Password SDK',
     )
   }
 
-  let selectedAccount: string
-  if (accounts.length === 1) {
-    // Array#at(0) returns T | undefined. The undefined guard is unreachable at
-    // runtime (length === 1 guarantees an element) but satisfies the type system.
-    const only = accounts.at(0)
-    if (only === undefined) throw new SetupError('Unexpected empty account list', '1Password CLI (op)')
-    selectedAccount = only.value
-  } else {
-    const accountQuestion: SetupQuestion = {
-      key: 'account',
-      prompt: 'Select a 1Password account',
-      choices: accounts,
-    }
-    selectedAccount = yield accountQuestion
-  }
-
-  let vaults: SetupChoice[]
-  try {
-    vaults = await listVaults(selectedAccount)
-  } catch (error: unknown) {
-    const detail = error instanceof Error ? error.message : String(error)
-    throw new SetupError(
-      `Could not list vaults for 1Password account (${selectedAccount}): ${detail}`,
-      '1Password CLI (op)',
-    )
-  }
-
-  if (vaults.length === 0) {
-    throw new SetupError(
-      `No vaults found in the selected 1Password account (${selectedAccount}). Ensure the account has at least one vault.`,
-      '1Password CLI (op)',
-    )
-  }
+  const vaultChoices: SetupChoice[] = vaultOverviews.map((v) => ({
+    value: v.id,
+    label: v.title,
+  }))
 
   let selectedVault: string
-  if (vaults.length === 1) {
+  if (vaultChoices.length === 1) {
     // Array#at(0) returns T | undefined. The undefined guard is unreachable at
     // runtime (length === 1 guarantees an element) but satisfies the type system.
-    const only = vaults.at(0)
-    if (only === undefined) throw new SetupError('Unexpected empty vault list', '1Password vault')
+    const only = vaultChoices.at(0)
+    if (only === undefined) throw new SetupError('Unexpected empty vault list', '1Password SDK')
     selectedVault = only.value
   } else {
     const vaultQuestion: SetupQuestion = {
       key: 'vault',
       prompt: 'Select a vault',
-      choices: vaults,
+      choices: vaultChoices,
     }
     selectedVault = yield vaultQuestion
   }
 
-  return { options: { account: selectedAccount, vault: selectedVault } }
+  const accessModeQuestion: SetupQuestion = {
+    key: 'accessMode',
+    prompt: 'How should secrets be accessed?',
+    choices: [
+      { value: 'session', label: 'Session (one prompt per session)' },
+      { value: 'per-access', label: 'Per-access (prompt for every retrieval)' },
+    ],
+  }
+  const accessMode = yield accessModeQuestion
+
+  return { options: { account: accountName, vault: selectedVault, accessMode } }
 }

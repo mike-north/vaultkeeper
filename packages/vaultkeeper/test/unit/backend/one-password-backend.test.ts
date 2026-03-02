@@ -1,236 +1,835 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
-import type { ExecCommandResult } from '../../../src/util/exec.js'
+/**
+ * Tests for the 1Password SDK-based backend.
+ *
+ * @see https://developer.1password.com/docs/sdks/
+ */
 
-vi.mock('../../../src/util/exec.js', () => ({
-  execCommand: vi.fn(),
-  execCommandFull: vi.fn(),
+import { describe, it, expect, vi, beforeEach } from 'vitest'
+
+// ---- Hoist mock variables so factories can close over them ----
+
+const {
+  mockCreate,
+  mockPut,
+  mockDelete,
+  mockList,
+  mockGet,
+  mockCreateClient,
+  mockSpawn,
+  MockDesktopAuth,
+  MockDesktopSessionExpiredError,
+  mockClient,
+} = vi.hoisted(() => {
+  const mockCreate = vi.fn()
+  const mockPut = vi.fn()
+  const mockDelete = vi.fn()
+  const mockList = vi.fn()
+  const mockGet = vi.fn()
+
+  const mockItems = {
+    create: mockCreate,
+    put: mockPut,
+    delete: mockDelete,
+    list: mockList,
+    get: mockGet,
+  }
+
+  const mockClient = { items: mockItems }
+
+  const mockCreateClient = vi.fn().mockResolvedValue(mockClient)
+
+  class MockDesktopAuth {
+    accountName: string
+    constructor(accountName: string) {
+      this.accountName = accountName
+    }
+  }
+
+  class MockDesktopSessionExpiredError extends Error {
+    constructor(message: string) {
+      super(message)
+      this.name = 'DesktopSessionExpiredError'
+    }
+  }
+
+  const mockSpawn = vi.fn()
+
+  return {
+    mockCreate,
+    mockPut,
+    mockDelete,
+    mockList,
+    mockGet,
+    mockCreateClient,
+    mockSpawn,
+    MockDesktopAuth,
+    MockDesktopSessionExpiredError,
+    mockClient,
+  }
+})
+
+// ---- Mock @1password/sdk ----
+
+vi.mock('@1password/sdk', () => ({
+  createClient: mockCreateClient,
+  DesktopAuth: MockDesktopAuth,
+  DesktopSessionExpiredError: MockDesktopSessionExpiredError,
+  ItemCategory: {
+    Password: 'Password',
+  },
+  ItemFieldType: {
+    Concealed: 'Concealed',
+  },
 }))
 
-import { execCommand, execCommandFull } from '../../../src/util/exec.js'
+// ---- Mock node:child_process for per-access mode tests ----
+
+vi.mock('node:child_process', () => ({
+  spawn: mockSpawn,
+}))
+
+// ---- Import backend under test (after mocks are set up) ----
+
 import { OnePasswordBackend } from '../../../src/backend/one-password-backend.js'
-import { SecretNotFoundError, PluginNotFoundError } from '../../../src/errors.js'
+import {
+  SecretNotFoundError,
+  BackendLockedError,
+  AuthorizationDeniedError,
+} from '../../../src/errors.js'
 
-const mockExecCommand = vi.mocked(execCommand)
-const mockExecCommandFull = vi.mocked(execCommandFull)
+// ---- Test helpers ----
 
-function makeResult(exitCode: number, stdout = '', stderr = ''): ExecCommandResult {
-  return { exitCode, stdout, stderr }
+interface ItemOverviewLike {
+  id: string
+  title: string
+  tags: string[]
+  category: string
+  vaultId: string
+  websites: []
+  createdAt: Date
+  updatedAt: Date
+  state: string
 }
 
-describe('OnePasswordBackend', () => {
-  let backend: OnePasswordBackend
+interface ItemFieldLike {
+  id: string
+  title: string
+  fieldType: string
+  value: string
+}
 
+interface ItemLike {
+  id: string
+  title: string
+  category: string
+  vaultId: string
+  fields: ItemFieldLike[]
+  sections: []
+  notes: string
+  tags: string[]
+  websites: []
+  version: number
+  files: []
+  createdAt: Date
+  updatedAt: Date
+}
+
+const VAULT_ID = 'vault-abc123'
+const ACCOUNT_NAME = 'my-account'
+const FIXED_DATE = new Date('2024-01-15T10:30:00.000Z')
+
+function makeOverview(
+  id: string,
+  title: string,
+  tags: string[] = ['vaultkeeper'],
+): ItemOverviewLike {
+  return {
+    id,
+    title,
+    tags,
+    category: 'Password',
+    vaultId: VAULT_ID,
+    websites: [],
+    createdAt: FIXED_DATE,
+    updatedAt: FIXED_DATE,
+    state: 'active',
+  }
+}
+
+function makeItem(id: string, title: string, secretValue: string): ItemLike {
+  return {
+    id,
+    title,
+    category: 'Password',
+    vaultId: VAULT_ID,
+    fields: [
+      {
+        id: 'password',
+        title: 'password',
+        fieldType: 'Concealed',
+        value: secretValue,
+      },
+    ],
+    sections: [],
+    notes: '',
+    tags: ['vaultkeeper'],
+    websites: [],
+    version: 1,
+    files: [],
+    createdAt: FIXED_DATE,
+    updatedAt: FIXED_DATE,
+  }
+}
+
+function makeSessionBackend(account = ACCOUNT_NAME): OnePasswordBackend {
+  return new OnePasswordBackend({ vault: VAULT_ID, account })
+}
+
+function makePerAccessBackend(account = ACCOUNT_NAME): OnePasswordBackend {
+  return new OnePasswordBackend({ vault: VAULT_ID, account, accessMode: 'per-access' })
+}
+
+function makeServiceAccountBackend(token: string): OnePasswordBackend {
+  return new OnePasswordBackend({ vault: VAULT_ID, serviceAccountToken: token })
+}
+
+/** Shape that satisfies what `retrieveViaWorker` reads from the child process. */
+interface MockChildProcess {
+  stdout: {
+    on: (event: string, cb: (chunk: Buffer) => void) => void
+  }
+  stderr: {
+    on: (event: string, cb: (chunk: Buffer) => void) => void
+  }
+  on: (event: string, cb: (...args: unknown[]) => void) => void
+}
+
+interface WorkerProcessOptions {
+  stdout?: string
+  stderr?: string
+  exitCode?: number | null
+}
+
+/**
+ * Set up a mock child process whose stdout/stderr emit `data` and then fires `close`.
+ */
+function makeWorkerProcess(stdoutDataOrOptions: string | WorkerProcessOptions): MockChildProcess {
+  const opts: WorkerProcessOptions = typeof stdoutDataOrOptions === 'string'
+    ? { stdout: stdoutDataOrOptions }
+    : stdoutDataOrOptions
+  const stdoutData = opts.stdout ?? ''
+  const stderrData = opts.stderr ?? ''
+  const exitCode = opts.exitCode ?? 0
+
+  const stdoutListeners: ((chunk: Buffer) => void)[] = []
+  const stderrListeners: ((chunk: Buffer) => void)[] = []
+  const closeListeners: ((...args: unknown[]) => void)[] = []
+
+  const stdout = {
+    on: vi.fn((event: string, cb: (chunk: Buffer) => void) => {
+      if (event === 'data') stdoutListeners.push(cb)
+    }),
+  }
+
+  const stderr = {
+    on: vi.fn((event: string, cb: (chunk: Buffer) => void) => {
+      if (event === 'data') stderrListeners.push(cb)
+    }),
+  }
+
+  const proc: MockChildProcess = {
+    stdout,
+    stderr,
+    on: vi.fn((event: string, cb: (...args: unknown[]) => void) => {
+      if (event === 'close') closeListeners.push(cb)
+    }),
+  }
+
+  // Schedule emission after mock resolves
+  setTimeout(() => {
+    if (stdoutData !== '') {
+      for (const listener of stdoutListeners) {
+        listener(Buffer.from(stdoutData, 'utf8'))
+      }
+    }
+    if (stderrData !== '') {
+      for (const listener of stderrListeners) {
+        listener(Buffer.from(stderrData, 'utf8'))
+      }
+    }
+    for (const listener of closeListeners) {
+      listener(exitCode)
+    }
+  }, 0)
+
+  return proc
+}
+
+function makeWorkerErrorProcess(spawnErr: Error): MockChildProcess {
+  const errorListeners: ((...args: unknown[]) => void)[] = []
+
+  const stdout = { on: vi.fn() }
+  const stderr = { on: vi.fn() }
+
+  const proc: MockChildProcess = {
+    stdout,
+    stderr,
+    on: vi.fn((event: string, cb: (...args: unknown[]) => void) => {
+      if (event === 'error') errorListeners.push(cb)
+    }),
+  }
+
+  setTimeout(() => {
+    for (const listener of errorListeners) {
+      listener(spawnErr)
+    }
+  }, 0)
+
+  return proc
+}
+
+// ---- Tests ----
+
+describe('OnePasswordBackend', () => {
   beforeEach(() => {
-    backend = new OnePasswordBackend()
     vi.clearAllMocks()
+    mockCreateClient.mockResolvedValue(mockClient)
+    mockList.mockResolvedValue([])
+    mockGet.mockResolvedValue(makeItem('item-1', 'my-secret', 'secret-value'))
+    mockCreate.mockResolvedValue(makeItem('item-new', 'my-secret', 'secret-value'))
+    mockPut.mockResolvedValue(makeItem('item-1', 'my-secret', 'updated-value'))
+    mockDelete.mockResolvedValue(undefined)
   })
 
-  describe('isAvailable', () => {
-    it('should return true when op is available', async () => {
-      mockExecCommandFull.mockResolvedValue(makeResult(0, '2.24.0'))
+  // ---- constructor validation ----
 
+  describe('constructor', () => {
+    it('should throw when per-access mode is combined with serviceAccountToken', () => {
+      expect(
+        () =>
+          new OnePasswordBackend({
+            vault: VAULT_ID,
+            serviceAccountToken: 'token',
+            accessMode: 'per-access',
+          }),
+      ).toThrow('per-access mode requires desktop biometric authentication')
+    })
+
+    it('should throw when both account and serviceAccountToken are provided', () => {
+      expect(
+        () =>
+          new OnePasswordBackend({
+            vault: VAULT_ID,
+            account: 'my-account',
+            serviceAccountToken: 'token',
+          }),
+      ).toThrow('account and serviceAccountToken are mutually exclusive')
+    })
+  })
+
+  // ---- isAvailable ----
+
+  describe('isAvailable', () => {
+    it('should return true when SDK loads successfully', async () => {
+      const backend = makeSessionBackend()
       const result = await backend.isAvailable()
       expect(result).toBe(true)
     })
+  })
 
-    it('should return false when op is not installed', async () => {
-      mockExecCommandFull.mockRejectedValue(new Error('command not found: op'))
+  // ---- Client caching (session mode) ----
 
-      const result = await backend.isAvailable()
-      expect(result).toBe(false)
+  describe('session mode — client caching', () => {
+    it('should call createClient only once across multiple operations', async () => {
+      const backend = makeSessionBackend()
+      mockList.mockResolvedValue([makeOverview('item-1', 'secret-a')])
+
+      await backend.exists('secret-a')
+      await backend.exists('secret-a')
+      await backend.list()
+
+      expect(mockCreateClient).toHaveBeenCalledTimes(1)
     })
 
-    it('should return false when op exits with non-zero', async () => {
-      mockExecCommandFull.mockResolvedValue(makeResult(1))
+    it('should pass account name via DesktopAuth when account is set', async () => {
+      const backend = makeSessionBackend('my-team-account')
+      await backend.isAvailable()
+      await backend.list() // triggers acquireClient
 
-      const result = await backend.isAvailable()
-      expect(result).toBe(false)
+      expect(mockCreateClient).toHaveBeenCalledTimes(1)
+      const callArg: unknown = mockCreateClient.mock.calls[0]?.[0]
+      expect(callArg).toMatchObject({ integrationName: 'vaultkeeper' })
+      // Verify auth is a DesktopAuth-like object with the right accountName
+      expect(callArg).toMatchObject({ auth: { accountName: 'my-team-account' } })
+    })
+
+    it('should pass service account token as a string when configured', async () => {
+      const backend = makeServiceAccountBackend('ops-token-xyz')
+      await backend.list()
+
+      expect(mockCreateClient).toHaveBeenCalledWith(
+        expect.objectContaining({
+          auth: 'ops-token-xyz',
+        }),
+      )
     })
   })
 
-  describe('store', () => {
-    it('should create new item when secret does not exist', async () => {
-      // isAvailable check
-      mockExecCommandFull
-        .mockResolvedValueOnce(makeResult(0, '2.24.0')) // isAvailable
-        .mockResolvedValueOnce(makeResult(1)) // exists check (not found)
-      mockExecCommand.mockResolvedValue('')
+  // ---- acquireClient error paths ----
 
-      await backend.store('my-secret', 'secret-value')
+  describe('acquireClient error handling', () => {
+    it('should throw BackendLockedError when SDK raises DesktopSessionExpiredError', async () => {
+      mockCreateClient.mockRejectedValue(new MockDesktopSessionExpiredError('session expired'))
 
-      expect(mockExecCommand).toHaveBeenCalledWith(
-        'op',
-        expect.arrayContaining(['item', 'create', '--category', 'Password', '--title', 'my-secret']),
-      )
+      const backend = makeSessionBackend()
+
+      await expect(backend.list()).rejects.toBeInstanceOf(BackendLockedError)
     })
 
-    it('should edit existing item when secret already exists', async () => {
-      // store calls: isAvailable, then exists (which calls isAvailable again + item get)
-      mockExecCommandFull
-        .mockResolvedValueOnce(makeResult(0, '2.24.0')) // store -> isAvailable
-        .mockResolvedValueOnce(makeResult(0, '2.24.0')) // exists -> isAvailable
-        .mockResolvedValueOnce(makeResult(0, 'my-secret')) // exists -> item get (found)
-      mockExecCommand.mockResolvedValue('')
+    it('should set interactive=true on BackendLockedError from session expiry', async () => {
+      mockCreateClient.mockRejectedValue(new MockDesktopSessionExpiredError('session expired'))
+
+      const backend = makeSessionBackend()
+
+      await expect(backend.list()).rejects.toMatchObject({ interactive: true })
+    })
+
+    it('should throw AuthorizationDeniedError for generic createClient failures', async () => {
+      mockCreateClient.mockRejectedValue(new Error('wrong account name'))
+
+      const backend = makeSessionBackend()
+
+      await expect(backend.list()).rejects.toBeInstanceOf(AuthorizationDeniedError)
+    })
+
+    it('should include the original error message in AuthorizationDeniedError', async () => {
+      mockCreateClient.mockRejectedValue(new Error('wrong account name'))
+
+      const backend = makeSessionBackend()
+
+      await expect(backend.list()).rejects.toThrow('wrong account name')
+    })
+
+    it('should retry acquireClient on next call after a failure', async () => {
+      mockCreateClient
+        .mockRejectedValueOnce(new Error('transient'))
+        .mockResolvedValueOnce(mockClient)
+
+      const backend = makeSessionBackend()
+
+      await expect(backend.list()).rejects.toBeInstanceOf(AuthorizationDeniedError)
+      // Second call should retry and succeed
+      const result = await backend.list()
+      expect(result).toEqual([])
+      expect(mockCreateClient).toHaveBeenCalledTimes(2)
+    })
+  })
+
+  // ---- store ----
+
+  describe('store', () => {
+    it('should create a new item when the secret does not exist', async () => {
+      const backend = makeSessionBackend()
+      mockList.mockResolvedValue([]) // no existing items
+
+      await backend.store('new-secret', 'secret-value')
+
+      expect(mockCreate).toHaveBeenCalledWith(
+        expect.objectContaining({
+          vaultId: VAULT_ID,
+          title: 'new-secret',
+          tags: ['vaultkeeper'],
+        }),
+      )
+      expect(mockPut).not.toHaveBeenCalled()
+    })
+
+    it('should update an existing item via put when secret already exists', async () => {
+      const backend = makeSessionBackend()
+      mockList.mockResolvedValue([makeOverview('item-1', 'my-secret')])
+      mockGet.mockResolvedValue(makeItem('item-1', 'my-secret', 'old-value'))
 
       await backend.store('my-secret', 'new-value')
 
-      expect(mockExecCommand).toHaveBeenCalledWith(
-        'op',
-        expect.arrayContaining(['item', 'edit', 'my-secret']),
+      expect(mockCreate).not.toHaveBeenCalled()
+      expect(mockPut).toHaveBeenCalledTimes(1)
+      const putArg: unknown = mockPut.mock.calls[0]?.[0]
+      expect(putArg).toMatchObject({ id: 'item-1' })
+      // Verify the password field was updated — check fields independently to avoid nested matchers
+      const putFields: unknown = putArg !== null && typeof putArg === 'object' && 'fields' in putArg ? putArg.fields : undefined
+      expect(putFields).toEqual(
+        expect.arrayContaining([expect.objectContaining({ title: 'password', value: 'new-value' })]),
       )
     })
 
-    it('should include vault args when vault is specified', async () => {
-      const vaultBackend = new OnePasswordBackend('my-vault')
+    it('should append a password field when updating an item that is missing one', async () => {
+      const backend = makeSessionBackend()
+      const itemWithoutPassword = {
+        id: 'item-1',
+        title: 'my-secret',
+        tags: ['vaultkeeper'],
+        fields: [{ id: 'notes', title: 'notes', fieldType: 'Text', value: 'some note' }],
+        vaultId: VAULT_ID,
+        category: 'Password',
+        version: 1,
+      }
+      mockList.mockResolvedValue([makeOverview('item-1', 'my-secret')])
+      mockGet.mockResolvedValue(itemWithoutPassword)
 
-      mockExecCommandFull
-        .mockResolvedValueOnce(makeResult(0)) // isAvailable
-        .mockResolvedValueOnce(makeResult(1)) // exists check (not found)
-      mockExecCommand.mockResolvedValue('')
+      await backend.store('my-secret', 'new-value')
 
-      await vaultBackend.store('my-secret', 'value')
-
-      expect(mockExecCommand).toHaveBeenCalledWith(
-        'op',
-        expect.arrayContaining(['--vault', 'my-vault']),
+      expect(mockPut).toHaveBeenCalledTimes(1)
+      const putArg: unknown = mockPut.mock.calls[0]?.[0]
+      const putFields: unknown = putArg !== null && typeof putArg === 'object' && 'fields' in putArg ? putArg.fields : undefined
+      expect(putFields).toEqual(
+        expect.arrayContaining([expect.objectContaining({ title: 'password', value: 'new-value', fieldType: 'Concealed' })]),
       )
     })
 
-    it('should throw PluginNotFoundError when op is not available', async () => {
-      mockExecCommandFull.mockRejectedValue(new Error('command not found'))
+    it('should scope operations to the configured vaultId', async () => {
+      const backend = new OnePasswordBackend({
+        vault: 'specific-vault-id',
+        account: 'acct',
+      })
+      mockList.mockResolvedValue([])
+      await backend.store('key', 'val')
 
-      await expect(backend.store('my-secret', 'value')).rejects.toBeInstanceOf(PluginNotFoundError)
+      expect(mockCreate).toHaveBeenCalledWith(
+        expect.objectContaining({ vaultId: 'specific-vault-id' }),
+      )
+    })
+
+    it('should create item with Concealed field type for the password', async () => {
+      const backend = makeSessionBackend()
+      mockList.mockResolvedValue([])
+
+      await backend.store('my-secret', 'supersecret')
+
+      expect(mockCreate).toHaveBeenCalledTimes(1)
+      const createArg: unknown = mockCreate.mock.calls[0]?.[0]
+      expect(createArg).toMatchObject({
+        fields: [{ title: 'password', fieldType: 'Concealed', value: 'supersecret' }],
+      })
     })
   })
 
-  describe('retrieve', () => {
-    it('should return the secret value', async () => {
-      mockExecCommandFull
-        .mockResolvedValueOnce(makeResult(0)) // isAvailable
-        .mockResolvedValueOnce(makeResult(0, 'my-secret-value\n')) // item get
+  // ---- retrieve (session mode) ----
+
+  describe('retrieve — session mode', () => {
+    it('should return the secret value from the password field', async () => {
+      const backend = makeSessionBackend()
+      mockList.mockResolvedValue([makeOverview('item-1', 'my-secret')])
+      mockGet.mockResolvedValue(makeItem('item-1', 'my-secret', 'hunter2'))
 
       const result = await backend.retrieve('my-secret')
-      expect(result).toBe('my-secret-value')
+      expect(result).toBe('hunter2')
     })
 
-    it('should throw SecretNotFoundError when item does not exist', async () => {
-      mockExecCommandFull
-        .mockResolvedValueOnce(makeResult(0)) // isAvailable
-        .mockResolvedValueOnce(makeResult(1, '', '[ERROR] 2024/01/01 item not found')) // item get
+    it('should throw SecretNotFoundError when item is not in the vault', async () => {
+      const backend = makeSessionBackend()
+      mockList.mockResolvedValue([]) // empty vault
+
+      await expect(backend.retrieve('missing-secret')).rejects.toBeInstanceOf(SecretNotFoundError)
+    })
+
+    it('should only find items tagged "vaultkeeper"', async () => {
+      const backend = makeSessionBackend()
+      // Item exists but without vaultkeeper tag — should not be found
+      mockList.mockResolvedValue([makeOverview('item-1', 'my-secret', ['unrelated-tag'])])
+
+      await expect(backend.retrieve('my-secret')).rejects.toBeInstanceOf(SecretNotFoundError)
+    })
+
+    it('should throw SecretNotFoundError when item exists but has no password field', async () => {
+      const backend = makeSessionBackend()
+      mockList.mockResolvedValue([makeOverview('item-1', 'my-secret')])
+      mockGet.mockResolvedValue({
+        ...makeItem('item-1', 'my-secret', ''),
+        fields: [], // no fields at all
+      })
+
+      await expect(backend.retrieve('my-secret')).rejects.toBeInstanceOf(SecretNotFoundError)
+    })
+  })
+
+  // ---- retrieve (per-access mode) ----
+
+  describe('retrieve — per-access mode', () => {
+    it('should spawn a child process and return its stdout value', async () => {
+      const backend = makePerAccessBackend()
+      const proc = makeWorkerProcess(JSON.stringify({ value: 'from-worker' }))
+      mockSpawn.mockReturnValue(proc)
+
+      const result = await backend.retrieve('my-secret')
+      expect(result).toBe('from-worker')
+      expect(mockSpawn).toHaveBeenCalledTimes(1)
+    })
+
+    it('should not use the session client for retrieve in per-access mode', async () => {
+      const backend = makePerAccessBackend()
+      const proc = makeWorkerProcess(JSON.stringify({ value: 'value' }))
+      mockSpawn.mockReturnValue(proc)
+
+      await backend.retrieve('my-secret')
+
+      // createClient should not be called because per-access skips the session client for retrieve
+      expect(mockCreateClient).not.toHaveBeenCalled()
+    })
+
+    it('should use session client for store in per-access mode', async () => {
+      const backend = makePerAccessBackend()
+      mockList.mockResolvedValue([])
+
+      await backend.store('my-secret', 'val')
+
+      expect(mockCreateClient).toHaveBeenCalledTimes(1)
+      expect(mockSpawn).not.toHaveBeenCalled()
+    })
+
+    it('should use session client for delete in per-access mode', async () => {
+      const backend = makePerAccessBackend()
+      mockList.mockResolvedValue([makeOverview('item-1', 'my-secret')])
+
+      await backend.delete('my-secret')
+
+      expect(mockCreateClient).toHaveBeenCalledTimes(1)
+      expect(mockSpawn).not.toHaveBeenCalled()
+    })
+
+    it('should use session client for exists in per-access mode', async () => {
+      const backend = makePerAccessBackend()
+      mockList.mockResolvedValue([makeOverview('item-1', 'my-secret')])
+
+      await backend.exists('my-secret')
+
+      expect(mockCreateClient).toHaveBeenCalledTimes(1)
+      expect(mockSpawn).not.toHaveBeenCalled()
+    })
+
+    it('should use session client for list in per-access mode', async () => {
+      const backend = makePerAccessBackend()
+      mockList.mockResolvedValue([])
+
+      await backend.list()
+
+      expect(mockCreateClient).toHaveBeenCalledTimes(1)
+      expect(mockSpawn).not.toHaveBeenCalled()
+    })
+
+    it('should throw SecretNotFoundError when worker returns NOT_FOUND code', async () => {
+      const backend = makePerAccessBackend()
+      const proc = makeWorkerProcess(JSON.stringify({ error: 'not found', code: 'NOT_FOUND' }))
+      mockSpawn.mockReturnValue(proc)
 
       await expect(backend.retrieve('missing')).rejects.toBeInstanceOf(SecretNotFoundError)
     })
 
-    it('should throw PluginNotFoundError when op is not available', async () => {
-      mockExecCommandFull.mockRejectedValue(new Error('command not found'))
+    it('should throw AuthorizationDeniedError when worker returns AUTH_DENIED code', async () => {
+      const backend = makePerAccessBackend()
+      const proc = makeWorkerProcess(JSON.stringify({ error: 'denied', code: 'AUTH_DENIED' }))
+      mockSpawn.mockReturnValue(proc)
 
-      await expect(backend.retrieve('my-secret')).rejects.toBeInstanceOf(PluginNotFoundError)
+      await expect(backend.retrieve('my-secret')).rejects.toBeInstanceOf(AuthorizationDeniedError)
+    })
+
+    it('should throw BackendLockedError when worker returns LOCKED code', async () => {
+      const backend = makePerAccessBackend()
+      const proc = makeWorkerProcess(JSON.stringify({ error: 'locked', code: 'LOCKED' }))
+      mockSpawn.mockReturnValue(proc)
+
+      await expect(backend.retrieve('my-secret')).rejects.toBeInstanceOf(BackendLockedError)
+    })
+
+    it('should throw SecretNotFoundError for unknown worker error code (default case)', async () => {
+      const backend = makePerAccessBackend()
+      const proc = makeWorkerProcess(JSON.stringify({ error: 'something weird', code: 'INTERNAL' }))
+      mockSpawn.mockReturnValue(proc)
+
+      await expect(backend.retrieve('my-secret')).rejects.toBeInstanceOf(SecretNotFoundError)
+    })
+
+    it('should throw Error with worker path when spawn itself errors', async () => {
+      const backend = makePerAccessBackend()
+      const proc = makeWorkerErrorProcess(new Error('spawn ENOENT'))
+      mockSpawn.mockReturnValue(proc)
+
+      await expect(backend.retrieve('my-secret')).rejects.toThrow('Failed to spawn 1Password per-access worker')
+    })
+
+    it('should throw SecretNotFoundError when worker returns unparseable output', async () => {
+      const backend = makePerAccessBackend()
+      const proc = makeWorkerProcess('not-valid-json{{')
+      mockSpawn.mockReturnValue(proc)
+
+      await expect(backend.retrieve('my-secret')).rejects.toBeInstanceOf(SecretNotFoundError)
+    })
+
+    it('should throw SecretNotFoundError when worker returns valid JSON with unexpected shape', async () => {
+      const backend = makePerAccessBackend()
+      const proc = makeWorkerProcess(JSON.stringify({ unexpected: true }))
+      mockSpawn.mockReturnValue(proc)
+
+      await expect(backend.retrieve('my-secret')).rejects.toBeInstanceOf(SecretNotFoundError)
+    })
+
+    it('should throw Error with stderr when worker crashes with no stdout', async () => {
+      const backend = makePerAccessBackend()
+      const proc = makeWorkerProcess({ stdout: '', stderr: 'Error: Cannot find module @1password/sdk', exitCode: 1 })
+      mockSpawn.mockReturnValue(proc)
+
+      await expect(backend.retrieve('my-secret')).rejects.toThrow('Cannot find module @1password/sdk')
+    })
+
+    it('should throw Error with exit code when worker crashes with no stdout or stderr', async () => {
+      const backend = makePerAccessBackend()
+      const proc = makeWorkerProcess({ stdout: '', stderr: '', exitCode: 137 })
+      mockSpawn.mockReturnValue(proc)
+
+      await expect(backend.retrieve('my-secret')).rejects.toThrow('exit code 137')
     })
   })
 
+  // ---- delete ----
+
   describe('delete', () => {
-    it('should delete the item successfully', async () => {
-      mockExecCommandFull
-        .mockResolvedValueOnce(makeResult(0)) // isAvailable
-        .mockResolvedValueOnce(makeResult(0)) // item delete
+    it('should delete the item by vault and item id', async () => {
+      const backend = makeSessionBackend()
+      mockList.mockResolvedValue([makeOverview('item-1', 'my-secret')])
 
       await backend.delete('my-secret')
 
-      expect(mockExecCommandFull).toHaveBeenCalledWith(
-        'op',
-        expect.arrayContaining(['item', 'delete', 'my-secret']),
-      )
+      expect(mockDelete).toHaveBeenCalledWith(VAULT_ID, 'item-1')
     })
 
     it('should throw SecretNotFoundError when item does not exist', async () => {
-      mockExecCommandFull
-        .mockResolvedValueOnce(makeResult(0)) // isAvailable
-        .mockResolvedValueOnce(makeResult(1, '', 'item not found')) // item delete
+      const backend = makeSessionBackend()
+      mockList.mockResolvedValue([])
 
       await expect(backend.delete('missing')).rejects.toBeInstanceOf(SecretNotFoundError)
     })
   })
 
+  // ---- exists ----
+
   describe('exists', () => {
-    it('should return true when item exists', async () => {
-      mockExecCommandFull
-        .mockResolvedValueOnce(makeResult(0)) // isAvailable
-        .mockResolvedValueOnce(makeResult(0, 'my-secret')) // item get
+    it('should return true when a tagged item with that title exists', async () => {
+      const backend = makeSessionBackend()
+      mockList.mockResolvedValue([makeOverview('item-1', 'my-secret')])
 
       const result = await backend.exists('my-secret')
       expect(result).toBe(true)
     })
 
-    it('should return false when item does not exist', async () => {
-      mockExecCommandFull
-        .mockResolvedValueOnce(makeResult(0)) // isAvailable
-        .mockResolvedValueOnce(makeResult(1)) // item get
+    it('should return false when no matching item exists', async () => {
+      const backend = makeSessionBackend()
+      mockList.mockResolvedValue([])
 
       const result = await backend.exists('missing')
       expect(result).toBe(false)
     })
 
-    it('should return false when op is not available', async () => {
-      mockExecCommandFull.mockRejectedValue(new Error('command not found'))
+    it('should return false when item exists but lacks vaultkeeper tag', async () => {
+      const backend = makeSessionBackend()
+      mockList.mockResolvedValue([makeOverview('item-1', 'my-secret', ['other-tag'])])
 
       const result = await backend.exists('my-secret')
       expect(result).toBe(false)
     })
+
+    it('should propagate PluginNotFoundError from acquireClient', async () => {
+      // When SDK isn't available, exists should throw, not silently return false
+      mockCreateClient.mockRejectedValue(new MockDesktopSessionExpiredError('expired'))
+
+      const backend = makeSessionBackend()
+
+      await expect(backend.exists('my-secret')).rejects.toBeInstanceOf(BackendLockedError)
+    })
   })
 
+  // ---- list ----
+
   describe('list', () => {
-    it('should return item titles from successful JSON response', async () => {
-      const jsonOutput = JSON.stringify([
-        { title: 'my-secret', id: 'abc123' },
-        { title: 'another-secret', id: 'def456' },
+    it('should return titles of all vaultkeeper-tagged items', async () => {
+      const backend = makeSessionBackend()
+      mockList.mockResolvedValue([
+        makeOverview('item-1', 'secret-a'),
+        makeOverview('item-2', 'secret-b'),
       ])
 
-      mockExecCommandFull
-        .mockResolvedValueOnce(makeResult(0)) // isAvailable
-        .mockResolvedValueOnce(makeResult(0, jsonOutput)) // item list
-
       const result = await backend.list()
-      expect(result).toEqual(['my-secret', 'another-secret'])
+      expect(result).toEqual(['secret-a', 'secret-b'])
     })
 
-    it('should return empty array when op is not available', async () => {
-      mockExecCommandFull.mockRejectedValue(new Error('command not found: op'))
-
-      const result = await backend.list()
-      expect(result).toEqual([])
-    })
-
-    it('should return empty array when op list command fails', async () => {
-      mockExecCommandFull
-        .mockResolvedValueOnce(makeResult(0)) // isAvailable
-        .mockResolvedValueOnce(makeResult(1, '', '[ERROR] not signed in')) // item list
-
-      const result = await backend.list()
-      expect(result).toEqual([])
-    })
-
-    it('should return empty array when op returns invalid JSON', async () => {
-      mockExecCommandFull
-        .mockResolvedValueOnce(makeResult(0)) // isAvailable
-        .mockResolvedValueOnce(makeResult(0, 'not valid json {{{')) // item list
-
-      const result = await backend.list()
-      expect(result).toEqual([])
-    })
-
-    it('should skip items without a string title', async () => {
-      const jsonOutput = JSON.stringify([
-        { title: 'valid-secret', id: 'abc123' },
-        { id: 'no-title-item' },
-        { title: 42, id: 'numeric-title' },
+    it('should exclude items without the vaultkeeper tag', async () => {
+      const backend = makeSessionBackend()
+      mockList.mockResolvedValue([
+        makeOverview('item-1', 'managed', ['vaultkeeper']),
+        makeOverview('item-2', 'unmanaged', ['unrelated']),
       ])
 
-      mockExecCommandFull
-        .mockResolvedValueOnce(makeResult(0)) // isAvailable
-        .mockResolvedValueOnce(makeResult(0, jsonOutput)) // item list
+      const result = await backend.list()
+      expect(result).toEqual(['managed'])
+    })
+
+    it('should return empty array when vault has no items', async () => {
+      const backend = makeSessionBackend()
+      mockList.mockResolvedValue([])
 
       const result = await backend.list()
-      expect(result).toEqual(['valid-secret'])
+      expect(result).toEqual([])
+    })
+
+    it('should propagate errors from acquireClient', async () => {
+      mockCreateClient.mockRejectedValue(new Error('network error'))
+
+      const backend = makeSessionBackend()
+
+      await expect(backend.list()).rejects.toBeInstanceOf(AuthorizationDeniedError)
+    })
+  })
+
+  // ---- createClient timeout ----
+
+  describe('session timeout', () => {
+    it(
+      'should throw BackendLockedError when createClient hangs beyond the session timeout',
+      async () => {
+        // createClient never resolves — simulates the known beta SDK hang
+        mockCreateClient.mockReturnValue(new Promise<never>(() => { /* intentionally pending */ }))
+
+        // Use a very short timeout (10ms) so the test runs in real time without fake timers
+        const backend = new OnePasswordBackend({
+          vault: VAULT_ID,
+          account: ACCOUNT_NAME,
+          sessionTimeoutMs: 10,
+        })
+
+        await expect(backend.store('any-key', 'any-val')).rejects.toBeInstanceOf(BackendLockedError)
+      },
+      // Give this test 2s to avoid the global 5s default being a problem
+      2000,
+    )
+  })
+
+  // ---- vault scoping ----
+
+  describe('vault scoping', () => {
+    it('should pass the configured vault ID to items.list', async () => {
+      const backend = new OnePasswordBackend({ vault: 'target-vault', account: 'acct' })
+      mockList.mockResolvedValue([])
+
+      await backend.list()
+
+      expect(mockList).toHaveBeenCalledWith('target-vault')
+    })
+
+    it('should pass the configured vault ID to items.delete', async () => {
+      const backend = new OnePasswordBackend({ vault: 'target-vault', account: 'acct' })
+      mockList.mockResolvedValue([makeOverview('item-1', 'my-secret')])
+
+      await backend.delete('my-secret')
+
+      expect(mockDelete).toHaveBeenCalledWith('target-vault', 'item-1')
     })
   })
 })

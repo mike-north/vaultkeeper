@@ -1,42 +1,41 @@
 /**
- * Tests for 1Password backend discovery (account and vault enumeration).
+ * Tests for 1Password backend discovery (SDK-based vault enumeration).
  *
- * @see https://developer.1password.com/docs/cli/reference/management-commands/account/
- * @see https://developer.1password.com/docs/cli/reference/management-commands/vault/
+ * @see https://developer.1password.com/docs/sdks/
  */
 
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach } from 'vitest'
+import type { VaultOverview } from '@1password/sdk'
 
-vi.mock('../../../../src/util/exec.js', () => ({
-  execCommand: vi.fn(),
-  execCommandFull: vi.fn(),
+// vi.hoisted ensures these declarations are available inside the vi.mock factory,
+// which is hoisted to the top of the file before any imports run.
+const { mockVaultsList, mockCreateClient } = vi.hoisted(() => {
+  const mockVaultsList = vi.fn<() => Promise<VaultOverview[]>>()
+  const mockCreateClient = vi.fn().mockResolvedValue({ vaults: { list: mockVaultsList } })
+  return { mockVaultsList, mockCreateClient }
+})
+
+vi.mock('@1password/sdk', () => ({
+  createClient: mockCreateClient,
+  DesktopAuth: vi.fn().mockImplementation((accountName: string) => ({ accountName })),
 }))
 
-import { execCommand } from '../../../../src/util/exec.js'
-import {
-  listAccounts,
-  listVaults,
-  createOnePasswordSetup,
-} from '../../../../src/backend/discovery/one-password.js'
+import { createOnePasswordSetup } from '../../../../src/backend/discovery/one-password.js'
 import { SetupError } from '../../../../src/errors.js'
 
-const mockExecCommand = vi.mocked(execCommand)
-
-/** Builds a JSON string for `op account list` output. */
-function makeAccountListJson(
-  entries: { account_uuid: string; url: string; email: string }[],
-): string {
-  return JSON.stringify(entries)
-}
-
-/** Builds a JSON string for `op account get` output (single object, not array). */
-function makeAccountGetJson(entry: { name: string }): string {
-  return JSON.stringify(entry)
-}
-
-/** Builds a JSON string for `op vault list` output. */
-function makeVaultListJson(entries: { id: string; name: string }[]): string {
-  return JSON.stringify(entries)
+/** Builds a minimal VaultOverview for testing. */
+function makeVaultOverview(id: string, title: string): VaultOverview {
+  return {
+    id,
+    title,
+    description: '',
+    vaultType: 'EVERYONE',
+    activeItemCount: 0,
+    contentVersion: 1,
+    attributeVersion: 1,
+    createdAt: new Date('2024-01-01T00:00:00.000Z'),
+    updatedAt: new Date('2024-01-01T00:00:00.000Z'),
+  }
 }
 
 /** Drives an AsyncGenerator to completion, collecting yielded values and feeding answers. */
@@ -62,428 +61,266 @@ async function driveGenerator(
   return { yielded, returned: result.value }
 }
 
+/** Extracts the `key` string from a yielded setup question (typed as unknown). */
+function questionKey(q: unknown): string {
+  if (typeof q === 'object' && q !== null && 'key' in q && typeof q.key === 'string') {
+    return q.key
+  }
+  throw new TypeError(`Expected a SetupQuestion, got: ${String(q)}`)
+}
+
 beforeEach(() => {
+  // clearAllMocks resets call counts/results but preserves implementations set via
+  // mockResolvedValue in the factory above. This keeps the default createClient →
+  // { vaults: { list: mockVaultsList } } resolution in effect between tests.
   vi.clearAllMocks()
-  // Suppress retry delays in tests by removing setTimeout delays
-  vi.useFakeTimers()
-})
-
-afterEach(() => {
-  vi.useRealTimers()
 })
 
 // ---------------------------------------------------------------------------
-// listAccounts
-// ---------------------------------------------------------------------------
-
-describe('listAccounts', () => {
-  it('returns a SetupChoice per account with "name (email)" label', async () => {
-    mockExecCommand
-      .mockResolvedValueOnce(
-        makeAccountListJson([
-          { account_uuid: 'uuid-1', url: 'https://my.1password.com', email: 'alice@example.com' },
-        ]),
-      )
-      .mockResolvedValueOnce(makeAccountGetJson({ name: 'Alice Corp' }))
-
-    const promise = listAccounts()
-    await vi.runAllTimersAsync()
-    const choices = await promise
-
-    expect(choices).toHaveLength(1)
-    expect(choices[0]).toEqual({ value: 'uuid-1', label: 'Alice Corp (alice@example.com)' })
-  })
-
-  it('returns multiple choices for multiple accounts', async () => {
-    mockExecCommand
-      .mockResolvedValueOnce(
-        makeAccountListJson([
-          { account_uuid: 'uuid-1', url: 'https://a.1password.com', email: 'alice@example.com' },
-          { account_uuid: 'uuid-2', url: 'https://b.1password.com', email: 'bob@example.com' },
-        ]),
-      )
-      // account get for uuid-1
-      .mockResolvedValueOnce(makeAccountGetJson({ name: 'Alice Corp' }))
-      // account get for uuid-2
-      .mockResolvedValueOnce(makeAccountGetJson({ name: 'Bob Inc' }))
-
-    const promise = listAccounts()
-    await vi.runAllTimersAsync()
-    const choices = await promise
-
-    expect(choices).toHaveLength(2)
-    expect(choices[0]).toEqual({ value: 'uuid-1', label: 'Alice Corp (alice@example.com)' })
-    expect(choices[1]).toEqual({ value: 'uuid-2', label: 'Bob Inc (bob@example.com)' })
-  })
-
-  it('returns empty array when op account list fails', async () => {
-    mockExecCommand.mockRejectedValue(new Error('command not found: op'))
-
-    const promise = listAccounts()
-    await vi.runAllTimersAsync()
-    const choices = await promise
-
-    expect(choices).toHaveLength(0)
-  })
-
-  it('returns empty array when op account list returns empty JSON array', async () => {
-    mockExecCommand.mockResolvedValueOnce('[]')
-
-    const promise = listAccounts()
-    await vi.runAllTimersAsync()
-    const choices = await promise
-
-    expect(choices).toHaveLength(0)
-  })
-
-  it('falls back to email-only label when op account get fails', async () => {
-    mockExecCommand
-      .mockResolvedValueOnce(
-        makeAccountListJson([
-          { account_uuid: 'uuid-1', url: 'https://a.1password.com', email: 'alice@example.com' },
-        ]),
-      )
-      // op account get fails (after retries)
-      .mockRejectedValue(new Error('account get failed'))
-
-    const promise = listAccounts()
-    await vi.runAllTimersAsync()
-    const choices = await promise
-
-    expect(choices).toHaveLength(1)
-    expect(choices[0]).toEqual({ value: 'uuid-1', label: 'alice@example.com' })
-  })
-
-  describe('retry behavior', () => {
-    it('retries up to 2 times on failure before returning empty array', async () => {
-      // All attempts fail (initial + 2 retries = 3 calls total)
-      mockExecCommand.mockRejectedValue(new Error('transient failure'))
-
-      const promise = listAccounts()
-      await vi.runAllTimersAsync()
-      await promise
-
-      // execCommand called 3 times: attempt 0, retry 1, retry 2
-      expect(mockExecCommand).toHaveBeenCalledTimes(3)
-    })
-
-    it('succeeds on a retry after an initial failure', async () => {
-      mockExecCommand
-        .mockRejectedValueOnce(new Error('transient'))
-        .mockResolvedValueOnce(
-          makeAccountListJson([
-            { account_uuid: 'uuid-1', url: 'https://a.1password.com', email: 'alice@example.com' },
-          ]),
-        )
-        .mockResolvedValueOnce(makeAccountGetJson({ name: 'Alice' }))
-
-      const promise = listAccounts()
-      await vi.runAllTimersAsync()
-      const choices = await promise
-
-      expect(choices).toHaveLength(1)
-      // First call failed (list attempt 1), second call succeeded (list attempt 2)
-      expect(mockExecCommand).toHaveBeenCalledTimes(3)
-    })
-  })
-})
-
-// ---------------------------------------------------------------------------
-// listVaults
-// ---------------------------------------------------------------------------
-
-describe('listVaults', () => {
-  it('returns a SetupChoice per vault', async () => {
-    mockExecCommand.mockResolvedValueOnce(
-      makeVaultListJson([
-        { id: 'vault-id-1', name: 'Personal' },
-        { id: 'vault-id-2', name: 'Work' },
-      ]),
-    )
-
-    const choices = await listVaults('uuid-1')
-
-    expect(choices).toHaveLength(2)
-    expect(choices[0]).toEqual({ value: 'vault-id-1', label: 'Personal' })
-    expect(choices[1]).toEqual({ value: 'vault-id-2', label: 'Work' })
-  })
-
-  it('passes the account UUID to op vault list', async () => {
-    mockExecCommand.mockResolvedValueOnce(makeVaultListJson([{ id: 'v1', name: 'Vault' }]))
-
-    await listVaults('my-account-uuid')
-
-    expect(mockExecCommand).toHaveBeenCalledWith('op', [
-      'vault',
-      'list',
-      '--account',
-      'my-account-uuid',
-      '--format=json',
-    ])
-  })
-
-  it('throws when op vault list fails', async () => {
-    mockExecCommand.mockRejectedValue(new Error('op not found'))
-
-    await expect(listVaults('uuid-1')).rejects.toThrow('op not found')
-  })
-
-  it('returns empty array when JSON is an empty array', async () => {
-    mockExecCommand.mockResolvedValueOnce('[]')
-
-    const choices = await listVaults('uuid-1')
-
-    expect(choices).toHaveLength(0)
-  })
-})
-
-// ---------------------------------------------------------------------------
-// createOnePasswordSetup
+// createOnePasswordSetup — account name question
 // ---------------------------------------------------------------------------
 
 describe('createOnePasswordSetup', () => {
-  it('auto-selects single account and single vault without yielding questions', async () => {
-    // account list
-    mockExecCommand
-      .mockResolvedValueOnce(
-        makeAccountListJson([
-          { account_uuid: 'uuid-1', url: 'https://a.1password.com', email: 'alice@example.com' },
-        ]),
-      )
-      // account get
-      .mockResolvedValueOnce(makeAccountGetJson({ name: 'Alice' }))
-      // vault list
-      .mockResolvedValueOnce(makeVaultListJson([{ id: 'vault-1', name: 'Personal' }]))
+  describe('account name question', () => {
+    it('first yields a free-form question asking for the account name', async () => {
+      mockVaultsList.mockResolvedValue([makeVaultOverview('v1', 'Personal')])
 
-    const gen = createOnePasswordSetup()
-    const promise = driveGenerator(gen, [])
-    await vi.runAllTimersAsync()
-    const { yielded, returned } = await promise
+      const gen = createOnePasswordSetup()
+      const first = await gen.next()
 
-    expect(yielded).toHaveLength(0)
-    expect(returned).toEqual({ options: { account: 'uuid-1', vault: 'vault-1' } })
-  })
-
-  it('yields account question when multiple accounts exist', async () => {
-    mockExecCommand
-      .mockResolvedValueOnce(
-        makeAccountListJson([
-          { account_uuid: 'uuid-1', url: 'https://a.1password.com', email: 'alice@example.com' },
-          { account_uuid: 'uuid-2', url: 'https://b.1password.com', email: 'bob@example.com' },
-        ]),
-      )
-      .mockResolvedValueOnce(makeAccountGetJson({ name: 'Alice' }))
-      .mockResolvedValueOnce(makeAccountGetJson({ name: 'Bob' }))
-      // vault list for selected account (uuid-1 sent as answer)
-      .mockResolvedValueOnce(makeVaultListJson([{ id: 'vault-1', name: 'Personal' }]))
-
-    const gen = createOnePasswordSetup()
-    const promise = driveGenerator(gen, ['uuid-1'])
-    await vi.runAllTimersAsync()
-    const { yielded, returned } = await promise
-
-    expect(yielded).toHaveLength(1)
-    const accountQuestion = yielded[0]
-    expect(accountQuestion).toMatchObject({
-      key: 'account',
-      prompt: 'Select a 1Password account',
+      expect(first.done).toBe(false)
+      expect(first.value).toMatchObject({
+        key: 'account',
+        prompt: 'Enter your 1Password account name',
+      })
     })
-    expect(returned).toEqual({ options: { account: 'uuid-1', vault: 'vault-1' } })
-  })
 
-  it('yields account question then vault question when multiple of both exist', async () => {
-    mockExecCommand
-      .mockResolvedValueOnce(
-        makeAccountListJson([
-          { account_uuid: 'uuid-1', url: 'https://a.1password.com', email: 'alice@example.com' },
-          { account_uuid: 'uuid-2', url: 'https://b.1password.com', email: 'bob@example.com' },
-        ]),
-      )
-      .mockResolvedValueOnce(makeAccountGetJson({ name: 'Alice' }))
-      .mockResolvedValueOnce(makeAccountGetJson({ name: 'Bob' }))
-      .mockResolvedValueOnce(
-        makeVaultListJson([
-          { id: 'vault-1', name: 'Personal' },
-          { id: 'vault-2', name: 'Work' },
-        ]),
-      )
+    it('account name question has no choices (free-form input)', async () => {
+      mockVaultsList.mockResolvedValue([makeVaultOverview('v1', 'Personal')])
 
-    const gen = createOnePasswordSetup()
-    const promise = driveGenerator(gen, ['uuid-2', 'vault-2'])
-    await vi.runAllTimersAsync()
-    const { yielded, returned } = await promise
+      const gen = createOnePasswordSetup()
+      const first = await gen.next()
 
-    expect(yielded).toHaveLength(2)
-    expect(yielded[0]).toMatchObject({ key: 'account' })
-    expect(yielded[1]).toMatchObject({ key: 'vault', prompt: 'Select a vault' })
-    expect(returned).toEqual({ options: { account: 'uuid-2', vault: 'vault-2' } })
-  })
-
-  it('yields account question only when multiple accounts but single vault', async () => {
-    mockExecCommand
-      .mockResolvedValueOnce(
-        makeAccountListJson([
-          { account_uuid: 'uuid-1', url: 'https://a.1password.com', email: 'alice@example.com' },
-          { account_uuid: 'uuid-2', url: 'https://b.1password.com', email: 'bob@example.com' },
-        ]),
-      )
-      .mockResolvedValueOnce(makeAccountGetJson({ name: 'Alice' }))
-      .mockResolvedValueOnce(makeAccountGetJson({ name: 'Bob' }))
-      .mockResolvedValueOnce(makeVaultListJson([{ id: 'vault-1', name: 'Personal' }]))
-
-    const gen = createOnePasswordSetup()
-    const promise = driveGenerator(gen, ['uuid-1'])
-    await vi.runAllTimersAsync()
-    const { yielded, returned } = await promise
-
-    expect(yielded).toHaveLength(1)
-    expect(yielded[0]).toMatchObject({ key: 'account' })
-    expect(returned).toEqual({ options: { account: 'uuid-1', vault: 'vault-1' } })
-  })
-
-  it('throws SetupError when no accounts are found', async () => {
-    mockExecCommand.mockRejectedValue(new Error('command not found: op'))
-
-    const gen = createOnePasswordSetup()
-    // Attach rejects handler before advancing timers to prevent unhandled rejection
-    const assertion = expect(driveGenerator(gen, [])).rejects.toBeInstanceOf(SetupError)
-    await vi.runAllTimersAsync()
-    await assertion
-  })
-
-  it('thrown SetupError for no accounts has dependency set', async () => {
-    mockExecCommand.mockRejectedValue(new Error('command not found: op'))
-
-    const gen = createOnePasswordSetup()
-    const assertion = expect(driveGenerator(gen, [])).rejects.toMatchObject({
-      dependency: '1Password CLI (op)',
+      expect(first.done).toBe(false)
+      expect(first.value).not.toHaveProperty('choices')
     })
-    await vi.runAllTimersAsync()
-    await assertion
   })
 
-  it('throws SetupError when no vaults are found for the selected account', async () => {
-    mockExecCommand
-      .mockResolvedValueOnce(
-        makeAccountListJson([
-          { account_uuid: 'uuid-1', url: 'https://a.1password.com', email: 'alice@example.com' },
-        ]),
-      )
-      .mockResolvedValueOnce(makeAccountGetJson({ name: 'Alice' }))
-      // vault list returns empty
-      .mockResolvedValueOnce('[]')
+  // -------------------------------------------------------------------------
+  // Single vault auto-selection
+  // -------------------------------------------------------------------------
 
-    const gen = createOnePasswordSetup()
-    const assertion = expect(driveGenerator(gen, [])).rejects.toBeInstanceOf(SetupError)
-    await vi.runAllTimersAsync()
-    await assertion
+  describe('single vault auto-selection', () => {
+    it('auto-selects single vault without yielding a vault question', async () => {
+      mockVaultsList.mockResolvedValue([makeVaultOverview('vault-1', 'Personal')])
+
+      const gen = createOnePasswordSetup()
+      const { yielded, returned } = await driveGenerator(gen, ['my-account', 'session'])
+
+      expect(yielded.map(questionKey)).not.toContain('vault')
+      expect(returned).toMatchObject({ options: { vault: 'vault-1' } })
+    })
+
+    it('includes the account name and access mode in the result', async () => {
+      mockVaultsList.mockResolvedValue([makeVaultOverview('vault-1', 'Personal')])
+
+      const gen = createOnePasswordSetup()
+      const { returned } = await driveGenerator(gen, ['acme-corp', 'per-access'])
+
+      expect(returned).toEqual({
+        options: { account: 'acme-corp', vault: 'vault-1', accessMode: 'per-access' },
+      })
+    })
   })
 
-  it('throws SetupError with CLI dependency when op vault list fails', async () => {
-    mockExecCommand
-      .mockResolvedValueOnce(
-        makeAccountListJson([
-          { account_uuid: 'uuid-1', url: 'https://a.1password.com', email: 'alice@example.com' },
-        ]),
-      )
-      .mockResolvedValueOnce(makeAccountGetJson({ name: 'Alice' }))
-      // vault list command fails
-      .mockRejectedValueOnce(new Error('op CLI not authenticated'))
+  // -------------------------------------------------------------------------
+  // Multiple vault selection
+  // -------------------------------------------------------------------------
 
-    const gen = createOnePasswordSetup()
-    const assertion = expect(driveGenerator(gen, [])).rejects.toThrow('Could not list vaults')
-    await vi.runAllTimersAsync()
-    await assertion
+  describe('multiple vaults', () => {
+    it('yields a vault question when multiple vaults exist', async () => {
+      mockVaultsList.mockResolvedValue([
+        makeVaultOverview('vault-1', 'Personal'),
+        makeVaultOverview('vault-2', 'Work'),
+      ])
+
+      const gen = createOnePasswordSetup()
+      const { yielded } = await driveGenerator(gen, ['my-account', 'vault-2', 'session'])
+
+      expect(yielded.map(questionKey)).toContain('vault')
+    })
+
+    it('vault question choices map vault id to title', async () => {
+      mockVaultsList.mockResolvedValue([
+        makeVaultOverview('vault-1', 'Personal'),
+        makeVaultOverview('vault-2', 'Work'),
+      ])
+
+      const gen = createOnePasswordSetup()
+      // Consume account question
+      await gen.next()
+      // Feed account name — next yield is vault question (multiple vaults)
+      const vaultResult = await gen.next('my-account')
+
+      expect(vaultResult.done).toBe(false)
+      expect(vaultResult.value).toMatchObject({
+        key: 'vault',
+        prompt: 'Select a vault',
+        choices: [
+          { value: 'vault-1', label: 'Personal' },
+          { value: 'vault-2', label: 'Work' },
+        ],
+      })
+    })
+
+    it('uses the selected vault id in the result', async () => {
+      mockVaultsList.mockResolvedValue([
+        makeVaultOverview('vault-1', 'Personal'),
+        makeVaultOverview('vault-2', 'Work'),
+      ])
+
+      const gen = createOnePasswordSetup()
+      const { returned } = await driveGenerator(gen, ['my-account', 'vault-2', 'session'])
+
+      expect(returned).toMatchObject({ options: { vault: 'vault-2' } })
+    })
   })
 
-  it('includes underlying error detail when op vault list fails', async () => {
-    mockExecCommand
-      .mockResolvedValueOnce(
-        makeAccountListJson([
-          { account_uuid: 'uuid-1', url: 'https://a.1password.com', email: 'alice@example.com' },
-        ]),
-      )
-      .mockResolvedValueOnce(makeAccountGetJson({ name: 'Alice' }))
-      .mockRejectedValueOnce(new Error('connect ECONNREFUSED'))
+  // -------------------------------------------------------------------------
+  // Access mode question
+  // -------------------------------------------------------------------------
 
-    const gen = createOnePasswordSetup()
-    const assertion = expect(driveGenerator(gen, [])).rejects.toThrow('connect ECONNREFUSED')
-    await vi.runAllTimersAsync()
-    await assertion
+  describe('access mode question', () => {
+    it('always yields an access mode question', async () => {
+      mockVaultsList.mockResolvedValue([makeVaultOverview('vault-1', 'Personal')])
+
+      const gen = createOnePasswordSetup()
+      const { yielded } = await driveGenerator(gen, ['my-account', 'session'])
+
+      expect(yielded.map(questionKey)).toContain('accessMode')
+    })
+
+    it('access mode question has session and per-access choices', async () => {
+      mockVaultsList.mockResolvedValue([makeVaultOverview('vault-1', 'Personal')])
+
+      const gen = createOnePasswordSetup()
+      // Consume account question
+      await gen.next()
+      // Feed account name — next yield is access mode question (single vault → no vault question)
+      const accessModeResult = await gen.next('my-account')
+
+      expect(accessModeResult.done).toBe(false)
+      expect(accessModeResult.value).toMatchObject({
+        key: 'accessMode',
+        prompt: 'How should secrets be accessed?',
+        choices: [
+          { value: 'session', label: 'Session (one prompt per session)' },
+          { value: 'per-access', label: 'Per-access (prompt for every retrieval)' },
+        ],
+      })
+    })
+
+    it('records session access mode in result', async () => {
+      mockVaultsList.mockResolvedValue([makeVaultOverview('vault-1', 'Personal')])
+
+      const gen = createOnePasswordSetup()
+      const { returned } = await driveGenerator(gen, ['my-account', 'session'])
+
+      expect(returned).toMatchObject({ options: { accessMode: 'session' } })
+    })
+
+    it('records per-access access mode in result', async () => {
+      mockVaultsList.mockResolvedValue([makeVaultOverview('vault-1', 'Personal')])
+
+      const gen = createOnePasswordSetup()
+      const { returned } = await driveGenerator(gen, ['my-account', 'per-access'])
+
+      expect(returned).toMatchObject({ options: { accessMode: 'per-access' } })
+    })
   })
 
-  it('thrown SetupError for op CLI failure has correct dependency', async () => {
-    mockExecCommand
-      .mockResolvedValueOnce(
-        makeAccountListJson([
-          { account_uuid: 'uuid-1', url: 'https://a.1password.com', email: 'alice@example.com' },
-        ]),
-      )
-      .mockResolvedValueOnce(makeAccountGetJson({ name: 'Alice' }))
-      // vault list command fails
-      .mockRejectedValueOnce(new Error('op CLI not authenticated'))
+  // -------------------------------------------------------------------------
+  // Error cases
+  // -------------------------------------------------------------------------
 
-    const gen = createOnePasswordSetup()
-    const assertion = expect(driveGenerator(gen, [])).rejects.toHaveProperty('dependency', '1Password CLI (op)')
-    await vi.runAllTimersAsync()
-    await assertion
-  })
+  describe('error cases', () => {
+    it('throws SetupError when account name is empty', async () => {
+      const gen = createOnePasswordSetup()
+      await expect(driveGenerator(gen, ['', 'session'])).rejects.toBeInstanceOf(SetupError)
+    })
 
-  it('thrown SetupError for zero vaults has correct dependency', async () => {
-    mockExecCommand
-      .mockResolvedValueOnce(
-        makeAccountListJson([
-          { account_uuid: 'uuid-1', url: 'https://a.1password.com', email: 'alice@example.com' },
-        ]),
-      )
-      .mockResolvedValueOnce(makeAccountGetJson({ name: 'Alice' }))
-      .mockResolvedValueOnce('[]')
+    it('throws SetupError when account name is whitespace-only', async () => {
+      const gen = createOnePasswordSetup()
+      await expect(driveGenerator(gen, ['   ', 'session'])).rejects.toBeInstanceOf(SetupError)
+    })
 
-    const gen = createOnePasswordSetup()
-    const assertion = expect(driveGenerator(gen, [])).rejects.toThrow('No vaults found')
-    await vi.runAllTimersAsync()
-    await assertion
-  })
+    it('throws SetupError when SDK client creation fails', async () => {
+      mockCreateClient.mockRejectedValueOnce(new Error('biometric auth failed'))
 
-  it('thrown SetupError for zero vaults has correct dependency value', async () => {
-    mockExecCommand
-      .mockResolvedValueOnce(
-        makeAccountListJson([
-          { account_uuid: 'uuid-1', url: 'https://a.1password.com', email: 'alice@example.com' },
-        ]),
-      )
-      .mockResolvedValueOnce(makeAccountGetJson({ name: 'Alice' }))
-      .mockResolvedValueOnce('[]')
+      const gen = createOnePasswordSetup()
+      await expect(driveGenerator(gen, ['my-account', 'session'])).rejects.toBeInstanceOf(SetupError)
+    })
 
-    const gen = createOnePasswordSetup()
-    const assertion = expect(driveGenerator(gen, [])).rejects.toHaveProperty('dependency', '1Password CLI (op)')
-    await vi.runAllTimersAsync()
-    await assertion
-  })
+    it('SetupError for client creation failure has dependency "1Password SDK"', async () => {
+      mockCreateClient.mockRejectedValueOnce(new Error('biometric auth failed'))
 
-  it('account question choices contain value and label for each account', async () => {
-    mockExecCommand
-      .mockResolvedValueOnce(
-        makeAccountListJson([
-          { account_uuid: 'uuid-1', url: 'https://a.1password.com', email: 'alice@example.com' },
-          { account_uuid: 'uuid-2', url: 'https://b.1password.com', email: 'bob@example.com' },
-        ]),
-      )
-      .mockResolvedValueOnce(makeAccountGetJson({ name: 'Alice Corp' }))
-      .mockResolvedValueOnce(makeAccountGetJson({ name: 'Bob Inc' }))
-      .mockResolvedValueOnce(makeVaultListJson([{ id: 'vault-1', name: 'Personal' }]))
+      const gen = createOnePasswordSetup()
+      await expect(driveGenerator(gen, ['my-account', 'session'])).rejects.toMatchObject({
+        dependency: '1Password SDK',
+      })
+    })
 
-    const gen = createOnePasswordSetup()
-    const firstResult = await gen.next()
-    await vi.runAllTimersAsync()
+    it('SetupError for client creation includes underlying error detail', async () => {
+      mockCreateClient.mockRejectedValueOnce(new Error('biometric auth failed'))
 
-    expect(firstResult.done).toBe(false)
-    const question = firstResult.value
-    expect(question).toMatchObject({
-      choices: [
-        { value: 'uuid-1', label: 'Alice Corp (alice@example.com)' },
-        { value: 'uuid-2', label: 'Bob Inc (bob@example.com)' },
-      ],
+      const gen = createOnePasswordSetup()
+      await expect(driveGenerator(gen, ['my-account', 'session'])).rejects.toThrow('biometric auth failed')
+    })
+
+    it('throws SetupError when vault listing fails', async () => {
+      mockVaultsList.mockRejectedValueOnce(new Error('network timeout'))
+
+      const gen = createOnePasswordSetup()
+      await expect(driveGenerator(gen, ['my-account', 'session'])).rejects.toBeInstanceOf(SetupError)
+    })
+
+    it('SetupError for vault listing failure has dependency "1Password SDK"', async () => {
+      mockVaultsList.mockRejectedValueOnce(new Error('network timeout'))
+
+      const gen = createOnePasswordSetup()
+      await expect(driveGenerator(gen, ['my-account', 'session'])).rejects.toMatchObject({
+        dependency: '1Password SDK',
+      })
+    })
+
+    it('SetupError for vault listing failure includes underlying error detail', async () => {
+      mockVaultsList.mockRejectedValueOnce(new Error('network timeout'))
+
+      const gen = createOnePasswordSetup()
+      await expect(driveGenerator(gen, ['my-account', 'session'])).rejects.toThrow('network timeout')
+    })
+
+    it('throws SetupError when no vaults are found', async () => {
+      mockVaultsList.mockResolvedValueOnce([])
+
+      const gen = createOnePasswordSetup()
+      await expect(driveGenerator(gen, ['my-account', 'session'])).rejects.toBeInstanceOf(SetupError)
+    })
+
+    it('SetupError for no vaults has dependency "1Password SDK"', async () => {
+      mockVaultsList.mockResolvedValueOnce([])
+
+      const gen = createOnePasswordSetup()
+      await expect(driveGenerator(gen, ['my-account', 'session'])).rejects.toMatchObject({
+        dependency: '1Password SDK',
+      })
+    })
+
+    it('SetupError for no vaults references the account name', async () => {
+      mockVaultsList.mockResolvedValueOnce([])
+
+      const gen = createOnePasswordSetup()
+      await expect(driveGenerator(gen, ['acme-corp', 'session'])).rejects.toThrow('acme-corp')
     })
   })
 })
