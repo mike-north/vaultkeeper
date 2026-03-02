@@ -1,5 +1,29 @@
 # vaultkeeper
 
+## 1.0.0
+
+### Major Changes
+
+- [#19](https://github.com/mike-north/vaultkeeper/pull/19) [`c0d36c5`](https://github.com/mike-north/vaultkeeper/commit/c0d36c5f5bdc7848574863514bfe53e23ce83d42) Thanks [@mike-north](https://github.com/mike-north)! - Migrate 1Password backend from `op` CLI to `@1password/sdk`
+
+  Breaking change: the 1Password backend now requires the `@1password/sdk` package and either the 1Password desktop app (for biometric auth via `DesktopAuth`) or a service account token (for headless CI/CD). The `op` CLI is no longer used.
+
+  New per-credential access modes:
+  - **Session mode** (default): SDK client is created once on first use and cached for the lifetime of the process. A 30-second timeout guards against the SDK hanging during authentication (known beta bug).
+  - **Per-access mode**: fresh biometric prompt for every secret retrieval via child process isolation. Only available with desktop auth (not service account tokens).
+
+  Setup now collects account name, vault, and access mode preference.
+
+### Minor Changes
+
+- [#15](https://github.com/mike-north/vaultkeeper/pull/15) [`5353518`](https://github.com/mike-north/vaultkeeper/commit/535351866ef9cb4e77edb9b2b757911e74b3b402) Thanks [@mike-north](https://github.com/mike-north)! - Add delegated signing, static verification, and backend setup protocol to VaultKeeper.
+
+  **Signing & Verification:**
+  `VaultKeeper.sign()` signs arbitrary data using a private key stored in the vault, returning a base64-encoded signature without exposing the key to the caller. `VaultKeeper.verify()` is a static method that verifies a signature against a public key and requires no VaultKeeper instance. New exported types: `SignRequest`, `SignResult`, `VerifyRequest`. New error: `InvalidAlgorithmError` for disallowed algorithm overrides.
+
+  **Backend Setup Protocol:**
+  Adds an async-generator-based interactive setup protocol for backend configuration. Each backend that requires user input implements a setup generator that yields `SetupQuestion` objects; consumers render them and send answers back via `generator.next(answer)`. Includes discovery modules for 1Password, macOS Keychain, and YubiKey. New exported types: `SetupQuestion`, `SetupChoice`, `SetupResult`, `BackendSetupFactory`. New `BackendRegistry` methods: `registerSetup()`, `getSetup()`, `hasSetup()`. `BackendConfig` gains an `options` field for persisting setup results.
+
 ## 0.4.0
 
 ### Minor Changes
