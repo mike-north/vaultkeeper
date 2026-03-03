@@ -12,6 +12,10 @@ import type { VaultConfig, BackendConfig, TrustTier } from './types.js'
  * @internal
  */
 export function getDefaultConfigDir(): string {
+  const envOverride = process.env.VAULTKEEPER_CONFIG_DIR
+  if (envOverride !== undefined && envOverride !== '') {
+    return envOverride
+  }
   if (process.platform === 'win32') {
     const appData = process.env.APPDATA
     if (appData !== undefined) {
