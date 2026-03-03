@@ -19,7 +19,7 @@ import { createClient, DesktopAuth, DesktopSessionExpiredError } from '@1passwor
 const TAG = 'vaultkeeper'
 const PASSWORD_FIELD_TITLE = 'password'
 const INTEGRATION_NAME = 'vaultkeeper'
-const INTEGRATION_VERSION = '0.4.0'
+const INTEGRATION_VERSION = '1.0.0'
 
 interface SuccessResponse {
   value: string

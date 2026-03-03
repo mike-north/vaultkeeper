@@ -38,7 +38,7 @@ const PASSWORD_FIELD_TITLE = 'password'
 const SESSION_TIMEOUT_MS = 30_000
 const INTEGRATION_NAME = 'vaultkeeper'
 // Keep in sync with the version in packages/vaultkeeper/package.json
-const INTEGRATION_VERSION = '0.4.0'
+const INTEGRATION_VERSION = '1.0.0'
 
 /** Options accepted by `OnePasswordBackend`. */
 export interface OnePasswordBackendOptions {

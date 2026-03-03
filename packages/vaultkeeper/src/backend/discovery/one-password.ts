@@ -10,7 +10,7 @@ import { SetupError } from '../../errors.js'
 import type { SetupChoice, SetupQuestion, SetupResult } from '../setup-types.js'
 
 const INTEGRATION_NAME = 'vaultkeeper'
-const INTEGRATION_VERSION = '0.4.0'
+const INTEGRATION_VERSION = '1.0.0'
 
 async function createSdkClient(accountName: string): Promise<Client> {
   try {
