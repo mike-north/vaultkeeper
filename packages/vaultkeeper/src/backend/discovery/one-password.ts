@@ -8,9 +8,7 @@ import { createClient, DesktopAuth } from '@1password/sdk'
 import type { Client, VaultOverview } from '@1password/sdk'
 import { SetupError } from '../../errors.js'
 import type { SetupChoice, SetupQuestion, SetupResult } from '../setup-types.js'
-
-const INTEGRATION_NAME = 'vaultkeeper'
-const INTEGRATION_VERSION = '0.4.0'
+import { INTEGRATION_NAME, INTEGRATION_VERSION } from '../one-password-constants.js'
 
 async function createSdkClient(accountName: string): Promise<Client> {
   try {

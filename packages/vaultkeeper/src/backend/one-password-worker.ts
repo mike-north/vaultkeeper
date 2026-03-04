@@ -18,8 +18,7 @@ import { createClient, DesktopAuth, DesktopSessionExpiredError } from '@1passwor
 
 const TAG = 'vaultkeeper'
 const PASSWORD_FIELD_TITLE = 'password'
-const INTEGRATION_NAME = 'vaultkeeper'
-const INTEGRATION_VERSION = '0.4.0'
+import { INTEGRATION_NAME, INTEGRATION_VERSION } from './one-password-constants.js'
 
 interface SuccessResponse {
   value: string

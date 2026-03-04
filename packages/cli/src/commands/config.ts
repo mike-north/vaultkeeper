@@ -5,6 +5,10 @@ import * as os from 'node:os'
 import { formatError } from '../output.js'
 
 function getDefaultConfigDir(): string {
+  const envOverride = process.env.VAULTKEEPER_CONFIG_DIR
+  if (envOverride !== undefined && envOverride !== '') {
+    return envOverride
+  }
   if (process.platform === 'win32') {
     const appData = process.env.APPDATA
     if (appData !== undefined) {

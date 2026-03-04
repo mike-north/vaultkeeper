@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, afterEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { validateConfig, loadConfig, getDefaultConfigDir } from '../../src/config.js'
 
 vi.mock('node:fs/promises', () => ({
@@ -150,12 +150,39 @@ describe('validateConfig', () => {
 // ---------------------------------------------------------------------------
 
 describe('getDefaultConfigDir', () => {
+  let savedEnv: string | undefined
+
+  beforeEach(() => {
+    savedEnv = process.env.VAULTKEEPER_CONFIG_DIR
+    delete process.env.VAULTKEEPER_CONFIG_DIR
+  })
+
+  afterEach(() => {
+    if (savedEnv === undefined) {
+      delete process.env.VAULTKEEPER_CONFIG_DIR
+    } else {
+      process.env.VAULTKEEPER_CONFIG_DIR = savedEnv
+    }
+  })
+
   it('should return a string', () => {
     expect(typeof getDefaultConfigDir()).toBe('string')
   })
 
   it('should include vaultkeeper in the path', () => {
     expect(getDefaultConfigDir()).toContain('vaultkeeper')
+  })
+
+  it('should return VAULTKEEPER_CONFIG_DIR when set', () => {
+    process.env.VAULTKEEPER_CONFIG_DIR = '/tmp/test-vaultkeeper'
+    expect(getDefaultConfigDir()).toBe('/tmp/test-vaultkeeper')
+  })
+
+  it('should ignore empty VAULTKEEPER_CONFIG_DIR', () => {
+    process.env.VAULTKEEPER_CONFIG_DIR = ''
+    const result = getDefaultConfigDir()
+    expect(result).toContain('vaultkeeper')
+    expect(result).not.toBe('')
   })
 })
 
