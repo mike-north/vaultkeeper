@@ -4,6 +4,9 @@
  * @packageDocumentation
  */
 
+// Side-effect: register all built-in backends with BackendRegistry
+import './backend/register-builtins.js'
+
 export {
   VaultError,
   BackendLockedError,
