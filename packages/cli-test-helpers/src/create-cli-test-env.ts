@@ -24,10 +24,10 @@ function resolveCliBinPath(): string {
 
 /**
  * Resolve the tsx binary for spawning TypeScript files directly.
+ * Uses PATH lookup so the correct platform-specific shim is found.
  */
 function resolveTsxBin(): string {
-  // tsx is installed at the workspace root
-  return path.resolve(__dirname, '..', '..', '..', 'node_modules', '.bin', 'tsx')
+  return 'tsx'
 }
 
 const DEFAULT_CONFIG = {

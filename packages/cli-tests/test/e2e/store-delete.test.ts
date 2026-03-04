@@ -29,7 +29,7 @@ describe('store and delete lifecycle', () => {
     // CLI error paths.
     const matchesExpected =
       result.stderr.includes('No secret provided on stdin') ||
-      result.stderr.includes('Error')
+      result.stderr.includes('doctor')
     expect(matchesExpected).toBe(true)
   })
 })
