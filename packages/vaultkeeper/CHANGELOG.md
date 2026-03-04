@@ -1,5 +1,23 @@
 # vaultkeeper
 
+## 1.0.1
+
+### Patch Changes
+
+- [#20](https://github.com/mike-north/vaultkeeper/pull/20) [`c65c107`](https://github.com/mike-north/vaultkeeper/commit/c65c1076802dcc5e2710c47fd60e3f1771858fe1) Thanks [@mike-north](https://github.com/mike-north)! - Add VAULTKEEPER_CONFIG_DIR env var for test isolation and introduce @vaultkeeper/cli-test-helpers package with reusable CLI test infrastructure
+
+- [#23](https://github.com/mike-north/vaultkeeper/pull/23) [`3f95e3b`](https://github.com/mike-north/vaultkeeper/commit/3f95e3b954cb6f046e34f2155da9ff945d47c16e) Thanks [@mike-north](https://github.com/mike-north)! - Fix built-in backends not registered at module load (issue #21)
+
+  BackendRegistry shipped empty because no built-in backends called
+  `BackendRegistry.register()`. Adds a side-effect module
+  (`register-builtins.ts`) imported from the package entry point so all
+  six built-in backends (file, keychain, dpapi, secret-tool, 1password,
+  yubikey) are available immediately after `import 'vaultkeeper'`.
+
+  Also updates `BackendFactory` to accept an optional `BackendConfig`,
+  allowing `VaultKeeper.init()` to forward per-backend configuration
+  (e.g. 1Password vault ID and access mode) through the registry.
+
 ## 1.0.0
 
 ### Major Changes

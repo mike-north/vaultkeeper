@@ -1,6 +1,6 @@
 {
   "name": "@vaultkeeper/cli-test-helpers",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "CLI test utilities for vaultkeeper",
   "type": "module",
   "main": "./dist/index.cjs",
@@ -18,8 +18,12 @@
       }
     }
   },
-  "files": ["dist"],
-  "engines": { "node": ">=20.0.0" },
+  "files": [
+    "dist"
+  ],
+  "engines": {
+    "node": ">=20.0.0"
+  },
   "scripts": {
     "build": "tsup",
     "clean": "node -e \"import('node:fs').then(fs=>fs.rmSync('dist',{recursive:true,force:true}))\"",
@@ -32,7 +36,9 @@
   },
   "author": "Mike North <michael.l.north@gmail.com>",
   "license": "MIT",
-  "publishConfig": { "access": "public" },
+  "publishConfig": {
+    "access": "public"
+  },
   "devDependencies": {
     "@microsoft/api-extractor": "^7.57.2",
     "@types/node": "^22.0.0",
