@@ -4,9 +4,16 @@
 
 /**
  * Factory function for creating a SecretBackend instance.
+ *
+ * @remarks
+ * Factories may optionally accept a {@link BackendConfig} to configure the
+ * backend from the user's vaultkeeper config file. Factories that do not need
+ * configuration can ignore the parameter.
+ *
  * @public
  */
-export type BackendFactory = () => SecretBackend
+// Inline import() avoids a circular dependency: ../types.js imports from this barrel.
+export type BackendFactory = (config?: import('../types.js').BackendConfig) => SecretBackend
 
 /**
  * Abstraction interface for all secret storage backends.

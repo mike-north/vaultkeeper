@@ -19,7 +19,7 @@ export interface BackendConfig {
 }
 
 // @public
-export type BackendFactory = () => SecretBackend;
+export type BackendFactory = (config?: BackendConfig) => SecretBackend;
 
 // @public
 export class BackendLockedError extends VaultError {
@@ -33,7 +33,7 @@ export class BackendRegistry {
     static clearBackends(): void;
     // @internal
     static clearSetups(): void;
-    static create(type: string): SecretBackend;
+    static create(type: string, config?: BackendConfig): SecretBackend;
     static getAvailableTypes(): Promise<string[]>;
     static getSetup(type: string): BackendSetupFactory | undefined;
     static getTypes(): string[];

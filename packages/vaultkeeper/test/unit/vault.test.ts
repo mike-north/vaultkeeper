@@ -59,6 +59,8 @@ async function initVault(
 
 describe('VaultKeeper', () => {
   beforeEach(() => {
+    // Clear auto-registered builtins so tests can register their own mock backend
+    BackendRegistry.clearBackends()
     clearBlocklist()
   })
 

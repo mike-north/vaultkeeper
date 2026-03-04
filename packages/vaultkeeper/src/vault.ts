@@ -415,7 +415,7 @@ export class VaultKeeper {
       )
     }
 
-    return BackendRegistry.create(firstEnabled.type)
+    return BackendRegistry.create(firstEnabled.type, firstEnabled)
   }
 
   #requireBackend(): SecretBackend {
