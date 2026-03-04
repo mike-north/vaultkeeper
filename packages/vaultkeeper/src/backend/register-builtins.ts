@@ -34,7 +34,7 @@ export function registerBuiltinBackends(): void {
   BackendRegistry.register('secret-tool', () => new SecretToolBackend())
   BackendRegistry.register('1password', (config?: BackendConfig) => {
     const opts = config?.options
-    const vaultId = opts?.vaultId ?? ''
+    const vaultId = opts?.vault ?? ''
     const opOptions: OnePasswordBackendOptions = {
       vault: vaultId,
       // 'session' is the safer default — 'per-access' re-prompts on every read.

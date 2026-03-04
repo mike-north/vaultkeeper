@@ -237,7 +237,7 @@ describe('built-in backend registration (issue #21)', () => {
         type: '1password',
         enabled: true,
         options: {
-          vaultId: 'vault-abc',
+          vault: 'vault-abc',
           account: 'my-account',
         },
       })
@@ -249,7 +249,7 @@ describe('built-in backend registration (issue #21)', () => {
         type: '1password',
         enabled: true,
         options: {
-          vaultId: 'vault-abc',
+          vault: 'vault-abc',
           accessMode: 'per-access',
         },
       })
@@ -261,7 +261,7 @@ describe('built-in backend registration (issue #21)', () => {
         type: '1password',
         enabled: true,
         options: {
-          vaultId: 'vault-abc',
+          vault: 'vault-abc',
           accessMode: 'unknown-value',
         },
       })
