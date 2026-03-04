@@ -8,14 +8,14 @@ import { createClient, DesktopAuth } from '@1password/sdk'
 import type { Client, VaultOverview } from '@1password/sdk'
 import { SetupError } from '../../errors.js'
 import type { SetupChoice, SetupQuestion, SetupResult } from '../setup-types.js'
-import { INTEGRATION_NAME, INTEGRATION_VERSION } from '../one-password-constants.js'
+import { INTEGRATION_NAME, getIntegrationVersion } from '../one-password-constants.js'
 
 async function createSdkClient(accountName: string): Promise<Client> {
   try {
     return await createClient({
       auth: new DesktopAuth(accountName),
       integrationName: INTEGRATION_NAME,
-      integrationVersion: INTEGRATION_VERSION,
+      integrationVersion: getIntegrationVersion(),
     })
   } catch (error: unknown) {
     const detail = error instanceof Error ? error.message : String(error)

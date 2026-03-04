@@ -10,7 +10,7 @@ import * as path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
   INTEGRATION_NAME,
-  INTEGRATION_VERSION,
+  getIntegrationVersion,
 } from '../../../src/backend/one-password-constants.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
@@ -20,12 +20,12 @@ describe('one-password-constants', () => {
     expect(INTEGRATION_NAME).toBe('vaultkeeper')
   })
 
-  it('INTEGRATION_VERSION should match package.json version', () => {
+  it('getIntegrationVersion() should match package.json version', () => {
     const pkgPath = path.resolve(__dirname, '..', '..', '..', 'package.json')
     const raw: unknown = JSON.parse(fs.readFileSync(pkgPath, 'utf8'))
     expect(raw).toHaveProperty('version')
     const pkg = raw ?? {}
-    expect(INTEGRATION_VERSION).toBe(
+    expect(getIntegrationVersion()).toBe(
       (pkg instanceof Object && 'version' in pkg) ? pkg.version : undefined,
     )
   })

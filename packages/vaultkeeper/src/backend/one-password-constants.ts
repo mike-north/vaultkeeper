@@ -14,12 +14,21 @@ import { fileURLToPath } from 'node:url'
 /** Name reported to the 1Password SDK for integration tracking. */
 export const INTEGRATION_NAME = 'vaultkeeper'
 
+let cachedVersion: string | undefined
+
 /**
  * Version reported to the 1Password SDK.
- * Derived from packages/vaultkeeper/package.json at runtime so it stays in
- * sync automatically after changesets version bumps.
+ *
+ * @remarks
+ * Lazily derived from packages/vaultkeeper/package.json on first call so that
+ * consumers who never use the 1Password backend pay no I/O cost at import time.
+ * The result is memoized for subsequent calls.
+ *
+ * @internal
  */
-function readPackageVersion(): string {
+export function getIntegrationVersion(): string {
+  if (cachedVersion !== undefined) return cachedVersion
+
   const dir = dirname(fileURLToPath(import.meta.url))
   // Source: src/backend/ → ../../package.json
   // Bundled: dist/ → ../package.json
@@ -36,10 +45,11 @@ function readPackageVersion(): string {
       'version' in raw &&
       typeof raw.version === 'string'
     ) {
-      return raw.version
+      cachedVersion = raw.version
+      return cachedVersion
     }
   }
-  throw new Error('Could not read version from vaultkeeper package.json')
+  throw new Error(
+    `Could not read version from vaultkeeper package.json. Tried paths: ${candidates.join(', ')}`,
+  )
 }
-
-export const INTEGRATION_VERSION: string = readPackageVersion()
