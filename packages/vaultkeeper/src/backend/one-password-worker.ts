@@ -18,7 +18,7 @@ import { createClient, DesktopAuth, DesktopSessionExpiredError } from '@1passwor
 
 const TAG = 'vaultkeeper'
 const PASSWORD_FIELD_TITLE = 'password'
-import { INTEGRATION_NAME, INTEGRATION_VERSION } from './one-password-constants.js'
+import { INTEGRATION_NAME, getIntegrationVersion } from './one-password-constants.js'
 
 interface SuccessResponse {
   value: string
@@ -52,7 +52,7 @@ async function main(): Promise<void> {
     client = await createClient({
       auth: new DesktopAuth(accountName),
       integrationName: INTEGRATION_NAME,
-      integrationVersion: INTEGRATION_VERSION,
+      integrationVersion: getIntegrationVersion(),
     })
   } catch (err) {
     if (err instanceof DesktopSessionExpiredError) {

@@ -36,7 +36,7 @@ const SDK_INSTALL_URL = 'https://developer.1password.com/docs/sdks/'
 const TAG = 'vaultkeeper'
 const PASSWORD_FIELD_TITLE = 'password'
 const SESSION_TIMEOUT_MS = 30_000
-import { INTEGRATION_NAME, INTEGRATION_VERSION } from './one-password-constants.js'
+import { INTEGRATION_NAME, getIntegrationVersion } from './one-password-constants.js'
 
 /** Options accepted by `OnePasswordBackend`. */
 export interface OnePasswordBackendOptions {
@@ -188,7 +188,7 @@ export class OnePasswordBackend implements ListableBackend {
         sdk.createClient({
           auth,
           integrationName: INTEGRATION_NAME,
-          integrationVersion: INTEGRATION_VERSION,
+          integrationVersion: getIntegrationVersion(),
         }),
         timeoutPromise,
       ])
