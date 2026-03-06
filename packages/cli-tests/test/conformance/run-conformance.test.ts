@@ -164,9 +164,14 @@ async function runCase(testCase: ConformanceCase): Promise<RunResult> {
       const bin = RUST_BIN
       if (!bin) throw new Error('Rust binary not found')
 
+      // Substitute __SELF_BINARY__ with the actual vaultkeeper binary path
+      const args = testCase.command.map((arg) =>
+        arg === '__SELF_BINARY__' ? bin : arg,
+      )
+
       const child = execFile(
         bin,
-        testCase.command,
+        args,
         {
           timeout: 15_000,
           env: {

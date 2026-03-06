@@ -52,8 +52,21 @@ fn run_case(case: &ConformanceCase, bin: &std::path::Path) -> Result<(), String>
             .map_err(|e| format!("failed to write config: {e}"))?;
     }
 
+    // Substitute __SELF_BINARY__ with the actual vaultkeeper binary path
+    let args: Vec<String> = case
+        .command
+        .iter()
+        .map(|arg| {
+            if arg == "__SELF_BINARY__" {
+                bin.to_string_lossy().into_owned()
+            } else {
+                arg.clone()
+            }
+        })
+        .collect();
+
     let mut cmd = Command::new(bin);
-    cmd.args(&case.command);
+    cmd.args(&args);
     cmd.env("VAULTKEEPER_CONFIG_DIR", dir.path());
 
     if let Some(ref stdin_data) = case.stdin {

@@ -236,4 +236,57 @@ describe('@vaultkeeper/wasm SDK', () => {
       vault.dispose();
     });
   });
+
+  it('JWE header uses dir + A256GCM (RFC 7516 interop)', async () => {
+    await withTempDir(async (dir) => {
+      const vault = await createTestVault(dir);
+      const token = vault.setup('interop-key', 'interop-value');
+      const parts = token.split('.');
+      assert.equal(parts.length, 5, 'compact JWE must have 5 segments');
+
+      const [headerB64, encryptedKey, ivB64, ciphertextB64, tagB64] = parts;
+      assert.ok(headerB64, 'header segment must exist');
+
+      // Decode the protected header (first segment, base64url)
+      const headerJson = Buffer.from(headerB64, 'base64url').toString('utf8');
+
+      // Verify header matches what the TS jose library expects
+      assert.ok(headerJson.includes('"alg":"dir"'), 'alg must be dir');
+      assert.ok(headerJson.includes('"enc":"A256GCM"'), 'enc must be A256GCM');
+      assert.ok(headerJson.includes('"kid":"'), 'kid must be present');
+
+      // For dir algorithm, encrypted key segment (2nd part) must be empty
+      assert.equal(encryptedKey, '', 'encrypted key must be empty for dir alg');
+
+      // IV (3rd part) must be present and base64url-decodable to 12 bytes
+      assert.ok(ivB64, 'IV segment must exist');
+      assert.ok(ivB64.length > 0, 'IV must not be empty');
+      const iv = Buffer.from(ivB64, 'base64url');
+      assert.equal(iv.length, 12, 'AES-256-GCM IV must be 12 bytes');
+
+      // Ciphertext (4th part) must be present
+      assert.ok(ciphertextB64, 'ciphertext segment must exist');
+      assert.ok(ciphertextB64.length > 0, 'ciphertext must not be empty');
+
+      // Auth tag (5th part) must be present and base64url-decodable to 16 bytes
+      assert.ok(tagB64, 'auth tag segment must exist');
+      assert.ok(tagB64.length > 0, 'auth tag must not be empty');
+      const tag = Buffer.from(tagB64, 'base64url');
+      assert.equal(tag.length, 16, 'AES-256-GCM auth tag must be 16 bytes');
+
+      vault.dispose();
+    });
+  });
+
+  it('multiple tokens have unique JTIs', async () => {
+    await withTempDir(async (dir) => {
+      const vault = await createTestVault(dir);
+      const token1 = vault.setup('key1', 'val1');
+      const token2 = vault.setup('key2', 'val2');
+      const result1 = vault.authorize(token1);
+      const result2 = vault.authorize(token2);
+      assert.notEqual(result1.claims.jti, result2.claims.jti, 'JTIs must be unique');
+      vault.dispose();
+    });
+  });
 });

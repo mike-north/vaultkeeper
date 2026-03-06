@@ -259,6 +259,59 @@ fn rotate_key_cases() -> Vec<ConformanceCase> {
     }]
 }
 
+// ─── Approve cases ──────────────────────────────────────────────
+
+fn approve_cases() -> Vec<ConformanceCase> {
+    vec![ConformanceCase {
+        name: "approve succeeds for existing file".into(),
+        command: vec![
+            "approve".into(),
+            "--path".into(),
+            // Use vaultkeeper binary itself as the target — it always exists
+            "__SELF_BINARY__".into(),
+        ],
+        stdin: None,
+        needs_config: true,
+        expected_exit_code: 0,
+        expected_stdout: OutputMatcher::Contains("Approved".into()),
+        expected_stderr: OutputMatcher::Any,
+    }]
+}
+
+// ─── Dev-mode cases ─────────────────────────────────────────────
+
+fn dev_mode_cases() -> Vec<ConformanceCase> {
+    vec![
+        ConformanceCase {
+            name: "dev-mode enable succeeds".into(),
+            command: vec![
+                "dev-mode".into(),
+                "--path".into(),
+                "/tmp/test-script.sh".into(),
+                "--enable".into(),
+            ],
+            stdin: None,
+            needs_config: true,
+            expected_exit_code: 0,
+            expected_stdout: OutputMatcher::Contains("enabled".into()),
+            expected_stderr: OutputMatcher::Any,
+        },
+        ConformanceCase {
+            name: "dev-mode disable succeeds".into(),
+            command: vec![
+                "dev-mode".into(),
+                "--path".into(),
+                "/tmp/test-script.sh".into(),
+            ],
+            stdin: None,
+            needs_config: true,
+            expected_exit_code: 0,
+            expected_stdout: OutputMatcher::Contains("disabled".into()),
+            expected_stderr: OutputMatcher::Any,
+        },
+    ]
+}
+
 /// Return all built-in conformance test cases.
 pub fn all_cases() -> Vec<ConformanceCase> {
     let mut cases = Vec::new();
@@ -269,6 +322,8 @@ pub fn all_cases() -> Vec<ConformanceCase> {
     cases.extend(config_cases());
     cases.extend(doctor_cases());
     cases.extend(rotate_key_cases());
+    cases.extend(approve_cases());
+    cases.extend(dev_mode_cases());
     cases
 }
 

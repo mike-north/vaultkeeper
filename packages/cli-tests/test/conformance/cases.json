@@ -306,5 +306,60 @@
     "expectedStderr": {
       "type": "Any"
     }
+  },
+  {
+    "name": "approve succeeds for existing file",
+    "command": [
+      "approve",
+      "--path",
+      "__SELF_BINARY__"
+    ],
+    "stdin": null,
+    "needsConfig": true,
+    "expectedExitCode": 0,
+    "expectedStdout": {
+      "type": "Contains",
+      "value": "Approved"
+    },
+    "expectedStderr": {
+      "type": "Any"
+    }
+  },
+  {
+    "name": "dev-mode enable succeeds",
+    "command": [
+      "dev-mode",
+      "--path",
+      "/tmp/test-script.sh",
+      "--enable"
+    ],
+    "stdin": null,
+    "needsConfig": true,
+    "expectedExitCode": 0,
+    "expectedStdout": {
+      "type": "Contains",
+      "value": "enabled"
+    },
+    "expectedStderr": {
+      "type": "Any"
+    }
+  },
+  {
+    "name": "dev-mode disable succeeds",
+    "command": [
+      "dev-mode",
+      "--path",
+      "/tmp/test-script.sh"
+    ],
+    "stdin": null,
+    "needsConfig": true,
+    "expectedExitCode": 0,
+    "expectedStdout": {
+      "type": "Contains",
+      "value": "disabled"
+    },
+    "expectedStderr": {
+      "type": "Any"
+    }
   }
 ]
