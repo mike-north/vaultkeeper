@@ -44,7 +44,7 @@ const cases: ConformanceCase[] = JSON.parse(
 
 // ─── Find the native Rust CLI binary ─────────────────────────────
 
-function findRustBinary(): string {
+function findRustBinary(): string | null {
   // Check VAULTKEEPER_BIN env var first
   const envBin = process.env['VAULTKEEPER_BIN']
   if (envBin) return envBin
@@ -65,11 +65,13 @@ function findRustBinary(): string {
     }
   }
 
-  // Default to debug build
-  return candidates[0] ?? ''
+  return null
 }
 
 const RUST_BIN = findRustBinary()
+const SKIP_REASON = RUST_BIN === null
+  ? 'Rust CLI binary not found (build with: cargo build -p vaultkeeper-cli)'
+  : undefined
 
 // ─── Default test config ─────────────────────────────────────────
 
@@ -164,7 +166,7 @@ async function runCase(testCase: ConformanceCase): Promise<RunResult> {
 
     return await new Promise<RunResult>((resolve) => {
       const child = execFile(
-        RUST_BIN,
+        RUST_BIN!,
         testCase.command,
         {
           timeout: 15_000,
@@ -200,7 +202,9 @@ async function runCase(testCase: ConformanceCase): Promise<RunResult> {
 
 // ─── Test suite ──────────────────────────────────────────────────
 
-describe('Rust CLI conformance', () => {
+// Skip the entire suite when the Rust binary isn't available (e.g., in CI
+// where only the TypeScript packages are built).
+describe.skipIf(RUST_BIN === null)('Rust CLI conformance', () => {
   it.each(cases.map((c) => [c.name, c] as const))(
     '%s',
     async (_name, testCase) => {
