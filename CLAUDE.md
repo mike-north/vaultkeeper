@@ -2,10 +2,23 @@
 
 ## Project overview
 
-vaultkeeper is a pnpm workspace monorepo containing two packages:
+vaultkeeper is a polyglot monorepo (TypeScript + Rust) providing unified, policy-enforced secret storage across OS credential backends. It uses pnpm workspaces for TypeScript packages and a Cargo workspace for Rust crates, with Nx orchestrating dependency-graph-aware builds across both.
 
-- **`vaultkeeper`** (`packages/vaultkeeper/`) — TypeScript library providing unified, policy-enforced secret storage across OS credential backends. ESM-first with dual CJS/ESM output. The public API is type-checked and validated by API Extractor.
-- **`@vaultkeeper/test-helpers`** (`packages/test-helpers/`) — Test utilities for vaultkeeper consumers, including an in-memory backend and a pre-configured `TestVault` for fast, hermetic tests.
+### TypeScript packages (`packages/`)
+
+- **`vaultkeeper`** (`packages/vaultkeeper/`) — TypeScript library: ESM-first with dual CJS/ESM output. The public API is type-checked and validated by API Extractor.
+- **`@vaultkeeper/cli`** (`packages/cli/`) — TypeScript CLI: `npx vaultkeeper` with lazy-loaded subcommands.
+- **`@vaultkeeper/wasm`** (`packages/vaultkeeper-wasm/`) — WASM-backed SDK for Node.js. Wraps the Rust core compiled to WebAssembly with a Node.js host platform bridge.
+- **`@vaultkeeper/test-helpers`** (`packages/test-helpers/`) — Test utilities: InMemoryBackend and TestVault for fast, hermetic tests.
+- **`@vaultkeeper/cli-test-helpers`** (`packages/cli-test-helpers/`) — CLI test harness: creates isolated temp config dirs for subprocess testing.
+- **`@vaultkeeper/cli-tests`** (`packages/cli-tests/`) — CLI user acceptance tests and conformance tests against the Rust binary.
+
+### Rust crates (`crates/`)
+
+- **`vaultkeeper-core`** — Core library: all business logic, crypto (JWE, AES-256-GCM), backends, key management, identity, doctor checks. Platform-agnostic via `HostPlatform` trait.
+- **`vaultkeeper-cli`** — Native CLI binary using clap. Provides `NativeHostPlatform` impl.
+- **`vaultkeeper-wasm`** — wasm-bindgen wrapper over core. Compiled with `wasm-pack --target nodejs`.
+- **`vaultkeeper-conformance`** — Data-driven conformance test definitions. Exports cases as JSON for both Rust and JS test runners.
 
 ## Package manager
 
@@ -20,57 +33,69 @@ Always use `pnpm`. Never use `npm` or `npx`.
 
 ```
 vaultkeeper/
-├── pnpm-workspace.yaml
-├── package.json            (private workspace root)
-├── tsconfig.base.json      (shared compiler options)
+├── Cargo.toml              (Cargo workspace root)
+├── pnpm-workspace.yaml     (pnpm workspace root)
+├── package.json            (private workspace root — Nx scripts)
+├── nx.json                 (Nx orchestration config)
+├── tsconfig.base.json      (shared TS compiler options)
 ├── eslint.config.ts        (shared lint config)
 ├── vitest.workspace.ts     (vitest workspace config)
+├── crates/
+│   ├── vaultkeeper-core/       (Rust core library)
+│   ├── vaultkeeper-cli/        (Rust native CLI)
+│   ├── vaultkeeper-wasm/       (Rust WASM bindings)
+│   └── vaultkeeper-conformance/ (conformance test data)
 ├── packages/
-│   ├── vaultkeeper/        (main library)
-│   │   ├── package.json
-│   │   ├── tsconfig.json
-│   │   ├── tsup.config.ts
-│   │   ├── api-extractor.json
-│   │   ├── api-report/
-│   │   ├── src/
-│   │   └── test/
-│   └── test-helpers/       (@vaultkeeper/test-helpers)
-│       ├── package.json
-│       ├── tsconfig.json
-│       ├── tsup.config.ts
-│       ├── api-extractor.json
-│       ├── api-report/
-│       ├── src/
-│       └── test/
+│   ├── vaultkeeper/            (TS library)
+│   ├── cli/                    (TS CLI)
+│   ├── vaultkeeper-wasm/       (WASM SDK — TS wrapper + committed .wasm)
+│   ├── test-helpers/           (test utilities)
+│   ├── cli-test-helpers/       (CLI test harness)
+│   └── cli-tests/              (CLI UATs + conformance runner)
 ```
 
-## Key scripts
+## Build orchestration (Nx)
 
-### Workspace-level (run from root)
+All workspace-level scripts use Nx for dependency-graph-aware execution with caching. Nx understands inter-package dependencies and runs tasks in correct order.
+
+**Never invoke `nx` directly** — use the npm scripts in root `package.json`.
+
+### Workspace-level scripts
 
 | Script | Purpose |
 |--------|---------|
-| `pnpm build` | Build all packages (recursive) |
-| `pnpm clean` | Clean all packages (recursive) |
+| `pnpm build` | Build all TS packages (Nx resolves dependency order) |
+| `pnpm clean` | Clean all packages |
 | `pnpm test` | Run all tests across all packages |
 | `pnpm test:watch` | Run tests in watch mode (vitest workspace) |
-| `pnpm check` | Run typecheck + lint + API report validation across all packages |
+| `pnpm check` | Run typecheck + lint + API report validation |
 | `pnpm check:typecheck` | `tsc --noEmit` in all packages |
 | `pnpm check:lint-ts` | `eslint .` in all packages |
-| `pnpm check:api-report` | Validate API reports in all packages |
-| `pnpm generate:api-report` | Update API reports in all packages |
+| `pnpm check:api-report` | Validate API reports |
+| `pnpm generate:api-report` | Update API reports |
+
+### Rust builds
+
+Rust builds are separate from Nx (Cargo manages its own dependency graph):
+
+| Command | Purpose |
+|---------|---------|
+| `cargo build` | Build all Rust crates |
+| `cargo test` | Run all Rust tests (125 tests) |
+| `cargo clippy` | Lint Rust code |
+| `wasm-pack build --target nodejs crates/vaultkeeper-wasm` | Build WASM module |
+
+The WASM output (`packages/vaultkeeper-wasm/wasm/`) is committed to git so TypeScript builds work without wasm-pack installed.
 
 ### Package-level (run with `--filter`)
 
 Use `pnpm --filter <name>` to target a specific package:
 - `pnpm --filter vaultkeeper build`
-- `pnpm --filter @vaultkeeper/test-helpers test`
-
-Each package has the same script names: `build`, `clean`, `test`, `check`, `check:typecheck`, `check:lint-ts`, `check:api-report`, `generate:api-report`.
+- `pnpm --filter @vaultkeeper/wasm test`
 
 Run `pnpm check` before declaring any implementation task complete.
 
-When the public API surface changes (new exports, changed signatures, removed types), run `pnpm generate:api-report` and commit the updated files in `api-report/`.
+When the public API surface changes, run `pnpm generate:api-report` and commit the updated `api-report/` files.
 
 ## Source layout (packages/vaultkeeper)
 
@@ -90,31 +115,57 @@ src/
   util/              # Platform detection and shared utilities
 ```
 
-## Source layout (packages/test-helpers)
+## Source layout (crates/vaultkeeper-core)
 
 ```
 src/
-  index.ts              # Public exports: InMemoryBackend, TestVault
-  in-memory-backend.ts  # In-memory SecretBackend implementation
-  test-vault.ts         # Pre-configured VaultKeeper for tests
+  lib.rs             # Crate root — re-exports public API
+  vault.rs           # VaultKeeper orchestrator
+  types.rs           # Shared types (VaultConfig, DevelopmentMode, etc.)
+  errors.rs          # Error hierarchy (VaultError via thiserror)
+  config/            # Config loading and validation
+  backend/           # SecretBackend trait, FileBackend, InMemoryBackend, registry
+  jwe/               # JWE token create/decrypt (AES-256-GCM, compatible with jose)
+  keys/              # KeyManager, rotation, grace periods
+  identity/          # SHA-256 hashing, TOFU manifest, trust tiers
+  doctor/            # Preflight check types and logic
+  access/            # Placeholder for delegated access patterns
+  util/              # Time utilities
 ```
 
 ## Test layout
 
-Each package has its own `test/` directory:
+### TypeScript tests
 
 ```
 packages/vaultkeeper/test/
   unit/              # Pure unit tests, dependencies mocked
   integration/       # Real component boundaries wired together
   e2e/               # Full assembled flow tests
-  helpers/           # Shared test fixtures and factory functions
 
-packages/test-helpers/test/
-  unit/              # Tests for InMemoryBackend and TestVault
+packages/cli-tests/test/
+  e2e/               # CLI user acceptance tests (subprocess)
+  conformance/       # Data-driven tests against the Rust CLI binary
 ```
 
-Tests use vitest. Test files match `test/**/*.test.ts`. Coverage is collected with `v8`.
+Tests use vitest (except `@vaultkeeper/wasm` which uses `node:test`). Coverage collected with `v8`.
+
+### Rust tests
+
+- `crates/vaultkeeper-core/tests/` — unit tests (47 tests)
+- `crates/vaultkeeper-cli/tests/` — CLI integration tests (8 tests)
+- `crates/vaultkeeper-conformance/tests/` — conformance runner (19 cases)
+
+### Conformance testing
+
+Both CLIs (Rust native and TS) are tested against the same data-driven test cases:
+1. Cases defined in `crates/vaultkeeper-conformance/src/lib.rs`
+2. Exported as JSON via `cargo run -p export-conformance`
+3. JS runner in `packages/cli-tests/test/conformance/` loads `cases.json` and tests the Rust binary
+4. Rust runner in `crates/vaultkeeper-conformance/tests/` tests the same binary directly
+5. TS CLI tested via `packages/cli-tests/test/e2e/` (subprocess tests against `@vaultkeeper/cli`)
+
+The JS conformance runner skips gracefully (`describe.skipIf`) when the Rust binary isn't available.
 
 ## TypeScript configuration
 
@@ -148,6 +199,8 @@ Key rules to respect:
 
 When ESLint reports an error, fix the code — do not add `// eslint-disable` comments unless there is no other option, and document the reason when you do.
 
+Generated files in `**/wasm/**` (wasm-pack output) are excluded from linting.
+
 ## API Extractor
 
 API Extractor v7 (`@microsoft/api-extractor`) is configured per-package in `api-extractor.json`. Each package generates its own `.d.ts` rollup and API report.
@@ -180,7 +233,14 @@ Plugin backends (1Password, YubiKey) are flagged with `plugin: true` in `Backend
 
 ### JWE tokens
 
-Tokens are compact JWE strings (using the `jose` library). The encrypted payload is `VaultClaims`. Keys are managed by `KeyManager`. Do not roll a custom encryption scheme — use the existing `createToken` / `decryptToken` API in `packages/vaultkeeper/src/jwe/`.
+Tokens are compact JWE strings. The TS library uses the `jose` npm package; the Rust core uses `aes-gcm` + `base64ct` directly (wire-compatible). The encrypted payload is `VaultClaims`. Keys are managed by `KeyManager`. Do not roll a custom encryption scheme — use the existing token APIs.
+
+### Rust/TS interop
+
+- Config JSON uses **camelCase** field names, enforced via `#[serde(rename_all = "camelCase")]`
+- `TrustTier` serializes as string numbers: `"1"`, `"2"`, `"3"`
+- VaultClaims fields use serde renames: `use_limit` → JSON `use`, `reference` → JSON `ref`
+- Both CLIs have identical command surfaces and output formats
 
 ### Access patterns
 
@@ -196,4 +256,4 @@ Tokens are compact JWE strings (using the `jose` library). The encrypted payload
 
 ## Dependency notes
 
-The only runtime dependency for `vaultkeeper` is `jose` (JWE/JWT). The `@vaultkeeper/test-helpers` package depends on `vaultkeeper` via `workspace:*`. Everything else is dev-only. Do not add runtime dependencies without discussion — the library is intended to be lean.
+The only runtime dependency for `vaultkeeper` (TS) is `jose` (JWE/JWT). The `@vaultkeeper/wasm` package has no runtime npm dependencies — it ships a committed `.wasm` binary. The `@vaultkeeper/test-helpers` package depends on `vaultkeeper` via `workspace:*`. Everything else is dev-only. Do not add runtime dependencies without discussion.
