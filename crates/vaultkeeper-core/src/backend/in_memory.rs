@@ -41,7 +41,8 @@ impl Default for InMemoryBackend {
     }
 }
 
-#[async_trait::async_trait]
+#[cfg_attr(target_arch = "wasm32", async_trait::async_trait(?Send))]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait::async_trait)]
 impl SecretBackend for InMemoryBackend {
     fn backend_type(&self) -> &str {
         "memory"
@@ -91,7 +92,8 @@ impl SecretBackend for InMemoryBackend {
     }
 }
 
-#[async_trait::async_trait]
+#[cfg_attr(target_arch = "wasm32", async_trait::async_trait(?Send))]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait::async_trait)]
 impl ListableBackend for InMemoryBackend {
     async fn list(&self) -> Result<Vec<String>, VaultError> {
         Ok(self

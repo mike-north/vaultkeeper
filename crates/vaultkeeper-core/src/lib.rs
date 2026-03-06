@@ -12,6 +12,7 @@ pub mod identity;
 pub mod jwe;
 pub mod keys;
 pub mod types;
+pub(crate) mod util;
 pub mod vault;
 
 // Re-export key public types at crate root for convenience.

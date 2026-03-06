@@ -11,7 +11,6 @@ use crate::backend::types::{HostPlatform, ListableBackend, SecretBackend};
 use crate::errors::VaultError;
 use aes_gcm::aead::Aead;
 use aes_gcm::{Aes256Gcm, KeyInit, Nonce};
-use async_trait::async_trait;
 use base64ct::{Base64, Encoding};
 use std::fmt::Write;
 use std::path::PathBuf;
@@ -157,7 +156,8 @@ fn hex_decode(hex: &str) -> Result<Vec<u8>, VaultError> {
     Ok(bytes)
 }
 
-#[async_trait]
+#[cfg_attr(target_arch = "wasm32", async_trait::async_trait(?Send))]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait::async_trait)]
 impl SecretBackend for FileBackend {
     fn backend_type(&self) -> &str {
         "file"
@@ -204,26 +204,19 @@ impl SecretBackend for FileBackend {
         // For now, we'll use exec to rm the file.
         match self.host.file_exists(&entry_path).await {
             Ok(true) => {
-                // Use exec to remove the file
                 let path_str = entry_path.to_string_lossy();
-                #[cfg(unix)]
-                {
-                    self.host
-                        .exec("rm", &["-f", &path_str], None)
-                        .await
-                        .map_err(|e| {
-                            VaultError::Other(format!("Failed to delete secret file: {e}"))
-                        })?;
-                }
-                #[cfg(windows)]
-                {
-                    self.host
-                        .exec("cmd", &["/c", "del", "/q", &path_str], None)
-                        .await
-                        .map_err(|e| {
-                            VaultError::Other(format!("Failed to delete secret file: {e}"))
-                        })?;
-                }
+                let (cmd, args): (&str, Vec<&str>) =
+                    if cfg!(windows) {
+                        ("cmd", vec!["/c", "del", "/q", &path_str])
+                    } else {
+                        ("rm", vec!["-f", &path_str])
+                    };
+                self.host
+                    .exec(cmd, &args, None)
+                    .await
+                    .map_err(|e| {
+                        VaultError::Other(format!("Failed to delete secret file: {e}"))
+                    })?;
                 Ok(())
             }
             _ => Err(VaultError::SecretNotFound {
@@ -238,7 +231,8 @@ impl SecretBackend for FileBackend {
     }
 }
 
-#[async_trait]
+#[cfg_attr(target_arch = "wasm32", async_trait::async_trait(?Send))]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait::async_trait)]
 impl ListableBackend for FileBackend {
     async fn list(&self) -> Result<Vec<String>, VaultError> {
         let storage_dir = self.storage_dir();
@@ -322,7 +316,7 @@ mod tests {
             config_dir: PathBuf,
         }
 
-        #[async_trait]
+        #[async_trait::async_trait]
         impl HostPlatform for TestHost {
             async fn exec(
                 &self,
@@ -393,7 +387,7 @@ mod tests {
             config_dir: PathBuf,
         }
 
-        #[async_trait]
+        #[async_trait::async_trait]
         impl HostPlatform for TestHost {
             async fn exec(
                 &self,

@@ -16,6 +16,14 @@ wasm-bindgen-futures = { workspace = true }
 js-sys = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+async-trait = { workspace = true }
+console_error_panic_hook = { workspace = true }
+
+# Enable JS-backed randomness for wasm32 targets
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+getrandom_02 = { package = "getrandom", version = "0.2", features = ["js"] }
+getrandom = { version = "0.3", features = ["wasm_js"] }
+uuid = { version = "1", features = ["v4", "js"] }
 
 [dev-dependencies]
 wasm-bindgen-test = "0.3"

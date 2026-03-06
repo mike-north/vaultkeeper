@@ -1,0 +1,41 @@
+{
+  "name": "@vaultkeeper/wasm",
+  "version": "0.1.0",
+  "description": "WASM-backed vaultkeeper SDK for Node.js — Rust core with JS host bridge",
+  "type": "module",
+  "exports": {
+    ".": {
+      "import": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      }
+    }
+  },
+  "files": [
+    "dist",
+    "wasm"
+  ],
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "scripts": {
+    "build": "tsc",
+    "clean": "node -e \"import('node:fs').then(fs=>fs.rmSync('dist',{recursive:true,force:true}))\"",
+    "test": "node --test dist/test/*.test.js"
+  },
+  "keywords": [
+    "vaultkeeper",
+    "wasm",
+    "secret",
+    "security"
+  ],
+  "author": "Mike North <michael.l.north@gmail.com>",
+  "license": "MIT",
+  "publishConfig": {
+    "access": "public"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.7.0"
+  }
+}

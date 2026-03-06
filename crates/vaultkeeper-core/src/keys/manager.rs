@@ -1,9 +1,9 @@
 //! KeyManager — handles key generation, rotation, and lookup.
 
 use crate::errors::VaultError;
+use crate::util::time;
 use super::types::{KeyMaterial, KeyState};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::SystemTime;
 
 /// Monotonic counter to ensure unique key IDs even within the same millisecond.
 static KEY_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -95,17 +95,14 @@ impl KeyManager {
         let mut key_bytes = vec![0u8; 32];
         getrandom::fill(&mut key_bytes).map_err(|e| VaultError::Other(e.to_string()))?;
 
-        let ts = SystemTime::now()
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis();
+        let ts = time::now_millis();
         let seq = KEY_COUNTER.fetch_add(1, Ordering::Relaxed);
         let id = format!("k-{ts}-{seq}");
 
         Ok(KeyMaterial {
             id,
             key: key_bytes,
-            created_at: SystemTime::now(),
+            created_at: time::now_secs(),
         })
     }
 }

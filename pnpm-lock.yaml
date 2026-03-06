@@ -144,6 +144,15 @@ importers:
         specifier: ^8.0.0
         version: 8.5.1(@microsoft/api-extractor@7.57.2(@types/node@22.19.11))(jiti@2.6.1)(postcss@8.5.6)(tsx@4.21.0)(typescript@5.9.3)
 
+  packages/vaultkeeper-wasm:
+    devDependencies:
+      '@types/node':
+        specifier: ^22.0.0
+        version: 22.19.11
+      typescript:
+        specifier: ^5.7.0
+        version: 5.9.3
+
 packages:
 
   '@1password/sdk-core@0.4.0':

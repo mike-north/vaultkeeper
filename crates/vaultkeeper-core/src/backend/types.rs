@@ -23,7 +23,8 @@ pub enum Platform {
 ///
 /// In native mode, implementations use `std::process::Command` and `std::fs`.
 /// In WASM mode, implementations call back into JavaScript host functions.
-#[async_trait::async_trait]
+#[cfg_attr(target_arch = "wasm32", async_trait::async_trait(?Send))]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait::async_trait)]
 pub trait HostPlatform: Send + Sync {
     /// Execute a subprocess, returning stdout, stderr, and exit code.
     async fn exec(
@@ -50,7 +51,8 @@ pub trait HostPlatform: Send + Sync {
 }
 
 /// Abstraction interface for all secret storage backends.
-#[async_trait::async_trait]
+#[cfg_attr(target_arch = "wasm32", async_trait::async_trait(?Send))]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait::async_trait)]
 pub trait SecretBackend: Send + Sync {
     /// Unique type identifier for this backend.
     fn backend_type(&self) -> &str;
@@ -75,7 +77,8 @@ pub trait SecretBackend: Send + Sync {
 }
 
 /// Backend that can enumerate stored secret IDs.
-#[async_trait::async_trait]
+#[cfg_attr(target_arch = "wasm32", async_trait::async_trait(?Send))]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait::async_trait)]
 pub trait ListableBackend: SecretBackend {
     /// List IDs of all secrets managed by this backend.
     async fn list(&self) -> Result<Vec<String>, VaultError>;

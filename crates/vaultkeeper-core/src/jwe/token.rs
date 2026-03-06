@@ -17,7 +17,7 @@ use crate::errors::VaultError;
 use crate::types::VaultClaims;
 use std::collections::HashMap;
 use std::sync::Mutex;
-use std::time::{SystemTime, UNIX_EPOCH};
+use crate::util::time;
 
 use super::types::VaultJweHeader;
 
@@ -255,10 +255,7 @@ pub fn validate_claims(claims: &VaultClaims, current_usage: u64) -> Result<(), V
     }
 
     // Check expiration
-    let now_sec = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs();
+    let now_sec = time::now_secs();
     if now_sec >= claims.exp {
         return Err(VaultError::TokenExpired {
             message: format!("Token expired at {} (now: {})", claims.exp, now_sec),
@@ -350,10 +347,7 @@ mod tests {
     use crate::types::TrustTier;
 
     fn test_claims() -> VaultClaims {
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_secs();
+        let now = time::now_secs();
         VaultClaims {
             jti: "test-jti-001".to_string(),
             exp: now + 3600,

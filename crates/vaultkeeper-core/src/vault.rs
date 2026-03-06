@@ -132,10 +132,7 @@ impl VaultKeeper {
             .unwrap_or("file")
             .to_string();
 
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs();
+        let now = crate::util::time::now_secs();
 
         let claims = VaultClaims {
             jti: uuid::Uuid::new_v4().to_string(),

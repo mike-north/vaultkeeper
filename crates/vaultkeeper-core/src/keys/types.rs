@@ -1,7 +1,5 @@
 //! Key management types.
 
-use std::time::SystemTime;
-
 /// A cryptographic key with metadata.
 #[derive(Debug, Clone)]
 pub struct KeyMaterial {
@@ -9,8 +7,8 @@ pub struct KeyMaterial {
     pub id: String,
     /// 32-byte raw key material.
     pub key: Vec<u8>,
-    /// When the key was generated.
-    pub created_at: SystemTime,
+    /// When the key was generated (seconds since Unix epoch).
+    pub created_at: u64,
 }
 
 impl Drop for KeyMaterial {
