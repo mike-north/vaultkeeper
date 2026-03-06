@@ -237,6 +237,9 @@ pub fn extract_kid(jwe: &str) -> Result<Option<String>, VaultError> {
 
 /// Validate claims: check expiry, blocklist, usage limits, and required fields.
 ///
+/// `current_usage` is the number of times this token has already been used.
+/// Pass `0` when usage tracking is not yet implemented at the storage layer.
+///
 /// # Errors
 /// Returns appropriate `VaultError` variant if validation fails.
 pub fn validate_claims(claims: &VaultClaims, current_usage: u64) -> Result<(), VaultError> {

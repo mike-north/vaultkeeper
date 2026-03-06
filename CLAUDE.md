@@ -81,7 +81,7 @@ Rust builds are separate from Nx (Cargo manages its own dependency graph):
 | Command | Purpose |
 |---------|---------|
 | `cargo build` | Build all Rust crates |
-| `cargo test` | Run all Rust tests (125 tests) |
+| `cargo test` | Run all Rust tests (130 tests) |
 | `cargo clippy` | Lint Rust code |
 | `wasm-pack build --target nodejs crates/vaultkeeper-wasm` | Build WASM module |
 
@@ -129,7 +129,7 @@ src/
   keys/              # KeyManager, rotation, grace periods
   identity/          # SHA-256 hashing, TOFU manifest, trust tiers
   doctor/            # Preflight check types and logic
-  access/            # Placeholder for delegated access patterns
+  access/            # SecretAccessor re-export; higher-level patterns live in TS SDK
   util/              # Time utilities
 ```
 

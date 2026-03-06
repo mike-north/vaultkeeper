@@ -3,7 +3,8 @@
 /// A cryptographic key with metadata.
 #[derive(Debug, Clone)]
 pub struct KeyMaterial {
-    /// Unique identifier, format: `k-{timestamp}`.
+    /// Unique identifier, format: `k-{millis}-{seq}` where `millis` is the
+    /// generation timestamp and `seq` is a monotonic counter for uniqueness.
     pub id: String,
     /// 32-byte raw key material.
     pub key: Vec<u8>,

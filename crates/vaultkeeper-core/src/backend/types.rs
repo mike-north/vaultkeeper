@@ -37,7 +37,8 @@ pub trait HostPlatform: Send + Sync {
     /// Read a file.
     async fn read_file(&self, path: &Path) -> Result<Vec<u8>, VaultError>;
 
-    /// Write a file with permissions.
+    /// Write a file with the given Unix permission `mode` (e.g. `0o600`).
+    /// On non-Unix platforms the mode hint may be ignored.
     async fn write_file(&self, path: &Path, content: &[u8], mode: u32) -> Result<(), VaultError>;
 
     /// Check if a file exists.

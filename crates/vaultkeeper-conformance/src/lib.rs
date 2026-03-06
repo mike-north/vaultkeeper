@@ -23,18 +23,28 @@ pub enum OutputMatcher {
 }
 
 /// A single conformance test case.
+///
+/// # Preprocessing
+///
+/// The literal `__SELF_BINARY__` in `command` args is a placeholder that each
+/// test runner must replace with the real path to the vaultkeeper binary before
+/// execution. This allows the `approve` command (which hashes an executable) to
+/// target a file that is guaranteed to exist.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ConformanceCase {
     /// Human-readable test name.
     pub name: String,
     /// CLI arguments (e.g. `["doctor"]` or `["store", "--name", "mykey"]`).
+    ///
+    /// May contain the sentinel `__SELF_BINARY__` — see struct-level docs.
     pub command: Vec<String>,
     /// Optional stdin content.
     pub stdin: Option<String>,
     /// Whether this test needs a config.json in the config dir.
     pub needs_config: bool,
-    /// Expected exit code.
+    /// Expected exit code. Use `-1` to skip the exit-code assertion (e.g. when
+    /// the command may legitimately exit 0 or 1 depending on environment).
     pub expected_exit_code: i32,
     /// Expected stdout pattern.
     pub expected_stdout: OutputMatcher,
