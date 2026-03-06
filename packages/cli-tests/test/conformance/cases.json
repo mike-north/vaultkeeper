@@ -243,6 +243,23 @@
     }
   },
   {
+    "name": "config init creates config when none exists",
+    "command": [
+      "config",
+      "init"
+    ],
+    "stdin": null,
+    "needsConfig": false,
+    "expectedExitCode": 0,
+    "expectedStdout": {
+      "type": "Contains",
+      "value": "created"
+    },
+    "expectedStderr": {
+      "type": "Any"
+    }
+  },
+  {
     "name": "config show outputs valid JSON with version",
     "command": [
       "config",

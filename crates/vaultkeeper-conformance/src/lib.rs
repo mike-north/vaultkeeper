@@ -220,6 +220,15 @@ fn store_delete_cases() -> Vec<ConformanceCase> {
 fn config_cases() -> Vec<ConformanceCase> {
     vec![
         ConformanceCase {
+            name: "config init creates config when none exists".into(),
+            command: vec!["config".into(), "init".into()],
+            stdin: None,
+            needs_config: false,
+            expected_exit_code: 0,
+            expected_stdout: OutputMatcher::Contains("created".into()),
+            expected_stderr: OutputMatcher::Any,
+        },
+        ConformanceCase {
             name: "config show outputs valid JSON with version".into(),
             command: vec!["config".into(), "show".into()],
             stdin: None,
