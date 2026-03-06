@@ -288,3 +288,67 @@ mod rotate_key {
             .stdout(predicate::str::contains("Key rotated successfully"));
     }
 }
+
+// ─── Approve command ────────────────────────────────────────────
+
+mod approve {
+    use super::*;
+
+    #[test]
+    fn approve_succeeds_with_existing_file() {
+        let (_, dir) = cli_test_env();
+
+        // Create a file to approve
+        let script_path = dir.path().join("test-script.sh");
+        std::fs::write(&script_path, "#!/bin/bash\necho hello").unwrap();
+
+        let mut cmd = Command::cargo_bin("vaultkeeper").unwrap();
+        cmd.env("VAULTKEEPER_CONFIG_DIR", dir.path())
+            .args(["approve", "--path", &script_path.to_string_lossy()])
+            .assert()
+            .success()
+            .stdout(predicate::str::contains("Approved"));
+    }
+
+    #[test]
+    fn approve_fails_for_nonexistent_file() {
+        let (mut cmd, _dir) = cli_test_env();
+        cmd.args(["approve", "--path", "/nonexistent/script.sh"])
+            .assert()
+            .code(1)
+            .stderr(predicate::str::contains("Error"));
+    }
+}
+
+// ─── Dev-mode command ───────────────────────────────────────────
+
+mod dev_mode {
+    use super::*;
+
+    #[test]
+    fn dev_mode_enable_succeeds() {
+        let (mut cmd, _dir) = cli_test_env();
+        cmd.args(["dev-mode", "--path", "/usr/bin/test-app", "--enable"])
+            .assert()
+            .success()
+            .stdout(predicate::str::contains("Dev mode enabled"));
+    }
+
+    #[test]
+    fn dev_mode_disable_succeeds() {
+        let (mut cmd, _dir) = cli_test_env();
+        // First enable
+        cmd.args(["dev-mode", "--path", "/usr/bin/test-app", "--enable"])
+            .assert()
+            .success();
+
+        // Then disable
+        let mut cmd2 = Command::cargo_bin("vaultkeeper").unwrap();
+        let dir = _dir; // Reuse same config dir
+        cmd2.env("VAULTKEEPER_CONFIG_DIR", dir.path())
+            .args(["dev-mode", "--path", "/usr/bin/test-app"])
+            .assert()
+            .success()
+            .stdout(predicate::str::contains("Dev mode disabled"));
+    }
+}

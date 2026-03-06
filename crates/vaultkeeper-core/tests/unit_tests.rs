@@ -10,8 +10,9 @@ use vaultkeeper_core::types::{
     BackendConfig, DevelopmentMode, KeyRotationPolicy, SecretAccessor, TrustTier, VaultClaims,
     VaultConfig, VaultDefaults, VaultResponse, KeyStatus,
 };
-use vaultkeeper_core::backend::BackendRegistry;
-use vaultkeeper_core::InMemoryBackend;
+use vaultkeeper_core::backend::{BackendRegistry, ExecOutput, HostPlatform, Platform};
+use vaultkeeper_core::vault::VaultKeeperOptions;
+use vaultkeeper_core::{InMemoryBackend, VaultKeeper};
 
 // ---------------------------------------------------------------------------
 // Config validation tests
@@ -484,5 +485,234 @@ mod error_tests {
             let _ = format!("{err}");
             let _ = format!("{err:?}");
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// VaultKeeper setup/authorize integration tests
+// ---------------------------------------------------------------------------
+
+mod vault_keeper {
+    use super::*;
+    use std::collections::HashMap;
+    use std::path::{Path, PathBuf};
+    use std::sync::Mutex;
+
+    /// A test host that provides config from memory.
+    struct TestHost {
+        files: Mutex<HashMap<PathBuf, Vec<u8>>>,
+        config_dir: PathBuf,
+    }
+
+    impl TestHost {
+        fn with_config() -> Self {
+            let config_dir = PathBuf::from("/test/config");
+            let config_json = serde_json::to_string_pretty(&serde_json::json!({
+                "version": 1,
+                "backends": [{ "type": "file", "enabled": true }],
+                "keyRotation": { "gracePeriodDays": 7 },
+                "defaults": { "ttlMinutes": 60, "trustTier": "3" }
+            }))
+            .unwrap()
+                + "\n";
+
+            let mut files = HashMap::new();
+            files.insert(
+                config_dir.join("config.json"),
+                config_json.into_bytes(),
+            );
+
+            Self {
+                files: Mutex::new(files),
+                config_dir,
+            }
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl HostPlatform for TestHost {
+        async fn exec(
+            &self,
+            _cmd: &str,
+            _args: &[&str],
+            _stdin: Option<&[u8]>,
+        ) -> Result<ExecOutput, VaultError> {
+            // Return "openssl OK" so doctor checks pass
+            Ok(ExecOutput {
+                stdout: b"OpenSSL 3.0.0 1 Jan 2024".to_vec(),
+                stderr: Vec::new(),
+                exit_code: 0,
+            })
+        }
+        async fn read_file(&self, path: &Path) -> Result<Vec<u8>, VaultError> {
+            self.files
+                .lock()
+                .unwrap()
+                .get(path)
+                .cloned()
+                .ok_or_else(|| VaultError::Other(format!("Not found: {}", path.display())))
+        }
+        async fn write_file(
+            &self,
+            path: &Path,
+            content: &[u8],
+            _mode: u32,
+        ) -> Result<(), VaultError> {
+            self.files
+                .lock()
+                .unwrap()
+                .insert(path.to_path_buf(), content.to_vec());
+            Ok(())
+        }
+        async fn file_exists(&self, path: &Path) -> Result<bool, VaultError> {
+            Ok(self.files.lock().unwrap().contains_key(path))
+        }
+        fn platform(&self) -> Platform {
+            Platform::Linux
+        }
+        fn config_dir(&self) -> &Path {
+            &self.config_dir
+        }
+    }
+
+    #[tokio::test]
+    async fn init_with_config_succeeds() {
+        let host = TestHost::with_config();
+        let vault = VaultKeeper::init(
+            &host,
+            Some(VaultKeeperOptions {
+                skip_doctor: true,
+                ..Default::default()
+            }),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(vault.config().version, 1);
+        assert_eq!(vault.config().defaults.ttl_minutes, 60);
+    }
+
+    #[tokio::test]
+    async fn setup_produces_jwe_token() {
+        let host = TestHost::with_config();
+        let vault = VaultKeeper::init(
+            &host,
+            Some(VaultKeeperOptions {
+                skip_doctor: true,
+                ..Default::default()
+            }),
+        )
+        .await
+        .unwrap();
+
+        let token = vault.setup("my-secret", "s3cret-value", None).unwrap();
+
+        // JWE compact serialization has 5 dot-separated parts
+        assert_eq!(token.split('.').count(), 5);
+    }
+
+    #[tokio::test]
+    async fn setup_authorize_round_trip() {
+        let host = TestHost::with_config();
+        let vault = VaultKeeper::init(
+            &host,
+            Some(VaultKeeperOptions {
+                skip_doctor: true,
+                ..Default::default()
+            }),
+        )
+        .await
+        .unwrap();
+
+        let token = vault.setup("db-password", "hunter2", None).unwrap();
+        let (claims, response) = vault.authorize(&token).unwrap();
+
+        assert_eq!(claims.sub, "db-password");
+        assert_eq!(claims.val, "hunter2");
+        assert_eq!(claims.reference, "db-password");
+        assert_eq!(claims.tid, TrustTier::Dev);
+        assert_eq!(response.key_status, KeyStatus::Current);
+        assert!(response.rotated_jwt.is_none());
+    }
+
+    #[tokio::test]
+    async fn authorize_with_rotated_key_re_encrypts() {
+        let host = TestHost::with_config();
+        let mut vault = VaultKeeper::init(
+            &host,
+            Some(VaultKeeperOptions {
+                skip_doctor: true,
+                ..Default::default()
+            }),
+        )
+        .await
+        .unwrap();
+
+        // Create token with initial key
+        let token = vault.setup("api-key", "abc123", None).unwrap();
+
+        // Rotate the key
+        vault.rotate_key().unwrap();
+
+        // Authorize should succeed (finds previous key) and provide a rotated JWT
+        let (claims, response) = vault.authorize(&token).unwrap();
+        assert_eq!(claims.val, "abc123");
+        assert_eq!(response.key_status, KeyStatus::Previous);
+        assert!(response.rotated_jwt.is_some());
+
+        // The rotated JWT should decrypt with the current key
+        let (claims2, response2) = vault.authorize(response.rotated_jwt.as_ref().unwrap()).unwrap();
+        assert_eq!(claims2.val, "abc123");
+        assert_eq!(response2.key_status, KeyStatus::Current);
+        assert!(response2.rotated_jwt.is_none());
+    }
+
+    #[tokio::test]
+    async fn authorize_rejects_token_from_revoked_key() {
+        let host = TestHost::with_config();
+        let mut vault = VaultKeeper::init(
+            &host,
+            Some(VaultKeeperOptions {
+                skip_doctor: true,
+                ..Default::default()
+            }),
+        )
+        .await
+        .unwrap();
+
+        let token = vault.setup("key", "val", None).unwrap();
+
+        // Revoke all keys — generates a completely new key
+        vault.revoke_key().unwrap();
+
+        // Token should fail to authorize (unknown key)
+        let result = vault.authorize(&token);
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn setup_with_custom_ttl() {
+        let host = TestHost::with_config();
+        let vault = VaultKeeper::init(
+            &host,
+            Some(VaultKeeperOptions {
+                skip_doctor: true,
+                ..Default::default()
+            }),
+        )
+        .await
+        .unwrap();
+
+        let opts = vaultkeeper_core::vault::SetupOptions {
+            ttl_minutes: Some(5),
+            ..Default::default()
+        };
+        let token = vault.setup("key", "val", Some(&opts)).unwrap();
+        let (claims, _) = vault.authorize(&token).unwrap();
+
+        // Token should expire in ~5 minutes
+        let expected_ttl = 5 * 60;
+        let actual_ttl = claims.exp - claims.iat;
+        assert_eq!(actual_ttl, expected_ttl);
     }
 }
