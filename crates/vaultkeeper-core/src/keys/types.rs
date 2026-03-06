@@ -26,6 +26,11 @@ pub struct KeyState {
     pub current: KeyMaterial,
     /// The previous key, only present during a grace period.
     pub previous: Option<KeyMaterial>,
+    /// When the last rotation occurred (milliseconds since Unix epoch).
+    /// Used for lazy grace period enforcement.
+    pub rotated_at_ms: Option<u128>,
+    /// Grace period duration in milliseconds.
+    pub grace_period_ms: Option<u64>,
 }
 
 /// Configuration for key rotation behavior.

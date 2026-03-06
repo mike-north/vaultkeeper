@@ -25,6 +25,8 @@ impl KeyManager {
         self.state = Some(KeyState {
             current: key,
             previous: None,
+            rotated_at_ms: None,
+            grace_period_ms: None,
         });
         Ok(())
     }
@@ -38,12 +40,14 @@ impl KeyManager {
     }
 
     /// Get the previous key (if in grace period).
-    pub fn get_previous_key(&self) -> Option<&KeyMaterial> {
+    pub fn get_previous_key(&mut self) -> Option<&KeyMaterial> {
+        self.expire_previous_if_needed();
         self.state.as_ref().and_then(|s| s.previous.as_ref())
     }
 
     /// Find a key by its ID. Returns the key and whether it is the current key.
-    pub fn find_key_by_id(&self, kid: &str) -> Option<(&KeyMaterial, bool)> {
+    pub fn find_key_by_id(&mut self, kid: &str) -> Option<(&KeyMaterial, bool)> {
+        self.expire_previous_if_needed();
         let state = self.state.as_ref()?;
         if state.current.id == kid {
             return Some((&state.current, true));
@@ -57,7 +61,9 @@ impl KeyManager {
     }
 
     /// Rotate the current key. The old key becomes `previous` for the grace period.
-    pub fn rotate_key(&mut self, _grace_period_ms: u64) -> Result<(), VaultError> {
+    pub fn rotate_key(&mut self, grace_period_ms: u64) -> Result<(), VaultError> {
+        self.expire_previous_if_needed();
+
         let state = self
             .state
             .as_mut()
@@ -72,8 +78,28 @@ impl KeyManager {
         let new_key = Self::generate_key()?;
         let old_current = std::mem::replace(&mut state.current, new_key);
         state.previous = Some(old_current);
+        state.rotated_at_ms = Some(time::now_millis());
+        state.grace_period_ms = Some(grace_period_ms);
 
         Ok(())
+    }
+
+    /// Lazily expire the previous key if the grace period has elapsed.
+    fn expire_previous_if_needed(&mut self) {
+        let Some(state) = self.state.as_mut() else {
+            return;
+        };
+        if state.previous.is_none() {
+            return;
+        }
+        if let (Some(rotated_at), Some(grace_ms)) = (state.rotated_at_ms, state.grace_period_ms) {
+            let now = time::now_millis();
+            if now >= rotated_at + u128::from(grace_ms) {
+                state.previous = None;
+                state.rotated_at_ms = None;
+                state.grace_period_ms = None;
+            }
+        }
     }
 
     /// Emergency key revocation — removes the previous key immediately.
