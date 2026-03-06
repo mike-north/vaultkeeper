@@ -146,6 +146,9 @@ vite.config.ts.timestamp-*
 # Build artifacts
 tmp/
 
+# Nx
+.nx/
+
 # Rust / Cargo
 target/
 # WASM build output (cargo target)
