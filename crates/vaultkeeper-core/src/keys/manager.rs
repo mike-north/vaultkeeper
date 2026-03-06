@@ -1,8 +1,8 @@
 //! KeyManager — handles key generation, rotation, and lookup.
 
+use super::types::{KeyMaterial, KeyState};
 use crate::errors::VaultError;
 use crate::util::time;
-use super::types::{KeyMaterial, KeyState};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 /// Monotonic counter to ensure unique key IDs even within the same millisecond.
@@ -34,9 +34,7 @@ impl KeyManager {
         self.state
             .as_ref()
             .map(|s| &s.current)
-            .ok_or(VaultError::Other(
-                "KeyManager not initialized".to_string(),
-            ))
+            .ok_or(VaultError::Other("KeyManager not initialized".to_string()))
     }
 
     /// Get the previous key (if in grace period).
@@ -51,17 +49,19 @@ impl KeyManager {
             return Some((&state.current, true));
         }
         if let Some(ref prev) = state.previous
-            && prev.id == kid {
-                return Some((prev, false));
-            }
+            && prev.id == kid
+        {
+            return Some((prev, false));
+        }
         None
     }
 
     /// Rotate the current key. The old key becomes `previous` for the grace period.
     pub fn rotate_key(&mut self, _grace_period_ms: u64) -> Result<(), VaultError> {
-        let state = self.state.as_mut().ok_or(VaultError::Other(
-            "KeyManager not initialized".to_string(),
-        ))?;
+        let state = self
+            .state
+            .as_mut()
+            .ok_or(VaultError::Other("KeyManager not initialized".to_string()))?;
 
         if state.previous.is_some() {
             return Err(VaultError::RotationInProgress {
@@ -78,9 +78,10 @@ impl KeyManager {
 
     /// Emergency key revocation — removes the previous key immediately.
     pub fn revoke_key(&mut self) -> Result<(), VaultError> {
-        let state = self.state.as_mut().ok_or(VaultError::Other(
-            "KeyManager not initialized".to_string(),
-        ))?;
+        let state = self
+            .state
+            .as_mut()
+            .ok_or(VaultError::Other("KeyManager not initialized".to_string()))?;
         state.previous = None;
 
         // Generate a new current key

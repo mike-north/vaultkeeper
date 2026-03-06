@@ -8,10 +8,7 @@ use std::path::Path;
 
 /// Compute the SHA-256 hex digest of the file at `path` using the
 /// given [`HostPlatform`] for file I/O.
-pub async fn hash_executable(
-    host: &dyn HostPlatform,
-    path: &Path,
-) -> Result<String, VaultError> {
+pub async fn hash_executable(host: &dyn HostPlatform, path: &Path) -> Result<String, VaultError> {
     let content = host.read_file(path).await?;
     Ok(sha256_hex(&content))
 }

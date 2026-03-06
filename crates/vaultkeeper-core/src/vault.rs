@@ -3,7 +3,7 @@
 use crate::backend::{HostPlatform, SecretBackend};
 use crate::config;
 use crate::errors::VaultError;
-use crate::jwe::{create_token, decrypt_token, extract_kid, validate_claims, CreateTokenOptions};
+use crate::jwe::{CreateTokenOptions, create_token, decrypt_token, extract_kid, validate_claims};
 use crate::keys::KeyManager;
 use crate::types::{KeyStatus, PreflightResult, VaultClaims, VaultConfig, VaultResponse};
 
@@ -163,12 +163,13 @@ impl VaultKeeper {
         let kid = extract_kid(jwe)?;
 
         let (key, is_current) = match &kid {
-            Some(k) => self
-                .key_manager
-                .find_key_by_id(k)
-                .ok_or_else(|| VaultError::KeyRevoked {
-                    message: format!("Unknown key ID: {k}"),
-                })?,
+            Some(k) => {
+                self.key_manager
+                    .find_key_by_id(k)
+                    .ok_or_else(|| VaultError::KeyRevoked {
+                        message: format!("Unknown key ID: {k}"),
+                    })?
+            }
             None => {
                 let k = self.key_manager.get_current_key()?;
                 (k, true)

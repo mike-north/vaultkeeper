@@ -363,11 +363,9 @@ pub fn matches_output(matcher: &OutputMatcher, output: &str) -> bool {
         OutputMatcher::Any => true,
         OutputMatcher::Exact(expected) => output.trim() == expected.trim(),
         OutputMatcher::Contains(substring) => output.contains(substring.as_str()),
-        OutputMatcher::Regex(pattern) => {
-            regex::Regex::new(pattern)
-                .map(|re| re.is_match(output))
-                .unwrap_or(false)
-        }
+        OutputMatcher::Regex(pattern) => regex::Regex::new(pattern)
+            .map(|re| re.is_match(output))
+            .unwrap_or(false),
         OutputMatcher::JsonContains(expected) => {
             let Ok(parsed) = serde_json::from_str::<serde_json::Value>(output) else {
                 return false;
@@ -380,11 +378,9 @@ pub fn matches_output(matcher: &OutputMatcher, output: &str) -> bool {
 /// Check if `haystack` contains all keys/values from `needle`.
 fn json_contains(haystack: &serde_json::Value, needle: &serde_json::Value) -> bool {
     match (haystack, needle) {
-        (serde_json::Value::Object(h), serde_json::Value::Object(n)) => {
-            n.iter().all(|(k, v)| {
-                h.get(k).is_some_and(|hv| json_contains(hv, v))
-            })
-        }
+        (serde_json::Value::Object(h), serde_json::Value::Object(n)) => n
+            .iter()
+            .all(|(k, v)| h.get(k).is_some_and(|hv| json_contains(hv, v))),
         (serde_json::Value::Array(h), serde_json::Value::Array(n)) => {
             n.iter().all(|nv| h.iter().any(|hv| json_contains(hv, nv)))
         }
@@ -453,10 +449,7 @@ mod tests {
     #[test]
     fn matches_output_json_contains() {
         let matcher = OutputMatcher::JsonContains(serde_json::json!({"version": 1}));
-        assert!(matches_output(
-            &matcher,
-            r#"{"version": 1, "extra": true}"#
-        ));
+        assert!(matches_output(&matcher, r#"{"version": 1, "extra": true}"#));
         assert!(!matches_output(&matcher, r#"{"version": 2}"#));
         assert!(!matches_output(&matcher, "not json"));
     }

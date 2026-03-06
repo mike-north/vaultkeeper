@@ -1,9 +1,7 @@
 //! Configuration loading, validation, and defaults.
 
 use crate::errors::VaultError;
-use crate::types::{
-    BackendConfig, KeyRotationPolicy, TrustTier, VaultConfig, VaultDefaults,
-};
+use crate::types::{BackendConfig, KeyRotationPolicy, TrustTier, VaultConfig, VaultDefaults};
 
 /// Return the default configuration when no config file exists.
 pub fn default_config() -> VaultConfig {
@@ -33,9 +31,7 @@ pub fn default_config() -> VaultConfig {
 /// Returns `VaultError` if the config structure is invalid.
 pub fn validate_config(config: &VaultConfig) -> Result<(), VaultError> {
     if config.version != 1 {
-        return Err(VaultError::Other(
-            "Config version must be 1".to_string(),
-        ));
+        return Err(VaultError::Other("Config version must be 1".to_string()));
     }
 
     if config.backends.is_empty() {
@@ -107,8 +103,8 @@ pub async fn load_config(
     }
 
     let content = host.read_file(&config_path).await?;
-    let json =
-        String::from_utf8(content).map_err(|e| VaultError::Other(format!("Invalid UTF-8 in config: {e}")))?;
+    let json = String::from_utf8(content)
+        .map_err(|e| VaultError::Other(format!("Invalid UTF-8 in config: {e}")))?;
 
     load_config_from_str(&json)
 }

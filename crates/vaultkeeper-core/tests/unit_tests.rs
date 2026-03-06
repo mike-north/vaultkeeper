@@ -3,14 +3,14 @@
 //! @see RFC 7516 (JWE Compact Serialization)
 //! @see RFC 5116 (AES-GCM)
 
+use vaultkeeper_core::backend::{BackendRegistry, ExecOutput, HostPlatform, Platform};
 use vaultkeeper_core::config::{default_config, load_config_from_str, validate_config};
 use vaultkeeper_core::errors::VaultError;
 use vaultkeeper_core::keys::KeyManager;
 use vaultkeeper_core::types::{
-    BackendConfig, DevelopmentMode, KeyRotationPolicy, SecretAccessor, TrustTier, VaultClaims,
-    VaultConfig, VaultDefaults, VaultResponse, KeyStatus,
+    BackendConfig, DevelopmentMode, KeyRotationPolicy, KeyStatus, SecretAccessor, TrustTier,
+    VaultClaims, VaultConfig, VaultDefaults, VaultResponse,
 };
-use vaultkeeper_core::backend::{BackendRegistry, ExecOutput, HostPlatform, Platform};
 use vaultkeeper_core::vault::VaultKeeperOptions;
 use vaultkeeper_core::{InMemoryBackend, VaultKeeper};
 
@@ -191,7 +191,10 @@ mod type_serde {
                 enabled: true,
                 plugin: None,
                 path: Some("/tmp/vault".to_string()),
-                options: Some(HashMap::from([("algo".to_string(), "aes-256-gcm".to_string())])),
+                options: Some(HashMap::from([(
+                    "algo".to_string(),
+                    "aes-256-gcm".to_string(),
+                )])),
             }],
             key_rotation: KeyRotationPolicy {
                 grace_period_days: 7,
@@ -312,10 +315,7 @@ mod key_manager {
         km.rotate_key(86400000).unwrap();
 
         let result = km.rotate_key(86400000);
-        assert!(matches!(
-            result,
-            Err(VaultError::RotationInProgress { .. })
-        ));
+        assert!(matches!(result, Err(VaultError::RotationInProgress { .. })));
     }
 
     #[test]
@@ -391,10 +391,7 @@ mod backend_registry {
     fn create_unknown_type_fails() {
         let registry = BackendRegistry::new();
         let result = registry.create("nonexistent", None);
-        assert!(matches!(
-            result,
-            Err(VaultError::BackendUnavailable { .. })
-        ));
+        assert!(matches!(result, Err(VaultError::BackendUnavailable { .. })));
     }
 
     #[test]
@@ -462,22 +459,68 @@ mod error_tests {
     fn all_variants_implement_display() {
         // Ensure no panic when formatting every variant
         let errors: Vec<VaultError> = vec![
-            VaultError::BackendLocked { message: "m".into(), interactive: false },
-            VaultError::DeviceNotPresent { message: "m".into(), timeout_ms: 1000 },
-            VaultError::AuthorizationDenied { message: "m".into() },
-            VaultError::BackendUnavailable { message: "m".into(), reason: "r".into(), attempted: vec![] },
-            VaultError::PluginNotFound { message: "m".into(), plugin: "p".into(), install_url: "u".into() },
-            VaultError::SecretNotFound { message: "m".into() },
-            VaultError::TokenExpired { message: "m".into(), can_refresh: true },
-            VaultError::KeyRotated { message: "m".into() },
-            VaultError::KeyRevoked { message: "m".into() },
-            VaultError::TokenRevoked { message: "m".into() },
-            VaultError::UsageLimitExceeded { message: "m".into() },
-            VaultError::IdentityMismatch { message: "m".into(), previous_hash: "a".into(), current_hash: "b".into() },
-            VaultError::InvalidAlgorithm { message: "m".into(), algorithm: "a".into(), allowed: vec![] },
-            VaultError::Setup { message: "m".into(), dependency: "d".into() },
-            VaultError::Filesystem { message: "m".into(), path: "p".into(), permission: "w".into() },
-            VaultError::RotationInProgress { message: "m".into() },
+            VaultError::BackendLocked {
+                message: "m".into(),
+                interactive: false,
+            },
+            VaultError::DeviceNotPresent {
+                message: "m".into(),
+                timeout_ms: 1000,
+            },
+            VaultError::AuthorizationDenied {
+                message: "m".into(),
+            },
+            VaultError::BackendUnavailable {
+                message: "m".into(),
+                reason: "r".into(),
+                attempted: vec![],
+            },
+            VaultError::PluginNotFound {
+                message: "m".into(),
+                plugin: "p".into(),
+                install_url: "u".into(),
+            },
+            VaultError::SecretNotFound {
+                message: "m".into(),
+            },
+            VaultError::TokenExpired {
+                message: "m".into(),
+                can_refresh: true,
+            },
+            VaultError::KeyRotated {
+                message: "m".into(),
+            },
+            VaultError::KeyRevoked {
+                message: "m".into(),
+            },
+            VaultError::TokenRevoked {
+                message: "m".into(),
+            },
+            VaultError::UsageLimitExceeded {
+                message: "m".into(),
+            },
+            VaultError::IdentityMismatch {
+                message: "m".into(),
+                previous_hash: "a".into(),
+                current_hash: "b".into(),
+            },
+            VaultError::InvalidAlgorithm {
+                message: "m".into(),
+                algorithm: "a".into(),
+                allowed: vec![],
+            },
+            VaultError::Setup {
+                message: "m".into(),
+                dependency: "d".into(),
+            },
+            VaultError::Filesystem {
+                message: "m".into(),
+                path: "p".into(),
+                permission: "w".into(),
+            },
+            VaultError::RotationInProgress {
+                message: "m".into(),
+            },
             VaultError::Other("o".into()),
         ];
 
@@ -517,10 +560,7 @@ mod vault_keeper {
                 + "\n";
 
             let mut files = HashMap::new();
-            files.insert(
-                config_dir.join("config.json"),
-                config_json.into_bytes(),
-            );
+            files.insert(config_dir.join("config.json"), config_json.into_bytes());
 
             Self {
                 files: Mutex::new(files),
@@ -682,7 +722,9 @@ mod vault_keeper {
         assert!(response.rotated_jwt.is_some());
 
         // The rotated JWT should decrypt with the current key
-        let (claims2, response2) = vault.authorize(response.rotated_jwt.as_ref().unwrap()).unwrap();
+        let (claims2, response2) = vault
+            .authorize(response.rotated_jwt.as_ref().unwrap())
+            .unwrap();
         assert_eq!(claims2.val, "abc123");
         assert_eq!(response2.key_status, KeyStatus::Current);
         assert!(response2.rotated_jwt.is_none());

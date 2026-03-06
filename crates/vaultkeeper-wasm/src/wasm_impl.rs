@@ -7,9 +7,9 @@ use js_sys::{Function, Promise, Reflect, Uint8Array};
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::JsFuture;
 
+use vaultkeeper_core::VaultError;
 use vaultkeeper_core::backend::{ExecOutput, FileBackend, HostPlatform, Platform, SecretBackend};
 use vaultkeeper_core::vault::{SetupOptions, VaultKeeperOptions};
-use vaultkeeper_core::VaultError;
 
 // ─── JsHostPlatform ──────────────────────────────────────────────
 
@@ -119,8 +119,7 @@ impl HostPlatform for JsHostPlatform {
         let stderr = Uint8Array::new(&stderr_val).to_vec();
         let exit_code = exit_code_val
             .as_f64()
-            .ok_or_else(|| js_err("exitCode is not a number"))?
-            as i32;
+            .ok_or_else(|| js_err("exitCode is not a number"))? as i32;
 
         Ok(ExecOutput {
             stdout,
@@ -197,8 +196,7 @@ impl HostPlatform for JsHostPlatform {
     }
 
     async fn list_dir(&self, path: &Path) -> Result<Vec<String>, VaultError> {
-        let list_fn =
-            get_method(&self.host, "listDir").map_err(|e| js_err(&format!("{e:?}")))?;
+        let list_fn = get_method(&self.host, "listDir").map_err(|e| js_err(&format!("{e:?}")))?;
 
         let js_path = JsValue::from_str(&path.to_string_lossy());
         let promise = list_fn

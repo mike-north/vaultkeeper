@@ -68,11 +68,10 @@ impl FileBackend {
                     Ok(false) => {
                         // File doesn't exist — generate a new key
                         let mut key = vec![0u8; GCM_KEY_BYTES];
-                        getrandom::fill(&mut key)
-                            .map_err(|e| VaultError::Other(format!("Failed to generate key: {e}")))?;
-                        self.host
-                            .write_file(&key_path, &key, 0o600)
-                            .await?;
+                        getrandom::fill(&mut key).map_err(|e| {
+                            VaultError::Other(format!("Failed to generate key: {e}"))
+                        })?;
+                        self.host.write_file(&key_path, &key, 0o600).await?;
                         Ok(key)
                     }
                     Ok(true) => {
@@ -206,11 +205,13 @@ impl SecretBackend for FileBackend {
 
     async fn retrieve(&self, id: &str) -> Result<String, VaultError> {
         let entry_path = self.entry_path(id);
-        let data = self.host.read_file(&entry_path).await.map_err(|_| {
-            VaultError::SecretNotFound {
-                message: format!("Secret not found in file store: {id}"),
-            }
-        })?;
+        let data =
+            self.host
+                .read_file(&entry_path)
+                .await
+                .map_err(|_| VaultError::SecretNotFound {
+                    message: format!("Secret not found in file store: {id}"),
+                })?;
 
         let encoded = String::from_utf8(data)
             .map_err(|e| VaultError::Other(format!("Encrypted file is not valid UTF-8: {e}")))?;
@@ -222,11 +223,11 @@ impl SecretBackend for FileBackend {
     async fn delete(&self, id: &str) -> Result<(), VaultError> {
         let entry_path = self.entry_path(id);
         match self.host.file_exists(&entry_path).await {
-            Ok(true) => {
-                self.host.delete_file(&entry_path).await.map_err(|e| {
-                    VaultError::Other(format!("Failed to delete secret file: {e}"))
-                })
-            }
+            Ok(true) => self
+                .host
+                .delete_file(&entry_path)
+                .await
+                .map_err(|e| VaultError::Other(format!("Failed to delete secret file: {e}"))),
             Ok(false) => Err(VaultError::SecretNotFound {
                 message: format!("Secret not found in file store: {id}"),
             }),

@@ -1,9 +1,9 @@
 //! Trust manifest management — load, save, and query approved executable hashes.
 
+use super::types::{TrustManifest, TrustManifestEntry};
 use crate::backend::HostPlatform;
 use crate::errors::VaultError;
 use crate::types::TrustTier;
-use super::types::{TrustManifest, TrustManifestEntry};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -94,10 +94,12 @@ pub async fn save_manifest(
 /// The trust tier of an existing entry is not changed.
 pub fn add_trusted_hash(manifest: &TrustManifest, namespace: &str, hash: &str) -> TrustManifest {
     let mut next = manifest.clone();
-    let entry = next.entry(namespace.to_string()).or_insert_with(|| TrustManifestEntry {
-        hashes: Vec::new(),
-        trust_tier: TrustTier::Dev,
-    });
+    let entry = next
+        .entry(namespace.to_string())
+        .or_insert_with(|| TrustManifestEntry {
+            hashes: Vec::new(),
+            trust_tier: TrustTier::Dev,
+        });
     if !entry.hashes.iter().any(|h| h == hash) {
         entry.hashes.push(hash.to_string());
     }

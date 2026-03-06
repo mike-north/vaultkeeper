@@ -298,7 +298,9 @@ async fn cmd_approve(path: &str) -> i32 {
 
     let updated = vaultkeeper_core::identity::manifest::add_trusted_hash(&manifest, path, &hash);
 
-    if let Err(e) = vaultkeeper_core::identity::manifest::save_manifest(host.as_ref(), &updated).await {
+    if let Err(e) =
+        vaultkeeper_core::identity::manifest::save_manifest(host.as_ref(), &updated).await
+    {
         eprintln!("Error: Failed to save trust manifest: {e}");
         return 1;
     }
@@ -432,8 +434,7 @@ fn create_config_dir(dir: &PathBuf) -> Result<(), String> {
 
 fn write_config_file(path: &PathBuf, json: &str) -> Result<(), String> {
     let content = format!("{json}\n");
-    std::fs::write(path, &content)
-        .map_err(|e| format!("Failed to write config file: {e}"))?;
+    std::fs::write(path, &content).map_err(|e| format!("Failed to write config file: {e}"))?;
 
     #[cfg(unix)]
     {
@@ -449,10 +450,15 @@ fn write_config_file(path: &PathBuf, json: &str) -> Result<(), String> {
 async fn cmd_rotate_key() -> i32 {
     let host = make_host();
 
-    let mut vault = match vaultkeeper_core::VaultKeeper::init(host.as_ref(), Some(vaultkeeper_core::vault::VaultKeeperOptions {
-        skip_doctor: true,
-        ..Default::default()
-    })).await {
+    let mut vault = match vaultkeeper_core::VaultKeeper::init(
+        host.as_ref(),
+        Some(vaultkeeper_core::vault::VaultKeeperOptions {
+            skip_doctor: true,
+            ..Default::default()
+        }),
+    )
+    .await
+    {
         Ok(v) => v,
         Err(e) => {
             eprintln!("Error: {e}");
@@ -472,10 +478,15 @@ async fn cmd_rotate_key() -> i32 {
 async fn cmd_revoke_key() -> i32 {
     let host = make_host();
 
-    let mut vault = match vaultkeeper_core::VaultKeeper::init(host.as_ref(), Some(vaultkeeper_core::vault::VaultKeeperOptions {
-        skip_doctor: true,
-        ..Default::default()
-    })).await {
+    let mut vault = match vaultkeeper_core::VaultKeeper::init(
+        host.as_ref(),
+        Some(vaultkeeper_core::vault::VaultKeeperOptions {
+            skip_doctor: true,
+            ..Default::default()
+        }),
+    )
+    .await
+    {
         Ok(v) => v,
         Err(e) => {
             eprintln!("Error: {e}");

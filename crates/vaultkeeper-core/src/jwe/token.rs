@@ -15,9 +15,9 @@ use base64ct::{Base64UrlUnpadded, Encoding};
 
 use crate::errors::VaultError;
 use crate::types::VaultClaims;
+use crate::util::time;
 use std::collections::HashMap;
 use std::sync::Mutex;
-use crate::util::time;
 
 use super::types::VaultJweHeader;
 
@@ -104,9 +104,7 @@ pub fn create_token(
     let ciphertext_b64 = Base64UrlUnpadded::encode_string(ciphertext);
     let tag_b64 = Base64UrlUnpadded::encode_string(tag);
 
-    Ok(format!(
-        "{header_b64}..{iv_b64}.{ciphertext_b64}.{tag_b64}"
-    ))
+    Ok(format!("{header_b64}..{iv_b64}.{ciphertext_b64}.{tag_b64}"))
 }
 
 /// Decrypt a compact JWE token and return the claims.
@@ -196,13 +194,16 @@ pub fn decrypt_token(key: &[u8], jwe: &str) -> Result<VaultClaims, VaultError> {
         aad: header_b64.as_bytes(),
     };
 
-    let plaintext = cipher
-        .decrypt(nonce, payload)
-        .map_err(|_| VaultError::Other("JWE decryption failed: authentication failed".to_string()))?;
+    let plaintext = cipher.decrypt(nonce, payload).map_err(|_| {
+        VaultError::Other("JWE decryption failed: authentication failed".to_string())
+    })?;
 
     // Parse claims
-    let claims: VaultClaims = serde_json::from_slice(&plaintext)
-        .map_err(|e| VaultError::Other(format!("JWE payload does not match VaultClaims schema: {e}")))?;
+    let claims: VaultClaims = serde_json::from_slice(&plaintext).map_err(|e| {
+        VaultError::Other(format!(
+            "JWE payload does not match VaultClaims schema: {e}"
+        ))
+    })?;
 
     Ok(claims)
 }
@@ -226,11 +227,15 @@ pub fn extract_kid(jwe: &str) -> Result<Option<String>, VaultError> {
         ));
     }
 
-    let header_bytes = Base64UrlUnpadded::decode_vec(header_b64)
-        .map_err(|_| VaultError::Other("Invalid JWE compact serialization: header is not valid Base64URL".to_string()))?;
+    let header_bytes = Base64UrlUnpadded::decode_vec(header_b64).map_err(|_| {
+        VaultError::Other(
+            "Invalid JWE compact serialization: header is not valid Base64URL".to_string(),
+        )
+    })?;
 
-    let header: VaultJweHeader = serde_json::from_slice(&header_bytes)
-        .map_err(|_| VaultError::Other("Invalid JWE compact serialization: header is not valid JSON".to_string()))?;
+    let header: VaultJweHeader = serde_json::from_slice(&header_bytes).map_err(|_| {
+        VaultError::Other("Invalid JWE compact serialization: header is not valid JSON".to_string())
+    })?;
 
     Ok(header.kid)
 }
@@ -400,7 +405,9 @@ mod tests {
     fn create_and_decrypt_round_trip() {
         let key = test_key();
         let claims = test_claims();
-        let opts = CreateTokenOptions { kid: Some("k-123".to_string()) };
+        let opts = CreateTokenOptions {
+            kid: Some("k-123".to_string()),
+        };
 
         let jwe = create_token(&key, &claims, &opts).unwrap();
 
@@ -427,7 +434,9 @@ mod tests {
     fn extract_kid_from_jwe() {
         let key = test_key();
         let claims = test_claims();
-        let opts = CreateTokenOptions { kid: Some("k-456".to_string()) };
+        let opts = CreateTokenOptions {
+            kid: Some("k-456".to_string()),
+        };
 
         let jwe = create_token(&key, &claims, &opts).unwrap();
         let kid = extract_kid(&jwe).unwrap();
@@ -494,7 +503,10 @@ mod tests {
         let parts: Vec<&str> = jwe.split('.').collect();
         let tampered = format!("{}.AAAA.{}.{}.{}", parts[0], parts[2], parts[3], parts[4]);
         let err = decrypt_token(&key, &tampered).unwrap_err();
-        assert!(err.to_string().contains("encrypted key segment must be empty"));
+        assert!(
+            err.to_string()
+                .contains("encrypted key segment must be empty")
+        );
     }
 
     #[test]

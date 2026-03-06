@@ -7,7 +7,7 @@ mod token;
 mod types;
 
 pub use token::{
-    block_token, clear_blocklist, create_token, decrypt_token, extract_kid, is_blocked,
-    validate_claims, CreateTokenOptions,
+    CreateTokenOptions, block_token, clear_blocklist, create_token, decrypt_token, extract_kid,
+    is_blocked, validate_claims,
 };
 pub use types::VaultJweHeader;

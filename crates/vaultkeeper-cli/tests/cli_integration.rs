@@ -23,8 +23,11 @@ fn cli_test_env() -> (Command, TempDir) {
         "defaults": { "ttlMinutes": 60, "trustTier": "3" }
     });
     let config_path = dir.path().join("config.json");
-    fs::write(&config_path, serde_json::to_string_pretty(&config).unwrap() + "\n")
-        .expect("failed to write config");
+    fs::write(
+        &config_path,
+        serde_json::to_string_pretty(&config).unwrap() + "\n",
+    )
+    .expect("failed to write config");
 
     let mut cmd = Command::cargo_bin("vaultkeeper").expect("binary not found");
     cmd.env("VAULTKEEPER_CONFIG_DIR", dir.path());
@@ -152,7 +155,9 @@ mod store_delete {
             .write_stdin("super-secret-value")
             .assert()
             .success()
-            .stdout(predicate::str::contains("Secret \"my-key\" stored successfully"));
+            .stdout(predicate::str::contains(
+                "Secret \"my-key\" stored successfully",
+            ));
     }
 
     #[test]

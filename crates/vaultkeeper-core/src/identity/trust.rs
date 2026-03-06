@@ -7,12 +7,12 @@
 //! TOFU (Trust On First Use): on the first encounter the hash is recorded.
 //! If the hash changes on a subsequent call a `tofu_conflict` is signalled.
 
-use crate::backend::HostPlatform;
-use crate::errors::VaultError;
-use crate::types::TrustTier;
 use super::hash::hash_executable;
 use super::manifest::{add_trusted_hash, is_trusted, load_manifest, save_manifest};
 use super::types::{IdentityInfo, TrustOptions, TrustVerificationResult};
+use crate::backend::HostPlatform;
+use crate::errors::VaultError;
+use crate::types::TrustTier;
 use std::path::Path;
 
 /// Verify the trust tier of the executable at `exec_path`.
@@ -237,7 +237,9 @@ mod tests {
         let host = MockHost::new();
         host.add_file("/usr/bin/test-app", b"binary-content");
 
-        let result = verify_trust(&host, "/usr/bin/test-app", None).await.unwrap();
+        let result = verify_trust(&host, "/usr/bin/test-app", None)
+            .await
+            .unwrap();
         assert_eq!(result.identity.trust_tier, TrustTier::Dev);
         assert!(!result.identity.verified);
         assert!(!result.tofu_conflict);
@@ -245,7 +247,11 @@ mod tests {
 
         // Manifest should have been saved
         let manifest = load_manifest(&host).await.unwrap();
-        assert!(is_trusted(&manifest, "/usr/bin/test-app", &result.identity.hash));
+        assert!(is_trusted(
+            &manifest,
+            "/usr/bin/test-app",
+            &result.identity.hash
+        ));
     }
 
     #[tokio::test]
@@ -254,11 +260,15 @@ mod tests {
         host.add_file("/usr/bin/test-app", b"binary-content");
 
         // First encounter records TOFU
-        let first = verify_trust(&host, "/usr/bin/test-app", None).await.unwrap();
+        let first = verify_trust(&host, "/usr/bin/test-app", None)
+            .await
+            .unwrap();
         assert!(!first.tofu_conflict);
 
         // Second encounter with same binary should find it in manifest
-        let second = verify_trust(&host, "/usr/bin/test-app", None).await.unwrap();
+        let second = verify_trust(&host, "/usr/bin/test-app", None)
+            .await
+            .unwrap();
         assert_eq!(second.identity.trust_tier, TrustTier::Tofu);
         assert!(second.identity.verified);
         assert!(!second.tofu_conflict);
@@ -271,13 +281,17 @@ mod tests {
         host.add_file("/usr/bin/test-app", b"original-binary");
 
         // First encounter
-        verify_trust(&host, "/usr/bin/test-app", None).await.unwrap();
+        verify_trust(&host, "/usr/bin/test-app", None)
+            .await
+            .unwrap();
 
         // Change the binary
         host.add_file("/usr/bin/test-app", b"modified-binary");
 
         // Should detect the TOFU conflict
-        let result = verify_trust(&host, "/usr/bin/test-app", None).await.unwrap();
+        let result = verify_trust(&host, "/usr/bin/test-app", None)
+            .await
+            .unwrap();
         assert!(result.tofu_conflict);
         assert_eq!(result.identity.trust_tier, TrustTier::Dev);
         assert!(!result.identity.verified);

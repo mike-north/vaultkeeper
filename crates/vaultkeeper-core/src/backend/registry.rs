@@ -7,7 +7,8 @@ use std::collections::HashMap;
 use std::sync::Mutex;
 
 /// Factory function for creating a [`SecretBackend`] instance.
-pub type BackendFactory = Box<dyn Fn(Option<&BackendConfig>) -> Box<dyn SecretBackend> + Send + Sync>;
+pub type BackendFactory =
+    Box<dyn Fn(Option<&BackendConfig>) -> Box<dyn SecretBackend> + Send + Sync>;
 
 /// Registry of backend factories, keyed by type identifier.
 pub struct BackendRegistry {
@@ -38,13 +39,14 @@ impl BackendRegistry {
         config: Option<&BackendConfig>,
     ) -> Result<Box<dyn SecretBackend>, VaultError> {
         let factories = self.factories.lock().expect("registry lock poisoned");
-        let factory = factories.get(backend_type).ok_or_else(|| {
-            VaultError::BackendUnavailable {
-                message: format!("Unknown backend type: {backend_type}"),
-                reason: "unknown-type".to_string(),
-                attempted: vec![backend_type.to_string()],
-            }
-        })?;
+        let factory =
+            factories
+                .get(backend_type)
+                .ok_or_else(|| VaultError::BackendUnavailable {
+                    message: format!("Unknown backend type: {backend_type}"),
+                    reason: "unknown-type".to_string(),
+                    attempted: vec![backend_type.to_string()],
+                })?;
         Ok(factory(config))
     }
 

@@ -3,8 +3,8 @@
 //! Stores secrets in a `HashMap` with no external dependencies.
 //! Suitable for unit, integration, and e2e tests.
 
-use crate::errors::VaultError;
 use super::types::{ListableBackend, SecretBackend};
+use crate::errors::VaultError;
 use std::collections::HashMap;
 use std::sync::Mutex;
 
@@ -76,10 +76,7 @@ impl SecretBackend for InMemoryBackend {
     }
 
     async fn delete(&self, id: &str) -> Result<(), VaultError> {
-        self.store
-            .lock()
-            .expect("store lock poisoned")
-            .remove(id);
+        self.store.lock().expect("store lock poisoned").remove(id);
         Ok(())
     }
 

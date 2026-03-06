@@ -10,7 +10,7 @@ use std::fs;
 use std::io::Write;
 use std::process::Command;
 use tempfile::TempDir;
-use vaultkeeper_conformance::{all_cases, matches_output, ConformanceCase};
+use vaultkeeper_conformance::{ConformanceCase, all_cases, matches_output};
 
 /// Find the vaultkeeper binary built by cargo.
 fn vaultkeeper_bin() -> std::path::PathBuf {
