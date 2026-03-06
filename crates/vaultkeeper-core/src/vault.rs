@@ -166,7 +166,9 @@ impl VaultKeeper {
             Some(k) => self
                 .key_manager
                 .find_key_by_id(k)
-                .ok_or_else(|| VaultError::Other(format!("Unknown key ID: {k}")))?,
+                .ok_or_else(|| VaultError::KeyRevoked {
+                    message: format!("Unknown key ID: {k}"),
+                })?,
             None => {
                 let k = self.key_manager.get_current_key()?;
                 (k, true)

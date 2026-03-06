@@ -36,7 +36,7 @@ export interface SetupOptions {
 export type TrustTier = '1' | '2' | '3';
 
 /** Key status in the vault response. */
-export type KeyStatus = 'current' | 'previous';
+export type KeyStatus = 'current' | 'previous' | 'deprecated';
 
 /** Claims embedded in a JWE token. */
 export interface VaultClaims {
