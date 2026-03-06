@@ -8,15 +8,14 @@
 import { execFile } from 'node:child_process';
 import { access, mkdir, readFile, writeFile, chmod } from 'node:fs/promises';
 import { homedir, platform as osPlatform } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import type { WasmHostPlatform } from './types.js';
 
 /**
  * Create a Node.js host platform for the WASM module.
  *
  * Uses the standard vaultkeeper config directory:
- * - macOS: `~/Library/Application Support/vaultkeeper`
- * - Linux: `~/.config/vaultkeeper`
+ * - macOS/Linux: `~/.config/vaultkeeper`
  * - Windows: `%APPDATA%/vaultkeeper`
  *
  * Override with `VAULTKEEPER_CONFIG_DIR` environment variable.
@@ -52,13 +51,16 @@ export function createNodeHost(configDirOverride?: string): WasmHostPlatform {
     },
 
     async writeFile(path: string, content: Uint8Array, mode: number): Promise<void> {
-      // Ensure parent directory exists
-      const dir = path.substring(0, path.lastIndexOf('/'));
-      if (dir) {
+      // Ensure parent directory exists (use path.dirname for cross-platform support)
+      const dir = dirname(path);
+      if (dir && dir !== '.') {
         await mkdir(dir, { recursive: true });
       }
       await writeFile(path, content);
-      await chmod(path, mode);
+      // chmod is a no-op on Windows; skip to avoid errors
+      if (osPlatform() !== 'win32') {
+        await chmod(path, mode);
+      }
     },
 
     async fileExists(path: string): Promise<boolean> {
@@ -89,7 +91,7 @@ function resolveConfigDir(): string {
 
   const p = osPlatform();
   const home = homedir();
-  if (p === 'darwin') return join(home, 'Library', 'Application Support', 'vaultkeeper');
   if (p === 'win32') return join(process.env.APPDATA ?? join(home, 'AppData', 'Roaming'), 'vaultkeeper');
+  // macOS and Linux both use ~/.config/vaultkeeper (matching the TS SDK)
   return join(home, '.config', 'vaultkeeper');
 }

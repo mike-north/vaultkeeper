@@ -130,10 +130,35 @@ pub fn decrypt_token(key: &[u8], jwe: &str) -> Result<VaultClaims, VaultError> {
     }
 
     let header_b64 = parts[0];
-    // parts[1] is encrypted key — empty for `dir`
+    let encrypted_key_b64 = parts[1];
     let iv_b64 = parts[2];
     let ciphertext_b64 = parts[3];
     let tag_b64 = parts[4];
+
+    // For `dir` algorithm, the encrypted key segment must be empty
+    if !encrypted_key_b64.is_empty() {
+        return Err(VaultError::Other(
+            "Invalid JWE for 'dir': encrypted key segment must be empty".to_string(),
+        ));
+    }
+
+    // Decode and validate the protected header
+    let header_bytes = Base64UrlUnpadded::decode_vec(header_b64)
+        .map_err(|e| VaultError::Other(format!("Invalid JWE header base64url: {e}")))?;
+    let header: VaultJweHeader = serde_json::from_slice(&header_bytes)
+        .map_err(|e| VaultError::Other(format!("Invalid JWE header JSON: {e}")))?;
+    if header.alg != "dir" {
+        return Err(VaultError::Other(format!(
+            "Unsupported JWE alg: expected 'dir', got '{}'",
+            header.alg
+        )));
+    }
+    if header.enc != "A256GCM" {
+        return Err(VaultError::Other(format!(
+            "Unsupported JWE enc: expected 'A256GCM', got '{}'",
+            header.enc
+        )));
+    }
 
     // Decode IV
     let iv_bytes = Base64UrlUnpadded::decode_vec(iv_b64)
@@ -453,6 +478,42 @@ mod tests {
         assert!(decrypt_token(&key, "not.a.jwe").is_err());
         assert!(decrypt_token(&key, "").is_err());
         assert!(extract_kid("only.two.parts").is_err());
+    }
+
+    #[test]
+    fn decrypt_rejects_non_empty_encrypted_key_segment() {
+        let key = test_key();
+        let claims = test_claims();
+        let opts = CreateTokenOptions { kid: None };
+        let jwe = create_token(&key, &claims, &opts).unwrap();
+
+        // Insert a non-empty encrypted key segment (should be empty for `dir`)
+        let parts: Vec<&str> = jwe.split('.').collect();
+        let tampered = format!("{}.AAAA.{}.{}.{}", parts[0], parts[2], parts[3], parts[4]);
+        let err = decrypt_token(&key, &tampered).unwrap_err();
+        assert!(err.to_string().contains("encrypted key segment must be empty"));
+    }
+
+    #[test]
+    fn decrypt_rejects_wrong_alg() {
+        let key = test_key();
+        // Craft a header with alg != "dir"
+        let header = serde_json::json!({"alg": "RSA-OAEP", "enc": "A256GCM"});
+        let header_b64 = Base64UrlUnpadded::encode_string(header.to_string().as_bytes());
+        let jwe = format!("{header_b64}..AAAA.BBBB.CCCC");
+        let err = decrypt_token(&key, &jwe).unwrap_err();
+        assert!(err.to_string().contains("Unsupported JWE alg"));
+    }
+
+    #[test]
+    fn decrypt_rejects_wrong_enc() {
+        let key = test_key();
+        // Craft a header with enc != "A256GCM"
+        let header = serde_json::json!({"alg": "dir", "enc": "A128CBC-HS256"});
+        let header_b64 = Base64UrlUnpadded::encode_string(header.to_string().as_bytes());
+        let jwe = format!("{header_b64}..AAAA.BBBB.CCCC");
+        let err = decrypt_token(&key, &jwe).unwrap_err();
+        assert!(err.to_string().contains("Unsupported JWE enc"));
     }
 
     #[test]

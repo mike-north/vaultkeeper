@@ -7,7 +7,7 @@
 //! Encrypted file format (all parts base64-encoded, colon-separated):
 //!   `<iv>:<authTag>:<ciphertext>`
 
-use crate::backend::types::{HostPlatform, ListableBackend, SecretBackend};
+use crate::backend::types::{HostPlatform, ListableBackend, Platform, SecretBackend};
 use crate::errors::VaultError;
 use aes_gcm::aead::Aead;
 use aes_gcm::{Aes256Gcm, KeyInit, Nonce};
@@ -62,15 +62,26 @@ impl FileBackend {
                 "Key file has wrong length: expected {GCM_KEY_BYTES}, got {}",
                 data.len()
             ))),
-            Err(_) => {
-                // Generate a random 32-byte key
-                let mut key = vec![0u8; GCM_KEY_BYTES];
-                getrandom::fill(&mut key)
-                    .map_err(|e| VaultError::Other(format!("Failed to generate key: {e}")))?;
-                self.host
-                    .write_file(&key_path, &key, 0o600)
-                    .await?;
-                Ok(key)
+            Err(read_err) => {
+                // Only create a new key if the key file does not exist.
+                // Transient read failures (permissions, IO errors) should be surfaced.
+                match self.host.file_exists(&key_path).await {
+                    Ok(false) => {
+                        // File doesn't exist — generate a new key
+                        let mut key = vec![0u8; GCM_KEY_BYTES];
+                        getrandom::fill(&mut key)
+                            .map_err(|e| VaultError::Other(format!("Failed to generate key: {e}")))?;
+                        self.host
+                            .write_file(&key_path, &key, 0o600)
+                            .await?;
+                        Ok(key)
+                    }
+                    Ok(true) => {
+                        // File exists but couldn't be read — surface the original error
+                        Err(read_err)
+                    }
+                    Err(exists_err) => Err(exists_err),
+                }
             }
         }
     }
@@ -112,8 +123,21 @@ fn decrypt_gcm(key: &[u8], encoded: &str) -> Result<String, VaultError> {
 
     let iv = Base64::decode_vec(parts[0])
         .map_err(|e| VaultError::Other(format!("Invalid IV base64: {e}")))?;
+    if iv.len() != GCM_IV_BYTES {
+        return Err(VaultError::Other(format!(
+            "AES-GCM IV must be {} bytes, got {}",
+            GCM_IV_BYTES,
+            iv.len()
+        )));
+    }
     let auth_tag = Base64::decode_vec(parts[1])
         .map_err(|e| VaultError::Other(format!("Invalid auth tag base64: {e}")))?;
+    if auth_tag.len() != 16 {
+        return Err(VaultError::Other(format!(
+            "AES-GCM auth tag must be 16 bytes, got {}",
+            auth_tag.len()
+        )));
+    }
     let ciphertext = Base64::decode_vec(parts[2])
         .map_err(|e| VaultError::Other(format!("Invalid ciphertext base64: {e}")))?;
 
@@ -198,25 +222,34 @@ impl SecretBackend for FileBackend {
 
     async fn delete(&self, id: &str) -> Result<(), VaultError> {
         let entry_path = self.entry_path(id);
-        // Delete by writing an empty file, then relying on the host to handle deletion.
-        // Since HostPlatform doesn't have a delete_file method, we write empty content
-        // as a "tombstone" approach. For a proper implementation, we'd need a delete method.
-        // For now, we'll use exec to rm the file.
         match self.host.file_exists(&entry_path).await {
             Ok(true) => {
                 let path_str = entry_path.to_string_lossy();
-                let (cmd, args): (&str, Vec<&str>) =
-                    if cfg!(windows) {
-                        ("cmd", vec!["/c", "del", "/q", &path_str])
-                    } else {
-                        ("rm", vec!["-f", &path_str])
-                    };
-                self.host
-                    .exec(cmd, &args, None)
+                // Use runtime platform detection (not compile-time cfg!) so
+                // WASM hosts report the correct platform at runtime.
+                let (cmd, args): (&str, Vec<String>) = match self.host.platform() {
+                    Platform::Windows => (
+                        "cmd",
+                        vec!["/c".to_string(), "del".to_string(), "/q".to_string(), path_str.to_string()],
+                    ),
+                    _ => (
+                        "rm",
+                        vec!["-f".to_string(), path_str.to_string()],
+                    ),
+                };
+                let arg_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
+                let output = self.host
+                    .exec(cmd, &arg_refs, None)
                     .await
                     .map_err(|e| {
                         VaultError::Other(format!("Failed to delete secret file: {e}"))
                     })?;
+                if output.exit_code != 0 {
+                    return Err(VaultError::Other(format!(
+                        "Delete command exited with code {} for {}",
+                        output.exit_code, path_str
+                    )));
+                }
                 Ok(())
             }
             _ => Err(VaultError::SecretNotFound {
@@ -236,12 +269,17 @@ impl SecretBackend for FileBackend {
 impl ListableBackend for FileBackend {
     async fn list(&self) -> Result<Vec<String>, VaultError> {
         let storage_dir = self.storage_dir();
-        // Use exec to list the directory contents
-        let output = match self
-            .host
-            .exec("ls", &[&storage_dir.to_string_lossy()], None)
-            .await
-        {
+        let dir_str = storage_dir.to_string_lossy().to_string();
+        // Use runtime platform detection for the list command
+        let (cmd, args): (&str, Vec<String>) = match self.host.platform() {
+            Platform::Windows => (
+                "cmd",
+                vec!["/c".to_string(), "dir".to_string(), "/b".to_string(), dir_str],
+            ),
+            _ => ("ls", vec![dir_str]),
+        };
+        let arg_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
+        let output = match self.host.exec(cmd, &arg_refs, None).await {
             Ok(o) if o.exit_code == 0 => o,
             _ => return Ok(Vec::new()),
         };
@@ -290,6 +328,30 @@ mod tests {
         let key = [0u8; 32];
         assert!(decrypt_gcm(&key, "not:enough").is_err());
         assert!(decrypt_gcm(&key, "single").is_err());
+    }
+
+    #[test]
+    fn decrypt_rejects_wrong_iv_length() {
+        let key = [0u8; 32];
+        // IV too short (base64 of 4 bytes instead of 12)
+        let short_iv = Base64::encode_string(&[0u8; 4]);
+        let tag = Base64::encode_string(&[0u8; 16]);
+        let ct = Base64::encode_string(b"data");
+        let encoded = format!("{short_iv}:{tag}:{ct}");
+        let err = decrypt_gcm(&key, &encoded).unwrap_err();
+        assert!(err.to_string().contains("IV must be"));
+    }
+
+    #[test]
+    fn decrypt_rejects_wrong_tag_length() {
+        let key = [0u8; 32];
+        // Tag too short (8 bytes instead of 16)
+        let iv = Base64::encode_string(&[0u8; GCM_IV_BYTES]);
+        let short_tag = Base64::encode_string(&[0u8; 8]);
+        let ct = Base64::encode_string(b"data");
+        let encoded = format!("{iv}:{short_tag}:{ct}");
+        let err = decrypt_gcm(&key, &encoded).unwrap_err();
+        assert!(err.to_string().contains("auth tag must be 16 bytes"));
     }
 
     #[test]
