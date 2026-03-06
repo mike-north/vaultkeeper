@@ -495,15 +495,13 @@ mod tests {
 
     #[test]
     fn validate_claims_rejects_blocked() {
-        clear_blocklist();
-
-        let claims = test_claims();
+        // Use a unique JTI to avoid races with other blocklist tests
+        let mut claims = test_claims();
+        claims.jti = "blocked-test-unique-jti".to_string();
         block_token(&claims.jti);
 
         let result = validate_claims(&claims, 0);
         assert!(matches!(result, Err(VaultError::TokenRevoked { .. })));
-
-        clear_blocklist();
     }
 
     #[test]
@@ -543,8 +541,8 @@ mod tests {
 
     #[test]
     fn validate_claims_accepts_valid() {
-        clear_blocklist();
-        let claims = test_claims();
+        let mut claims = test_claims();
+        claims.jti = "valid-test-unique-jti".to_string();
         assert!(validate_claims(&claims, 0).is_ok());
     }
 }

@@ -94,8 +94,8 @@ mod config_validation {
         let json = r#"{
             "version": 1,
             "backends": [{"type": "keychain", "enabled": true}],
-            "key_rotation": {"grace_period_days": 14},
-            "defaults": {"ttl_minutes": 120, "trust_tier": "2"}
+            "keyRotation": {"gracePeriodDays": 14},
+            "defaults": {"ttlMinutes": 120, "trustTier": "2"}
         }"#;
         let cfg = load_config_from_str(json).unwrap();
         assert_eq!(cfg.backends[0].backend_type, "keychain");
@@ -215,7 +215,7 @@ mod type_serde {
             key_status: KeyStatus::Current,
         };
         let json = serde_json::to_string(&response).unwrap();
-        assert!(!json.contains("rotated_jwt"));
+        assert!(!json.contains("rotatedJwt"));
     }
 
     #[test]

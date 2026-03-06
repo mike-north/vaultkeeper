@@ -94,6 +94,7 @@ pub struct VaultClaims {
 
 /// Response from a vault access operation.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct VaultResponse {
     /// Replacement JWE if key was rotated.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -136,6 +137,7 @@ pub struct ExecRequest {
 
 /// Result from delegated command execution.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ExecResult {
     /// Captured standard output.
     pub stdout: String,
@@ -206,6 +208,7 @@ pub struct SignResult {
 
 /// Request for signature verification.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct VerifyRequest {
     /// The original data that was signed (UTF-8 string).
     pub data: String,
@@ -219,6 +222,7 @@ pub struct VerifyRequest {
 
 /// Vaultkeeper configuration file structure.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct VaultConfig {
     /// Config schema version. Currently must be `1`.
     pub version: u32,
@@ -235,6 +239,7 @@ pub struct VaultConfig {
 
 /// Key rotation policy configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct KeyRotationPolicy {
     /// Number of days the previous key remains valid after rotation.
     pub grace_period_days: u32,
@@ -242,6 +247,7 @@ pub struct KeyRotationPolicy {
 
 /// Default values for vault operations.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct VaultDefaults {
     /// Default JWE time-to-live in minutes.
     pub ttl_minutes: u32,
