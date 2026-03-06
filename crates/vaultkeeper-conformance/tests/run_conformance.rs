@@ -26,7 +26,7 @@ fn vaultkeeper_bin() -> std::path::PathBuf {
         .parent()
         .expect("no grandparent dir")
         .to_path_buf();
-    path.push("vaultkeeper");
+    path.push(format!("vaultkeeper{}", std::env::consts::EXE_SUFFIX));
     path
 }
 
