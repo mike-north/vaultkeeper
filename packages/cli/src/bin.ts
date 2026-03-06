@@ -34,7 +34,8 @@ function printHelp(): void {
       '  store        Store a secret (reads from stdin)\n' +
       '  delete       Delete a secret\n' +
       '  config       Manage configuration\n' +
-      '  rotate-key   Rotate the encryption key\n',
+      '  rotate-key   Rotate the encryption key\n' +
+      '  revoke-key   Emergency key revocation\n',
   )
 }
 
@@ -77,6 +78,10 @@ async function main(): Promise<number> {
     case 'rotate-key': {
       const { rotateKeyCommand } = await import('./commands/rotate-key.js')
       return rotateKeyCommand(commandArgs)
+    }
+    case 'revoke-key': {
+      const { revokeKeyCommand } = await import('./commands/revoke-key.js')
+      return revokeKeyCommand(commandArgs)
     }
     default:
       process.stderr.write(`Unknown command: ${subcommand}\n`)
