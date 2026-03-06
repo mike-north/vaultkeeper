@@ -11,5 +11,9 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 regex = "1"
 
+[[bin]]
+name = "export-conformance"
+path = "src/export.rs"
+
 [dev-dependencies]
 tempfile = "3"

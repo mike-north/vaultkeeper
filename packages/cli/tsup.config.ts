@@ -14,8 +14,5 @@ export default defineConfig([
     format: ['esm'],
     sourcemap: true,
     clean: false,
-    banner: {
-      js: '#!/usr/bin/env node',
-    },
   },
 ])

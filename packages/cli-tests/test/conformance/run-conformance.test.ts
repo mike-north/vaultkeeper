@@ -1,0 +1,243 @@
+/**
+ * Conformance test runner for the native Rust CLI.
+ *
+ * Loads data-driven test cases exported from `vaultkeeper-conformance` (Rust crate)
+ * and runs each one against the compiled Rust binary. This ensures the native CLI
+ * produces the exact same output as the Rust integration test runner.
+ *
+ * @see crates/vaultkeeper-conformance/src/lib.rs — case definitions
+ * @see crates/vaultkeeper-conformance/tests/run_conformance.rs — Rust-side runner
+ */
+
+import { execFile } from 'node:child_process'
+import * as fsSync from 'node:fs'
+import * as fs from 'node:fs/promises'
+import * as os from 'node:os'
+import * as path from 'node:path'
+import { fileURLToPath } from 'node:url'
+import { describe, it, expect } from 'vitest'
+
+// ─── Types mirroring the Rust ConformanceCase / OutputMatcher ────
+
+interface OutputMatcher {
+  type: 'Any' | 'Exact' | 'Contains' | 'Regex' | 'JsonContains'
+  value?: string | Record<string, unknown>
+}
+
+interface ConformanceCase {
+  name: string
+  command: string[]
+  stdin: string | null
+  needsConfig: boolean
+  expectedExitCode: number
+  expectedStdout: OutputMatcher
+  expectedStderr: OutputMatcher
+}
+
+// ─── Load cases ──────────────────────────────────────────────────
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url))
+const casesPath = path.join(__dirname, 'cases.json')
+const cases: ConformanceCase[] = JSON.parse(
+  await fs.readFile(casesPath, 'utf8'),
+) as ConformanceCase[]
+
+// ─── Find the native Rust CLI binary ─────────────────────────────
+
+function findRustBinary(): string {
+  // Check VAULTKEEPER_BIN env var first
+  const envBin = process.env['VAULTKEEPER_BIN']
+  if (envBin) return envBin
+
+  // Look in typical cargo target directories relative to workspace root
+  const root = path.resolve(__dirname, '..', '..', '..', '..')
+  const candidates = [
+    path.join(root, 'target', 'debug', 'vaultkeeper'),
+    path.join(root, 'target', 'release', 'vaultkeeper'),
+  ]
+
+  for (const candidate of candidates) {
+    try {
+      fsSync.accessSync(candidate)
+      return candidate
+    } catch {
+      // try next
+    }
+  }
+
+  // Default to debug build
+  return candidates[0] ?? ''
+}
+
+const RUST_BIN = findRustBinary()
+
+// ─── Default test config ─────────────────────────────────────────
+
+const DEFAULT_CONFIG = JSON.stringify(
+  {
+    version: 1,
+    backends: [{ type: 'file', enabled: true }],
+    keyRotation: { gracePeriodDays: 7 },
+    defaults: { ttlMinutes: 60, trustTier: '3' },
+  },
+  null,
+  2,
+)
+
+// ─── Output matching ─────────────────────────────────────────────
+
+function matchesOutput(matcher: OutputMatcher, output: string): boolean {
+  switch (matcher.type) {
+    case 'Any':
+      return true
+    case 'Exact':
+      return output.trim() === String(matcher.value ?? '').trim()
+    case 'Contains':
+      return output.includes(String(matcher.value ?? ''))
+    case 'Regex': {
+      let pattern = String(matcher.value ?? '')
+      let flags = ''
+      // Translate Rust inline (?s) flag to JS 's' flag (dotall mode)
+      if (pattern.startsWith('(?s)')) {
+        pattern = pattern.slice(4)
+        flags = 's'
+      }
+      return new RegExp(pattern, flags).test(output)
+    }
+    case 'JsonContains': {
+      try {
+        const parsed: unknown = JSON.parse(output)
+        return jsonContains(parsed, matcher.value)
+      } catch {
+        return false
+      }
+    }
+    default:
+      return false
+  }
+}
+
+function jsonContains(haystack: unknown, needle: unknown): boolean {
+  if (
+    haystack !== null &&
+    needle !== null &&
+    typeof haystack === 'object' &&
+    typeof needle === 'object' &&
+    !Array.isArray(haystack) &&
+    !Array.isArray(needle)
+  ) {
+    const h = haystack as Record<string, unknown>
+    const n = needle as Record<string, unknown>
+    return Object.entries(n).every(
+      ([k, v]) => k in h && jsonContains(h[k], v),
+    )
+  }
+  if (Array.isArray(haystack) && Array.isArray(needle)) {
+    return needle.every((nv: unknown) =>
+      haystack.some((hv: unknown) => jsonContains(hv, nv)),
+    )
+  }
+  return haystack === needle
+}
+
+// ─── Run a single case ───────────────────────────────────────────
+
+interface RunResult {
+  stdout: string
+  stderr: string
+  exitCode: number
+}
+
+async function runCase(testCase: ConformanceCase): Promise<RunResult> {
+  const configDir = await fs.mkdtemp(
+    path.join(os.tmpdir(), 'vk-conformance-'),
+  )
+
+  try {
+    if (testCase.needsConfig) {
+      await fs.writeFile(
+        path.join(configDir, 'config.json'),
+        DEFAULT_CONFIG + '\n',
+        { mode: 0o600 },
+      )
+    }
+
+    return await new Promise<RunResult>((resolve) => {
+      const child = execFile(
+        RUST_BIN,
+        testCase.command,
+        {
+          timeout: 15_000,
+          env: {
+            ...process.env,
+            VAULTKEEPER_CONFIG_DIR: configDir,
+          },
+        },
+        (error, stdout, stderr) => {
+          let exitCode = 0
+          if (error !== null) {
+            // Node's ExecException puts the exit code in `code` as a number
+            // when the process exits non-zero
+            const errObj = error as { code?: string | number }
+            exitCode =
+              typeof errObj.code === 'number' ? errObj.code : 1
+          }
+          resolve({ stdout, stderr, exitCode })
+        },
+      )
+
+      if (testCase.stdin !== null && child.stdin !== null) {
+        child.stdin.write(testCase.stdin)
+        child.stdin.end()
+      } else if (child.stdin !== null) {
+        child.stdin.end()
+      }
+    })
+  } finally {
+    await fs.rm(configDir, { recursive: true, force: true })
+  }
+}
+
+// ─── Test suite ──────────────────────────────────────────────────
+
+describe('Rust CLI conformance', () => {
+  it.each(cases.map((c) => [c.name, c] as const))(
+    '%s',
+    async (_name, testCase) => {
+      const result = await runCase(testCase)
+      const errors: string[] = []
+
+      // Check exit code (-1 means don't check)
+      if (
+        testCase.expectedExitCode !== -1 &&
+        result.exitCode !== testCase.expectedExitCode
+      ) {
+        errors.push(
+          `exit code: expected ${String(testCase.expectedExitCode)}, got ${String(result.exitCode)}`,
+        )
+      }
+
+      if (!matchesOutput(testCase.expectedStdout, result.stdout)) {
+        errors.push(
+          `stdout mismatch: expected ${JSON.stringify(testCase.expectedStdout)}, got ${JSON.stringify(result.stdout.slice(0, 200))}`,
+        )
+      }
+
+      if (!matchesOutput(testCase.expectedStderr, result.stderr)) {
+        errors.push(
+          `stderr mismatch: expected ${JSON.stringify(testCase.expectedStderr)}, got ${JSON.stringify(result.stderr.slice(0, 200))}`,
+        )
+      }
+
+      if (errors.length > 0) {
+        const detail = [
+          `stdout: ${JSON.stringify(result.stdout.slice(0, 300))}`,
+          `stderr: ${JSON.stringify(result.stderr.slice(0, 300))}`,
+          `exit: ${String(result.exitCode)}`,
+        ].join('\n  ')
+
+        expect.fail(`${errors.join('\n')}\n  ${detail}`)
+      }
+    },
+  )
+})
