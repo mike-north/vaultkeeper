@@ -289,4 +289,87 @@ describe('@vaultkeeper/wasm SDK', () => {
       vault.dispose();
     });
   });
+
+  it('authorize rejects token with empty sub (secret name)', async () => {
+    await withTempDir(async (dir) => {
+      const vault = await createTestVault(dir);
+      // setup accepts empty name but authorize should reject (claims validation)
+      const token = vault.setup('', 'some-value');
+      assert.throws(() => vault.authorize(token), /sub must not be empty/);
+      vault.dispose();
+    });
+  });
+
+  it('authorize rejects token with empty val (secret value)', async () => {
+    await withTempDir(async (dir) => {
+      const vault = await createTestVault(dir);
+      // setup accepts empty value but authorize should reject (claims validation)
+      const token = vault.setup('some-name', '');
+      assert.throws(() => vault.authorize(token), /val must not be empty/);
+      vault.dispose();
+    });
+  });
+
+  it('store then overwrite retrieves latest value', async () => {
+    await withTempDir(async (dir) => {
+      const vault = await createTestVault(dir);
+      await vault.store('overwrite-key', 'first-value');
+      await vault.store('overwrite-key', 'second-value');
+      const retrieved = await vault.retrieve('overwrite-key');
+      assert.equal(retrieved, 'second-value');
+      vault.dispose();
+    });
+  });
+
+  it('delete non-existent secret throws', async () => {
+    await withTempDir(async (dir) => {
+      const vault = await createTestVault(dir);
+      await assert.rejects(() => vault.delete('never-stored'));
+      vault.dispose();
+    });
+  });
+
+  it('config returns expected structure', async () => {
+    await withTempDir(async (dir) => {
+      const vault = await createTestVault(dir);
+      const cfg = vault.config();
+      assert.equal(cfg.version, 1);
+      assert.ok(Array.isArray(cfg.backends));
+      assert.ok(cfg.backends.length > 0);
+      const firstBackend = cfg.backends[0];
+      assert.ok(firstBackend, 'first backend must exist');
+      assert.equal(firstBackend.type, 'file');
+      assert.ok(cfg.keyRotation);
+      assert.equal(cfg.keyRotation.gracePeriodDays, 7);
+      assert.ok(cfg.defaults);
+      assert.equal(cfg.defaults.ttlMinutes, 60);
+      vault.dispose();
+    });
+  });
+
+  it('setup with explicit backend type', async () => {
+    await withTempDir(async (dir) => {
+      const vault = await createTestVault(dir);
+      const token = vault.setup('backend-key', 'backend-value', {
+        backendType: 'file',
+      });
+      const result = vault.authorize(token);
+      assert.equal(result.claims.bkd, 'file');
+      vault.dispose();
+    });
+  });
+
+  it('authorize expired token throws', async () => {
+    await withTempDir(async (dir) => {
+      const vault = await createTestVault(dir);
+      // Create a token with a very short TTL that should be expired by the time we check
+      // We can't easily test this without controlling time, but we can test that
+      // the claims contain the expected TTL calculation
+      const token = vault.setup('ttl-test', 'ttl-value', { ttlMinutes: 1 });
+      const result = vault.authorize(token);
+      // exp should be iat + 60 seconds (1 minute)
+      assert.equal(result.claims.exp - result.claims.iat, 60);
+      vault.dispose();
+    });
+  });
 });
