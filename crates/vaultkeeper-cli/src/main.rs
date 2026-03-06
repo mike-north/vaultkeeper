@@ -8,7 +8,8 @@ use clap::{Parser, Subcommand};
 use host::NativeHostPlatform;
 use std::io::{self, Read};
 use std::path::PathBuf;
-use vaultkeeper_core::backend::{BackendRegistry, InMemoryBackend};
+use std::sync::Arc;
+use vaultkeeper_core::backend::{FileBackend, HostPlatform, SecretBackend};
 use vaultkeeper_core::config;
 
 #[derive(Parser)]
@@ -80,11 +81,9 @@ enum ConfigAction {
     Show,
 }
 
-fn create_registry() -> BackendRegistry {
-    let registry = BackendRegistry::new();
-    registry.register("memory", |_| Box::new(InMemoryBackend::new()));
-    // TODO: register file, keychain, etc. backends
-    registry
+fn make_host() -> Arc<NativeHostPlatform> {
+    let config_dir = NativeHostPlatform::default_config_dir();
+    Arc::new(NativeHostPlatform::new(config_dir))
 }
 
 #[tokio::main]
@@ -141,14 +140,8 @@ async fn cmd_store(name: &str) -> i32 {
         return 1;
     }
 
-    let registry = create_registry();
-    let backend = match registry.create("memory", None) {
-        Ok(b) => b,
-        Err(e) => {
-            eprintln!("Error: {e}");
-            return 1;
-        }
-    };
+    let host = make_host();
+    let backend = FileBackend::new(host);
 
     if let Err(e) = backend.store(name, secret).await {
         eprintln!("Error: {e}");
@@ -160,18 +153,18 @@ async fn cmd_store(name: &str) -> i32 {
 }
 
 async fn cmd_delete(name: &str) -> i32 {
-    let registry = create_registry();
-    let backend = match registry.create("memory", None) {
-        Ok(b) => b,
+    let host = make_host();
+    let backend = FileBackend::new(host);
+
+    match backend.delete(name).await {
+        Ok(()) => {}
+        Err(vaultkeeper_core::VaultError::SecretNotFound { .. }) => {
+            // Idempotent delete — treat as success
+        }
         Err(e) => {
             eprintln!("Error: {e}");
             return 1;
         }
-    };
-
-    if let Err(e) = backend.delete(name).await {
-        eprintln!("Error: {e}");
-        return 1;
     }
 
     println!("Secret \"{name}\" deleted.");
@@ -184,7 +177,8 @@ async fn cmd_exec(token: &str, command: &[String]) -> i32 {
 }
 
 async fn cmd_doctor() -> i32 {
-    let result = vaultkeeper_core::doctor::run_doctor().await;
+    let host = make_host();
+    let result = vaultkeeper_core::doctor::run_doctor(host.as_ref()).await;
 
     for check in &result.checks {
         let icon = if check.status == vaultkeeper_core::PreflightCheckStatus::Ok {
@@ -225,13 +219,95 @@ async fn cmd_doctor() -> i32 {
 }
 
 async fn cmd_approve(path: &str) -> i32 {
-    eprintln!("approve: {path} (not yet implemented)");
-    1
+    let host = make_host();
+
+    // Hash the executable
+    let hash = match vaultkeeper_core::identity::hash::hash_executable(
+        host.as_ref(),
+        std::path::Path::new(path),
+    )
+    .await
+    {
+        Ok(h) => h,
+        Err(e) => {
+            eprintln!("Error: Failed to hash executable: {e}");
+            return 1;
+        }
+    };
+
+    // Load and update the trust manifest
+    let manifest = match vaultkeeper_core::identity::manifest::load_manifest(host.as_ref()).await {
+        Ok(m) => m,
+        Err(e) => {
+            eprintln!("Error: Failed to load trust manifest: {e}");
+            return 1;
+        }
+    };
+
+    let updated = vaultkeeper_core::identity::manifest::add_trusted_hash(&manifest, path, &hash);
+
+    if let Err(e) = vaultkeeper_core::identity::manifest::save_manifest(host.as_ref(), &updated).await {
+        eprintln!("Error: Failed to save trust manifest: {e}");
+        return 1;
+    }
+
+    println!("Approved {path} (hash: {hash})");
+    0
 }
 
 async fn cmd_dev_mode(path: &str, enable: bool) -> i32 {
-    eprintln!("dev-mode: {path} enable={enable} (not yet implemented)");
-    1
+    let host = make_host();
+    let config_path = host.config_dir().join("config.json");
+
+    // Load config
+    let cfg = match vaultkeeper_core::config::load_config(host.as_ref()).await {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("Error: {e}");
+            return 1;
+        }
+    };
+
+    // Update development_mode
+    let mut cfg = cfg;
+    if enable {
+        let mut executables = cfg
+            .development_mode
+            .map(|dm| dm.executables)
+            .unwrap_or_default();
+        if !executables.iter().any(|e| e == path) {
+            executables.push(path.to_string());
+        }
+        cfg.development_mode = Some(vaultkeeper_core::types::DevelopmentMode { executables });
+    } else {
+        // Remove the specific path from dev mode executables
+        if let Some(dm) = cfg.development_mode.as_mut() {
+            dm.executables.retain(|e| e != path);
+            if dm.executables.is_empty() {
+                cfg.development_mode = None;
+            }
+        }
+    }
+
+    let json = match serde_json::to_string_pretty(&cfg) {
+        Ok(j) => j,
+        Err(e) => {
+            eprintln!("Error: {e}");
+            return 1;
+        }
+    };
+
+    if let Err(e) = host
+        .write_file(&config_path, format!("{json}\n").as_bytes(), 0o600)
+        .await
+    {
+        eprintln!("Error: {e}");
+        return 1;
+    }
+
+    let state = if enable { "enabled" } else { "disabled" };
+    println!("Dev mode {state} for {path}");
+    0
 }
 
 async fn cmd_config(action: ConfigAction) -> i32 {
@@ -319,10 +395,9 @@ fn write_config_file(path: &PathBuf, json: &str) -> Result<(), String> {
 }
 
 async fn cmd_rotate_key() -> i32 {
-    let config_dir = NativeHostPlatform::default_config_dir();
-    let host = NativeHostPlatform::new(config_dir);
+    let host = make_host();
 
-    let mut vault = match vaultkeeper_core::VaultKeeper::init(&host, Some(vaultkeeper_core::vault::VaultKeeperOptions {
+    let mut vault = match vaultkeeper_core::VaultKeeper::init(host.as_ref(), Some(vaultkeeper_core::vault::VaultKeeperOptions {
         skip_doctor: true,
         ..Default::default()
     })).await {

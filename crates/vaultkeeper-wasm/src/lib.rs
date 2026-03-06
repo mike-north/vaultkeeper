@@ -32,12 +32,13 @@ impl WasmVaultKeeper {
 
     /// Run doctor checks.
     pub async fn doctor() -> Result<JsValue, JsError> {
-        let result = vaultkeeper_core::doctor::run_doctor().await;
-        serde_wasm_bindgen::to_value(&result).map_err(|e| JsError::new(&e.to_string()))
+        // TODO: Phase 5 — requires a JS-backed HostPlatform implementation
+        Err(JsError::new("WasmVaultKeeper.doctor() not yet implemented — requires host platform"))
     }
 }
 
 /// Re-export for use in JS interop.
+#[allow(dead_code)] // Used in Phase 5 when the full WASM API is implemented.
 mod serde_wasm_bindgen {
     use serde::Serialize;
     use wasm_bindgen::JsValue;

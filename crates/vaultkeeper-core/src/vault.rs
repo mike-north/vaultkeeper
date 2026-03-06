@@ -49,7 +49,7 @@ impl VaultKeeper {
         let opts = options.unwrap_or_default();
 
         if !opts.skip_doctor {
-            let doctor_result = crate::doctor::run_doctor().await;
+            let doctor_result = crate::doctor::run_doctor(host).await;
             if !doctor_result.ready {
                 return Err(VaultError::Other(format!(
                     "System not ready: {}",
@@ -74,8 +74,8 @@ impl VaultKeeper {
     }
 
     /// Run doctor checks without full initialization.
-    pub async fn doctor() -> PreflightResult {
-        crate::doctor::run_doctor().await
+    pub async fn doctor(host: &dyn HostPlatform) -> PreflightResult {
+        crate::doctor::run_doctor(host).await
     }
 
     /// Get a reference to the current config.

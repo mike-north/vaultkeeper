@@ -47,5 +47,4 @@ pub struct TrustManifestEntry {
 
 /// The on-disk trust manifest.
 /// Maps a namespace string to its approved-hash entry.
-#[allow(dead_code)] // Used in Phase 3 when trust verification is implemented.
 pub type TrustManifest = HashMap<String, TrustManifestEntry>;
