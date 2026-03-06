@@ -277,6 +277,23 @@
     }
   },
   {
+    "name": "config show exits 1 when no config exists",
+    "command": [
+      "config",
+      "show"
+    ],
+    "stdin": null,
+    "needsConfig": false,
+    "expectedExitCode": 1,
+    "expectedStdout": {
+      "type": "Any"
+    },
+    "expectedStderr": {
+      "type": "Contains",
+      "value": "Error"
+    }
+  },
+  {
     "name": "config init exits 1 when config already exists",
     "command": [
       "config",

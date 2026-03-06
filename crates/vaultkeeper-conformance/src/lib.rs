@@ -238,6 +238,15 @@ fn config_cases() -> Vec<ConformanceCase> {
             expected_stderr: OutputMatcher::Any,
         },
         ConformanceCase {
+            name: "config show exits 1 when no config exists".into(),
+            command: vec!["config".into(), "show".into()],
+            stdin: None,
+            needs_config: false,
+            expected_exit_code: 1,
+            expected_stdout: OutputMatcher::Any,
+            expected_stderr: OutputMatcher::Contains("Error".into()),
+        },
+        ConformanceCase {
             name: "config init exits 1 when config already exists".into(),
             command: vec!["config".into(), "init".into()],
             stdin: None,
