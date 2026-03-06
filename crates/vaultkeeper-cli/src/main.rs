@@ -141,7 +141,7 @@ async fn cmd_store(name: &str) -> i32 {
     }
 
     let host = make_host();
-    let backend = FileBackend::new(host);
+    let backend = FileBackend::new(host.clone());
 
     if let Err(e) = backend.store(name, secret).await {
         eprintln!("Error: {e}");
@@ -172,8 +172,56 @@ async fn cmd_delete(name: &str) -> i32 {
 }
 
 async fn cmd_exec(token: &str, command: &[String]) -> i32 {
-    eprintln!("exec: token={token}, command={command:?} (not yet implemented)");
-    1
+    if command.is_empty() {
+        eprintln!("Error: No command specified");
+        return 1;
+    }
+
+    let host = make_host();
+
+    // Initialize VaultKeeper with doctor checks skipped (exec should be fast)
+    let vault = match vaultkeeper_core::VaultKeeper::init(
+        host.as_ref(),
+        Some(vaultkeeper_core::vault::VaultKeeperOptions {
+            skip_doctor: true,
+            ..Default::default()
+        }),
+    )
+    .await
+    {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("Error: {e}");
+            return 1;
+        }
+    };
+
+    // Decrypt and validate the JWE token
+    let (claims, _response) = match vault.authorize(token) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("Error: Failed to authorize token: {e}");
+            return 1;
+        }
+    };
+
+    // Run the command with the secret injected as VAULTKEEPER_SECRET env var
+    let cmd_name = &command[0];
+    let cmd_args: Vec<&str> = command[1..].iter().map(String::as_str).collect();
+
+    use std::process::Command;
+    let status = Command::new(cmd_name)
+        .args(&cmd_args)
+        .env("VAULTKEEPER_SECRET", &claims.val)
+        .status();
+
+    match status {
+        Ok(s) => s.code().unwrap_or(1),
+        Err(e) => {
+            eprintln!("Error: Failed to execute command: {e}");
+            1
+        }
+    }
 }
 
 async fn cmd_doctor() -> i32 {
