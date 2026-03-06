@@ -114,20 +114,8 @@ async fn main() {
 }
 
 fn print_help() {
-    print!(
-        "Usage: vaultkeeper <command> [options]\n\
-         \n\
-         Commands:\n\
-         \x20 exec         Run a command with a secret injected as an env var\n\
-         \x20 doctor       Run preflight checks\n\
-         \x20 approve      Pre-record a script hash in the TOFU manifest\n\
-         \x20 dev-mode     Toggle development mode for a script\n\
-         \x20 store        Store a secret (reads from stdin)\n\
-         \x20 delete       Delete a secret\n\
-         \x20 config       Manage configuration\n\
-         \x20 rotate-key   Rotate the encryption key\n\
-         \x20 revoke-key   Emergency key revocation\n"
-    );
+    use clap::CommandFactory;
+    Cli::command().print_help().ok();
 }
 
 async fn cmd_store(name: &str) -> i32 {

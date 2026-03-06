@@ -20,6 +20,8 @@ use vaultkeeper_core::vault::{SetupOptions, VaultKeeperOptions};
 /// - `readFile(path)` → `Promise<Uint8Array>`
 /// - `writeFile(path, content, mode)` → `Promise<void>`
 /// - `fileExists(path)` → `Promise<boolean>`
+/// - `deleteFile(path)` → `Promise<void>`
+/// - `listDir(path)` → `Promise<string[]>`
 /// - `platform()` → `string` ("darwin"|"linux"|"win32")
 /// - `configDir()` → `string`
 struct JsHostPlatform {
