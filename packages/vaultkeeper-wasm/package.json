@@ -16,12 +16,15 @@
     "wasm"
   ],
   "engines": {
-    "node": ">=20.0.0"
+    "node": ">=20.13.0"
   },
   "scripts": {
     "build": "tsc",
     "clean": "node -e \"import('node:fs').then(fs=>fs.rmSync('dist',{recursive:true,force:true}))\"",
-    "test": "node --test dist/test/*.test.js"
+    "test": "node --test dist/test/*.test.js",
+    "check:typecheck": "tsc --noEmit",
+    "check:lint-ts": "eslint .",
+    "check": "pnpm check:typecheck && pnpm check:lint-ts"
   },
   "keywords": [
     "vaultkeeper",

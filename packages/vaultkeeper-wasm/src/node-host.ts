@@ -84,12 +84,12 @@ export function createNodeHost(configDirOverride?: string): WasmHostPlatform {
 }
 
 function resolveConfigDir(): string {
-  const envDir = process.env['VAULTKEEPER_CONFIG_DIR'];
+  const envDir = process.env.VAULTKEEPER_CONFIG_DIR;
   if (envDir) return envDir;
 
   const p = osPlatform();
   const home = homedir();
   if (p === 'darwin') return join(home, 'Library', 'Application Support', 'vaultkeeper');
-  if (p === 'win32') return join(process.env['APPDATA'] ?? join(home, 'AppData', 'Roaming'), 'vaultkeeper');
+  if (p === 'win32') return join(process.env.APPDATA ?? join(home, 'AppData', 'Roaming'), 'vaultkeeper');
   return join(home, '.config', 'vaultkeeper');
 }

@@ -38,15 +38,14 @@ interface ConformanceCase {
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const casesPath = path.join(__dirname, 'cases.json')
-const cases: ConformanceCase[] = JSON.parse(
-  await fs.readFile(casesPath, 'utf8'),
-) as ConformanceCase[]
+// eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- JSON.parse returns any; validated by conformance crate
+const cases: ConformanceCase[] = JSON.parse(await fs.readFile(casesPath, 'utf8'))
 
 // ─── Find the native Rust CLI binary ─────────────────────────────
 
 function findRustBinary(): string | null {
   // Check VAULTKEEPER_BIN env var first
-  const envBin = process.env['VAULTKEEPER_BIN']
+  const envBin = process.env.VAULTKEEPER_BIN
   if (envBin) return envBin
 
   // Look in typical cargo target directories relative to workspace root
@@ -69,9 +68,6 @@ function findRustBinary(): string | null {
 }
 
 const RUST_BIN = findRustBinary()
-const SKIP_REASON = RUST_BIN === null
-  ? 'Rust CLI binary not found (build with: cargo build -p vaultkeeper-cli)'
-  : undefined
 
 // ─── Default test config ─────────────────────────────────────────
 
@@ -88,16 +84,21 @@ const DEFAULT_CONFIG = JSON.stringify(
 
 // ─── Output matching ─────────────────────────────────────────────
 
+function matcherValueAsString(matcher: OutputMatcher): string {
+  if (typeof matcher.value === 'string') return matcher.value
+  return ''
+}
+
 function matchesOutput(matcher: OutputMatcher, output: string): boolean {
   switch (matcher.type) {
     case 'Any':
       return true
     case 'Exact':
-      return output.trim() === String(matcher.value ?? '').trim()
+      return output.trim() === matcherValueAsString(matcher).trim()
     case 'Contains':
-      return output.includes(String(matcher.value ?? ''))
+      return output.includes(matcherValueAsString(matcher))
     case 'Regex': {
-      let pattern = String(matcher.value ?? '')
+      let pattern = matcherValueAsString(matcher)
       let flags = ''
       // Translate Rust inline (?s) flag to JS 's' flag (dotall mode)
       if (pattern.startsWith('(?s)')) {
@@ -119,19 +120,14 @@ function matchesOutput(matcher: OutputMatcher, output: string): boolean {
   }
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+}
+
 function jsonContains(haystack: unknown, needle: unknown): boolean {
-  if (
-    haystack !== null &&
-    needle !== null &&
-    typeof haystack === 'object' &&
-    typeof needle === 'object' &&
-    !Array.isArray(haystack) &&
-    !Array.isArray(needle)
-  ) {
-    const h = haystack as Record<string, unknown>
-    const n = needle as Record<string, unknown>
-    return Object.entries(n).every(
-      ([k, v]) => k in h && jsonContains(h[k], v),
+  if (isRecord(haystack) && isRecord(needle)) {
+    return Object.entries(needle).every(
+      ([k, v]) => k in haystack && jsonContains(haystack[k], v),
     )
   }
   if (Array.isArray(haystack) && Array.isArray(needle)) {
@@ -165,8 +161,11 @@ async function runCase(testCase: ConformanceCase): Promise<RunResult> {
     }
 
     return await new Promise<RunResult>((resolve) => {
+      const bin = RUST_BIN
+      if (!bin) throw new Error('Rust binary not found')
+
       const child = execFile(
-        RUST_BIN!,
+        bin,
         testCase.command,
         {
           timeout: 15_000,
@@ -180,9 +179,8 @@ async function runCase(testCase: ConformanceCase): Promise<RunResult> {
           if (error !== null) {
             // Node's ExecException puts the exit code in `code` as a number
             // when the process exits non-zero
-            const errObj = error as { code?: string | number }
             exitCode =
-              typeof errObj.code === 'number' ? errObj.code : 1
+              typeof error.code === 'number' ? error.code : 1
           }
           resolve({ stdout, stderr, exitCode })
         },
@@ -205,7 +203,7 @@ async function runCase(testCase: ConformanceCase): Promise<RunResult> {
 // Skip the entire suite when the Rust binary isn't available (e.g., in CI
 // where only the TypeScript packages are built).
 describe.skipIf(RUST_BIN === null)('Rust CLI conformance', () => {
-  it.each(cases.map((c) => [c.name, c] as const))(
+  it.each(cases.map((c): [string, ConformanceCase] => [c.name, c]))(
     '%s',
     async (_name, testCase) => {
       const result = await runCase(testCase)

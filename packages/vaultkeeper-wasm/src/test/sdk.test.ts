@@ -3,7 +3,12 @@
  *
  * These tests verify that the WASM module loads, initializes, and
  * can perform basic operations through the Node.js host platform bridge.
+ *
+ * Uses node:test (not vitest) since this package compiles with plain tsc.
  */
+
+/* eslint-disable @typescript-eslint/no-floating-promises -- node:test it() returns Promise but is not meant to be awaited inside describe() */
+/* eslint-disable n/no-unsupported-features/node-builtins -- test.describe is stable in our CI Node version */
 
 import { describe, it } from 'node:test';
 import * as assert from 'node:assert/strict';
@@ -122,7 +127,9 @@ describe('@vaultkeeper/wasm SDK', () => {
       const token = vault.setup('key', 'value');
       // Corrupt the ciphertext (4th segment)
       const parts = token.split('.');
-      parts[3] = parts[3]!.slice(0, -4) + 'XXXX';
+      const segment = parts[3];
+      assert.ok(segment, 'JWE should have a 4th segment');
+      parts[3] = segment.slice(0, -4) + 'XXXX';
       const tampered = parts.join('.');
       assert.throws(() => vault.authorize(tampered));
       vault.dispose();
@@ -171,7 +178,9 @@ describe('@vaultkeeper/wasm SDK', () => {
     await withTempDir(async (dir) => {
       const vault = await createTestVault(dir);
       vault.rotateKey();
-      assert.throws(() => vault.rotateKey(), /rotation/i);
+      assert.throws(() => {
+        vault.rotateKey();
+      }, /rotation/i);
       vault.dispose();
     });
   });

@@ -84,11 +84,11 @@ export interface PreflightResult {
 /** Vault configuration. */
 export interface VaultConfig {
   version: number;
-  backends: Array<{
+  backends: {
     type: string;
     enabled: boolean;
     plugin?: boolean;
-  }>;
+  }[];
   keyRotation: {
     gracePeriodDays: number;
   };

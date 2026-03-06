@@ -50,9 +50,7 @@ type WasmVaultKeeperInstance = Awaited<ReturnType<WasmBindings['createVaultKeepe
 let wasmBindings: WasmBindings | undefined;
 
 async function loadWasm(): Promise<WasmBindings> {
-  if (!wasmBindings) {
-    wasmBindings = await import('../wasm/vaultkeeper_wasm.js');
-  }
+  wasmBindings ??= await import('../wasm/vaultkeeper_wasm.js');
   return wasmBindings;
 }
 
@@ -87,7 +85,8 @@ export class VaultKeeper {
 
   /** Run doctor preflight checks. */
   async doctor(): Promise<PreflightResult> {
-    return this.#inner.doctor() as Promise<PreflightResult>;
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-return -- WASM boundary: wasm-bindgen returns untyped JsValue
+    return this.#inner.doctor();
   }
 
   /** Create a JWE token encapsulating a secret. */
@@ -97,7 +96,8 @@ export class VaultKeeper {
 
   /** Decrypt and validate a JWE token. */
   authorize(jwe: string): AuthorizeResult {
-    return this.#inner.authorize(jwe) as AuthorizeResult;
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-return -- WASM boundary: wasm-bindgen returns untyped JsValue
+    return this.#inner.authorize(jwe);
   }
 
   /** Rotate the encryption key. */
@@ -107,7 +107,8 @@ export class VaultKeeper {
 
   /** Get the current configuration. */
   config(): VaultConfig {
-    return this.#inner.config() as VaultConfig;
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-return -- WASM boundary: wasm-bindgen returns untyped JsValue
+    return this.#inner.config();
   }
 
   /** Store a secret via the file backend. */
