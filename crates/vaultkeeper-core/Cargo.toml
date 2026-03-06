@@ -17,6 +17,7 @@ base64ct = { workspace = true }
 getrandom = { workspace = true }
 rand = { workspace = true }
 uuid = { workspace = true }
+zeroize = { workspace = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 js-sys = { workspace = true }
@@ -24,3 +25,4 @@ js-sys = { workspace = true }
 [dev-dependencies]
 tokio = { workspace = true, features = ["full"] }
 assert_matches = { workspace = true }
+serial_test = { workspace = true }

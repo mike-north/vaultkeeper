@@ -2,6 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use zeroize::Zeroize;
 
 /// Trust tier for executable identity verification.
 ///
@@ -54,6 +55,7 @@ pub struct PreflightCheck {
 
 /// Aggregated result from all preflight checks.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct PreflightResult {
     /// Individual check results, one per dependency inspected.
     pub checks: Vec<PreflightCheck>,
@@ -174,8 +176,7 @@ impl SecretAccessor {
             "SecretAccessor already consumed".to_string(),
         ))?;
         let result = callback(&buf);
-        // Zero the buffer
-        buf.iter_mut().for_each(|b| *b = 0);
+        buf.zeroize();
         Ok(result)
     }
 }
@@ -183,7 +184,7 @@ impl SecretAccessor {
 impl Drop for SecretAccessor {
     fn drop(&mut self) {
         if let Some(ref mut buf) = self.secret {
-            buf.iter_mut().for_each(|b| *b = 0);
+            buf.zeroize();
         }
     }
 }

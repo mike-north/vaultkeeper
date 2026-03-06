@@ -530,6 +530,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial(blocklist)]
     fn blocklist_operations() {
         clear_blocklist();
 
@@ -552,14 +553,16 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial(blocklist)]
     fn validate_claims_rejects_blocked() {
-        // Use a unique JTI to avoid races with other blocklist tests
+        clear_blocklist();
         let mut claims = test_claims();
         claims.jti = "blocked-test-unique-jti".to_string();
         block_token(&claims.jti);
 
         let result = validate_claims(&claims, 0);
         assert!(matches!(result, Err(VaultError::TokenRevoked { .. })));
+        clear_blocklist();
     }
 
     #[test]

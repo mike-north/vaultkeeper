@@ -44,6 +44,12 @@ pub trait HostPlatform: Send + Sync {
     /// Check if a file exists.
     async fn file_exists(&self, path: &Path) -> Result<bool, VaultError>;
 
+    /// Delete a file. Returns `Ok(())` if the file was deleted.
+    async fn delete_file(&self, path: &Path) -> Result<(), VaultError>;
+
+    /// List filenames in a directory. Returns an empty vec if the dir doesn't exist.
+    async fn list_dir(&self, path: &Path) -> Result<Vec<String>, VaultError>;
+
     /// Get platform type.
     fn platform(&self) -> Platform;
 

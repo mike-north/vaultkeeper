@@ -7,7 +7,7 @@
 //! Encrypted file format (all parts base64-encoded, colon-separated):
 //!   `<iv>:<authTag>:<ciphertext>`
 
-use crate::backend::types::{HostPlatform, ListableBackend, Platform, SecretBackend};
+use crate::backend::types::{HostPlatform, ListableBackend, SecretBackend};
 use crate::errors::VaultError;
 use aes_gcm::aead::Aead;
 use aes_gcm::{Aes256Gcm, KeyInit, Nonce};
@@ -44,12 +44,11 @@ impl FileBackend {
     }
 
     async fn ensure_storage_dir(&self) -> Result<(), VaultError> {
-        let dir = self.storage_dir();
-        // Create by writing a marker file, or just ensure the dir exists via host
-        // We rely on the host's write_file creating parent dirs or the CLI creating it.
-        // For simplicity, try to read a sentinel; if it fails, the dir doesn't exist.
-        // The native host's write_file should handle missing parent dirs.
-        let _ = self.host.file_exists(&dir).await;
+        let sentinel = self.storage_dir().join(".keep");
+        if !self.host.file_exists(&sentinel).await.unwrap_or(false) {
+            // Write a sentinel file, which forces the host to create parent dirs.
+            self.host.write_file(&sentinel, b"", 0o600).await?;
+        }
         Ok(())
     }
 
@@ -224,37 +223,14 @@ impl SecretBackend for FileBackend {
         let entry_path = self.entry_path(id);
         match self.host.file_exists(&entry_path).await {
             Ok(true) => {
-                let path_str = entry_path.to_string_lossy();
-                // Use runtime platform detection (not compile-time cfg!) so
-                // WASM hosts report the correct platform at runtime.
-                let (cmd, args): (&str, Vec<String>) = match self.host.platform() {
-                    Platform::Windows => (
-                        "cmd",
-                        vec!["/c".to_string(), "del".to_string(), "/q".to_string(), path_str.to_string()],
-                    ),
-                    _ => (
-                        "rm",
-                        vec!["-f".to_string(), path_str.to_string()],
-                    ),
-                };
-                let arg_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
-                let output = self.host
-                    .exec(cmd, &arg_refs, None)
-                    .await
-                    .map_err(|e| {
-                        VaultError::Other(format!("Failed to delete secret file: {e}"))
-                    })?;
-                if output.exit_code != 0 {
-                    return Err(VaultError::Other(format!(
-                        "Delete command exited with code {} for {}",
-                        output.exit_code, path_str
-                    )));
-                }
-                Ok(())
+                self.host.delete_file(&entry_path).await.map_err(|e| {
+                    VaultError::Other(format!("Failed to delete secret file: {e}"))
+                })
             }
-            _ => Err(VaultError::SecretNotFound {
+            Ok(false) => Err(VaultError::SecretNotFound {
                 message: format!("Secret not found in file store: {id}"),
             }),
+            Err(e) => Err(e),
         }
     }
 
@@ -269,25 +245,10 @@ impl SecretBackend for FileBackend {
 impl ListableBackend for FileBackend {
     async fn list(&self) -> Result<Vec<String>, VaultError> {
         let storage_dir = self.storage_dir();
-        let dir_str = storage_dir.to_string_lossy().to_string();
-        // Use runtime platform detection for the list command
-        let (cmd, args): (&str, Vec<String>) = match self.host.platform() {
-            Platform::Windows => (
-                "cmd",
-                vec!["/c".to_string(), "dir".to_string(), "/b".to_string(), dir_str],
-            ),
-            _ => ("ls", vec![dir_str]),
-        };
-        let arg_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
-        let output = match self.host.exec(cmd, &arg_refs, None).await {
-            Ok(o) if o.exit_code == 0 => o,
-            _ => return Ok(Vec::new()),
-        };
+        let filenames = self.host.list_dir(&storage_dir).await?;
 
-        let stdout = String::from_utf8_lossy(&output.stdout);
         let mut names = Vec::new();
-        for line in stdout.lines() {
-            let filename = line.trim();
+        for filename in &filenames {
             if let Some(hex_name) = filename.strip_suffix(".enc")
                 && let Ok(bytes) = hex_decode(hex_name)
                 && let Ok(name) = String::from_utf8(bytes)
@@ -367,67 +328,92 @@ mod tests {
         assert_eq!(hex_encode(b"abc"), "616263");
     }
 
-    #[tokio::test]
-    async fn file_backend_store_and_retrieve() {
-        use crate::backend::{ExecOutput, Platform};
-        use std::collections::HashMap;
-        use std::sync::Mutex;
+    use crate::backend::{ExecOutput, Platform};
+    use std::collections::HashMap;
+    use std::sync::Mutex;
 
-        struct TestHost {
-            files: Mutex<HashMap<PathBuf, Vec<u8>>>,
-            config_dir: PathBuf,
+    struct TestHost {
+        files: Mutex<HashMap<PathBuf, Vec<u8>>>,
+        config_dir: PathBuf,
+    }
+
+    #[async_trait::async_trait]
+    impl HostPlatform for TestHost {
+        async fn exec(
+            &self,
+            _cmd: &str,
+            _args: &[&str],
+            _stdin: Option<&[u8]>,
+        ) -> Result<ExecOutput, VaultError> {
+            Ok(ExecOutput {
+                stdout: Vec::new(),
+                stderr: Vec::new(),
+                exit_code: 0,
+            })
         }
-
-        #[async_trait::async_trait]
-        impl HostPlatform for TestHost {
-            async fn exec(
-                &self,
-                _cmd: &str,
-                _args: &[&str],
-                _stdin: Option<&[u8]>,
-            ) -> Result<ExecOutput, VaultError> {
-                Ok(ExecOutput {
-                    stdout: Vec::new(),
-                    stderr: Vec::new(),
-                    exit_code: 0,
+        async fn read_file(&self, path: &Path) -> Result<Vec<u8>, VaultError> {
+            self.files
+                .lock()
+                .unwrap()
+                .get(path)
+                .cloned()
+                .ok_or_else(|| VaultError::Other(format!("Not found: {}", path.display())))
+        }
+        async fn write_file(
+            &self,
+            path: &Path,
+            content: &[u8],
+            _mode: u32,
+        ) -> Result<(), VaultError> {
+            self.files
+                .lock()
+                .unwrap()
+                .insert(path.to_path_buf(), content.to_vec());
+            Ok(())
+        }
+        async fn file_exists(&self, path: &Path) -> Result<bool, VaultError> {
+            Ok(self.files.lock().unwrap().contains_key(path))
+        }
+        async fn delete_file(&self, path: &Path) -> Result<(), VaultError> {
+            self.files
+                .lock()
+                .unwrap()
+                .remove(path)
+                .ok_or_else(|| VaultError::Other(format!("Not found: {}", path.display())))?;
+            Ok(())
+        }
+        async fn list_dir(&self, path: &Path) -> Result<Vec<String>, VaultError> {
+            let files = self.files.lock().unwrap();
+            let prefix = path.to_path_buf();
+            Ok(files
+                .keys()
+                .filter_map(|k| {
+                    if k.parent() == Some(&prefix) {
+                        k.file_name().and_then(|n| n.to_str()).map(String::from)
+                    } else {
+                        None
+                    }
                 })
-            }
-            async fn read_file(&self, path: &Path) -> Result<Vec<u8>, VaultError> {
-                self.files
-                    .lock()
-                    .unwrap()
-                    .get(path)
-                    .cloned()
-                    .ok_or_else(|| VaultError::Other(format!("Not found: {}", path.display())))
-            }
-            async fn write_file(
-                &self,
-                path: &Path,
-                content: &[u8],
-                _mode: u32,
-            ) -> Result<(), VaultError> {
-                self.files
-                    .lock()
-                    .unwrap()
-                    .insert(path.to_path_buf(), content.to_vec());
-                Ok(())
-            }
-            async fn file_exists(&self, path: &Path) -> Result<bool, VaultError> {
-                Ok(self.files.lock().unwrap().contains_key(path))
-            }
-            fn platform(&self) -> Platform {
-                Platform::Linux
-            }
-            fn config_dir(&self) -> &Path {
-                &self.config_dir
-            }
+                .collect())
         }
+        fn platform(&self) -> Platform {
+            Platform::Linux
+        }
+        fn config_dir(&self) -> &Path {
+            &self.config_dir
+        }
+    }
 
-        let host = Arc::new(TestHost {
+    fn make_test_host() -> Arc<TestHost> {
+        Arc::new(TestHost {
             files: Mutex::new(HashMap::new()),
             config_dir: PathBuf::from("/test/config"),
-        });
+        })
+    }
 
+    #[tokio::test]
+    async fn file_backend_store_and_retrieve() {
+        let host = make_test_host();
         let backend = FileBackend::new(host);
         backend.store("my-key", "my-secret").await.unwrap();
 
@@ -440,67 +426,39 @@ mod tests {
 
     #[tokio::test]
     async fn file_backend_retrieve_missing_returns_error() {
-        use crate::backend::{ExecOutput, Platform};
-        use std::collections::HashMap;
-        use std::sync::Mutex;
-
-        struct TestHost {
-            files: Mutex<HashMap<PathBuf, Vec<u8>>>,
-            config_dir: PathBuf,
-        }
-
-        #[async_trait::async_trait]
-        impl HostPlatform for TestHost {
-            async fn exec(
-                &self,
-                _cmd: &str,
-                _args: &[&str],
-                _stdin: Option<&[u8]>,
-            ) -> Result<ExecOutput, VaultError> {
-                Ok(ExecOutput {
-                    stdout: Vec::new(),
-                    stderr: Vec::new(),
-                    exit_code: 0,
-                })
-            }
-            async fn read_file(&self, path: &Path) -> Result<Vec<u8>, VaultError> {
-                self.files
-                    .lock()
-                    .unwrap()
-                    .get(path)
-                    .cloned()
-                    .ok_or_else(|| VaultError::Other(format!("Not found: {}", path.display())))
-            }
-            async fn write_file(
-                &self,
-                path: &Path,
-                content: &[u8],
-                _mode: u32,
-            ) -> Result<(), VaultError> {
-                self.files
-                    .lock()
-                    .unwrap()
-                    .insert(path.to_path_buf(), content.to_vec());
-                Ok(())
-            }
-            async fn file_exists(&self, path: &Path) -> Result<bool, VaultError> {
-                Ok(self.files.lock().unwrap().contains_key(path))
-            }
-            fn platform(&self) -> Platform {
-                Platform::Linux
-            }
-            fn config_dir(&self) -> &Path {
-                &self.config_dir
-            }
-        }
-
-        let host = Arc::new(TestHost {
-            files: Mutex::new(HashMap::new()),
-            config_dir: PathBuf::from("/test/config"),
-        });
-
+        let host = make_test_host();
         let backend = FileBackend::new(host);
         let result = backend.retrieve("nonexistent").await;
         assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn file_backend_delete_removes_secret() {
+        let host = make_test_host();
+        let backend = FileBackend::new(host);
+        backend.store("delete-me", "temp").await.unwrap();
+        assert!(backend.exists("delete-me").await.unwrap());
+        backend.delete("delete-me").await.unwrap();
+        assert!(!backend.exists("delete-me").await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn file_backend_delete_missing_returns_not_found() {
+        let host = make_test_host();
+        let backend = FileBackend::new(host);
+        let result = backend.delete("nonexistent").await;
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("not found"));
+    }
+
+    #[tokio::test]
+    async fn file_backend_list_returns_stored_names() {
+        let host = make_test_host();
+        let backend = FileBackend::new(host);
+        backend.store("alpha", "val-a").await.unwrap();
+        backend.store("beta", "val-b").await.unwrap();
+        let mut names = backend.list().await.unwrap();
+        names.sort();
+        assert_eq!(names, vec!["alpha", "beta"]);
     }
 }

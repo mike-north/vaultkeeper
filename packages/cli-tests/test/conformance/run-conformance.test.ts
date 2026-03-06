@@ -50,9 +50,10 @@ function findRustBinary(): string | null {
 
   // Look in typical cargo target directories relative to workspace root
   const root = path.resolve(__dirname, '..', '..', '..', '..')
+  const ext = process.platform === 'win32' ? '.exe' : ''
   const candidates = [
-    path.join(root, 'target', 'debug', 'vaultkeeper'),
-    path.join(root, 'target', 'release', 'vaultkeeper'),
+    path.join(root, 'target', 'debug', `vaultkeeper${ext}`),
+    path.join(root, 'target', 'release', `vaultkeeper${ext}`),
   ]
 
   for (const candidate of candidates) {

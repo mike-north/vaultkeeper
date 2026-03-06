@@ -203,6 +203,7 @@ describe('@vaultkeeper/wasm SDK', () => {
       assert.ok(typeof result.ready === 'boolean');
       assert.ok(Array.isArray(result.checks));
       assert.ok(Array.isArray(result.warnings));
+      // TODO: rename to result.nextSteps after wasm-pack rebuild (Rust side already updated)
       assert.ok(Array.isArray(result.next_steps));
       vault.dispose();
     });

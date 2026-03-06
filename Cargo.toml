@@ -37,5 +37,9 @@ console_error_panic_hook = "0.1"
 # CLI
 clap = { version = "4", features = ["derive"] }
 
+# Security
+zeroize = "1"
+
 # Testing
 assert_matches = "1"
+serial_test = "3"

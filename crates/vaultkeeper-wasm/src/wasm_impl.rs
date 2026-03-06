@@ -180,6 +180,45 @@ impl HostPlatform for JsHostPlatform {
         Ok(result.as_bool().unwrap_or(false))
     }
 
+    async fn delete_file(&self, path: &Path) -> Result<(), VaultError> {
+        let delete_fn =
+            get_method(&self.host, "deleteFile").map_err(|e| js_err(&format!("{e:?}")))?;
+
+        let js_path = JsValue::from_str(&path.to_string_lossy());
+        let promise = delete_fn
+            .call1(&self.host, &js_path)
+            .map_err(|e| js_err(&format!("deleteFile() call failed: {e:?}")))?;
+
+        JsFuture::from(Promise::from(promise))
+            .await
+            .map_err(|e| js_err(&format!("deleteFile() rejected: {e:?}")))?;
+
+        Ok(())
+    }
+
+    async fn list_dir(&self, path: &Path) -> Result<Vec<String>, VaultError> {
+        let list_fn =
+            get_method(&self.host, "listDir").map_err(|e| js_err(&format!("{e:?}")))?;
+
+        let js_path = JsValue::from_str(&path.to_string_lossy());
+        let promise = list_fn
+            .call1(&self.host, &js_path)
+            .map_err(|e| js_err(&format!("listDir() call failed: {e:?}")))?;
+
+        let result = JsFuture::from(Promise::from(promise))
+            .await
+            .map_err(|e| js_err(&format!("listDir() rejected: {e:?}")))?;
+
+        let arr = js_sys::Array::from(&result);
+        let mut names = Vec::new();
+        for i in 0..arr.length() {
+            if let Some(s) = arr.get(i).as_string() {
+                names.push(s);
+            }
+        }
+        Ok(names)
+    }
+
     fn platform(&self) -> Platform {
         self.platform
     }

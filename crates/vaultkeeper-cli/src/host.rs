@@ -128,6 +128,36 @@ impl HostPlatform for NativeHostPlatform {
         Ok(path.exists())
     }
 
+    async fn delete_file(&self, path: &Path) -> Result<(), VaultError> {
+        std::fs::remove_file(path).map_err(|e| VaultError::Filesystem {
+            message: format!("Failed to delete {}: {e}", path.display()),
+            path: path.display().to_string(),
+            permission: "write".to_string(),
+        })
+    }
+
+    async fn list_dir(&self, path: &Path) -> Result<Vec<String>, VaultError> {
+        match std::fs::read_dir(path) {
+            Ok(entries) => {
+                let mut names = Vec::new();
+                for entry in entries {
+                    if let Ok(e) = entry
+                        && let Some(name) = e.file_name().to_str()
+                    {
+                        names.push(name.to_string());
+                    }
+                }
+                Ok(names)
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
+            Err(e) => Err(VaultError::Filesystem {
+                message: format!("Failed to list {}: {e}", path.display()),
+                path: path.display().to_string(),
+                permission: "read".to_string(),
+            }),
+        }
+    }
+
     fn platform(&self) -> Platform {
         if cfg!(target_os = "macos") {
             Platform::Darwin

@@ -190,6 +190,29 @@ mod tests {
             Ok(self.files.lock().unwrap().contains_key(path))
         }
 
+        async fn delete_file(&self, path: &Path) -> Result<(), VaultError> {
+            self.files
+                .lock()
+                .unwrap()
+                .remove(path)
+                .ok_or_else(|| VaultError::Other(format!("Not found: {}", path.display())))?;
+            Ok(())
+        }
+
+        async fn list_dir(&self, path: &Path) -> Result<Vec<String>, VaultError> {
+            let files = self.files.lock().unwrap();
+            Ok(files
+                .keys()
+                .filter_map(|k| {
+                    if k.parent() == Some(path) {
+                        k.file_name().and_then(|n| n.to_str()).map(String::from)
+                    } else {
+                        None
+                    }
+                })
+                .collect())
+        }
+
         fn platform(&self) -> Platform {
             Platform::Linux
         }

@@ -13,6 +13,8 @@ export interface WasmHostPlatform {
   readFile(path: string): Promise<Uint8Array>;
   writeFile(path: string, content: Uint8Array, mode: number): Promise<void>;
   fileExists(path: string): Promise<boolean>;
+  deleteFile(path: string): Promise<void>;
+  listDir(path: string): Promise<string[]>;
   platform(): string;
   configDir(): string;
 }
@@ -73,7 +75,8 @@ export interface PreflightCheck {
   reason?: string | null;
 }
 
-/** Overall preflight result (Rust snake_case field names). */
+/** Overall preflight result. */
+// TODO: rename next_steps → nextSteps after wasm-pack rebuild (Rust side already has camelCase serde)
 export interface PreflightResult {
   ready: boolean;
   checks: PreflightCheck[];
