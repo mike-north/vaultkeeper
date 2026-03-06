@@ -148,8 +148,11 @@ tmp/
 
 # Rust / Cargo
 target/
-*.wasm
-!packages/**/wasm/.gitkeep
+# WASM build output (cargo target)
+target/**/*.wasm
+# Allow committed wasm-pack output for npm packages
+!packages/**/wasm/
+!packages/**/wasm/**
 
 # Claude
 .claude/settings.local.json
