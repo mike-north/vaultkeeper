@@ -1,9 +1,13 @@
 //! VaultKeeper main struct — wires together all vaultkeeper subsystems.
 
+use std::collections::HashMap;
+
 use crate::backend::{HostPlatform, SecretBackend};
 use crate::config;
 use crate::errors::VaultError;
-use crate::jwe::{CreateTokenOptions, create_token, decrypt_token, extract_kid, validate_claims};
+use crate::jwe::{
+    CreateTokenOptions, block_token, create_token, decrypt_token, extract_kid, validate_claims,
+};
 use crate::keys::KeyManager;
 use crate::types::{KeyStatus, PreflightResult, VaultClaims, VaultConfig, VaultResponse};
 
@@ -37,6 +41,8 @@ pub struct VaultKeeper {
     config: VaultConfig,
     key_manager: KeyManager,
     _backend: Option<Box<dyn SecretBackend>>,
+    /// Per-JTI usage counts for use-limited tokens.
+    usage_counts: HashMap<String, u64>,
 }
 
 impl VaultKeeper {
@@ -71,6 +77,7 @@ impl VaultKeeper {
             config: cfg,
             key_manager,
             _backend: None,
+            usage_counts: HashMap::new(),
         })
     }
 
@@ -158,8 +165,9 @@ impl VaultKeeper {
     }
 
     /// Decrypt a JWE token, validate its claims, and return the claims
-    /// and key status.
-    pub fn authorize(&self, jwe: &str) -> Result<(VaultClaims, VaultResponse), VaultError> {
+    /// and key status. Tracks per-JTI usage counts and blocks tokens that
+    /// exceed their use limit.
+    pub fn authorize(&mut self, jwe: &str) -> Result<(VaultClaims, VaultResponse), VaultError> {
         let kid = extract_kid(jwe)?;
 
         let (key, is_current) = match &kid {
@@ -177,7 +185,20 @@ impl VaultKeeper {
         };
 
         let claims = decrypt_token(&key.key, jwe)?;
-        validate_claims(&claims, 0)?;
+
+        let current_usage = self.usage_counts.get(&claims.jti).copied().unwrap_or(0);
+        validate_claims(&claims, current_usage)?;
+
+        // Increment usage count
+        let new_usage = current_usage + 1;
+        self.usage_counts.insert(claims.jti.clone(), new_usage);
+
+        // If usage limit reached, block the token for future requests
+        if let Some(limit) = claims.use_limit
+            && new_usage >= limit
+        {
+            block_token(&claims.jti);
+        }
 
         let key_status = if is_current {
             KeyStatus::Current

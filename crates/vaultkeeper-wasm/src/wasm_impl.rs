@@ -324,7 +324,7 @@ impl WasmVaultKeeper {
     }
 
     /// Decrypt a JWE token, validate its claims, and return { claims, response }.
-    pub fn authorize(&self, jwe: &str) -> Result<JsValue, JsError> {
+    pub fn authorize(&mut self, jwe: &str) -> Result<JsValue, JsError> {
         let (claims, response) = self
             .vault
             .authorize(jwe)

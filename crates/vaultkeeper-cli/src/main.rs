@@ -184,7 +184,7 @@ async fn cmd_exec(token: &str, command: &[String]) -> i32 {
     let host = make_host();
 
     // Initialize VaultKeeper with doctor checks skipped (exec should be fast)
-    let vault = match vaultkeeper_core::VaultKeeper::init(
+    let mut vault = match vaultkeeper_core::VaultKeeper::init(
         host.as_ref(),
         Some(vaultkeeper_core::vault::VaultKeeperOptions {
             skip_doctor: true,

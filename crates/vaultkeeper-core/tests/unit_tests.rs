@@ -675,7 +675,7 @@ mod vault_keeper {
     #[tokio::test]
     async fn setup_authorize_round_trip() {
         let host = TestHost::with_config();
-        let vault = VaultKeeper::init(
+        let mut vault = VaultKeeper::init(
             &host,
             Some(VaultKeeperOptions {
                 skip_doctor: true,
@@ -756,7 +756,7 @@ mod vault_keeper {
     #[tokio::test]
     async fn setup_with_custom_ttl() {
         let host = TestHost::with_config();
-        let vault = VaultKeeper::init(
+        let mut vault = VaultKeeper::init(
             &host,
             Some(VaultKeeperOptions {
                 skip_doctor: true,
@@ -777,5 +777,41 @@ mod vault_keeper {
         let expected_ttl = 5 * 60;
         let actual_ttl = claims.exp - claims.iat;
         assert_eq!(actual_ttl, expected_ttl);
+    }
+
+    #[tokio::test]
+    async fn authorize_enforces_use_limit() {
+        let host = TestHost::with_config();
+        let mut vault = VaultKeeper::init(
+            &host,
+            Some(VaultKeeperOptions {
+                skip_doctor: true,
+                ..Default::default()
+            }),
+        )
+        .await
+        .unwrap();
+
+        let opts = vaultkeeper_core::vault::SetupOptions {
+            use_limit: Some(2),
+            ..Default::default()
+        };
+        let token = vault.setup("limited", "val", Some(&opts)).unwrap();
+
+        // First two authorizations succeed
+        let (claims, _) = vault.authorize(&token).unwrap();
+        assert_eq!(claims.val, "val");
+        let (claims2, _) = vault.authorize(&token).unwrap();
+        assert_eq!(claims2.val, "val");
+
+        // Third should fail — usage limit exceeded
+        let result = vault.authorize(&token);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            matches!(err, VaultError::UsageLimitExceeded { .. })
+                || matches!(err, VaultError::TokenRevoked { .. }),
+            "Expected UsageLimitExceeded or TokenRevoked, got: {err}"
+        );
     }
 }
