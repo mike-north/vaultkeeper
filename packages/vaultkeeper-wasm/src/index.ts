@@ -105,6 +105,11 @@ export class VaultKeeper {
     this.#inner.rotateKey();
   }
 
+  /** Emergency key revocation — removes previous key and generates a new current key. */
+  revokeKey(): void {
+    this.#inner.revokeKey();
+  }
+
   /** Get the current configuration. */
   config(): VaultConfig {
     // eslint-disable-next-line @typescript-eslint/no-unsafe-return -- WASM boundary: wasm-bindgen returns untyped JsValue

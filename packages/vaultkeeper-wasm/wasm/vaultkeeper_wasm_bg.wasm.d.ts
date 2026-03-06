@@ -9,6 +9,7 @@ export const wasmvaultkeeper_config: (a: number) => [number, number, number];
 export const wasmvaultkeeper_delete: (a: number, b: number, c: number) => any;
 export const wasmvaultkeeper_doctor: (a: number) => any;
 export const wasmvaultkeeper_retrieve: (a: number, b: number, c: number) => any;
+export const wasmvaultkeeper_revokeKey: (a: number) => [number, number];
 export const wasmvaultkeeper_rotateKey: (a: number) => [number, number];
 export const wasmvaultkeeper_setup: (a: number, b: number, c: number, d: number, e: number, f: any) => [number, number, number, number];
 export const wasmvaultkeeper_store: (a: number, b: number, c: number, d: number, e: number) => any;

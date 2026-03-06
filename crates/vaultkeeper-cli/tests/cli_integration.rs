@@ -81,7 +81,8 @@ mod help {
                 .and(predicate::str::contains("store"))
                 .and(predicate::str::contains("delete"))
                 .and(predicate::str::contains("config"))
-                .and(predicate::str::contains("rotate-key")),
+                .and(predicate::str::contains("rotate-key"))
+                .and(predicate::str::contains("revoke-key")),
         );
     }
 
@@ -286,6 +287,21 @@ mod rotate_key {
             .assert()
             .success()
             .stdout(predicate::str::contains("Key rotated successfully"));
+    }
+}
+
+// ─── Revoke-key command ──────────────────────────────────────────
+
+mod revoke_key {
+    use super::*;
+
+    #[test]
+    fn revoke_key_succeeds_with_valid_config() {
+        let (mut cmd, _dir) = cli_test_env();
+        cmd.arg("revoke-key")
+            .assert()
+            .success()
+            .stdout(predicate::str::contains("Key revoked successfully"));
     }
 }
 

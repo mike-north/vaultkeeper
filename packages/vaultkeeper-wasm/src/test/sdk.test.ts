@@ -174,6 +174,22 @@ describe('@vaultkeeper/wasm SDK', () => {
     });
   });
 
+  it('revokeKey generates new key and invalidates old tokens', async () => {
+    await withTempDir(async (dir) => {
+      const vault = await createTestVault(dir);
+      const token = vault.setup('revoke-key', 'revoke-value');
+      vault.revokeKey();
+      // Old token should be rejected — key was revoked
+      assert.throws(() => vault.authorize(token), /revoked|unknown/i);
+      // New tokens should still work
+      const newToken = vault.setup('post-revoke', 'new-value');
+      const result = vault.authorize(newToken);
+      assert.equal(result.claims.val, 'new-value');
+      assert.equal(result.response.keyStatus, 'current');
+      vault.dispose();
+    });
+  });
+
   it('double rotate rejects (rotation already in progress)', async () => {
     await withTempDir(async (dir) => {
       const vault = await createTestVault(dir);
@@ -203,8 +219,7 @@ describe('@vaultkeeper/wasm SDK', () => {
       assert.ok(typeof result.ready === 'boolean');
       assert.ok(Array.isArray(result.checks));
       assert.ok(Array.isArray(result.warnings));
-      // TODO: rename to result.nextSteps after wasm-pack rebuild (Rust side already updated)
-      assert.ok(Array.isArray(result.next_steps));
+      assert.ok(Array.isArray(result.nextSteps));
       vault.dispose();
     });
   });

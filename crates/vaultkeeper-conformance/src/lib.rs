@@ -99,7 +99,7 @@ fn help_cases() -> Vec<ConformanceCase> {
             needs_config: false,
             expected_exit_code: 0,
             expected_stdout: OutputMatcher::Regex(
-                "(?s)exec.*doctor.*approve.*dev-mode.*store.*delete.*config.*rotate-key".into(),
+                "(?s)exec.*doctor.*approve.*dev-mode.*store.*delete.*config.*rotate-key.*revoke-key".into(),
             ),
             expected_stderr: OutputMatcher::Any,
         },
@@ -322,6 +322,20 @@ fn dev_mode_cases() -> Vec<ConformanceCase> {
     ]
 }
 
+// ─── Revoke-key cases ────────────────────────────────────────────
+
+fn revoke_key_cases() -> Vec<ConformanceCase> {
+    vec![ConformanceCase {
+        name: "revoke-key succeeds with valid config".into(),
+        command: vec!["revoke-key".into()],
+        stdin: None,
+        needs_config: true,
+        expected_exit_code: 0,
+        expected_stdout: OutputMatcher::Contains("revoked successfully".into()),
+        expected_stderr: OutputMatcher::Any,
+    }]
+}
+
 /// Return all built-in conformance test cases.
 pub fn all_cases() -> Vec<ConformanceCase> {
     let mut cases = Vec::new();
@@ -332,6 +346,7 @@ pub fn all_cases() -> Vec<ConformanceCase> {
     cases.extend(config_cases());
     cases.extend(doctor_cases());
     cases.extend(rotate_key_cases());
+    cases.extend(revoke_key_cases());
     cases.extend(approve_cases());
     cases.extend(dev_mode_cases());
     cases

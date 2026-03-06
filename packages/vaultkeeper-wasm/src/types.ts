@@ -76,12 +76,11 @@ export interface PreflightCheck {
 }
 
 /** Overall preflight result. */
-// TODO: rename next_steps → nextSteps after wasm-pack rebuild (Rust side already has camelCase serde)
 export interface PreflightResult {
   ready: boolean;
   checks: PreflightCheck[];
   warnings: string[];
-  next_steps: string[];
+  nextSteps: string[];
 }
 
 /** Vault configuration. */

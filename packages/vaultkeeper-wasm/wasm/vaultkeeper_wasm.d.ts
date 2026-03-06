@@ -29,6 +29,10 @@ export class WasmVaultKeeper {
      */
     retrieve(id: string): Promise<string>;
     /**
+     * Emergency key revocation — removes previous key and generates a new current key.
+     */
+    revokeKey(): void;
+    /**
      * Rotate the encryption key.
      */
     rotateKey(): void;
@@ -38,6 +42,9 @@ export class WasmVaultKeeper {
     setup(secret_name: string, secret_value: string, options: any): string;
     /**
      * Store a secret via the file backend.
+     *
+     * FileBackend is stateless (holds only a host reference), so creating it
+     * per-call avoids lifetime complexity without performance cost.
      */
     store(id: string, secret: string): Promise<void>;
 }

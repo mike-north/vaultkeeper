@@ -71,7 +71,7 @@
     "expectedExitCode": 0,
     "expectedStdout": {
       "type": "Regex",
-      "value": "(?s)exec.*doctor.*approve.*dev-mode.*store.*delete.*config.*rotate-key"
+      "value": "(?s)exec.*doctor.*approve.*dev-mode.*store.*delete.*config.*rotate-key.*revoke-key"
     },
     "expectedStderr": {
       "type": "Any"
@@ -302,6 +302,22 @@
     "expectedStdout": {
       "type": "Contains",
       "value": "rotated successfully"
+    },
+    "expectedStderr": {
+      "type": "Any"
+    }
+  },
+  {
+    "name": "revoke-key succeeds with valid config",
+    "command": [
+      "revoke-key"
+    ],
+    "stdin": null,
+    "needsConfig": true,
+    "expectedExitCode": 0,
+    "expectedStdout": {
+      "type": "Contains",
+      "value": "revoked successfully"
     },
     "expectedStderr": {
       "type": "Any"

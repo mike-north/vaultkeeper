@@ -71,6 +71,8 @@ enum Commands {
     },
     /// Rotate the encryption key
     RotateKey,
+    /// Emergency key revocation
+    RevokeKey,
 }
 
 #[derive(Subcommand)]
@@ -104,6 +106,7 @@ async fn main() {
             Commands::DevMode { path, enable } => cmd_dev_mode(&path, enable).await,
             Commands::Config { action } => cmd_config(action).await,
             Commands::RotateKey => cmd_rotate_key().await,
+            Commands::RevokeKey => cmd_revoke_key().await,
         },
     };
 
@@ -122,7 +125,8 @@ fn print_help() {
          \x20 store        Store a secret (reads from stdin)\n\
          \x20 delete       Delete a secret\n\
          \x20 config       Manage configuration\n\
-         \x20 rotate-key   Rotate the encryption key\n"
+         \x20 rotate-key   Rotate the encryption key\n\
+         \x20 revoke-key   Emergency key revocation\n"
     );
 }
 
@@ -462,5 +466,28 @@ async fn cmd_rotate_key() -> i32 {
     }
 
     println!("Key rotated successfully.");
+    0
+}
+
+async fn cmd_revoke_key() -> i32 {
+    let host = make_host();
+
+    let mut vault = match vaultkeeper_core::VaultKeeper::init(host.as_ref(), Some(vaultkeeper_core::vault::VaultKeeperOptions {
+        skip_doctor: true,
+        ..Default::default()
+    })).await {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("Error: {e}");
+            return 1;
+        }
+    };
+
+    if let Err(e) = vault.revoke_key() {
+        eprintln!("Error: {e}");
+        return 1;
+    }
+
+    println!("Key revoked successfully.");
     0
 }

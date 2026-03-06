@@ -77,6 +77,15 @@ class WasmVaultKeeper {
         return ret;
     }
     /**
+     * Emergency key revocation — removes previous key and generates a new current key.
+     */
+    revokeKey() {
+        const ret = wasm.wasmvaultkeeper_revokeKey(this.__wbg_ptr);
+        if (ret[1]) {
+            throw takeFromExternrefTable0(ret[0]);
+        }
+    }
+    /**
      * Rotate the encryption key.
      */
     rotateKey() {
@@ -116,6 +125,9 @@ class WasmVaultKeeper {
     }
     /**
      * Store a secret via the file backend.
+     *
+     * FileBackend is stateless (holds only a host reference), so creating it
+     * per-call avoids lifetime complexity without performance cost.
      * @param {string} id
      * @param {string} secret
      * @returns {Promise<void>}
@@ -227,6 +239,10 @@ function __wbg_get_imports() {
                 wasm.__wbindgen_free(deferred0_0, deferred0_1, 1);
             }
         },
+        __wbg_from_4bdf88943703fd48: function(arg0) {
+            const ret = Array.from(arg0);
+            return ret;
+        },
         __wbg_getRandomValues_3f44b700395062e5: function() { return handleError(function (arg0, arg1) {
             globalThis.crypto.getRandomValues(getArrayU8FromWasm0(arg0, arg1));
         }, arguments); },
@@ -237,6 +253,14 @@ function __wbg_get_imports() {
             const ret = Reflect.get(arg0, arg1);
             return ret;
         }, arguments); },
+        __wbg_get_a8ee5c45dabc1b3b: function(arg0, arg1) {
+            const ret = arg0[arg1 >>> 0];
+            return ret;
+        },
+        __wbg_length_b3416cf66a5452c8: function(arg0) {
+            const ret = arg0.length;
+            return ret;
+        },
         __wbg_length_ea16607d7b61445b: function(arg0) {
             const ret = arg0.length;
             return ret;
@@ -340,7 +364,7 @@ function __wbg_get_imports() {
             return ret;
         },
         __wbindgen_cast_0000000000000001: function(arg0, arg1) {
-            // Cast intrinsic for `Closure(Closure { dtor_idx: 149, function: Function { arguments: [Externref], shim_idx: 150, ret: Result(Unit), inner_ret: Some(Result(Unit)) }, mutable: true }) -> Externref`.
+            // Cast intrinsic for `Closure(Closure { dtor_idx: 153, function: Function { arguments: [Externref], shim_idx: 154, ret: Result(Unit), inner_ret: Some(Result(Unit)) }, mutable: true }) -> Externref`.
             const ret = makeMutClosure(arg0, arg1, wasm.wasm_bindgen__closure__destroy__had4a06f88502d92d, wasm_bindgen__convert__closures_____invoke__h245423d8564c58d0);
             return ret;
         },
