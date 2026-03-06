@@ -9,4 +9,4 @@ mod types;
 
 pub use in_memory::InMemoryBackend;
 pub use registry::BackendRegistry;
-pub use types::{HostPlatform, ListableBackend, Platform, SecretBackend};
+pub use types::{ExecOutput, HostPlatform, ListableBackend, Platform, SecretBackend};

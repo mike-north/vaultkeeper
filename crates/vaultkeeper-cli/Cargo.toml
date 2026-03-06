@@ -12,6 +12,7 @@ path = "src/main.rs"
 
 [dependencies]
 vaultkeeper-core = { path = "../vaultkeeper-core" }
+async-trait = { workspace = true }
 clap = { workspace = true }
 tokio = { workspace = true, features = ["full"] }
 serde_json = { workspace = true }
