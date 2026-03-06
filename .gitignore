@@ -146,8 +146,22 @@ vite.config.ts.timestamp-*
 # Build artifacts
 tmp/
 
+# Nx
+.nx/
+
+# Rust / Cargo
+target/
+# WASM build output (cargo target)
+target/**/*.wasm
+# Allow committed wasm-pack output for npm packages
+!packages/**/wasm/
+!packages/**/wasm/**
+
 # Claude
 .claude/settings.local.json
+
+# Git worktrees
+.worktrees/
 
 # Scratch area
 scratch/

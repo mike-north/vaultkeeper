@@ -5,7 +5,10 @@
   "description": "CLI user acceptance tests for vaultkeeper",
   "type": "module",
   "scripts": {
-    "test": "vitest run"
+    "test": "vitest run",
+    "check:typecheck": "tsc --noEmit",
+    "check:lint-ts": "eslint .",
+    "check": "pnpm check:typecheck && pnpm check:lint-ts"
   },
   "author": "Mike North <michael.l.north@gmail.com>",
   "license": "MIT",

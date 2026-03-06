@@ -1,0 +1,415 @@
+[
+  {
+    "name": "no args prints help and exits 0",
+    "command": [],
+    "stdin": null,
+    "needsConfig": false,
+    "expectedExitCode": 0,
+    "expectedStdout": {
+      "type": "Contains",
+      "value": "vaultkeeper"
+    },
+    "expectedStderr": {
+      "type": "Any"
+    }
+  },
+  {
+    "name": "help flag prints help and exits 0",
+    "command": [
+      "--help"
+    ],
+    "stdin": null,
+    "needsConfig": false,
+    "expectedExitCode": 0,
+    "expectedStdout": {
+      "type": "Contains",
+      "value": "vaultkeeper"
+    },
+    "expectedStderr": {
+      "type": "Any"
+    }
+  },
+  {
+    "name": "short help flag prints help and exits 0",
+    "command": [
+      "-h"
+    ],
+    "stdin": null,
+    "needsConfig": false,
+    "expectedExitCode": 0,
+    "expectedStdout": {
+      "type": "Contains",
+      "value": "vaultkeeper"
+    },
+    "expectedStderr": {
+      "type": "Any"
+    }
+  },
+  {
+    "name": "version flag prints version",
+    "command": [
+      "--version"
+    ],
+    "stdin": null,
+    "needsConfig": false,
+    "expectedExitCode": 0,
+    "expectedStdout": {
+      "type": "Contains",
+      "value": "vaultkeeper"
+    },
+    "expectedStderr": {
+      "type": "Any"
+    }
+  },
+  {
+    "name": "help lists all expected commands",
+    "command": [
+      "--help"
+    ],
+    "stdin": null,
+    "needsConfig": false,
+    "expectedExitCode": 0,
+    "expectedStdout": {
+      "type": "Regex",
+      "value": "(?s)exec.*doctor.*approve.*dev-mode.*store.*delete.*config.*rotate-key.*revoke-key"
+    },
+    "expectedStderr": {
+      "type": "Any"
+    }
+  },
+  {
+    "name": "unknown command exits with error",
+    "command": [
+      "nonexistent-command"
+    ],
+    "stdin": null,
+    "needsConfig": false,
+    "expectedExitCode": 2,
+    "expectedStdout": {
+      "type": "Any"
+    },
+    "expectedStderr": {
+      "type": "Contains",
+      "value": "error"
+    }
+  },
+  {
+    "name": "store requires --name",
+    "command": [
+      "store"
+    ],
+    "stdin": "some-secret",
+    "needsConfig": false,
+    "expectedExitCode": 2,
+    "expectedStdout": {
+      "type": "Any"
+    },
+    "expectedStderr": {
+      "type": "Contains",
+      "value": "--name"
+    }
+  },
+  {
+    "name": "delete requires --name",
+    "command": [
+      "delete"
+    ],
+    "stdin": null,
+    "needsConfig": false,
+    "expectedExitCode": 2,
+    "expectedStdout": {
+      "type": "Any"
+    },
+    "expectedStderr": {
+      "type": "Contains",
+      "value": "--name"
+    }
+  },
+  {
+    "name": "exec requires --token",
+    "command": [
+      "exec"
+    ],
+    "stdin": null,
+    "needsConfig": false,
+    "expectedExitCode": 2,
+    "expectedStdout": {
+      "type": "Any"
+    },
+    "expectedStderr": {
+      "type": "Contains",
+      "value": "--token"
+    }
+  },
+  {
+    "name": "approve requires --path",
+    "command": [
+      "approve"
+    ],
+    "stdin": null,
+    "needsConfig": false,
+    "expectedExitCode": 2,
+    "expectedStdout": {
+      "type": "Any"
+    },
+    "expectedStderr": {
+      "type": "Contains",
+      "value": "--path"
+    }
+  },
+  {
+    "name": "dev-mode requires --path",
+    "command": [
+      "dev-mode"
+    ],
+    "stdin": null,
+    "needsConfig": false,
+    "expectedExitCode": 2,
+    "expectedStdout": {
+      "type": "Any"
+    },
+    "expectedStderr": {
+      "type": "Contains",
+      "value": "--path"
+    }
+  },
+  {
+    "name": "config with no subcommand exits 2",
+    "command": [
+      "config"
+    ],
+    "stdin": null,
+    "needsConfig": false,
+    "expectedExitCode": 2,
+    "expectedStdout": {
+      "type": "Any"
+    },
+    "expectedStderr": {
+      "type": "Any"
+    }
+  },
+  {
+    "name": "store succeeds with valid secret",
+    "command": [
+      "store",
+      "--name",
+      "conformance-key"
+    ],
+    "stdin": "conformance-secret",
+    "needsConfig": true,
+    "expectedExitCode": 0,
+    "expectedStdout": {
+      "type": "Contains",
+      "value": "stored successfully"
+    },
+    "expectedStderr": {
+      "type": "Any"
+    }
+  },
+  {
+    "name": "store exits 1 when stdin is empty",
+    "command": [
+      "store",
+      "--name",
+      "empty-key"
+    ],
+    "stdin": "",
+    "needsConfig": true,
+    "expectedExitCode": 1,
+    "expectedStdout": {
+      "type": "Any"
+    },
+    "expectedStderr": {
+      "type": "Contains",
+      "value": "No secret provided"
+    }
+  },
+  {
+    "name": "delete succeeds",
+    "command": [
+      "delete",
+      "--name",
+      "some-key"
+    ],
+    "stdin": null,
+    "needsConfig": true,
+    "expectedExitCode": 0,
+    "expectedStdout": {
+      "type": "Contains",
+      "value": "deleted"
+    },
+    "expectedStderr": {
+      "type": "Any"
+    }
+  },
+  {
+    "name": "config init creates config when none exists",
+    "command": [
+      "config",
+      "init"
+    ],
+    "stdin": null,
+    "needsConfig": false,
+    "expectedExitCode": 0,
+    "expectedStdout": {
+      "type": "Contains",
+      "value": "created"
+    },
+    "expectedStderr": {
+      "type": "Any"
+    }
+  },
+  {
+    "name": "config show outputs valid JSON with version",
+    "command": [
+      "config",
+      "show"
+    ],
+    "stdin": null,
+    "needsConfig": true,
+    "expectedExitCode": 0,
+    "expectedStdout": {
+      "type": "Contains",
+      "value": "\"version\""
+    },
+    "expectedStderr": {
+      "type": "Any"
+    }
+  },
+  {
+    "name": "config show exits 1 when no config exists",
+    "command": [
+      "config",
+      "show"
+    ],
+    "stdin": null,
+    "needsConfig": false,
+    "expectedExitCode": 1,
+    "expectedStdout": {
+      "type": "Any"
+    },
+    "expectedStderr": {
+      "type": "Contains",
+      "value": "Error"
+    }
+  },
+  {
+    "name": "config init exits 1 when config already exists",
+    "command": [
+      "config",
+      "init"
+    ],
+    "stdin": null,
+    "needsConfig": true,
+    "expectedExitCode": 1,
+    "expectedStdout": {
+      "type": "Any"
+    },
+    "expectedStderr": {
+      "type": "Contains",
+      "value": "already exists"
+    }
+  },
+  {
+    "name": "doctor produces output",
+    "command": [
+      "doctor"
+    ],
+    "stdin": null,
+    "needsConfig": false,
+    "expectedExitCode": -1,
+    "expectedStdout": {
+      "type": "Any"
+    },
+    "expectedStderr": {
+      "type": "Any"
+    }
+  },
+  {
+    "name": "rotate-key succeeds with valid config",
+    "command": [
+      "rotate-key"
+    ],
+    "stdin": null,
+    "needsConfig": true,
+    "expectedExitCode": 0,
+    "expectedStdout": {
+      "type": "Contains",
+      "value": "rotated successfully"
+    },
+    "expectedStderr": {
+      "type": "Any"
+    }
+  },
+  {
+    "name": "revoke-key succeeds with valid config",
+    "command": [
+      "revoke-key"
+    ],
+    "stdin": null,
+    "needsConfig": true,
+    "expectedExitCode": 0,
+    "expectedStdout": {
+      "type": "Contains",
+      "value": "revoked successfully"
+    },
+    "expectedStderr": {
+      "type": "Any"
+    }
+  },
+  {
+    "name": "approve succeeds for existing file",
+    "command": [
+      "approve",
+      "--path",
+      "__SELF_BINARY__"
+    ],
+    "stdin": null,
+    "needsConfig": true,
+    "expectedExitCode": 0,
+    "expectedStdout": {
+      "type": "Contains",
+      "value": "Approved"
+    },
+    "expectedStderr": {
+      "type": "Any"
+    }
+  },
+  {
+    "name": "dev-mode enable succeeds",
+    "command": [
+      "dev-mode",
+      "--path",
+      "/tmp/test-script.sh",
+      "--enable"
+    ],
+    "stdin": null,
+    "needsConfig": true,
+    "expectedExitCode": 0,
+    "expectedStdout": {
+      "type": "Contains",
+      "value": "enabled"
+    },
+    "expectedStderr": {
+      "type": "Any"
+    }
+  },
+  {
+    "name": "dev-mode disable succeeds",
+    "command": [
+      "dev-mode",
+      "--path",
+      "/tmp/test-script.sh"
+    ],
+    "stdin": null,
+    "needsConfig": true,
+    "expectedExitCode": 0,
+    "expectedStdout": {
+      "type": "Contains",
+      "value": "disabled"
+    },
+    "expectedStderr": {
+      "type": "Any"
+    }
+  }
+]

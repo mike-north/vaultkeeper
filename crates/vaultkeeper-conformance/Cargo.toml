@@ -1,0 +1,19 @@
+[package]
+name = "vaultkeeper-conformance"
+description = "Conformance test definitions for vaultkeeper CLI parity"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+regex = "1"
+
+[[bin]]
+name = "export-conformance"
+path = "src/export.rs"
+
+[dev-dependencies]
+tempfile = "3"

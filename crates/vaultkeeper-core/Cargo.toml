@@ -1,0 +1,28 @@
+[package]
+name = "vaultkeeper-core"
+description = "Core library for vaultkeeper — unified, policy-enforced secret storage"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+async-trait = { workspace = true }
+aes-gcm = { workspace = true }
+sha2 = { workspace = true }
+base64ct = { workspace = true }
+getrandom = { workspace = true }
+rand = { workspace = true }
+uuid = { workspace = true }
+zeroize = { workspace = true }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+js-sys = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["full"] }
+assert_matches = { workspace = true }
+serial_test = { workspace = true }
