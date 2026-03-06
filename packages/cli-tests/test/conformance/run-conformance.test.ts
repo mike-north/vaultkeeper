@@ -192,10 +192,14 @@ async function runCase(testCase: ConformanceCase): Promise<RunResult> {
         },
       )
 
-      if (testCase.stdin !== null && child.stdin !== null) {
-        child.stdin.write(testCase.stdin)
-        child.stdin.end()
-      } else if (child.stdin !== null) {
+      if (child.stdin !== null) {
+        // Ignore EPIPE — the child may exit before we finish writing
+        // (e.g., clap rejecting args before reading stdin). This race
+        // is more common on Node 20 than 22.
+        child.stdin.on('error', () => {})
+        if (testCase.stdin !== null) {
+          child.stdin.write(testCase.stdin)
+        }
         child.stdin.end()
       }
     })
