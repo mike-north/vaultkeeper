@@ -62,10 +62,10 @@ export interface AuthorizeResult {
   response: VaultResponse;
 }
 
-/** Preflight check status. */
-export type PreflightCheckStatus = 'ok' | 'missing' | 'outdated' | 'error';
+/** Preflight check status (Rust kebab-case serialization). */
+export type PreflightCheckStatus = 'ok' | 'missing' | 'version-unsupported';
 
-/** Individual preflight check result. */
+/** Individual preflight check result (Rust snake_case field names). */
 export interface PreflightCheck {
   name: string;
   status: PreflightCheckStatus;
@@ -73,12 +73,12 @@ export interface PreflightCheck {
   reason?: string | null;
 }
 
-/** Overall preflight result. */
+/** Overall preflight result (Rust snake_case field names). */
 export interface PreflightResult {
   ready: boolean;
   checks: PreflightCheck[];
   warnings: string[];
-  nextSteps: string[];
+  next_steps: string[];
 }
 
 /** Vault configuration. */

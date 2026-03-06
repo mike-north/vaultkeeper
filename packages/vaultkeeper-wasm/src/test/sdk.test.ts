@@ -96,4 +96,135 @@ describe('@vaultkeeper/wasm SDK', () => {
       vault.dispose();
     });
   });
+
+  it('delete a stored secret', async () => {
+    await withTempDir(async (dir) => {
+      const vault = await createTestVault(dir);
+      await vault.store('delete-me', 'temp-value');
+      await vault.delete('delete-me');
+      // Retrieving deleted secret should throw
+      await assert.rejects(() => vault.retrieve('delete-me'));
+      vault.dispose();
+    });
+  });
+
+  it('authorize rejects invalid JWE token', async () => {
+    await withTempDir(async (dir) => {
+      const vault = await createTestVault(dir);
+      assert.throws(() => vault.authorize('not-a-valid-jwe'));
+      vault.dispose();
+    });
+  });
+
+  it('authorize rejects tampered JWE token', async () => {
+    await withTempDir(async (dir) => {
+      const vault = await createTestVault(dir);
+      const token = vault.setup('key', 'value');
+      // Corrupt the ciphertext (4th segment)
+      const parts = token.split('.');
+      parts[3] = parts[3]!.slice(0, -4) + 'XXXX';
+      const tampered = parts.join('.');
+      assert.throws(() => vault.authorize(tampered));
+      vault.dispose();
+    });
+  });
+
+  it('setup with custom TTL', async () => {
+    await withTempDir(async (dir) => {
+      const vault = await createTestVault(dir);
+      const token = vault.setup('ttl-key', 'ttl-value', { ttlMinutes: 5 });
+      const result = vault.authorize(token);
+      // exp should be iat + 300 seconds (5 minutes)
+      assert.equal(result.claims.exp - result.claims.iat, 300);
+      vault.dispose();
+    });
+  });
+
+  it('setup with use limit', async () => {
+    await withTempDir(async (dir) => {
+      const vault = await createTestVault(dir);
+      const token = vault.setup('limit-key', 'limit-value', { useLimit: 3 });
+      const result = vault.authorize(token);
+      assert.equal(result.claims.use, 3);
+      vault.dispose();
+    });
+  });
+
+  it('rotate key then authorize with old token re-encrypts', async () => {
+    await withTempDir(async (dir) => {
+      const vault = await createTestVault(dir);
+      const token = vault.setup('rotate-key', 'rotate-value');
+      vault.rotateKey();
+      const result = vault.authorize(token);
+      // Old token decrypted with previous key
+      assert.equal(result.response.keyStatus, 'previous');
+      assert.ok(result.response.rotatedJwt, 'should provide re-encrypted token');
+      // The re-encrypted token should work with the current key
+      const result2 = vault.authorize(result.response.rotatedJwt);
+      assert.equal(result2.response.keyStatus, 'current');
+      assert.equal(result2.claims.val, 'rotate-value');
+      vault.dispose();
+    });
+  });
+
+  it('double rotate rejects (rotation already in progress)', async () => {
+    await withTempDir(async (dir) => {
+      const vault = await createTestVault(dir);
+      vault.rotateKey();
+      assert.throws(() => vault.rotateKey(), /rotation/i);
+      vault.dispose();
+    });
+  });
+
+  it('store and retrieve preserves unicode', async () => {
+    await withTempDir(async (dir) => {
+      const vault = await createTestVault(dir);
+      const unicodeValue = '\u{1F512} secure \u{2603} snowman \u{1F60E}';
+      await vault.store('unicode-key', unicodeValue);
+      const retrieved = await vault.retrieve('unicode-key');
+      assert.equal(retrieved, unicodeValue);
+      vault.dispose();
+    });
+  });
+
+  it('doctor returns preflight result', async () => {
+    await withTempDir(async (dir) => {
+      const vault = await createTestVault(dir);
+      const result = await vault.doctor();
+      assert.ok(typeof result.ready === 'boolean');
+      assert.ok(Array.isArray(result.checks));
+      assert.ok(Array.isArray(result.warnings));
+      assert.ok(Array.isArray(result.next_steps));
+      vault.dispose();
+    });
+  });
+
+  it('retrieve non-existent secret throws', async () => {
+    await withTempDir(async (dir) => {
+      const vault = await createTestVault(dir);
+      await assert.rejects(() => vault.retrieve('does-not-exist'));
+      vault.dispose();
+    });
+  });
+
+  it('claims contain expected fields', async () => {
+    await withTempDir(async (dir) => {
+      const vault = await createTestVault(dir);
+      const token = vault.setup('claim-key', 'claim-value');
+      const result = vault.authorize(token);
+      const claims = result.claims;
+      // Verify all expected fields exist
+      assert.ok(typeof claims.jti === 'string');
+      assert.ok(claims.jti.length > 0);
+      assert.ok(typeof claims.exp === 'number');
+      assert.ok(typeof claims.iat === 'number');
+      assert.equal(claims.sub, 'claim-key');
+      assert.equal(claims.val, 'claim-value');
+      assert.equal(claims.ref, 'claim-key');
+      assert.ok(typeof claims.exe === 'string');
+      assert.ok(typeof claims.tid === 'string');
+      assert.ok(typeof claims.bkd === 'string');
+      vault.dispose();
+    });
+  });
 });
