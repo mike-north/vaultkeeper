@@ -13,8 +13,37 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  rust:
+    name: Rust Build & Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Clippy
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: Test
+        run: cargo test
+
+      - name: Build release binary
+        run: cargo build --release
+
+      - name: Upload Rust binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: vaultkeeper-binary
+          path: target/release/vaultkeeper
+          retention-days: 1
+
   ci:
-    name: Build & Check
+    name: Build & Check (Node ${{ matrix.node-version }})
+    needs: rust
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -39,7 +68,17 @@ jobs:
 
       - run: pnpm check:api-report
 
-      - run: pnpm test
+      - name: Download Rust binary
+        uses: actions/download-artifact@v4
+        with:
+          name: vaultkeeper-binary
+          path: target/release
+
+      - name: Make binary executable
+        run: chmod +x target/release/vaultkeeper
+
+      - name: Test (including conformance)
+        run: pnpm test
 
   release:
     name: Release

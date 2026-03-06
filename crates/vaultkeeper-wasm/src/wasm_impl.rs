@@ -308,12 +308,23 @@ impl WasmVaultKeeper {
             .map_err(|e| JsError::new(&e.to_string()))
     }
 
+    /// Emergency key revocation — removes previous key and generates a new current key.
+    #[wasm_bindgen(js_name = "revokeKey")]
+    pub fn revoke_key(&mut self) -> Result<(), JsError> {
+        self.vault
+            .revoke_key()
+            .map_err(|e| JsError::new(&e.to_string()))
+    }
+
     /// Get the current configuration as JSON.
     pub fn config(&self) -> Result<JsValue, JsError> {
         to_js_value(self.vault.config())
     }
 
     /// Store a secret via the file backend.
+    ///
+    /// FileBackend is stateless (holds only a host reference), so creating it
+    /// per-call avoids lifetime complexity without performance cost.
     pub async fn store(&self, id: &str, secret: &str) -> Result<(), JsError> {
         let backend = FileBackend::new(self.host.clone());
         backend
