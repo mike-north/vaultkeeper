@@ -196,6 +196,7 @@ async function runCase(testCase: ConformanceCase): Promise<RunResult> {
         // Ignore EPIPE — the child may exit before we finish writing
         // (e.g., clap rejecting args before reading stdin). This race
         // is more common on Node 20 than 22.
+        // eslint-disable-next-line @typescript-eslint/no-empty-function -- suppress EPIPE from child exiting before stdin write completes
         child.stdin.on('error', () => {})
         if (testCase.stdin !== null) {
           child.stdin.write(testCase.stdin)
