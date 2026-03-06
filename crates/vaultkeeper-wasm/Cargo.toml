@@ -1,0 +1,21 @@
+[package]
+name = "vaultkeeper-wasm"
+description = "WASM bindings for vaultkeeper — used by the npm package"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+vaultkeeper-core = { path = "../vaultkeeper-core" }
+wasm-bindgen = { workspace = true }
+wasm-bindgen-futures = { workspace = true }
+js-sys = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+wasm-bindgen-test = "0.3"

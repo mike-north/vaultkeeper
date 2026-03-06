@@ -146,6 +146,11 @@ vite.config.ts.timestamp-*
 # Build artifacts
 tmp/
 
+# Rust / Cargo
+target/
+*.wasm
+!packages/**/wasm/.gitkeep
+
 # Claude
 .claude/settings.local.json
 

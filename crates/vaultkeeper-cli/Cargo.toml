@@ -1,0 +1,17 @@
+[package]
+name = "vaultkeeper-cli"
+description = "Native CLI binary for vaultkeeper"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "vaultkeeper"
+path = "src/main.rs"
+
+[dependencies]
+vaultkeeper-core = { path = "../vaultkeeper-core" }
+clap = { workspace = true }
+tokio = { workspace = true, features = ["full"] }
+serde_json = { workspace = true }
