@@ -19,16 +19,28 @@ function getDefaultConfigDir(): string {
   return path.join(os.homedir(), '.config', 'vaultkeeper')
 }
 
-const DEFAULT_CONFIG = JSON.stringify(
-  {
+function getDefaultConfig(): string {
+  let backendType: string
+  if (process.platform === 'darwin') {
+    backendType = 'keychain'
+  } else if (process.platform === 'win32') {
+    backendType = 'dpapi'
+  } else {
+    // Linux and other Unix-like systems.
+    // Use 'file' rather than 'secret-tool' because secret-tool requires
+    // installing libsecret-tools which many Linux systems don't have.
+    backendType = 'file'
+  }
+
+  const config: Record<string, unknown> = {
     version: 1,
-    backends: [{ type: 'keychain', enabled: true }],
+    backends: [{ type: backendType, enabled: true }],
     keyRotation: { gracePeriodDays: 7 },
     defaults: { ttlMinutes: 60, trustTier: 3 },
-  },
-  null,
-  2,
-)
+  }
+
+  return JSON.stringify(config, null, 2)
+}
 
 function printConfigHelp(): void {
   process.stdout.write(
@@ -77,7 +89,7 @@ export async function configCommand(args: string[]): Promise<number> {
           // File doesn't exist — create it
         }
 
-        await fs.writeFile(configPath, DEFAULT_CONFIG + '\n', { encoding: 'utf8', mode: 0o600 })
+        await fs.writeFile(configPath, getDefaultConfig() + '\n', { encoding: 'utf8', mode: 0o600 })
         process.stdout.write(`Config created at ${configPath}\n`)
         return 0
       } catch (err) {
