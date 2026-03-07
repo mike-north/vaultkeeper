@@ -29,7 +29,27 @@ import { readCachedToken, writeCachedToken, invalidateCache } from '../cache.js'
 import { RedactingStream } from '../redact.js'
 import { formatError } from '../output.js'
 
+function printExecHelp(): void {
+  process.stdout.write(
+    'Usage: vaultkeeper exec --secret <name> --env <VAR> --caller <path> [options] -- <command...>\n\n' +
+      'Options:\n' +
+      '  --secret <name>    Name of the secret to inject\n' +
+      '  --env <VAR>        Environment variable name to inject the secret into\n' +
+      '  --caller <path>    Path to the calling executable (used for TOFU verification)\n' +
+      '  --reason <text>    Human-readable reason for access (optional)\n' +
+      '  --cache            Cache the JWE token for subsequent invocations\n' +
+      '  --no-redact        Do not redact the secret from output\n' +
+      '  -h, --help         Show this help message\n',
+  )
+}
+
 export async function execCommand(args: string[]): Promise<number> {
+  // Handle --help / -h before any other processing.
+  if (args.includes('--help') || args.includes('-h')) {
+    printExecHelp()
+    return 0
+  }
+
   // Find the -- separator to split CLI flags from the wrapped command
   const dashDashIdx = args.indexOf('--')
   if (dashDashIdx === -1) {
@@ -37,7 +57,8 @@ export async function execCommand(args: string[]): Promise<number> {
     process.stderr.write(
       'Usage: vaultkeeper exec --secret <name> --env <VAR> --caller <path> -- <command...>\n',
     )
-    return 1
+    // Exit code 2: usage error (missing required separator)
+    return 2
   }
 
   const flagArgs = args.slice(0, dashDashIdx)
@@ -45,7 +66,8 @@ export async function execCommand(args: string[]): Promise<number> {
 
   if (command.length === 0) {
     process.stderr.write('Error: No command provided after --\n')
-    return 1
+    // Exit code 2: usage error (empty command after separator)
+    return 2
   }
 
   const { values } = parseArgs({
@@ -67,7 +89,8 @@ export async function execCommand(args: string[]): Promise<number> {
 
   if (secret === undefined || envVar === undefined || caller === undefined) {
     process.stderr.write('Error: --secret, --env, and --caller are required\n')
-    return 1
+    // Exit code 2: usage error (missing required flags)
+    return 2
   }
 
   const callerPath = path.resolve(caller)

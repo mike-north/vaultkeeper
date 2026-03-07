@@ -61,15 +61,15 @@ describe('bin.ts entry point', () => {
     expect(result.stdout).toContain('Usage: vaultkeeper <command>')
   })
 
-  it('should write an error to stderr and exit 1 for an unknown command', async () => {
+  it('should write an error to stderr and exit 2 for an unknown command', async () => {
     const result = await runCli(['not-a-real-command'])
-    expect(result.exitCode).toBe(1)
+    expect(result.exitCode).toBe(2)
     expect(result.stderr).toContain('Unknown command: not-a-real-command')
   })
 
   it('should include help text after an unknown command error', async () => {
     const result = await runCli(['totally-bogus'])
-    expect(result.exitCode).toBe(1)
+    expect(result.exitCode).toBe(2)
     expect(result.stdout).toContain('Usage: vaultkeeper <command>')
   })
 
@@ -94,5 +94,65 @@ describe('bin.ts entry point', () => {
     // exec requires --secret, --env, --caller, and a -- separator
     const result = await runCli(['exec'])
     expect(result.exitCode).not.toBe(0)
+  })
+
+  describe('--version flag', () => {
+    it('should print the package version and exit 0 for --version', async () => {
+      const result = await runCli(['--version'])
+      expect(result.exitCode).toBe(0)
+      // Version string matches semver pattern (e.g. "0.1.4")
+      expect(result.stdout.trim()).toMatch(/^\d+\.\d+\.\d+/)
+    })
+
+    it('should print the package version and exit 0 for -V', async () => {
+      const result = await runCli(['-V'])
+      expect(result.exitCode).toBe(0)
+      expect(result.stdout.trim()).toMatch(/^\d+\.\d+\.\d+/)
+    })
+  })
+
+  describe('per-subcommand --help', () => {
+    it('should print usage and exit 0 for exec --help', async () => {
+      const result = await runCli(['exec', '--help'])
+      expect(result.exitCode).toBe(0)
+      expect(result.stdout).toContain('Usage: vaultkeeper exec')
+    })
+
+    it('should print usage and exit 0 for exec -h', async () => {
+      const result = await runCli(['exec', '-h'])
+      expect(result.exitCode).toBe(0)
+      expect(result.stdout).toContain('Usage: vaultkeeper exec')
+    })
+
+    it('should print usage and exit 0 for config --help', async () => {
+      const result = await runCli(['config', '--help'])
+      expect(result.exitCode).toBe(0)
+      expect(result.stdout).toContain('Usage: vaultkeeper config')
+    })
+
+    it('should print usage and exit 0 for rotate-key --help', async () => {
+      const result = await runCli(['rotate-key', '--help'])
+      expect(result.exitCode).toBe(0)
+      expect(result.stdout).toContain('Usage: vaultkeeper rotate-key')
+    })
+
+    it('should print usage and exit 0 for revoke-key --help', async () => {
+      const result = await runCli(['revoke-key', '--help'])
+      expect(result.exitCode).toBe(0)
+      expect(result.stdout).toContain('Usage: vaultkeeper revoke-key')
+    })
+
+    it('should print usage and exit 0 for store --help', async () => {
+      const result = await runCli(['store', '--help'])
+      expect(result.exitCode).toBe(0)
+      expect(result.stdout).toContain('Usage:')
+    })
+  })
+
+  describe('exit code 2 for usage errors', () => {
+    it('should exit 2 for unknown command', async () => {
+      const result = await runCli(['unknown-command-xyz'])
+      expect(result.exitCode).toBe(2)
+    })
   })
 })

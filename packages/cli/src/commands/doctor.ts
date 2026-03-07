@@ -1,7 +1,22 @@
 import { VaultKeeper } from 'vaultkeeper'
 import { formatError } from '../output.js'
 
-export async function doctorCommand(_args: string[]): Promise<number> {
+function printDoctorHelp(): void {
+  process.stdout.write(
+    'Usage: vaultkeeper doctor\n\n' +
+      'Run preflight checks to verify the vault is correctly configured\n' +
+      'and all required dependencies are available.\n\n' +
+      'Options:\n' +
+      '  -h, --help   Show this help message\n',
+  )
+}
+
+export async function doctorCommand(args: string[]): Promise<number> {
+  if (args.includes('--help') || args.includes('-h')) {
+    printDoctorHelp()
+    return 0
+  }
+
   try {
     const result = await VaultKeeper.doctor()
 

@@ -23,10 +23,24 @@ describe('approveCommand', () => {
     vi.restoreAllMocks()
   })
 
+  describe('--help / -h', () => {
+    it('should print usage and return 0 for --help', () => {
+      const code = approveCommand(['--help'])
+      expect(code).toBe(0)
+      expect(stdoutOutput).toContain('Usage: vaultkeeper approve')
+    })
+
+    it('should print usage and return 0 for -h', () => {
+      const code = approveCommand(['-h'])
+      expect(code).toBe(0)
+      expect(stdoutOutput).toContain('Usage: vaultkeeper approve')
+    })
+  })
+
   describe('--script flag validation', () => {
-    it('should return 1 when --script is missing', () => {
+    it('should return 2 when --script is missing', () => {
       const code = approveCommand([])
-      expect(code).toBe(1)
+      expect(code).toBe(2)
     })
 
     it('should write error to stderr when --script is missing', () => {

@@ -28,9 +28,9 @@ describe('deleteCommand', () => {
   })
 
   describe('--name flag validation', () => {
-    it('should return 1 when --name is missing', async () => {
+    it('should return 2 when --name is missing', async () => {
       const code = await deleteCommand([])
-      expect(code).toBe(1)
+      expect(code).toBe(2)
     })
 
     it('should write error to stderr when --name is missing', async () => {

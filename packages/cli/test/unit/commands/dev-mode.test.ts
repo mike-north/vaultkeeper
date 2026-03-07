@@ -24,19 +24,19 @@ describe('devModeCommand', () => {
   })
 
   describe('action validation', () => {
-    it('should return 1 when no action is provided', async () => {
+    it('should return 2 when no action is provided', async () => {
       const code = await devModeCommand(['--script', '/path/to/script.sh'])
-      expect(code).toBe(1)
+      expect(code).toBe(2)
     })
 
-    it('should return 1 for invalid action', async () => {
+    it('should return 2 for invalid action', async () => {
       const code = await devModeCommand(['invalid', '--script', '/path/to/script.sh'])
-      expect(code).toBe(1)
+      expect(code).toBe(2)
     })
 
-    it('should return 1 for action that is neither enable nor disable', async () => {
+    it('should return 2 for action that is neither enable nor disable', async () => {
       const code = await devModeCommand(['toggle', '--script', '/path/to/script.sh'])
-      expect(code).toBe(1)
+      expect(code).toBe(2)
     })
 
     it('should write usage to stderr for invalid action', async () => {
@@ -47,14 +47,14 @@ describe('devModeCommand', () => {
   })
 
   describe('--script flag validation', () => {
-    it('should return 1 when --script is missing with valid action', async () => {
+    it('should return 2 when --script is missing with valid action', async () => {
       const code = await devModeCommand(['enable'])
-      expect(code).toBe(1)
+      expect(code).toBe(2)
     })
 
-    it('should return 1 when --script is missing with disable action', async () => {
+    it('should return 2 when --script is missing with disable action', async () => {
       const code = await devModeCommand(['disable'])
-      expect(code).toBe(1)
+      expect(code).toBe(2)
     })
 
     it('should write usage to stderr when --script is missing', async () => {
@@ -64,9 +64,9 @@ describe('devModeCommand', () => {
   })
 
   describe('when both action and --script are missing', () => {
-    it('should return 1 with no args', async () => {
+    it('should return 2 with no args', async () => {
       const code = await devModeCommand([])
-      expect(code).toBe(1)
+      expect(code).toBe(2)
     })
 
     it('should write usage to stderr with no args', async () => {

@@ -30,7 +30,29 @@ const DEFAULT_CONFIG = JSON.stringify(
   2,
 )
 
+function printConfigHelp(): void {
+  process.stdout.write(
+    'Usage: vaultkeeper config <subcommand>\n\n' +
+      'Subcommands:\n' +
+      '  init   Create a default config file\n' +
+      '  show   Print the current config file\n\n' +
+      'Options:\n' +
+      '  -h, --help   Show this help message\n',
+  )
+}
+
+/** Return true if err is a Node.js ENOENT error (file not found). */
+function isEnoent(err: unknown): boolean {
+  return err instanceof Error && 'code' in err && err.code === 'ENOENT'
+}
+
 export async function configCommand(args: string[]): Promise<number> {
+  // Handle --help / -h before subcommand dispatch.
+  if (args.includes('--help') || args.includes('-h')) {
+    printConfigHelp()
+    return 0
+  }
+
   const { positionals } = parseArgs({
     args,
     allowPositionals: true,
@@ -75,6 +97,13 @@ export async function configCommand(args: string[]): Promise<number> {
         }
         return 0
       } catch (err) {
+        // Fix 4: show a user-friendly message when the config file is missing.
+        if (isEnoent(err)) {
+          process.stderr.write(
+            "Error: No config file found. Run 'vaultkeeper config init' to create one.\n",
+          )
+          return 1
+        }
         process.stderr.write(`${formatError(err)}\n`)
         return 1
       }
@@ -82,6 +111,7 @@ export async function configCommand(args: string[]): Promise<number> {
 
     default:
       process.stderr.write('Usage: vaultkeeper config <init|show>\n')
-      return 1
+      // Exit code 2: usage error (missing or unknown subcommand)
+      return 2
   }
 }
