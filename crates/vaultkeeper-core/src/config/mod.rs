@@ -4,16 +4,45 @@ use crate::errors::VaultError;
 use crate::types::{BackendConfig, KeyRotationPolicy, TrustTier, VaultConfig, VaultDefaults};
 
 /// Return the default configuration when no config file exists.
+///
+/// The default backend is chosen based on the target platform:
+/// - macOS: `keychain` (Keychain Services)
+/// - Windows: `dpapi` (Data Protection API)
+/// - Linux / other Unix: `file` (encrypted file backend)
+///
+/// The `file` backend is preferred over `secret-tool` on Linux because
+/// `secret-tool` requires `libsecret-tools` which is not universally installed.
 pub fn default_config() -> VaultConfig {
-    VaultConfig {
-        version: 1,
-        backends: vec![BackendConfig {
+    let backend = if cfg!(target_os = "macos") {
+        BackendConfig {
+            backend_type: "keychain".to_string(),
+            enabled: true,
+            plugin: None,
+            path: None,
+            options: None,
+        }
+    } else if cfg!(target_os = "windows") {
+        BackendConfig {
+            backend_type: "dpapi".to_string(),
+            enabled: true,
+            plugin: None,
+            path: None,
+            options: None,
+        }
+    } else {
+        // Linux and other Unix-like systems.
+        BackendConfig {
             backend_type: "file".to_string(),
             enabled: true,
             plugin: None,
             path: None,
             options: None,
-        }],
+        }
+    };
+
+    VaultConfig {
+        version: 1,
+        backends: vec![backend],
         key_rotation: KeyRotationPolicy {
             grace_period_days: 7,
         },

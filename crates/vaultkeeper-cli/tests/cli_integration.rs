@@ -215,6 +215,35 @@ mod config {
     }
 
     #[test]
+    fn config_init_uses_platform_appropriate_backend() {
+        let (mut cmd, dir) = cli_test_env_no_config();
+        cmd.args(["config", "init"])
+            .assert()
+            .success()
+            .stdout(predicate::str::contains("Config created at"));
+        let content =
+            fs::read_to_string(dir.path().join("config.json")).expect("config should exist");
+        let parsed: serde_json::Value =
+            serde_json::from_str(&content).expect("should be valid JSON");
+        let backend_type = parsed["backends"][0]["type"].as_str().unwrap_or("");
+        #[cfg(target_os = "macos")]
+        assert_eq!(backend_type, "keychain");
+        #[cfg(target_os = "windows")]
+        assert_eq!(backend_type, "dpapi");
+        #[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
+        assert_eq!(backend_type, "file");
+        // The path field must not appear in the generated config — the file backend
+        // manages its own storage location and ignores any path in config.
+        let backend_obj = parsed["backends"][0]
+            .as_object()
+            .expect("backend entry should be a JSON object");
+        assert!(
+            !backend_obj.contains_key("path"),
+            "file backend config should not contain a 'path' field"
+        );
+    }
+
+    #[test]
     fn config_show_exits_1_when_no_config_exists() {
         let (mut cmd, _dir) = cli_test_env_no_config();
         cmd.args(["config", "show"])
