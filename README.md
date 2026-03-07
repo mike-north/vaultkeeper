@@ -2,17 +2,91 @@
 
 Unified, policy-enforced secret storage across OS backends. Secrets are stored in the native credential store for the current platform and accessed through short-lived JWE tokens. No secret ever appears in a return value — callers use delegated patterns that inject the value at the last possible moment.
 
-## Requirements
-
-- Node >= 20
+Available as a **native Rust CLI**, a **TypeScript library**, a **WASM-backed SDK**, and a **Node.js CLI**.
 
 ## Installation
+
+### Native CLI (Rust)
+
+Build from source using Cargo:
+
+```sh
+cargo install vaultkeeper-cli
+```
+
+This installs the `vaultkeeper` binary into `~/.cargo/bin/`.
+
+**Requirements:** Rust toolchain (rustup)
+
+### Node.js CLI
+
+```sh
+pnpm add -g @vaultkeeper/cli
+# or
+npm install -g @vaultkeeper/cli
+```
+
+Then run:
+
+```sh
+vaultkeeper --help
+```
+
+**Requirements:** Node >= 20
+
+### TypeScript library
 
 ```sh
 pnpm add vaultkeeper
 ```
 
-## Quick start
+### WASM SDK
+
+The WASM SDK wraps the Rust core compiled to WebAssembly. It offers a similar high-level feature set to the TypeScript library, but the public API is not a drop-in replacement — some function signatures differ (e.g., `setup(secretName, secretValue, ...)` vs the TS library's `setup(secretName, options?)`).
+
+```sh
+pnpm add @vaultkeeper/wasm
+```
+
+**Requirements:** Node >= 20.13.0
+
+## CLI usage
+
+Both the native Rust CLI and the Node.js CLI share the same command surface:
+
+```sh
+# Run preflight checks
+vaultkeeper doctor
+
+# Initialize configuration
+vaultkeeper config init
+
+# Show current configuration
+vaultkeeper config show
+
+# Store a secret (reads from stdin)
+echo "my-secret-value" | vaultkeeper store --name MY_API_KEY
+
+# Delete a secret
+vaultkeeper delete --name MY_API_KEY
+
+# Pre-approve an executable (TOFU)
+vaultkeeper approve --path /usr/local/bin/my-tool
+
+# Toggle development mode for a script
+vaultkeeper dev-mode --path /path/to/script --enable
+
+# Run a command with a secret injected as VAULTKEEPER_SECRET
+vaultkeeper exec --token <jwe-token> -- my-command --flag
+
+# Rotate the encryption key (previous key stays valid during grace period)
+vaultkeeper rotate-key
+
+# Emergency key revocation (previous key invalidated immediately)
+vaultkeeper revoke-key
+```
+
+## TypeScript quick start
 
 ```ts
 import { VaultKeeper } from 'vaultkeeper'
@@ -47,6 +121,32 @@ accessor.read((buf) => {
   // Use buf here. Do not store a reference beyond this callback.
   doSomethingWith(buf.toString('utf8'))
 })
+```
+
+## WASM SDK quick start
+
+The WASM SDK exposes lower-level APIs than the TypeScript library's delegated patterns. Methods like `store()` and `retrieve()` handle raw secret values directly — use the delegated access patterns (fetch/exec) from the TypeScript library when you need to avoid exposing secrets in application memory.
+
+```ts
+import { createVaultKeeper } from '@vaultkeeper/wasm'
+
+const vault = await createVaultKeeper()
+
+// Store a secret
+await vault.store('MY_API_KEY', 'my-secret-value')
+
+// Mint a JWE token
+const jwe = vault.setup('MY_API_KEY', 'my-secret-value')
+
+// Authorize: decrypt and validate
+const result = vault.authorize(jwe)
+
+// Rotate or revoke keys
+vault.rotateKey()
+vault.revokeKey()
+
+// Clean up
+vault.dispose()
 ```
 
 ## Backends
@@ -235,6 +335,22 @@ All errors extend `VaultError`.
 | `SetupError` | Required system dependency missing or incompatible at init |
 | `FilesystemError` | Config directory not readable or writable |
 | `RotationInProgressError` | `rotateKey()` called while previous key is still in grace period |
+
+## Architecture
+
+vaultkeeper is a polyglot monorepo with TypeScript and Rust implementations sharing the same crypto primitives and wire format:
+
+| Component | Package | Description |
+|-----------|---------|-------------|
+| Rust core | `vaultkeeper-core` (crate) | All business logic, crypto (JWE, AES-256-GCM), backends, key management |
+| Native CLI | `vaultkeeper-cli` (crate) | Standalone binary using clap |
+| WASM bindings | `vaultkeeper-wasm` (crate) | wasm-bindgen wrapper over core |
+| TypeScript library | `vaultkeeper` (npm) | Pure TypeScript implementation |
+| WASM SDK | `@vaultkeeper/wasm` (npm) | Node.js wrapper around the WASM binary |
+| Node.js CLI | `@vaultkeeper/cli` (npm) | CLI using the TypeScript library |
+| Conformance tests | `vaultkeeper-conformance` (crate) | Data-driven tests ensuring both CLIs match |
+
+JWE tokens created by the Rust core and the TypeScript library are wire-compatible — a token minted by one can be decrypted by the other.
 
 ## License
 
