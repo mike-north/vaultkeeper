@@ -116,7 +116,7 @@ export class VaultKeeper {
   }
 
   /**
-   * Store a secret and return a JWE token that encapsulates it.
+   * Retrieve a secret from the backend and return a JWE token that encapsulates it.
    *
    * @param secretName - Identifier for the secret
    * @param options - Setup options

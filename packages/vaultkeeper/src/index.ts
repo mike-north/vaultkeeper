@@ -58,3 +58,7 @@ export { CapabilityToken } from './identity/index.js'
 
 export { VaultKeeper } from './vault.js'
 export type { VaultKeeperOptions, SetupOptions } from './vault.js'
+
+export { runDoctor } from './doctor/runner.js'
+export type { RunDoctorOptions } from './doctor/runner.js'
+export type { Platform } from './util/platform.js'

@@ -130,6 +130,9 @@ export interface ListableBackend extends SecretBackend {
 }
 
 // @public
+export type Platform = 'darwin' | 'win32' | 'linux';
+
+// @public
 export class PluginNotFoundError extends VaultError {
     constructor(message: string, plugin: string, installUrl: string);
     readonly installUrl: string;
@@ -158,6 +161,14 @@ export interface PreflightResult {
 // @public
 export class RotationInProgressError extends VaultError {
     constructor(message: string);
+}
+
+// @public
+export function runDoctor(options?: RunDoctorOptions): Promise<PreflightResult>;
+
+// @public
+export interface RunDoctorOptions {
+    platform?: Platform;
 }
 
 // @public
