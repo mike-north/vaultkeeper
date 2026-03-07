@@ -198,11 +198,13 @@ The first enabled backend in the configuration is used.
 | Platform | Default backend | Required dependencies |
 |----------|----------------|----------------------|
 | macOS | `keychain` | `security` (built-in) |
-| Linux | `secret-tool` | `secret-tool` (`sudo apt install libsecret-tools`) |
+| Linux | `file` | None (AES-256-GCM encrypted file, no OS credential store needed) |
 | Windows | `dpapi` | PowerShell (built-in) |
 | Any | `file` | None (AES-256-GCM encrypted file, no OS credential store needed) |
 
 The `file` backend works on all platforms and requires no system dependencies. Use it as a fallback or in environments without a native credential store (CI, Docker, etc.).
+
+To use the native Linux credential store instead, install `secret-tool` (`sudo apt install libsecret-tools`) and set `"type": "secret-tool"` in your config.
 
 ## Access patterns
 
