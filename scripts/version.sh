@@ -11,12 +11,15 @@ set -euo pipefail
 pnpm exec changeset version
 
 # 2. Read the new version from the main vaultkeeper package
-VERSION=$(node -e "console.log(require('./packages/vaultkeeper/package.json').version)")
-
-if [ -z "$VERSION" ]; then
-  echo "Error: Could not read version from packages/vaultkeeper/package.json"
+if [ ! -f packages/vaultkeeper/package.json ]; then
+  echo "Error: packages/vaultkeeper/package.json not found"
   exit 1
 fi
+
+VERSION=$(node -e "console.log(require('./packages/vaultkeeper/package.json').version)" 2>/dev/null) || {
+  echo "Error: Could not read version from packages/vaultkeeper/package.json"
+  exit 1
+}
 
 echo "Syncing Cargo workspace version to ${VERSION}"
 
