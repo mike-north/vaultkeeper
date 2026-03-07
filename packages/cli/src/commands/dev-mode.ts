@@ -1,6 +1,7 @@
 import { parseArgs } from 'node:util'
 import * as path from 'node:path'
 import { VaultKeeper } from 'vaultkeeper'
+import { shouldSkipDoctor } from '../skip-doctor.js'
 import { formatError } from '../output.js'
 
 function printDevModeHelp(): void {
@@ -11,8 +12,11 @@ function printDevModeHelp(): void {
       'Arguments:\n' +
       '  enable | disable   Action to perform\n\n' +
       'Options:\n' +
-      '  --script <path>   Path to the script\n' +
-      '  -h, --help        Show this help message\n',
+      '  --script <path>    Path to the script\n' +
+      '  --skip-doctor      Skip doctor preflight checks\n' +
+      '  -h, --help         Show this help message\n\n' +
+      'Environment variables:\n' +
+      '  VAULTKEEPER_SKIP_DOCTOR=1   Skip doctor preflight checks\n',
   )
 }
 
@@ -28,6 +32,7 @@ export async function devModeCommand(args: string[]): Promise<number> {
     allowPositionals: true,
     options: {
       script: { type: 'string' },
+      'skip-doctor': { type: 'boolean', default: false },
     },
     strict: true,
   })
@@ -43,9 +48,10 @@ export async function devModeCommand(args: string[]): Promise<number> {
 
   const scriptPath = path.resolve(values.script)
   const enabled = action === 'enable'
+  const skipDoctor = shouldSkipDoctor(values['skip-doctor'])
 
   try {
-    const vault = await VaultKeeper.init()
+    const vault = await VaultKeeper.init({ skipDoctor })
     await vault.setDevelopmentMode(scriptPath, enabled)
     process.stdout.write(
       `Development mode ${enabled ? 'enabled' : 'disabled'} for ${scriptPath}\n`,

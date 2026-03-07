@@ -1,9 +1,11 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { execCommand } from '../../../src/commands/exec.js'
 
+const mockInit = vi.hoisted(() => vi.fn())
+
 vi.mock('vaultkeeper', () => ({
   VaultKeeper: {
-    init: vi.fn(),
+    init: mockInit,
   },
 }))
 
@@ -20,17 +22,25 @@ vi.mock('../../../src/cache.js', () => ({
 
 describe('execCommand', () => {
   let stderrOutput: string
+  let stdoutOutput: string
 
   beforeEach(() => {
     stderrOutput = ''
+    stdoutOutput = ''
     vi.spyOn(process.stderr, 'write').mockImplementation((chunk) => {
       stderrOutput += String(chunk)
+      return true
+    })
+    vi.spyOn(process.stdout, 'write').mockImplementation((chunk) => {
+      stdoutOutput += String(chunk)
       return true
     })
   })
 
   afterEach(() => {
     vi.restoreAllMocks()
+    vi.clearAllMocks()
+    delete process.env.VAULTKEEPER_SKIP_DOCTOR
   })
 
   describe('-- separator validation', () => {
@@ -86,6 +96,98 @@ describe('execCommand', () => {
     it('should write error message when required flags are missing', async () => {
       await execCommand(['--env', 'MY_VAR', '--caller', '/path/to/script.sh', '--', 'echo', 'hello'])
       expect(stderrOutput).toContain('--secret, --env, and --caller are required')
+    })
+  })
+
+  describe('--skip-doctor flag', () => {
+    it('should pass skipDoctor: false to VaultKeeper.init by default', async () => {
+      // promptApproval returns false, so init will be called but the command exits at denial
+      mockInit.mockResolvedValue({ setup: vi.fn(), authorize: vi.fn(), getSecret: vi.fn() })
+      await execCommand([
+        '--secret', 'my-key',
+        '--env', 'MY_VAR',
+        '--caller', '/path/to/script.sh',
+        '--',
+        'echo', 'hello',
+      ])
+      expect(mockInit).toHaveBeenCalledWith({ skipDoctor: false })
+    })
+
+    it('should pass skipDoctor: true to VaultKeeper.init when --skip-doctor is set', async () => {
+      mockInit.mockResolvedValue({ setup: vi.fn(), authorize: vi.fn(), getSecret: vi.fn() })
+      await execCommand([
+        '--skip-doctor',
+        '--secret', 'my-key',
+        '--env', 'MY_VAR',
+        '--caller', '/path/to/script.sh',
+        '--',
+        'echo', 'hello',
+      ])
+      expect(mockInit).toHaveBeenCalledWith({ skipDoctor: true })
+    })
+
+    it('should pass skipDoctor: true when VAULTKEEPER_SKIP_DOCTOR=1 env var is set', async () => {
+      process.env.VAULTKEEPER_SKIP_DOCTOR = '1'
+      mockInit.mockResolvedValue({ setup: vi.fn(), authorize: vi.fn(), getSecret: vi.fn() })
+      await execCommand([
+        '--secret', 'my-key',
+        '--env', 'MY_VAR',
+        '--caller', '/path/to/script.sh',
+        '--',
+        'echo', 'hello',
+      ])
+      expect(mockInit).toHaveBeenCalledWith({ skipDoctor: true })
+    })
+
+    it('should not skip doctor when VAULTKEEPER_SKIP_DOCTOR=0', async () => {
+      process.env.VAULTKEEPER_SKIP_DOCTOR = '0'
+      mockInit.mockResolvedValue({ setup: vi.fn(), authorize: vi.fn(), getSecret: vi.fn() })
+      await execCommand([
+        '--secret', 'my-key',
+        '--env', 'MY_VAR',
+        '--caller', '/path/to/script.sh',
+        '--',
+        'echo', 'hello',
+      ])
+      expect(mockInit).toHaveBeenCalledWith({ skipDoctor: false })
+    })
+
+    it('should not skip doctor when VAULTKEEPER_SKIP_DOCTOR=true (non-numeric)', async () => {
+      process.env.VAULTKEEPER_SKIP_DOCTOR = 'true'
+      mockInit.mockResolvedValue({ setup: vi.fn(), authorize: vi.fn(), getSecret: vi.fn() })
+      await execCommand([
+        '--secret', 'my-key',
+        '--env', 'MY_VAR',
+        '--caller', '/path/to/script.sh',
+        '--',
+        'echo', 'hello',
+      ])
+      expect(mockInit).toHaveBeenCalledWith({ skipDoctor: false })
+    })
+
+    it('should not skip doctor when VAULTKEEPER_SKIP_DOCTOR is empty string', async () => {
+      process.env.VAULTKEEPER_SKIP_DOCTOR = ''
+      mockInit.mockResolvedValue({ setup: vi.fn(), authorize: vi.fn(), getSecret: vi.fn() })
+      await execCommand([
+        '--secret', 'my-key',
+        '--env', 'MY_VAR',
+        '--caller', '/path/to/script.sh',
+        '--',
+        'echo', 'hello',
+      ])
+      expect(mockInit).toHaveBeenCalledWith({ skipDoctor: false })
+    })
+  })
+
+  describe('--help flag', () => {
+    it('should include --skip-doctor in help output', async () => {
+      await execCommand(['--help'])
+      expect(stdoutOutput).toContain('--skip-doctor')
+    })
+
+    it('should include VAULTKEEPER_SKIP_DOCTOR env var in help output', async () => {
+      await execCommand(['--help'])
+      expect(stdoutOutput).toContain('VAULTKEEPER_SKIP_DOCTOR')
     })
   })
 })

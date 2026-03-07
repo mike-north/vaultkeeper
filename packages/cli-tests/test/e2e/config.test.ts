@@ -88,4 +88,26 @@ describe('config command', () => {
     expect(result.exitCode).toBe(2)
     expect(result.stderr).toContain('Usage: vaultkeeper config')
   })
+
+  it('should generate platform-appropriate defaults for config init', async () => {
+    env = await createCliTestEnv()
+    // Remove the config.json that createCliTestEnv wrote
+    await fs.rm(path.join(env.configDir, 'config.json'))
+    const result = await env.run(['config', 'init'])
+    expect(result.exitCode).toBe(0)
+    const content = await fs.readFile(path.join(env.configDir, 'config.json'), 'utf8')
+    const parsed: unknown = JSON.parse(content)
+    const expectedBackendType =
+      process.platform === 'darwin'
+        ? 'keychain'
+        : process.platform === 'win32'
+          ? 'dpapi'
+          : 'file'
+    expect(parsed).toHaveProperty('backends[0].type', expectedBackendType)
+    // The file backend does not use a 'path' field — the backend manages
+    // its own storage location and ignores any path in config.
+    if (expectedBackendType === 'file') {
+      expect(parsed).not.toHaveProperty('backends[0].path')
+    }
+  })
 })

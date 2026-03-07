@@ -27,6 +27,7 @@ import { VaultKeeper } from 'vaultkeeper'
 import { promptApproval } from '../approval.js'
 import { readCachedToken, writeCachedToken, invalidateCache } from '../cache.js'
 import { RedactingStream } from '../redact.js'
+import { shouldSkipDoctor } from '../skip-doctor.js'
 import { formatError } from '../output.js'
 
 function printExecHelp(): void {
@@ -39,7 +40,10 @@ function printExecHelp(): void {
       '  --reason <text>    Human-readable reason for access (optional)\n' +
       '  --cache            Cache the JWE token for subsequent invocations\n' +
       '  --no-redact        Do not redact the secret from output\n' +
-      '  -h, --help         Show this help message\n',
+      '  --skip-doctor      Skip doctor preflight checks\n' +
+      '  -h, --help         Show this help message\n\n' +
+      'Environment variables:\n' +
+      '  VAULTKEEPER_SKIP_DOCTOR=1   Skip doctor preflight checks\n',
   )
 }
 
@@ -79,6 +83,7 @@ export async function execCommand(args: string[]): Promise<number> {
       reason: { type: 'string' },
       cache: { type: 'boolean', default: false },
       'no-redact': { type: 'boolean', default: false },
+      'skip-doctor': { type: 'boolean', default: false },
     },
     strict: true,
   })
@@ -97,9 +102,10 @@ export async function execCommand(args: string[]): Promise<number> {
   // parseArgs with default: false types these as boolean (never undefined)
   const useCache: boolean = values.cache
   const noRedact: boolean = values['no-redact']
+  const skipDoctor = shouldSkipDoctor(values['skip-doctor'])
 
   try {
-    const vault = await VaultKeeper.init()
+    const vault = await VaultKeeper.init({ skipDoctor })
 
     // Check cache first if --cache
     let jwe: string | undefined

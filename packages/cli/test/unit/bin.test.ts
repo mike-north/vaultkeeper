@@ -178,5 +178,15 @@ describe('bin.ts entry point', () => {
       const result = await runCli(['unknown-command-xyz'])
       expect(result.exitCode).toBe(2)
     })
+
+    it('should exit 2 for rotate-key with unknown flag', async () => {
+      const result = await runCli(['rotate-key', '--bogus'])
+      expect(result.exitCode).toBe(2)
+    })
+
+    it('should exit 2 for revoke-key with unknown flag', async () => {
+      const result = await runCli(['revoke-key', '--bogus'])
+      expect(result.exitCode).toBe(2)
+    })
   })
 })

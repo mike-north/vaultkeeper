@@ -1,9 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
-// Capture mock fn reference in the factory closure to avoid
-// accessing class methods through vi.mocked(), which triggers
-// @typescript-eslint/unbound-method on static class method types.
-const mockInit = vi.fn()
+// vi.hoisted ensures the mock factory can reference mockInit before imports are resolved.
+const mockInit = vi.hoisted(() => vi.fn())
 
 vi.mock('vaultkeeper', () => ({
   VaultKeeper: {
@@ -31,6 +29,27 @@ describe('rotateKeyCommand', () => {
   afterEach(() => {
     vi.restoreAllMocks()
     vi.clearAllMocks()
+    delete process.env.VAULTKEEPER_SKIP_DOCTOR
+  })
+
+  describe('unknown flag handling', () => {
+    it('should return 2 for unknown flags', async () => {
+      const { rotateKeyCommand } = await import('../../../src/commands/rotate-key.js')
+      const code = await rotateKeyCommand(['--bogus'])
+      expect(code).toBe(2)
+    })
+
+    it('should write error message for unknown flags', async () => {
+      const { rotateKeyCommand } = await import('../../../src/commands/rotate-key.js')
+      await rotateKeyCommand(['--bogus'])
+      expect(stderrOutput).toContain('Error:')
+    })
+
+    it('should print help after unknown flag error', async () => {
+      const { rotateKeyCommand } = await import('../../../src/commands/rotate-key.js')
+      await rotateKeyCommand(['--bogus'])
+      expect(stdoutOutput).toContain('Usage: vaultkeeper rotate-key')
+    })
   })
 
   describe('when VaultKeeper.init() throws', () => {
@@ -95,6 +114,56 @@ describe('rotateKeyCommand', () => {
       const { rotateKeyCommand } = await import('../../../src/commands/rotate-key.js')
       await rotateKeyCommand([])
       expect(stdoutOutput).toContain('Key rotated successfully')
+    })
+  })
+
+  describe('--skip-doctor flag', () => {
+    it('should pass skipDoctor: false to VaultKeeper.init by default', async () => {
+      const mockVault = { rotateKey: vi.fn().mockResolvedValue(undefined) }
+      mockInit.mockResolvedValue(mockVault)
+      const { rotateKeyCommand } = await import('../../../src/commands/rotate-key.js')
+      await rotateKeyCommand([])
+      expect(mockInit).toHaveBeenCalledWith({ skipDoctor: false })
+    })
+
+    it('should pass skipDoctor: true to VaultKeeper.init when --skip-doctor is set', async () => {
+      const mockVault = { rotateKey: vi.fn().mockResolvedValue(undefined) }
+      mockInit.mockResolvedValue(mockVault)
+      const { rotateKeyCommand } = await import('../../../src/commands/rotate-key.js')
+      await rotateKeyCommand(['--skip-doctor'])
+      expect(mockInit).toHaveBeenCalledWith({ skipDoctor: true })
+    })
+
+    it('should pass skipDoctor: true when VAULTKEEPER_SKIP_DOCTOR=1 env var is set', async () => {
+      process.env.VAULTKEEPER_SKIP_DOCTOR = '1'
+      const mockVault = { rotateKey: vi.fn().mockResolvedValue(undefined) }
+      mockInit.mockResolvedValue(mockVault)
+      const { rotateKeyCommand } = await import('../../../src/commands/rotate-key.js')
+      await rotateKeyCommand([])
+      expect(mockInit).toHaveBeenCalledWith({ skipDoctor: true })
+    })
+
+    it('should not skip doctor when VAULTKEEPER_SKIP_DOCTOR=0', async () => {
+      process.env.VAULTKEEPER_SKIP_DOCTOR = '0'
+      const mockVault = { rotateKey: vi.fn().mockResolvedValue(undefined) }
+      mockInit.mockResolvedValue(mockVault)
+      const { rotateKeyCommand } = await import('../../../src/commands/rotate-key.js')
+      await rotateKeyCommand([])
+      expect(mockInit).toHaveBeenCalledWith({ skipDoctor: false })
+    })
+  })
+
+  describe('--help flag', () => {
+    it('should include --skip-doctor in help output', async () => {
+      const { rotateKeyCommand } = await import('../../../src/commands/rotate-key.js')
+      await rotateKeyCommand(['--help'])
+      expect(stdoutOutput).toContain('--skip-doctor')
+    })
+
+    it('should include VAULTKEEPER_SKIP_DOCTOR env var in help output', async () => {
+      const { rotateKeyCommand } = await import('../../../src/commands/rotate-key.js')
+      await rotateKeyCommand(['--help'])
+      expect(stdoutOutput).toContain('VAULTKEEPER_SKIP_DOCTOR')
     })
   })
 })

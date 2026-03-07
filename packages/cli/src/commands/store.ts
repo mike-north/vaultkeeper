@@ -1,13 +1,17 @@
 import { parseArgs } from 'node:util'
 import { BackendRegistry, VaultKeeper } from 'vaultkeeper'
+import { shouldSkipDoctor } from '../skip-doctor.js'
 import { formatError } from '../output.js'
 
 function printStoreHelp(): void {
   process.stdout.write(
     'Usage: echo "secret" | vaultkeeper store --name <name>\n\n' +
       'Options:\n' +
-      '  --name <name>   Name to store the secret under\n' +
-      '  -h, --help      Show this help message\n',
+      '  --name <name>      Name to store the secret under\n' +
+      '  --skip-doctor      Skip doctor preflight checks\n' +
+      '  -h, --help         Show this help message\n\n' +
+      'Environment variables:\n' +
+      '  VAULTKEEPER_SKIP_DOCTOR=1   Skip doctor preflight checks\n',
   )
 }
 
@@ -22,6 +26,7 @@ export async function storeCommand(args: string[]): Promise<number> {
     args,
     options: {
       name: { type: 'string' },
+      'skip-doctor': { type: 'boolean', default: false },
     },
     strict: true,
   })
@@ -32,6 +37,8 @@ export async function storeCommand(args: string[]): Promise<number> {
     // Exit code 2: usage error (missing required flag)
     return 2
   }
+
+  const skipDoctor = shouldSkipDoctor(values['skip-doctor'])
 
   try {
     // Read secret from stdin
@@ -57,7 +64,7 @@ export async function storeCommand(args: string[]): Promise<number> {
     // (doctor checks and backend registration). TODO: VaultKeeper should expose
     // a public store() method; until then we use BackendRegistry.create() with
     // the config-resolved type.
-    await VaultKeeper.init()
+    await VaultKeeper.init({ skipDoctor })
     const types = BackendRegistry.getTypes()
     const firstType = types[0]
     if (firstType === undefined) {
