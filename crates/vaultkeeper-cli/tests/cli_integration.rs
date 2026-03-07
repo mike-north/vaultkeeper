@@ -226,13 +226,21 @@ mod config {
         let parsed: serde_json::Value =
             serde_json::from_str(&content).expect("should be valid JSON");
         let backend_type = parsed["backends"][0]["type"].as_str().unwrap_or("");
-        // On Linux (where CI runs), 'keychain' is macOS-only and must not be the default.
-        // keychain requires Keychain Services which is unavailable on Linux.
-        #[cfg(not(target_os = "macos"))]
-        assert_ne!(backend_type, "keychain", "keychain is macOS-only");
-        // On macOS, keychain is expected.
         #[cfg(target_os = "macos")]
         assert_eq!(backend_type, "keychain");
+        #[cfg(target_os = "windows")]
+        assert_eq!(backend_type, "dpapi");
+        #[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
+        assert_eq!(backend_type, "file");
+        // The path field must not appear in the generated config — the file backend
+        // manages its own storage location and ignores any path in config.
+        let backend_obj = parsed["backends"][0]
+            .as_object()
+            .expect("backend entry should be a JSON object");
+        assert!(
+            !backend_obj.contains_key("path"),
+            "file backend config should not contain a 'path' field"
+        );
     }
 
     #[test]

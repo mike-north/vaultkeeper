@@ -32,16 +32,9 @@ function getDefaultConfig(): string {
     backendType = 'file'
   }
 
-  const backend: Record<string, unknown> = { type: backendType, enabled: true }
-
-  // The file backend needs a storage path.
-  if (backendType === 'file') {
-    backend.path = '~/.config/vaultkeeper/secrets.enc'
-  }
-
   const config: Record<string, unknown> = {
     version: 1,
-    backends: [backend],
+    backends: [{ type: backendType, enabled: true }],
     keyRotation: { gracePeriodDays: 7 },
     defaults: { ttlMinutes: 60, trustTier: 3 },
   }

@@ -49,6 +49,15 @@ mod config_validation {
     }
 
     #[test]
+    fn default_config_has_no_path_field() {
+        // The file backend manages its own storage location; the path field
+        // in config is ignored. Generating a path in the default config would
+        // be misleading (~ is not expanded by the backend either).
+        let cfg = default_config();
+        assert!(cfg.backends[0].path.is_none());
+    }
+
+    #[test]
     fn rejects_wrong_version() {
         let mut cfg = default_config();
         cfg.version = 2;

@@ -8,7 +8,7 @@ use crate::types::{BackendConfig, KeyRotationPolicy, TrustTier, VaultConfig, Vau
 /// The default backend is chosen based on the target platform:
 /// - macOS: `keychain` (Keychain Services)
 /// - Windows: `dpapi` (Data Protection API)
-/// - Linux / other Unix: `file` (encrypted file at `~/.config/vaultkeeper/secrets.enc`)
+/// - Linux / other Unix: `file` (encrypted file backend)
 ///
 /// The `file` backend is preferred over `secret-tool` on Linux because
 /// `secret-tool` requires `libsecret-tools` which is not universally installed.
@@ -35,7 +35,7 @@ pub fn default_config() -> VaultConfig {
             backend_type: "file".to_string(),
             enabled: true,
             plugin: None,
-            path: Some("~/.config/vaultkeeper/secrets.enc".to_string()),
+            path: None,
             options: None,
         }
     };
