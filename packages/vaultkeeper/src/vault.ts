@@ -21,7 +21,7 @@ import { loadConfig, getDefaultConfigDir } from './config.js'
 import { KeyManager } from './keys/manager.js'
 import { BackendRegistry } from './backend/registry.js'
 import type { SecretBackend } from './backend/types.js'
-import { createToken, decryptToken, extractKid, validateClaims } from './jwe/index.js'
+import { createToken, decryptToken, extractKid, validateClaims, blockToken } from './jwe/index.js'
 import { verifyTrust } from './identity/trust.js'
 import {
   CapabilityToken,
@@ -190,18 +190,22 @@ export class VaultKeeper {
     const currentCount = usageCounts.get(jti) ?? 0
     validateClaims(claims, currentCount)
 
-    // Track usage. Keep the count even after the limit is reached so that
-    // subsequent calls hit the UsageLimitExceededError path in validateClaims
-    // rather than the TokenRevokedError path.
-    const newCount = currentCount + 1
-    usageCounts.set(jti, newCount)
+    // Only track usage for tokens with a finite use limit. Unlimited tokens
+    // (claims.use === null) never need count checks, so tracking them would
+    // waste memory and cause unnecessary evictions of limited-token entries.
+    if (claims.use !== null) {
+      const newCount = currentCount + 1
+      usageCounts.set(jti, newCount)
 
-    // Evict the oldest entry when the map exceeds its size cap to prevent
-    // unbounded memory growth in long-running processes.
-    if (usageCounts.size > USAGE_MAP_MAX_SIZE) {
-      const oldest = usageCounts.keys().next().value
-      if (oldest !== undefined) {
-        usageCounts.delete(oldest)
+      // Evict the oldest entry when the map exceeds its size cap to prevent
+      // unbounded memory growth in long-running processes. Block the evicted
+      // JTI so that it cannot be silently re-authorized with a reset count.
+      if (usageCounts.size > USAGE_MAP_MAX_SIZE) {
+        const oldest = usageCounts.keys().next().value
+        if (oldest !== undefined) {
+          usageCounts.delete(oldest)
+          blockToken(oldest)
+        }
       }
     }
 

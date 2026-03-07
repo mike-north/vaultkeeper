@@ -53,7 +53,7 @@ describe('createSecretAccessor', () => {
   })
 
   describe('double-read prevention', () => {
-    it('throws a descriptive Error (not TypeError) on second call to read()', () => {
+    it('throws a descriptive domain error (not TypeError) on second call to read()', () => {
       const accessor = createSecretAccessor('secret')
 
       accessor.read(() => {
@@ -61,24 +61,11 @@ describe('createSecretAccessor', () => {
       })
 
       // The consumed flag blocks re-execution with a descriptive domain error.
-      // This is NOT a TypeError (which would be a raw Proxy revocation error).
+      // Asserting on the message ensures this is NOT a raw Proxy revocation
+      // TypeError (which would also pass a bare `.toThrow(Error)` check).
       expect(() => {
         accessor.read(() => {
           // should never reach here
-        })
-      }).toThrow(Error)
-    })
-
-    it('second read() throws with "already been consumed" message', () => {
-      const accessor = createSecretAccessor('secret')
-
-      accessor.read(() => {
-        // first call: ok
-      })
-
-      expect(() => {
-        accessor.read(() => {
-          // unreachable
         })
       }).toThrow('already been consumed')
     })
