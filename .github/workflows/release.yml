@@ -123,17 +123,62 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
+      - name: Verify crate packaging
+        run: |
+          cargo package -p vaultkeeper-core --no-verify
+          cargo package -p vaultkeeper-cli --no-verify
+
       - name: Publish vaultkeeper-core
-        run: cargo publish -p vaultkeeper-core --no-verify
+        run: |
+          set +e
+          OUTPUT=$(cargo publish -p vaultkeeper-core --no-verify 2>&1)
+          STATUS=$?
+          set -e
+          echo "$OUTPUT"
+          if [ $STATUS -ne 0 ]; then
+            case "$OUTPUT" in
+              *"already uploaded"*)
+                echo "vaultkeeper-core: already published, skipping."
+                ;;
+              *)
+                echo "vaultkeeper-core: publish failed."
+                exit $STATUS
+                ;;
+            esac
+          fi
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_TOKEN }}
-        continue-on-error: true
 
-      - name: Wait for crates.io index update
-        run: sleep 30
-
-      - name: Publish vaultkeeper-cli
-        run: cargo publish -p vaultkeeper-cli --no-verify
+      - name: Publish vaultkeeper-cli (with retry for index propagation)
+        run: |
+          attempts=0
+          max_attempts=6
+          delay=15
+          while [ "$attempts" -lt "$max_attempts" ]; do
+            attempts=$((attempts + 1))
+            echo "Attempt ${attempts}/${max_attempts}..."
+            set +e
+            OUTPUT=$(cargo publish -p vaultkeeper-cli --no-verify 2>&1)
+            STATUS=$?
+            set -e
+            echo "$OUTPUT"
+            if [ $STATUS -eq 0 ]; then
+              echo "vaultkeeper-cli published successfully."
+              exit 0
+            fi
+            case "$OUTPUT" in
+              *"already uploaded"*)
+                echo "vaultkeeper-cli: already published, skipping."
+                exit 0
+                ;;
+            esac
+            if [ "$attempts" -ge "$max_attempts" ]; then
+              echo "Failed to publish vaultkeeper-cli after ${max_attempts} attempts."
+              exit $STATUS
+            fi
+            echo "Retrying in ${delay}s..."
+            sleep "$delay"
+            delay=$((delay * 2))
+          done
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_TOKEN }}
-        continue-on-error: true

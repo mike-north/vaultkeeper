@@ -42,11 +42,13 @@ pnpm add vaultkeeper
 
 ### WASM SDK
 
-The WASM SDK wraps the Rust core compiled to WebAssembly. It provides the same API as the TypeScript library but runs all crypto and policy logic in WASM.
+The WASM SDK wraps the Rust core compiled to WebAssembly. It offers a similar high-level feature set to the TypeScript library, but the public API is not a drop-in replacement — some function signatures differ (e.g., `setup(secretName, secretValue, ...)` vs the TS library's `setup(secretName, options?)`).
 
 ```sh
 pnpm add @vaultkeeper/wasm
 ```
+
+**Requirements:** Node >= 20.13.0
 
 ## CLI usage
 
@@ -123,6 +125,8 @@ accessor.read((buf) => {
 
 ## WASM SDK quick start
 
+The WASM SDK exposes lower-level APIs than the TypeScript library's delegated patterns. Methods like `store()` and `retrieve()` handle raw secret values directly — use the delegated access patterns (fetch/exec) from the TypeScript library when you need to avoid exposing secrets in application memory.
+
 ```ts
 import { createVaultKeeper } from '@vaultkeeper/wasm'
 
@@ -131,11 +135,8 @@ const vault = await createVaultKeeper()
 // Store a secret
 await vault.store('MY_API_KEY', 'my-secret-value')
 
-// Retrieve a secret
-const secret = await vault.retrieve('MY_API_KEY')
-
 // Mint a JWE token
-const jwe = vault.setup('MY_API_KEY', secret)
+const jwe = vault.setup('MY_API_KEY', 'my-secret-value')
 
 // Authorize: decrypt and validate
 const result = vault.authorize(jwe)
