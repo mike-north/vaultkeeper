@@ -41,7 +41,17 @@ interface ResolvedEntry {
  * @public
  */
 export async function runDoctor(options?: RunDoctorOptions): Promise<PreflightResult> {
-  const platform = options?.platform ?? currentPlatform()
+  let platform: Platform
+  try {
+    platform = options?.platform ?? currentPlatform()
+  } catch {
+    return {
+      checks: [],
+      ready: false,
+      warnings: [],
+      nextSteps: ['Unsupported platform. vaultkeeper supports macOS, Linux, and Windows.'],
+    }
+  }
 
   const entries: CheckEntry[] = buildCheckList(platform)
 
