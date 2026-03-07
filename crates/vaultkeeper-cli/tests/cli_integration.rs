@@ -196,7 +196,7 @@ mod config {
         cmd.args(["config", "init"])
             .assert()
             .code(1)
-            .stderr(predicate::str::contains("already exists"));
+            .stderr(predicate::str::contains("Error: Config already exists at"));
     }
 
     #[test]
@@ -217,7 +217,12 @@ mod config {
     #[test]
     fn config_show_exits_1_when_no_config_exists() {
         let (mut cmd, _dir) = cli_test_env_no_config();
-        cmd.args(["config", "show"]).assert().code(1);
+        cmd.args(["config", "show"])
+            .assert()
+            .code(1)
+            .stderr(predicate::str::contains(
+                "Error: No config file found. Run 'vaultkeeper config init' to create one.",
+            ));
     }
 
     #[test]

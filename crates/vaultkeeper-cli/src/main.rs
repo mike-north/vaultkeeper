@@ -43,12 +43,12 @@ enum Commands {
         #[arg(long)]
         path: String,
     },
-    /// Toggle development mode for a script
+    /// Enable or disable development mode for a script
     DevMode {
         /// Path to the executable
         #[arg(long)]
         path: String,
-        /// Enable or disable dev mode
+        /// Enable dev mode for the given path (omit to disable)
         #[arg(long)]
         enable: bool,
     },
@@ -366,7 +366,7 @@ async fn cmd_config(action: ConfigAction) -> i32 {
             }
 
             if config_path.exists() {
-                eprintln!("Config already exists at {}", config_path.display());
+                eprintln!("Error: Config already exists at {}", config_path.display());
                 return 1;
             }
 
@@ -396,6 +396,12 @@ async fn cmd_config(action: ConfigAction) -> i32 {
                         println!();
                     }
                     0
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                    eprintln!(
+                        "Error: No config file found. Run 'vaultkeeper config init' to create one."
+                    );
+                    1
                 }
                 Err(e) => {
                     eprintln!("Error: {e}");
