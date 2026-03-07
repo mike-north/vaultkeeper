@@ -1,5 +1,11 @@
 # vaultkeeper
 
+## 0.5.1
+
+### Patch Changes
+
+- [#39](https://github.com/mike-north/vaultkeeper/pull/39) [`003e497`](https://github.com/mike-north/vaultkeeper/commit/003e4972c6bf1c4b39e838ed32346a84e4396bee) Thanks [@mike-north](https://github.com/mike-north)! - Export `runDoctor`, `RunDoctorOptions`, and `Platform` as public API. Fix `setup()` JSDoc to accurately describe its behavior (retrieves, not stores). Add README sections for storing secrets, testing, platforms, and missing error types.
+
 ## 1.0.1
 
 ### Patch Changes

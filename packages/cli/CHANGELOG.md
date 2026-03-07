@@ -1,5 +1,16 @@
 # @vaultkeeper/cli
 
+## 0.1.6
+
+### Patch Changes
+
+- [#41](https://github.com/mike-north/vaultkeeper/pull/41) [`31262e9`](https://github.com/mike-north/vaultkeeper/commit/31262e9cc052a3ca6b5c6a81d143f8090794997d) Thanks [@mike-north](https://github.com/mike-north)! - Add `--skip-doctor` flag and `VAULTKEEPER_SKIP_DOCTOR=1` environment variable to CLI commands that initialize VaultKeeper. When set, preflight dependency checks are skipped — useful on systems where the native credential store is unavailable but the `file` backend is configured.
+
+- [#40](https://github.com/mike-north/vaultkeeper/pull/40) [`dd82303`](https://github.com/mike-north/vaultkeeper/commit/dd823038b4b227a7fd6e3bb5e2a2675718f96353) Thanks [@mike-north](https://github.com/mike-north)! - Fix `config init` to generate platform-appropriate defaults: `keychain` on macOS, `dpapi` on Windows, `file` on Linux. Previously always defaulted to `keychain` which is macOS-only.
+
+- Updated dependencies [[`003e497`](https://github.com/mike-north/vaultkeeper/commit/003e4972c6bf1c4b39e838ed32346a84e4396bee)]:
+  - vaultkeeper@0.5.1
+
 ## 0.1.5
 
 ### Patch Changes
