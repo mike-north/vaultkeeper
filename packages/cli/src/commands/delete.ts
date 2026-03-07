@@ -1,5 +1,6 @@
 import { parseArgs } from 'node:util'
 import { BackendRegistry, VaultKeeper } from 'vaultkeeper'
+import { shouldSkipDoctor } from '../skip-doctor.js'
 import { formatError } from '../output.js'
 
 function printDeleteHelp(): void {
@@ -7,10 +8,10 @@ function printDeleteHelp(): void {
     'Usage: vaultkeeper delete --name <name>\n\n' +
       'Options:\n' +
       '  --name <name>      Name of the secret to delete\n' +
-      '  --skip-doctor      Skip preflight dependency checks\n' +
-      '  -h, --help         Show this help message\n' +
-      '\nEnvironment:\n' +
-      '  VAULTKEEPER_SKIP_DOCTOR=1  Skip preflight dependency checks\n',
+      '  --skip-doctor      Skip doctor preflight checks\n' +
+      '  -h, --help         Show this help message\n\n' +
+      'Environment variables:\n' +
+      '  VAULTKEEPER_SKIP_DOCTOR=1   Skip doctor preflight checks\n',
   )
 }
 
@@ -37,8 +38,7 @@ export async function deleteCommand(args: string[]): Promise<number> {
     return 2
   }
 
-  const skipDoctor: boolean =
-    values['skip-doctor'] || process.env.VAULTKEEPER_SKIP_DOCTOR === '1'
+  const skipDoctor = shouldSkipDoctor(values['skip-doctor'])
 
   try {
     // Initialize vault to ensure backends are registered and doctor passes

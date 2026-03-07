@@ -32,6 +32,26 @@ describe('revokeKeyCommand', () => {
     delete process.env.VAULTKEEPER_SKIP_DOCTOR
   })
 
+  describe('unknown flag handling', () => {
+    it('should return 2 for unknown flags', async () => {
+      const { revokeKeyCommand } = await import('../../../src/commands/revoke-key.js')
+      const code = await revokeKeyCommand(['--bogus'])
+      expect(code).toBe(2)
+    })
+
+    it('should write error message for unknown flags', async () => {
+      const { revokeKeyCommand } = await import('../../../src/commands/revoke-key.js')
+      await revokeKeyCommand(['--bogus'])
+      expect(stderrOutput).toContain('Error:')
+    })
+
+    it('should print help after unknown flag error', async () => {
+      const { revokeKeyCommand } = await import('../../../src/commands/revoke-key.js')
+      await revokeKeyCommand(['--bogus'])
+      expect(stdoutOutput).toContain('Usage: vaultkeeper revoke-key')
+    })
+  })
+
   describe('when VaultKeeper.init() throws', () => {
     it('should return 1', async () => {
       mockInit.mockRejectedValue(new Error('backend unavailable'))

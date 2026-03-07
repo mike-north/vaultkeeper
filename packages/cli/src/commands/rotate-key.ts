@@ -1,5 +1,6 @@
 import { parseArgs } from 'node:util'
 import { VaultKeeper } from 'vaultkeeper'
+import { shouldSkipDoctor } from '../skip-doctor.js'
 import { formatError } from '../output.js'
 
 function printRotateKeyHelp(): void {
@@ -8,10 +9,10 @@ function printRotateKeyHelp(): void {
       'Rotate the active encryption key. Secrets encrypted with the previous\n' +
       'key remain readable during the configured grace period.\n\n' +
       'Options:\n' +
-      '  --skip-doctor      Skip preflight dependency checks\n' +
-      '  -h, --help         Show this help message\n' +
-      '\nEnvironment:\n' +
-      '  VAULTKEEPER_SKIP_DOCTOR=1  Skip preflight dependency checks\n',
+      '  --skip-doctor          Skip doctor preflight checks\n' +
+      '  -h, --help             Show this help message\n\n' +
+      'Environment variables:\n' +
+      '  VAULTKEEPER_SKIP_DOCTOR=1   Skip doctor preflight checks\n',
   )
 }
 
@@ -21,16 +22,23 @@ export async function rotateKeyCommand(args: string[]): Promise<number> {
     return 0
   }
 
-  const { values } = parseArgs({
-    args,
-    options: {
-      'skip-doctor': { type: 'boolean', default: false },
-    },
-    strict: true,
-  })
+  const options = {
+    'skip-doctor': { type: 'boolean' as const, default: false },
+  }
 
-  const skipDoctor: boolean =
-    values['skip-doctor'] || process.env.VAULTKEEPER_SKIP_DOCTOR === '1'
+  let skipDoctorFlag: boolean
+  try {
+    const parsed = parseArgs({ args, options, strict: true })
+    skipDoctorFlag = parsed.values['skip-doctor']
+  } catch (err) {
+    if (err instanceof Error) {
+      process.stderr.write(`Error: ${err.message}\n`)
+    }
+    printRotateKeyHelp()
+    return 2
+  }
+
+  const skipDoctor = shouldSkipDoctor(skipDoctorFlag)
 
   try {
     const vault = await VaultKeeper.init({ skipDoctor })

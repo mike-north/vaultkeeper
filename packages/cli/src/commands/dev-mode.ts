@@ -1,6 +1,7 @@
 import { parseArgs } from 'node:util'
 import * as path from 'node:path'
 import { VaultKeeper } from 'vaultkeeper'
+import { shouldSkipDoctor } from '../skip-doctor.js'
 import { formatError } from '../output.js'
 
 function printDevModeHelp(): void {
@@ -12,10 +13,10 @@ function printDevModeHelp(): void {
       '  enable | disable   Action to perform\n\n' +
       'Options:\n' +
       '  --script <path>    Path to the script\n' +
-      '  --skip-doctor      Skip preflight dependency checks\n' +
-      '  -h, --help         Show this help message\n' +
-      '\nEnvironment:\n' +
-      '  VAULTKEEPER_SKIP_DOCTOR=1  Skip preflight dependency checks\n',
+      '  --skip-doctor      Skip doctor preflight checks\n' +
+      '  -h, --help         Show this help message\n\n' +
+      'Environment variables:\n' +
+      '  VAULTKEEPER_SKIP_DOCTOR=1   Skip doctor preflight checks\n',
   )
 }
 
@@ -47,8 +48,7 @@ export async function devModeCommand(args: string[]): Promise<number> {
 
   const scriptPath = path.resolve(values.script)
   const enabled = action === 'enable'
-  const skipDoctor: boolean =
-    values['skip-doctor'] || process.env.VAULTKEEPER_SKIP_DOCTOR === '1'
+  const skipDoctor = shouldSkipDoctor(values['skip-doctor'])
 
   try {
     const vault = await VaultKeeper.init({ skipDoctor })

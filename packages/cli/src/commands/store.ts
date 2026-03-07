@@ -1,5 +1,6 @@
 import { parseArgs } from 'node:util'
 import { BackendRegistry, VaultKeeper } from 'vaultkeeper'
+import { shouldSkipDoctor } from '../skip-doctor.js'
 import { formatError } from '../output.js'
 
 function printStoreHelp(): void {
@@ -7,10 +8,10 @@ function printStoreHelp(): void {
     'Usage: echo "secret" | vaultkeeper store --name <name>\n\n' +
       'Options:\n' +
       '  --name <name>      Name to store the secret under\n' +
-      '  --skip-doctor      Skip preflight dependency checks\n' +
-      '  -h, --help         Show this help message\n' +
-      '\nEnvironment:\n' +
-      '  VAULTKEEPER_SKIP_DOCTOR=1  Skip preflight dependency checks\n',
+      '  --skip-doctor      Skip doctor preflight checks\n' +
+      '  -h, --help         Show this help message\n\n' +
+      'Environment variables:\n' +
+      '  VAULTKEEPER_SKIP_DOCTOR=1   Skip doctor preflight checks\n',
   )
 }
 
@@ -37,8 +38,7 @@ export async function storeCommand(args: string[]): Promise<number> {
     return 2
   }
 
-  const skipDoctor: boolean =
-    values['skip-doctor'] || process.env.VAULTKEEPER_SKIP_DOCTOR === '1'
+  const skipDoctor = shouldSkipDoctor(values['skip-doctor'])
 
   try {
     // Read secret from stdin

@@ -32,6 +32,26 @@ describe('rotateKeyCommand', () => {
     delete process.env.VAULTKEEPER_SKIP_DOCTOR
   })
 
+  describe('unknown flag handling', () => {
+    it('should return 2 for unknown flags', async () => {
+      const { rotateKeyCommand } = await import('../../../src/commands/rotate-key.js')
+      const code = await rotateKeyCommand(['--bogus'])
+      expect(code).toBe(2)
+    })
+
+    it('should write error message for unknown flags', async () => {
+      const { rotateKeyCommand } = await import('../../../src/commands/rotate-key.js')
+      await rotateKeyCommand(['--bogus'])
+      expect(stderrOutput).toContain('Error:')
+    })
+
+    it('should print help after unknown flag error', async () => {
+      const { rotateKeyCommand } = await import('../../../src/commands/rotate-key.js')
+      await rotateKeyCommand(['--bogus'])
+      expect(stdoutOutput).toContain('Usage: vaultkeeper rotate-key')
+    })
+  })
+
   describe('when VaultKeeper.init() throws', () => {
     it('should return 1', async () => {
       mockInit.mockRejectedValue(new Error('backend unavailable'))
