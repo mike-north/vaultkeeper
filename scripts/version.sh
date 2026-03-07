@@ -65,4 +65,8 @@ echo "Syncing Cargo workspace version to ${VERSION} (from @vaultkeeper/wasm)"
 # 4. Update the workspace version in Cargo.toml
 sed -i "s/^version = \".*\"/version = \"${VERSION}\"/" Cargo.toml
 
-echo "Version sync complete: npm @vaultkeeper/wasm + Cargo.toml → ${VERSION}"
+# 5. Update the vaultkeeper-core dependency version in vaultkeeper-cli
+#    Cargo requires a version on path dependencies when packaging for crates.io
+sed -i "s/vaultkeeper-core = { path = \"..\/vaultkeeper-core\", version = \"[^\"]*\"/vaultkeeper-core = { path = \"..\/vaultkeeper-core\", version = \"${VERSION}\"/" crates/vaultkeeper-cli/Cargo.toml
+
+echo "Version sync complete: npm @vaultkeeper/wasm + Cargo.toml + cli dep → ${VERSION}"
