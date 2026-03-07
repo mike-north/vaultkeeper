@@ -62,11 +62,29 @@ fi
 
 echo "Syncing Cargo workspace version to ${VERSION} (from @vaultkeeper/wasm)"
 
-# 4. Update the workspace version in Cargo.toml
-sed -i "s/^version = \".*\"/version = \"${VERSION}\"/" Cargo.toml
+# 4. Update Cargo.toml: workspace version + vaultkeeper-core dep version
+#    The workspace version is the single source of truth for all crate versions.
+#    vaultkeeper-core is declared in [workspace.dependencies] with both path and
+#    version, so crates that use { workspace = true } inherit both automatically.
+#
+#    We use sed -i.bak + rm for cross-platform compatibility (GNU vs BSD sed).
 
-# 5. Update the vaultkeeper-core dependency version in vaultkeeper-cli
-#    Cargo requires a version on path dependencies when packaging for crates.io
-sed -i "s/vaultkeeper-core = { path = \"..\/vaultkeeper-core\", version = \"[^\"]*\"/vaultkeeper-core = { path = \"..\/vaultkeeper-core\", version = \"${VERSION}\"/" crates/vaultkeeper-cli/Cargo.toml
+# 4a. Update [workspace.package] version
+sed -i.bak "s/^version = \".*\"/version = \"${VERSION}\"/" Cargo.toml && rm -f Cargo.toml.bak
 
-echo "Version sync complete: npm @vaultkeeper/wasm + Cargo.toml + cli dep → ${VERSION}"
+if ! grep -Fq "version = \"${VERSION}\"" Cargo.toml; then
+  echo "Error: failed to update workspace version in Cargo.toml"
+  echo "Expected to find: version = \"${VERSION}\""
+  exit 1
+fi
+
+# 4b. Update vaultkeeper-core dep version in [workspace.dependencies]
+sed -i.bak "s/\(vaultkeeper-core = {.*version = \"\)[^\"]*/\1${VERSION}/" Cargo.toml && rm -f Cargo.toml.bak
+
+if ! grep -Fq "vaultkeeper-core = { path = \"crates/vaultkeeper-core\", version = \"${VERSION}\" }" Cargo.toml; then
+  echo "Error: failed to update vaultkeeper-core dep version in Cargo.toml"
+  echo "Expected: vaultkeeper-core = { path = \"crates/vaultkeeper-core\", version = \"${VERSION}\" }"
+  exit 1
+fi
+
+echo "Version sync complete: npm @vaultkeeper/wasm + Cargo.toml → ${VERSION}"
