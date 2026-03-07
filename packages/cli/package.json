@@ -1,6 +1,6 @@
 {
   "name": "@vaultkeeper/cli",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "description": "Command-line interface for vaultkeeper — store, retrieve, and inject secrets with policy-enforced access control",
   "type": "module",
   "exports": {
