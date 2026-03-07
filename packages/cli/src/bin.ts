@@ -9,10 +9,41 @@
  * parseArgs consumes argv[2..] and extracts the subcommand as positionals[0].
  * commandArgs is argv[3..] — everything after the subcommand.
  *
+ * Exit codes:
+ *   0 — success
+ *   1 — runtime / vault error
+ *   2 — usage error (unknown command, missing required argument, bad flag)
+ *
  * @internal
  */
 
+import * as fs from 'node:fs'
+import * as path from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { parseArgs } from 'node:util'
+
+// Read the package version at startup so --version doesn't need an async import.
+// We read and parse the package.json synchronously to avoid a dynamic import()
+// that would require top-level await or restructuring main().
+function readPackageVersion(): string {
+  try {
+    const pkgPath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../package.json')
+    const raw: unknown = JSON.parse(fs.readFileSync(pkgPath, 'utf8'))
+    if (raw !== null && typeof raw === 'object' && 'version' in raw && typeof raw.version === 'string') {
+      return raw.version
+    }
+  } catch {
+    // package.json absent or malformed — return sentinel
+  }
+  return '0.0.0'
+}
+
+const packageVersion = readPackageVersion()
+
+// argv[2] is the first user-supplied token. Check it directly before
+// parseArgs so that --version / -V (parsed as option values, not positionals)
+// and --help / -h are handled without going through the switch.
+const firstArg = process.argv[2]
 
 const { positionals } = parseArgs({
   allowPositionals: true,
@@ -40,8 +71,16 @@ function printHelp(): void {
 }
 
 async function main(): Promise<number> {
-  // [S1 fix] Handle --help and no-argument invocations
-  if (subcommand === undefined || subcommand === '--help' || subcommand === '-h') {
+  // Handle --version / -V before subcommand dispatch.
+  // parseArgs treats these as option values (not positionals) with strict:false,
+  // so we inspect argv[2] directly to detect them.
+  if (firstArg === '--version' || firstArg === '-V') {
+    process.stdout.write(`${packageVersion}\n`)
+    return 0
+  }
+
+  // Handle --help / -h and no-argument invocations at the top level.
+  if (firstArg === '--help' || firstArg === '-h' || subcommand === undefined) {
     printHelp()
     return 0
   }
@@ -86,7 +125,8 @@ async function main(): Promise<number> {
     default:
       process.stderr.write(`Unknown command: ${subcommand}\n`)
       printHelp()
-      return 1
+      // Exit code 2: usage error (unknown command)
+      return 2
   }
 }
 

@@ -108,19 +108,42 @@ describe('configCommand', () => {
       await configCommand(['show'])
       expect(stderrOutput.length).toBeGreaterThan(0)
     })
+
+    it('should show a user-friendly message when no config file exists', async () => {
+      const { configCommand } = await import('../../../src/commands/config.js')
+      await configCommand(['show'])
+      expect(stderrOutput).toContain('No config file found')
+      expect(stderrOutput).toContain('vaultkeeper config init')
+    })
+  })
+
+  describe('--help / -h', () => {
+    it('should print usage and return 0 for --help', async () => {
+      const { configCommand } = await import('../../../src/commands/config.js')
+      const code = await configCommand(['--help'])
+      expect(code).toBe(0)
+      expect(stdoutOutput).toContain('Usage: vaultkeeper config')
+    })
+
+    it('should print usage and return 0 for -h', async () => {
+      const { configCommand } = await import('../../../src/commands/config.js')
+      const code = await configCommand(['-h'])
+      expect(code).toBe(0)
+      expect(stdoutOutput).toContain('Usage: vaultkeeper config')
+    })
   })
 
   describe('missing/unknown subcommand', () => {
-    it('should return 1 when no subcommand given', async () => {
+    it('should return 2 when no subcommand given', async () => {
       const { configCommand } = await import('../../../src/commands/config.js')
       const code = await configCommand([])
-      expect(code).toBe(1)
+      expect(code).toBe(2)
     })
 
-    it('should return 1 for unknown subcommand', async () => {
+    it('should return 2 for unknown subcommand', async () => {
       const { configCommand } = await import('../../../src/commands/config.js')
       const code = await configCommand(['unknown'])
-      expect(code).toBe(1)
+      expect(code).toBe(2)
     })
 
     it('should write usage to stderr for missing subcommand', async () => {

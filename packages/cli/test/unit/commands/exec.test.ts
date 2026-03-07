@@ -34,9 +34,9 @@ describe('execCommand', () => {
   })
 
   describe('-- separator validation', () => {
-    it('should return 1 when -- separator is missing', async () => {
+    it('should return 2 when -- separator is missing', async () => {
       const code = await execCommand(['--secret', 'my-key', '--env', 'MY_VAR', '--caller', '/path/to/script.sh'])
-      expect(code).toBe(1)
+      expect(code).toBe(2)
     })
 
     it('should write error message when -- separator is missing', async () => {
@@ -51,9 +51,9 @@ describe('execCommand', () => {
   })
 
   describe('command after -- validation', () => {
-    it('should return 1 when command after -- is empty', async () => {
+    it('should return 2 when command after -- is empty', async () => {
       const code = await execCommand(['--secret', 'my-key', '--env', 'MY_VAR', '--caller', '/path/to/script.sh', '--'])
-      expect(code).toBe(1)
+      expect(code).toBe(2)
     })
 
     it('should write error message when command after -- is empty', async () => {
@@ -63,24 +63,24 @@ describe('execCommand', () => {
   })
 
   describe('required flag validation', () => {
-    it('should return 1 when --secret is missing', async () => {
+    it('should return 2 when --secret is missing', async () => {
       const code = await execCommand(['--env', 'MY_VAR', '--caller', '/path/to/script.sh', '--', 'echo', 'hello'])
-      expect(code).toBe(1)
+      expect(code).toBe(2)
     })
 
-    it('should return 1 when --env is missing', async () => {
+    it('should return 2 when --env is missing', async () => {
       const code = await execCommand(['--secret', 'my-key', '--caller', '/path/to/script.sh', '--', 'echo', 'hello'])
-      expect(code).toBe(1)
+      expect(code).toBe(2)
     })
 
-    it('should return 1 when --caller is missing', async () => {
+    it('should return 2 when --caller is missing', async () => {
       const code = await execCommand(['--secret', 'my-key', '--env', 'MY_VAR', '--', 'echo', 'hello'])
-      expect(code).toBe(1)
+      expect(code).toBe(2)
     })
 
-    it('should return 1 when all required flags are missing', async () => {
+    it('should return 2 when all required flags are missing', async () => {
       const code = await execCommand(['--', 'echo', 'hello'])
-      expect(code).toBe(1)
+      expect(code).toBe(2)
     })
 
     it('should write error message when required flags are missing', async () => {

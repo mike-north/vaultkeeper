@@ -2,7 +2,22 @@ import { parseArgs } from 'node:util'
 import { BackendRegistry, VaultKeeper } from 'vaultkeeper'
 import { formatError } from '../output.js'
 
+function printStoreHelp(): void {
+  process.stdout.write(
+    'Usage: echo "secret" | vaultkeeper store --name <name>\n\n' +
+      'Options:\n' +
+      '  --name <name>   Name to store the secret under\n' +
+      '  -h, --help      Show this help message\n',
+  )
+}
+
 export async function storeCommand(args: string[]): Promise<number> {
+  // Handle --help / -h before parseArgs to avoid strict-mode rejection of -h.
+  if (args.includes('--help') || args.includes('-h')) {
+    printStoreHelp()
+    return 0
+  }
+
   const { values } = parseArgs({
     args,
     options: {
@@ -14,7 +29,8 @@ export async function storeCommand(args: string[]): Promise<number> {
   if (values.name === undefined) {
     process.stderr.write('Error: --name is required\n')
     process.stderr.write('Usage: echo "secret" | vaultkeeper store --name <name>\n')
-    return 1
+    // Exit code 2: usage error (missing required flag)
+    return 2
   }
 
   try {
