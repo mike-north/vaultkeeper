@@ -36,10 +36,10 @@ describe('help and usage', () => {
     expect(result.stdout).toContain('Usage: vaultkeeper <command>')
   })
 
-  it('should exit 1 and show error for unknown command', async () => {
+  it('should exit 2 and show error for unknown command', async () => {
     env = await createCliTestEnv()
     const result = await env.run(['not-a-real-command'])
-    expect(result.exitCode).toBe(1)
+    expect(result.exitCode).toBe(2)
     expect(result.stderr).toContain('Unknown command: not-a-real-command')
     expect(result.stdout).toContain('Usage: vaultkeeper <command>')
   })

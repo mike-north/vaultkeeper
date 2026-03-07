@@ -34,7 +34,7 @@ describe('dev-mode', () => {
   it('should show usage for missing arguments', async () => {
     env = await createCliTestEnv()
     const result = await env.run(['dev-mode'])
-    expect(result.exitCode).toBe(1)
+    expect(result.exitCode).toBe(2)
     expect(result.stderr).toContain('Usage')
   })
 })
