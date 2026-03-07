@@ -50,6 +50,20 @@ describe('config command', () => {
     expect(parsed).toHaveProperty('version', 1)
   })
 
+  it('should generate platform-appropriate defaults for config init', async () => {
+    env = await createCliTestEnv()
+    // Remove the config.json that createCliTestEnv wrote
+    await fs.rm(path.join(env.configDir, 'config.json'))
+    const result = await env.run(['config', 'init'])
+    expect(result.exitCode).toBe(0)
+    const content = await fs.readFile(path.join(env.configDir, 'config.json'), 'utf8')
+    const parsed: unknown = JSON.parse(content)
+    // On Linux (where CI runs), default should be 'file', not 'keychain'.
+    // 'keychain' is macOS-only and would fail immediately on Linux.
+    expect(parsed).toHaveProperty('backends[0].type')
+    expect(parsed).not.toHaveProperty('backends[0].type', 'keychain')
+  })
+
   it('should exit 1 for config show when no config exists', async () => {
     env = await createCliTestEnv()
     // Remove the config.json

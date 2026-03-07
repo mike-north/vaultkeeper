@@ -215,6 +215,27 @@ mod config {
     }
 
     #[test]
+    fn config_init_uses_platform_appropriate_backend() {
+        let (mut cmd, dir) = cli_test_env_no_config();
+        cmd.args(["config", "init"])
+            .assert()
+            .success()
+            .stdout(predicate::str::contains("Config created at"));
+        let content =
+            fs::read_to_string(dir.path().join("config.json")).expect("config should exist");
+        let parsed: serde_json::Value =
+            serde_json::from_str(&content).expect("should be valid JSON");
+        let backend_type = parsed["backends"][0]["type"].as_str().unwrap_or("");
+        // On Linux (where CI runs), 'keychain' is macOS-only and must not be the default.
+        // keychain requires Keychain Services which is unavailable on Linux.
+        #[cfg(not(target_os = "macos"))]
+        assert_ne!(backend_type, "keychain", "keychain is macOS-only");
+        // On macOS, keychain is expected.
+        #[cfg(target_os = "macos")]
+        assert_eq!(backend_type, "keychain");
+    }
+
+    #[test]
     fn config_show_exits_1_when_no_config_exists() {
         let (mut cmd, _dir) = cli_test_env_no_config();
         cmd.args(["config", "show"])

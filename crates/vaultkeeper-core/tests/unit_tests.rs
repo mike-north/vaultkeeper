@@ -27,8 +27,25 @@ mod config_validation {
         assert!(validate_config(&cfg).is_ok());
         assert_eq!(cfg.version, 1);
         assert_eq!(cfg.backends.len(), 1);
-        assert_eq!(cfg.backends[0].backend_type, "file");
         assert!(cfg.backends[0].enabled);
+    }
+
+    #[test]
+    fn default_config_uses_platform_appropriate_backend() {
+        let cfg = default_config();
+        let backend_type = cfg.backends[0].backend_type.as_str();
+        // On Linux (where CI runs), 'keychain' is macOS-only and must not be the default.
+        #[cfg(not(target_os = "macos"))]
+        assert_ne!(backend_type, "keychain", "keychain is macOS-only");
+        // On macOS, keychain is the expected default.
+        #[cfg(target_os = "macos")]
+        assert_eq!(backend_type, "keychain");
+        // On Windows, dpapi is the expected default.
+        #[cfg(target_os = "windows")]
+        assert_eq!(backend_type, "dpapi");
+        // On Linux and other Unix, file is the expected default.
+        #[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
+        assert_eq!(backend_type, "file");
     }
 
     #[test]
