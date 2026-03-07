@@ -132,7 +132,14 @@ export function validateConfig(config: unknown): VaultConfig {
   if (typeof config.defaults.ttlMinutes !== 'number' || config.defaults.ttlMinutes <= 0) {
     throw new Error('Config defaults.ttlMinutes must be a positive number')
   }
-  const tier = config.defaults.trustTier
+  // Coerce string trust tier values from Rust CLI config (which serializes as "1"/"2"/"3")
+  let tier: unknown = config.defaults.trustTier
+  if (typeof tier === 'string') {
+    const parsed = Number(tier)
+    if (!Number.isNaN(parsed)) {
+      tier = parsed
+    }
+  }
   if (tier !== 1 && tier !== 2 && tier !== 3) {
     throw new Error('Config defaults.trustTier must be 1, 2, or 3')
   }
