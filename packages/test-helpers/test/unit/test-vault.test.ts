@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import { TestVault, InMemoryBackend } from '../../src/index.js'
+import { SecretNotFoundError } from 'vaultkeeper'
 
 describe('InMemoryBackend', () => {
   let backend: InMemoryBackend
@@ -17,8 +18,15 @@ describe('InMemoryBackend', () => {
     expect(await backend.retrieve('key1')).toBe('value1')
   })
 
-  it('should reject retrieval of nonexistent secret', async () => {
-    await expect(backend.retrieve('missing')).rejects.toThrow('Secret not found: missing')
+  it('should reject retrieval of nonexistent secret with SecretNotFoundError', async () => {
+    // Regression: previously threw a plain Error, not SecretNotFoundError.
+    // Code that catches SecretNotFoundError in production would behave differently
+    // from tests using InMemoryBackend.
+    const err = await backend.retrieve('missing').catch((e: unknown) => e)
+    expect(err).toBeInstanceOf(SecretNotFoundError)
+    if (err instanceof SecretNotFoundError) {
+      expect(err.message).toBe('Secret not found: missing')
+    }
   })
 
   it('should delete a secret', async () => {

@@ -53,61 +53,68 @@ describe('createSecretAccessor', () => {
   })
 
   describe('double-read prevention', () => {
-    it('throws on second call to read() because the proxy is revoked after the first read', () => {
+    it('throws a descriptive Error (not TypeError) on second call to read()', () => {
       const accessor = createSecretAccessor('secret')
 
       accessor.read(() => {
         // first call: ok
       })
 
-      // After read() completes the proxy is revoked synchronously, so any
-      // subsequent property access (including calling .read again) throws TypeError.
+      // The consumed flag blocks re-execution with a descriptive domain error.
+      // This is NOT a TypeError (which would be a raw Proxy revocation error).
       expect(() => {
         accessor.read(() => {
           // should never reach here
         })
-      }).toThrow(TypeError)
-    })
-  })
-
-  describe('synchronous revocation after read()', () => {
-    it('accessor is usable before read() is called', () => {
-      const accessor = createSecretAccessor('secret')
-
-      // Still accessible before any read
-      expect(() => {
-        accessor.read(() => {
-          // fine
-        })
-      }).not.toThrow()
+      }).toThrow(Error)
     })
 
-    it('revokes the proxy synchronously after read() returns', () => {
+    it('second read() throws with "already been consumed" message', () => {
       const accessor = createSecretAccessor('secret')
 
       accessor.read(() => {
-        // first call succeeds
+        // first call: ok
       })
 
-      // Proxy is revoked synchronously — any property access now throws TypeError.
       expect(() => {
-        // Any property access on a revoked proxy throws TypeError
         accessor.read(() => {
           // unreachable
         })
-      }).toThrow(TypeError)
+      }).toThrow('already been consumed')
     })
 
-    it('throws TypeError for property get access after read()', () => {
+    it('second read() error is not a TypeError (no raw proxy error)', () => {
       const accessor = createSecretAccessor('secret')
+
       accessor.read(() => {
         // consume
       })
-      expect(() => getProperty(accessor, 'read')).toThrow(TypeError)
+
+      let caught: unknown
+      try {
+        accessor.read(() => {
+          // unreachable
+        })
+      } catch (err) {
+        caught = err
+      }
+
+      expect(caught).toBeInstanceOf(Error)
+      expect(caught).not.toBeInstanceOf(TypeError)
+    })
+
+    it('accessor is still accessible via property get after read() is called', () => {
+      const accessor = createSecretAccessor('secret')
+
+      accessor.read(() => {
+        // consume
+      })
+
+      // Property access must work (no revocation) — only calling read() again is blocked
+      expect(typeof getProperty(accessor, 'read')).toBe('function')
     })
 
     it('accessor remains usable after await if read() has not been called', async () => {
-      // Regression test: queueMicrotask(revoke) would have broken this.
       const accessor = createSecretAccessor('secret')
 
       // Await a microtask — accessor must still be usable because read() was not called.
@@ -219,67 +226,47 @@ describe('createSecretAccessor', () => {
     })
   })
 
-  describe('all property access throws TypeError after revocation', () => {
-    /** Helper: create an accessor and consume it so the proxy is revoked. */
+  describe('proxy remains accessible after read() is consumed', () => {
+    /** Helper: create an accessor and consume it via read(). */
     function makeConsumedAccessor(): SecretAccessor {
       const accessor = createSecretAccessor('s')
       accessor.read(() => {
-        // consume — triggers synchronous revocation in finally block
+        // consume
       })
       return accessor
     }
 
-    it('get trap throws after revocation', () => {
+    it('get trap still works after read() is consumed', () => {
       const accessor = makeConsumedAccessor()
-      expect(() => getProperty(accessor, 'read')).toThrow(TypeError)
+      expect(() => getProperty(accessor, 'read')).not.toThrow()
     })
 
-    it('has trap throws after revocation', () => {
+    it('has trap still works after read() is consumed', () => {
       const accessor = makeConsumedAccessor()
-      expect(() => 'read' in accessor).toThrow(TypeError)
+      expect(() => 'read' in accessor).not.toThrow()
     })
 
-    it('ownKeys trap throws after revocation', () => {
+    it('ownKeys trap still works after read() is consumed', () => {
       const accessor = makeConsumedAccessor()
-      expect(() => Reflect.ownKeys(accessor)).toThrow(TypeError)
+      expect(() => Reflect.ownKeys(accessor)).not.toThrow()
     })
 
-    it('getPrototypeOf trap throws after revocation', () => {
+    it('getPrototypeOf trap still works after read() is consumed', () => {
       const accessor = makeConsumedAccessor()
       expect(() => {
         const _proto: unknown = Object.getPrototypeOf(accessor)
         return _proto
-      }).toThrow(TypeError)
+      }).not.toThrow()
     })
 
-    it('isExtensible trap throws after revocation', () => {
+    it('isExtensible trap still works after read() is consumed', () => {
       const accessor = makeConsumedAccessor()
-      expect(() => Object.isExtensible(accessor)).toThrow(TypeError)
+      expect(() => Object.isExtensible(accessor)).not.toThrow()
     })
 
-    it('getOwnPropertyDescriptor trap throws after revocation', () => {
+    it('getOwnPropertyDescriptor trap still works after read() is consumed', () => {
       const accessor = makeConsumedAccessor()
-      expect(() => Object.getOwnPropertyDescriptor(accessor, 'read')).toThrow(TypeError)
-    })
-
-    it('set trap throws after revocation', () => {
-      const accessor = makeConsumedAccessor()
-      expect(() => Reflect.set(accessor, 'x', 1)).toThrow(TypeError)
-    })
-
-    it('deleteProperty trap throws after revocation', () => {
-      const accessor = makeConsumedAccessor()
-      expect(() => Reflect.deleteProperty(accessor, 'read')).toThrow(TypeError)
-    })
-
-    it('defineProperty trap throws after revocation', () => {
-      const accessor = makeConsumedAccessor()
-      expect(() => Reflect.defineProperty(accessor, 'x', {})).toThrow(TypeError)
-    })
-
-    it('setPrototypeOf trap throws after revocation', () => {
-      const accessor = makeConsumedAccessor()
-      expect(() => Reflect.setPrototypeOf(accessor, null)).toThrow(TypeError)
+      expect(() => Object.getOwnPropertyDescriptor(accessor, 'read')).not.toThrow()
     })
   })
 })

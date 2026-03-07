@@ -21,7 +21,7 @@ import { loadConfig, getDefaultConfigDir } from './config.js'
 import { KeyManager } from './keys/manager.js'
 import { BackendRegistry } from './backend/registry.js'
 import type { SecretBackend } from './backend/types.js'
-import { createToken, decryptToken, extractKid, validateClaims, blockToken } from './jwe/index.js'
+import { createToken, decryptToken, extractKid, validateClaims } from './jwe/index.js'
 import { verifyTrust } from './identity/trust.js'
 import {
   CapabilityToken,
@@ -67,6 +67,13 @@ export interface SetupOptions {
 
 /** Usage tracking for tokens with use limits. */
 const usageCounts = new Map<string, number>()
+
+/**
+ * Maximum number of JTIs the in-memory usage-count map will retain.
+ * When the cap is reached, the oldest inserted entry is evicted (FIFO).
+ * This prevents unbounded growth for long-running processes.
+ */
+const USAGE_MAP_MAX_SIZE = 10_000
 
 /**
  * Main entry point for vaultkeeper. Orchestrates backends, keys, JWE tokens,
@@ -183,15 +190,19 @@ export class VaultKeeper {
     const currentCount = usageCounts.get(jti) ?? 0
     validateClaims(claims, currentCount)
 
-    // Track usage and evict finished tokens to prevent unbounded map growth.
+    // Track usage. Keep the count even after the limit is reached so that
+    // subsequent calls hit the UsageLimitExceededError path in validateClaims
+    // rather than the TokenRevokedError path.
     const newCount = currentCount + 1
-    if (claims.use !== null && newCount >= claims.use) {
-      // Token has reached its usage limit — remove from tracking and block it
-      // so future attempts hit the blocklist rather than the usageCounts map.
-      usageCounts.delete(jti)
-      blockToken(jti)
-    } else {
-      usageCounts.set(jti, newCount)
+    usageCounts.set(jti, newCount)
+
+    // Evict the oldest entry when the map exceeds its size cap to prevent
+    // unbounded memory growth in long-running processes.
+    if (usageCounts.size > USAGE_MAP_MAX_SIZE) {
+      const oldest = usageCounts.keys().next().value
+      if (oldest !== undefined) {
+        usageCounts.delete(oldest)
+      }
     }
 
     const token = createCapabilityToken(claims)
