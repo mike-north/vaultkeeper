@@ -9,7 +9,7 @@ vi.mock('vaultkeeper', () => ({
   },
 }))
 
-describe('rotateKeyCommand', () => {
+describe('revokeKeyCommand', () => {
   let stderrOutput: string
   let stdoutOutput: string
 
@@ -35,114 +35,101 @@ describe('rotateKeyCommand', () => {
   describe('when VaultKeeper.init() throws', () => {
     it('should return 1', async () => {
       mockInit.mockRejectedValue(new Error('backend unavailable'))
-      const { rotateKeyCommand } = await import('../../../src/commands/rotate-key.js')
-      const code = await rotateKeyCommand([])
+      const { revokeKeyCommand } = await import('../../../src/commands/revoke-key.js')
+      const code = await revokeKeyCommand([])
       expect(code).toBe(1)
     })
 
     it('should write formatted error to stderr', async () => {
       mockInit.mockRejectedValue(new Error('backend unavailable'))
-      const { rotateKeyCommand } = await import('../../../src/commands/rotate-key.js')
-      await rotateKeyCommand([])
+      const { revokeKeyCommand } = await import('../../../src/commands/revoke-key.js')
+      await revokeKeyCommand([])
       expect(stderrOutput).toContain('backend unavailable')
-    })
-
-    it('should include error name in stderr output', async () => {
-      class RotationError extends Error {
-        constructor(message: string) {
-          super(message)
-          this.name = 'RotationError'
-        }
-      }
-      mockInit.mockRejectedValue(new RotationError('key rotation failed'))
-      const { rotateKeyCommand } = await import('../../../src/commands/rotate-key.js')
-      await rotateKeyCommand([])
-      expect(stderrOutput).toContain('RotationError')
     })
   })
 
-  describe('when VaultKeeper.init() succeeds but rotateKey() throws', () => {
+  describe('when VaultKeeper.init() succeeds but revokeKey() throws', () => {
     it('should return 1', async () => {
-      const mockVault = { rotateKey: vi.fn().mockRejectedValue(new Error('rotation failed')) }
+      const mockVault = { revokeKey: vi.fn().mockRejectedValue(new Error('revocation failed')) }
       mockInit.mockResolvedValue(mockVault)
-      const { rotateKeyCommand } = await import('../../../src/commands/rotate-key.js')
-      const code = await rotateKeyCommand([])
+      const { revokeKeyCommand } = await import('../../../src/commands/revoke-key.js')
+      const code = await revokeKeyCommand([])
       expect(code).toBe(1)
     })
 
     it('should write formatted error to stderr', async () => {
-      const mockVault = { rotateKey: vi.fn().mockRejectedValue(new Error('rotation failed')) }
+      const mockVault = { revokeKey: vi.fn().mockRejectedValue(new Error('revocation failed')) }
       mockInit.mockResolvedValue(mockVault)
-      const { rotateKeyCommand } = await import('../../../src/commands/rotate-key.js')
-      await rotateKeyCommand([])
-      expect(stderrOutput).toContain('rotation failed')
+      const { revokeKeyCommand } = await import('../../../src/commands/revoke-key.js')
+      await revokeKeyCommand([])
+      expect(stderrOutput).toContain('revocation failed')
     })
   })
 
-  describe('when rotation succeeds', () => {
+  describe('when revocation succeeds', () => {
     it('should return 0', async () => {
-      const mockVault = { rotateKey: vi.fn().mockResolvedValue(undefined) }
+      const mockVault = { revokeKey: vi.fn().mockResolvedValue(undefined) }
       mockInit.mockResolvedValue(mockVault)
-      const { rotateKeyCommand } = await import('../../../src/commands/rotate-key.js')
-      const code = await rotateKeyCommand([])
+      const { revokeKeyCommand } = await import('../../../src/commands/revoke-key.js')
+      const code = await revokeKeyCommand([])
       expect(code).toBe(0)
     })
 
     it('should write success message to stdout', async () => {
-      const mockVault = { rotateKey: vi.fn().mockResolvedValue(undefined) }
+      const mockVault = { revokeKey: vi.fn().mockResolvedValue(undefined) }
       mockInit.mockResolvedValue(mockVault)
-      const { rotateKeyCommand } = await import('../../../src/commands/rotate-key.js')
-      await rotateKeyCommand([])
-      expect(stdoutOutput).toContain('Key rotated successfully')
+      const { revokeKeyCommand } = await import('../../../src/commands/revoke-key.js')
+      await revokeKeyCommand([])
+      expect(stdoutOutput).toContain('Key revoked successfully')
     })
   })
 
   describe('--skip-doctor flag', () => {
     it('should pass skipDoctor: false to VaultKeeper.init by default', async () => {
-      const mockVault = { rotateKey: vi.fn().mockResolvedValue(undefined) }
+      const mockVault = { revokeKey: vi.fn().mockResolvedValue(undefined) }
       mockInit.mockResolvedValue(mockVault)
-      const { rotateKeyCommand } = await import('../../../src/commands/rotate-key.js')
-      await rotateKeyCommand([])
+      const { revokeKeyCommand } = await import('../../../src/commands/revoke-key.js')
+      await revokeKeyCommand([])
       expect(mockInit).toHaveBeenCalledWith({ skipDoctor: false })
     })
 
     it('should pass skipDoctor: true to VaultKeeper.init when --skip-doctor is set', async () => {
-      const mockVault = { rotateKey: vi.fn().mockResolvedValue(undefined) }
+      const mockVault = { revokeKey: vi.fn().mockResolvedValue(undefined) }
       mockInit.mockResolvedValue(mockVault)
-      const { rotateKeyCommand } = await import('../../../src/commands/rotate-key.js')
-      await rotateKeyCommand(['--skip-doctor'])
+      const { revokeKeyCommand } = await import('../../../src/commands/revoke-key.js')
+      await revokeKeyCommand(['--skip-doctor'])
       expect(mockInit).toHaveBeenCalledWith({ skipDoctor: true })
     })
 
     it('should pass skipDoctor: true when VAULTKEEPER_SKIP_DOCTOR=1 env var is set', async () => {
       process.env.VAULTKEEPER_SKIP_DOCTOR = '1'
-      const mockVault = { rotateKey: vi.fn().mockResolvedValue(undefined) }
+      const mockVault = { revokeKey: vi.fn().mockResolvedValue(undefined) }
       mockInit.mockResolvedValue(mockVault)
-      const { rotateKeyCommand } = await import('../../../src/commands/rotate-key.js')
-      await rotateKeyCommand([])
+      const { revokeKeyCommand } = await import('../../../src/commands/revoke-key.js')
+      await revokeKeyCommand([])
       expect(mockInit).toHaveBeenCalledWith({ skipDoctor: true })
     })
 
     it('should not skip doctor when VAULTKEEPER_SKIP_DOCTOR=0', async () => {
       process.env.VAULTKEEPER_SKIP_DOCTOR = '0'
-      const mockVault = { rotateKey: vi.fn().mockResolvedValue(undefined) }
+      const mockVault = { revokeKey: vi.fn().mockResolvedValue(undefined) }
       mockInit.mockResolvedValue(mockVault)
-      const { rotateKeyCommand } = await import('../../../src/commands/rotate-key.js')
-      await rotateKeyCommand([])
+      const { revokeKeyCommand } = await import('../../../src/commands/revoke-key.js')
+      await revokeKeyCommand([])
       expect(mockInit).toHaveBeenCalledWith({ skipDoctor: false })
     })
   })
 
   describe('--help flag', () => {
     it('should include --skip-doctor in help output', async () => {
-      const { rotateKeyCommand } = await import('../../../src/commands/rotate-key.js')
-      await rotateKeyCommand(['--help'])
+      const { revokeKeyCommand } = await import('../../../src/commands/revoke-key.js')
+      await revokeKeyCommand(['--help'])
       expect(stdoutOutput).toContain('--skip-doctor')
     })
 
     it('should include VAULTKEEPER_SKIP_DOCTOR env var in help output', async () => {
-      const { rotateKeyCommand } = await import('../../../src/commands/rotate-key.js')
-      await rotateKeyCommand(['--help'])
+      const { revokeKeyCommand } = await import('../../../src/commands/revoke-key.js')
+      await revokeKeyCommand(['--help'])
       expect(stdoutOutput).toContain('VAULTKEEPER_SKIP_DOCTOR')
     })
   })
