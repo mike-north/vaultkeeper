@@ -56,6 +56,8 @@ describe('config command', () => {
     await fs.rm(path.join(env.configDir, 'config.json'))
     const result = await env.run(['config', 'show'])
     expect(result.exitCode).toBe(1)
+    expect(result.stderr).toContain('No config file found')
+    expect(result.stderr).toContain('vaultkeeper config init')
   })
 
   it('should exit 2 for config with no subcommand', async () => {

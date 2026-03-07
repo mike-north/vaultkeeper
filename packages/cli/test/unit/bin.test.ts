@@ -147,6 +147,30 @@ describe('bin.ts entry point', () => {
       expect(result.exitCode).toBe(0)
       expect(result.stdout).toContain('Usage: echo "secret" | vaultkeeper store')
     })
+
+    it('should print usage and exit 0 for delete --help', async () => {
+      const result = await runCli(['delete', '--help'])
+      expect(result.exitCode).toBe(0)
+      expect(result.stdout).toContain('Usage: vaultkeeper delete')
+    })
+
+    it('should print usage and exit 0 for dev-mode --help', async () => {
+      const result = await runCli(['dev-mode', '--help'])
+      expect(result.exitCode).toBe(0)
+      expect(result.stdout).toContain('Usage: vaultkeeper dev-mode')
+    })
+
+    it('should print usage and exit 0 for approve --help', async () => {
+      const result = await runCli(['approve', '--help'])
+      expect(result.exitCode).toBe(0)
+      expect(result.stdout).toContain('Usage: vaultkeeper approve')
+    })
+
+    it('should print usage and exit 0 for doctor --help', async () => {
+      const result = await runCli(['doctor', '--help'])
+      expect(result.exitCode).toBe(0)
+      expect(result.stdout).toContain('Usage: vaultkeeper doctor')
+    })
   })
 
   describe('exit code 2 for usage errors', () => {

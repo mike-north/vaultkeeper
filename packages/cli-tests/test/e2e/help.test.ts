@@ -44,6 +44,20 @@ describe('help and usage', () => {
     expect(result.stdout).toContain('Usage: vaultkeeper <command>')
   })
 
+  it('should print version and exit 0 for --version', async () => {
+    env = await createCliTestEnv()
+    const result = await env.run(['--version'])
+    expect(result.exitCode).toBe(0)
+    expect(result.stdout.trim()).toMatch(/^\d+\.\d+\.\d+/)
+  })
+
+  it('should print version and exit 0 for -V', async () => {
+    env = await createCliTestEnv()
+    const result = await env.run(['-V'])
+    expect(result.exitCode).toBe(0)
+    expect(result.stdout.trim()).toMatch(/^\d+\.\d+\.\d+/)
+  })
+
   it('should list all expected commands in help output', async () => {
     env = await createCliTestEnv()
     const result = await env.run(['--help'])
