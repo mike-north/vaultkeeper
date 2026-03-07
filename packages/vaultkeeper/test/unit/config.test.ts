@@ -126,6 +126,57 @@ describe('validateConfig', () => {
     ).toThrow('trustTier must be 1, 2, or 3')
   })
 
+  // Rust CLI compatibility: trustTier is serialized as a string ("1"/"2"/"3")
+  it('should accept numeric trustTier 3', () => {
+    const result = validateConfig({
+      ...validConfigJson(),
+      defaults: { ttlMinutes: 60, trustTier: 3 },
+    })
+    expect(result.defaults.trustTier).toBe(3)
+  })
+
+  it('should accept string trustTier "3" and coerce it to the number 3', () => {
+    const result = validateConfig({
+      ...validConfigJson(),
+      defaults: { ttlMinutes: 60, trustTier: '3' },
+    })
+    expect(result.defaults.trustTier).toBe(3)
+  })
+
+  it('should accept string trustTier "1" and coerce it to the number 1', () => {
+    const result = validateConfig({
+      ...validConfigJson(),
+      defaults: { ttlMinutes: 60, trustTier: '1' },
+    })
+    expect(result.defaults.trustTier).toBe(1)
+  })
+
+  it('should accept string trustTier "2" and coerce it to the number 2', () => {
+    const result = validateConfig({
+      ...validConfigJson(),
+      defaults: { ttlMinutes: 60, trustTier: '2' },
+    })
+    expect(result.defaults.trustTier).toBe(2)
+  })
+
+  it('should reject string trustTier "4" (out of range)', () => {
+    expect(() =>
+      validateConfig({
+        ...validConfigJson(),
+        defaults: { ttlMinutes: 60, trustTier: '4' },
+      }),
+    ).toThrow('trustTier must be 1, 2, or 3')
+  })
+
+  it('should reject non-numeric string trustTier "high"', () => {
+    expect(() =>
+      validateConfig({
+        ...validConfigJson(),
+        defaults: { ttlMinutes: 60, trustTier: 'high' },
+      }),
+    ).toThrow('trustTier must be 1, 2, or 3')
+  })
+
   it('should reject non-array developmentMode.executables', () => {
     expect(() =>
       validateConfig({
