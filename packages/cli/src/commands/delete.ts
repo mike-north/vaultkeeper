@@ -6,8 +6,11 @@ function printDeleteHelp(): void {
   process.stdout.write(
     'Usage: vaultkeeper delete --name <name>\n\n' +
       'Options:\n' +
-      '  --name <name>   Name of the secret to delete\n' +
-      '  -h, --help      Show this help message\n',
+      '  --name <name>      Name of the secret to delete\n' +
+      '  --skip-doctor      Skip preflight dependency checks\n' +
+      '  -h, --help         Show this help message\n' +
+      '\nEnvironment:\n' +
+      '  VAULTKEEPER_SKIP_DOCTOR=1  Skip preflight dependency checks\n',
   )
 }
 
@@ -22,6 +25,7 @@ export async function deleteCommand(args: string[]): Promise<number> {
     args,
     options: {
       name: { type: 'string' },
+      'skip-doctor': { type: 'boolean', default: false },
     },
     strict: true,
   })
@@ -33,9 +37,12 @@ export async function deleteCommand(args: string[]): Promise<number> {
     return 2
   }
 
+  const skipDoctor: boolean =
+    values['skip-doctor'] || process.env.VAULTKEEPER_SKIP_DOCTOR === '1'
+
   try {
     // Initialize vault to ensure backends are registered and doctor passes
-    await VaultKeeper.init()
+    await VaultKeeper.init({ skipDoctor })
 
     const types = BackendRegistry.getTypes()
     const firstType = types[0]

@@ -11,8 +11,11 @@ function printDevModeHelp(): void {
       'Arguments:\n' +
       '  enable | disable   Action to perform\n\n' +
       'Options:\n' +
-      '  --script <path>   Path to the script\n' +
-      '  -h, --help        Show this help message\n',
+      '  --script <path>    Path to the script\n' +
+      '  --skip-doctor      Skip preflight dependency checks\n' +
+      '  -h, --help         Show this help message\n' +
+      '\nEnvironment:\n' +
+      '  VAULTKEEPER_SKIP_DOCTOR=1  Skip preflight dependency checks\n',
   )
 }
 
@@ -28,6 +31,7 @@ export async function devModeCommand(args: string[]): Promise<number> {
     allowPositionals: true,
     options: {
       script: { type: 'string' },
+      'skip-doctor': { type: 'boolean', default: false },
     },
     strict: true,
   })
@@ -43,9 +47,11 @@ export async function devModeCommand(args: string[]): Promise<number> {
 
   const scriptPath = path.resolve(values.script)
   const enabled = action === 'enable'
+  const skipDoctor: boolean =
+    values['skip-doctor'] || process.env.VAULTKEEPER_SKIP_DOCTOR === '1'
 
   try {
-    const vault = await VaultKeeper.init()
+    const vault = await VaultKeeper.init({ skipDoctor })
     await vault.setDevelopmentMode(scriptPath, enabled)
     process.stdout.write(
       `Development mode ${enabled ? 'enabled' : 'disabled'} for ${scriptPath}\n`,

@@ -118,6 +118,12 @@ describe('bin.ts entry point', () => {
       expect(result.stdout).toContain('Usage: vaultkeeper exec')
     })
 
+    it('should include --skip-doctor in exec --help output', async () => {
+      const result = await runCli(['exec', '--help'])
+      expect(result.exitCode).toBe(0)
+      expect(result.stdout).toContain('--skip-doctor')
+    })
+
     it('should print usage and exit 0 for exec -h', async () => {
       const result = await runCli(['exec', '-h'])
       expect(result.exitCode).toBe(0)
@@ -148,10 +154,22 @@ describe('bin.ts entry point', () => {
       expect(result.stdout).toContain('Usage: echo "secret" | vaultkeeper store')
     })
 
+    it('should include --skip-doctor in store --help output', async () => {
+      const result = await runCli(['store', '--help'])
+      expect(result.exitCode).toBe(0)
+      expect(result.stdout).toContain('--skip-doctor')
+    })
+
     it('should print usage and exit 0 for delete --help', async () => {
       const result = await runCli(['delete', '--help'])
       expect(result.exitCode).toBe(0)
       expect(result.stdout).toContain('Usage: vaultkeeper delete')
+    })
+
+    it('should include --skip-doctor in delete --help output', async () => {
+      const result = await runCli(['delete', '--help'])
+      expect(result.exitCode).toBe(0)
+      expect(result.stdout).toContain('--skip-doctor')
     })
 
     it('should print usage and exit 0 for dev-mode --help', async () => {
