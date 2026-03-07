@@ -1,6 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { runDoctor } from '../../../src/doctor/runner.js'
 
+vi.mock('../../../src/util/platform.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../../src/util/platform.js')>()
+  return { ...actual, currentPlatform: vi.fn(actual.currentPlatform) }
+})
+
 vi.mock('../../../src/doctor/checks.js', () => ({
   checkOpenssl: vi.fn(),
   checkBash: vi.fn(),
@@ -20,6 +25,7 @@ import {
   checkOp,
   checkYkman,
 } from '../../../src/doctor/checks.js'
+import { currentPlatform } from '../../../src/util/platform.js'
 
 const mockCheckOpenssl = vi.mocked(checkOpenssl)
 const mockCheckBash = vi.mocked(checkBash)
@@ -28,6 +34,7 @@ const mockCheckSecurity = vi.mocked(checkSecurity)
 const mockCheckSecretTool = vi.mocked(checkSecretTool)
 const mockCheckOp = vi.mocked(checkOp)
 const mockCheckYkman = vi.mocked(checkYkman)
+const mockCurrentPlatform = vi.mocked(currentPlatform)
 
 beforeEach(() => {
   vi.resetAllMocks()
@@ -320,5 +327,43 @@ describe('runDoctor result shape', () => {
 
     expect(result.ready).toBe(false)
     expect(result.nextSteps).toHaveLength(2)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Unsupported platform — regression test for graceful degradation
+// Before this fix, currentPlatform() threw a raw Error; now runDoctor()
+// catches it and returns a non-ready PreflightResult instead.
+// ---------------------------------------------------------------------------
+
+describe('runDoctor on unsupported platform', () => {
+  it('returns ready=false with a nextStep when currentPlatform throws', async () => {
+    mockCurrentPlatform.mockImplementation(() => {
+      throw new Error('Unsupported platform: freebsd')
+    })
+
+    const result = await runDoctor()
+
+    expect(result.ready).toBe(false)
+    expect(result.checks).toHaveLength(0)
+    expect(result.warnings).toHaveLength(0)
+    expect(result.nextSteps).toHaveLength(1)
+    expect(result.nextSteps[0]).toContain('Unsupported platform')
+  })
+
+  it('does not invoke any check functions when currentPlatform throws', async () => {
+    mockCurrentPlatform.mockImplementation(() => {
+      throw new Error('Unsupported platform: freebsd')
+    })
+
+    await runDoctor()
+
+    expect(mockCheckOpenssl).not.toHaveBeenCalled()
+    expect(mockCheckBash).not.toHaveBeenCalled()
+    expect(mockCheckSecurity).not.toHaveBeenCalled()
+    expect(mockCheckPowershell).not.toHaveBeenCalled()
+    expect(mockCheckSecretTool).not.toHaveBeenCalled()
+    expect(mockCheckOp).not.toHaveBeenCalled()
+    expect(mockCheckYkman).not.toHaveBeenCalled()
   })
 })

@@ -17,7 +17,7 @@ import type { Platform } from '../util/platform.js'
 
 /**
  * Options for running the doctor.
- * @internal
+ * @public
  */
 export interface RunDoctorOptions {
   /** Override the platform detection (useful for testing). */
@@ -38,10 +38,20 @@ interface ResolvedEntry {
 
 /**
  * Run all platform-appropriate preflight checks and aggregate the results.
- * @internal
+ * @public
  */
 export async function runDoctor(options?: RunDoctorOptions): Promise<PreflightResult> {
-  const platform = options?.platform ?? currentPlatform()
+  let platform: Platform
+  try {
+    platform = options?.platform ?? currentPlatform()
+  } catch {
+    return {
+      checks: [],
+      ready: false,
+      warnings: [],
+      nextSteps: ['Unsupported platform. vaultkeeper supports macOS, Linux, and Windows.'],
+    }
+  }
 
   const entries: CheckEntry[] = buildCheckList(platform)
 

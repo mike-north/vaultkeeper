@@ -94,8 +94,9 @@ import { VaultKeeper } from 'vaultkeeper'
 // 1. Initialize (runs doctor preflight checks)
 const vault = await VaultKeeper.init()
 
-// 2. Store a secret and mint a JWE token
+// 2. Retrieve a stored secret and mint a JWE token
 //    The secret must already exist in the backend (e.g. macOS Keychain).
+//    See "Storing secrets" below for how to populate the backend.
 const jwe = await vault.setup('MY_API_KEY')
 
 // 3. Authorize: decrypt and validate the token
@@ -121,6 +122,36 @@ accessor.read((buf) => {
   // Use buf here. Do not store a reference beyond this callback.
   doSomethingWith(buf.toString('utf8'))
 })
+```
+
+## Storing secrets
+
+Before calling `setup()`, the secret must exist in the backend. There are three ways to populate it.
+
+**CLI:**
+
+```sh
+echo "my-secret-value" | vaultkeeper store --name MY_API_KEY
+```
+
+**TypeScript API:**
+
+```ts
+import { BackendRegistry } from 'vaultkeeper'
+
+// Create a backend instance and store the secret
+const backend = BackendRegistry.create('file')
+await backend.store('MY_API_KEY', 'my-secret-value')
+```
+
+**Test helper (in-memory, no OS dependencies):**
+
+```ts
+import { TestVault } from '@vaultkeeper/test-helpers'
+
+const { keeper, backend } = await TestVault.create()
+await backend.store('MY_API_KEY', 'my-secret-value')
+const jwe = await keeper.setup('MY_API_KEY')
 ```
 
 ## WASM SDK quick start
@@ -161,6 +192,19 @@ The first enabled backend in the configuration is used.
 | `file` | All | AES-256-GCM encrypted file fallback (built-in) |
 | `1password` | All | 1Password `op` CLI (plugin) |
 | `yubikey` | All | YubiKey `ykman` (plugin) |
+
+## Platforms
+
+| Platform | Default backend | Required dependencies |
+|----------|----------------|----------------------|
+| macOS | `keychain` | `security` (built-in) |
+| Linux | `file` | None (AES-256-GCM encrypted file, no OS credential store needed) |
+| Windows | `dpapi` | PowerShell (built-in) |
+| Any | `file` | None (AES-256-GCM encrypted file, no OS credential store needed) |
+
+The `file` backend works on all platforms and requires no system dependencies. Use it as a fallback or in environments without a native credential store (CI, Docker, etc.).
+
+To use the native Linux credential store instead, install `secret-tool` (`sudo apt install libsecret-tools`) and set `"type": "secret-tool"` in your config.
 
 ## Access patterns
 
@@ -278,6 +322,31 @@ await vault.setDevelopmentMode('/path/to/my-dev-tool', true)
 const jwe = await vault.setup('MY_API_KEY', { executablePath: 'dev' })
 ```
 
+## Testing
+
+The `@vaultkeeper/test-helpers` package provides an in-memory backend and a pre-configured `TestVault` for fast, hermetic tests with zero system dependencies:
+
+```sh
+pnpm add -D @vaultkeeper/test-helpers
+```
+
+```ts
+import { TestVault } from '@vaultkeeper/test-helpers'
+
+const { keeper, backend } = await TestVault.create()
+await backend.store('MY_SECRET', 'hunter2')
+
+const jwe = await keeper.setup('MY_SECRET')
+const { token } = await keeper.authorize(jwe)
+const { result } = await keeper.exec(token, {
+  command: 'echo',
+  args: ['done'],
+  env: { SECRET: '{{secret}}' },
+})
+```
+
+`TestVault` uses an in-memory backend — no OS keychain, no file system, no doctor checks.
+
 ## Configuration
 
 Config is loaded from `~/.config/vaultkeeper/config.json` by default. Override with `configDir` in init options or supply `config` directly.
@@ -332,6 +401,7 @@ All errors extend `VaultError`.
 | `TokenRevokedError` | Token has been blocked (e.g. single-use token already consumed) |
 | `UsageLimitExceededError` | Token presented more times than its `use` limit allows |
 | `IdentityMismatchError` | Executable hash changed since TOFU approval |
+| `InvalidAlgorithmError` | Signing/verifying with a disallowed algorithm (e.g. `md5`) |
 | `SetupError` | Required system dependency missing or incompatible at init |
 | `FilesystemError` | Config directory not readable or writable |
 | `RotationInProgressError` | `rotateKey()` called while previous key is still in grace period |

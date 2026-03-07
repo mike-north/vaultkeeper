@@ -3,7 +3,8 @@
  */
 
 /**
- * @internal
+ * The OS platform identifier used for platform-specific behavior.
+ * @public
  */
 export type Platform = 'darwin' | 'win32' | 'linux'
 
