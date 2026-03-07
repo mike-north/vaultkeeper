@@ -244,7 +244,9 @@ fn config_cases() -> Vec<ConformanceCase> {
             needs_config: false,
             expected_exit_code: 1,
             expected_stdout: OutputMatcher::Any,
-            expected_stderr: OutputMatcher::Contains("Error".into()),
+            expected_stderr: OutputMatcher::Contains(
+                "No config file found. Run 'vaultkeeper config init' to create one.".into(),
+            ),
         },
         ConformanceCase {
             name: "config init exits 1 when config already exists".into(),
@@ -253,7 +255,7 @@ fn config_cases() -> Vec<ConformanceCase> {
             needs_config: true,
             expected_exit_code: 1,
             expected_stdout: OutputMatcher::Any,
-            expected_stderr: OutputMatcher::Contains("already exists".into()),
+            expected_stderr: OutputMatcher::Contains("Error: Config already exists at".into()),
         },
     ]
 }
