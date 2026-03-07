@@ -97,7 +97,7 @@ export async function configCommand(args: string[]): Promise<number> {
         }
         return 0
       } catch (err) {
-        // Fix 4: show a user-friendly message when the config file is missing.
+        // Show a user-friendly message when the config file is missing.
         if (isEnoent(err)) {
           process.stderr.write(
             "Error: No config file found. Run 'vaultkeeper config init' to create one.\n",
@@ -110,6 +110,7 @@ export async function configCommand(args: string[]): Promise<number> {
     }
 
     default:
+      process.stderr.write('Error: missing or unknown config subcommand\n')
       process.stderr.write('Usage: vaultkeeper config <init|show>\n')
       // Exit code 2: usage error (missing or unknown subcommand)
       return 2

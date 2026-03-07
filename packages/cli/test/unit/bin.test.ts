@@ -145,7 +145,7 @@ describe('bin.ts entry point', () => {
     it('should print usage and exit 0 for store --help', async () => {
       const result = await runCli(['store', '--help'])
       expect(result.exitCode).toBe(0)
-      expect(result.stdout).toContain('Usage:')
+      expect(result.stdout).toContain('Usage: echo "secret" | vaultkeeper store')
     })
   })
 

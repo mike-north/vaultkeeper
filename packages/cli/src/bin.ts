@@ -26,10 +26,14 @@ import { parseArgs } from 'node:util'
 // We read and parse the package.json synchronously to avoid a dynamic import()
 // that would require top-level await or restructuring main().
 function readPackageVersion(): string {
-  const pkgPath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../package.json')
-  const raw: unknown = JSON.parse(fs.readFileSync(pkgPath, 'utf8'))
-  if (raw !== null && typeof raw === 'object' && 'version' in raw && typeof raw.version === 'string') {
-    return raw.version
+  try {
+    const pkgPath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../package.json')
+    const raw: unknown = JSON.parse(fs.readFileSync(pkgPath, 'utf8'))
+    if (raw !== null && typeof raw === 'object' && 'version' in raw && typeof raw.version === 'string') {
+      return raw.version
+    }
+  } catch {
+    // package.json absent or malformed — return sentinel
   }
   return '0.0.0'
 }
