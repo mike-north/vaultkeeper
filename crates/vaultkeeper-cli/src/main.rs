@@ -43,7 +43,7 @@ enum Commands {
         #[arg(long)]
         path: String,
     },
-    /// Toggle development mode for a script
+    /// Enable or disable development mode for a script
     DevMode {
         /// Path to the executable
         #[arg(long)]

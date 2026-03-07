@@ -245,7 +245,7 @@ fn config_cases() -> Vec<ConformanceCase> {
             expected_exit_code: 1,
             expected_stdout: OutputMatcher::Any,
             expected_stderr: OutputMatcher::Contains(
-                "No config file found. Run 'vaultkeeper config init' to create one.".into(),
+                "Error: No config file found. Run 'vaultkeeper config init' to create one.".into(),
             ),
         },
         ConformanceCase {
