@@ -37,6 +37,9 @@ console_error_panic_hook = "0.1"
 # CLI
 clap = { version = "4", features = ["derive"] }
 
+# Internal
+vaultkeeper-core = { path = "crates/vaultkeeper-core", version = "0.2.0" }
+
 # Security
 zeroize = "1"
 
