@@ -74,25 +74,27 @@ export interface VaultResponse {
  * Request for delegated HTTP fetch.
  *
  * String values in `url`, `headers`, and `body` may include the placeholder
- * `{{secret}}`, which is replaced with the actual secret value immediately
- * before the request is sent.
+ * `{{secret}}` (single-token mode) or `{{secret:name}}` (multi-token mode),
+ * which are replaced with actual secret values immediately before the request
+ * is sent.
  */
 export interface FetchRequest {
   /**
-   * The target URL. May contain `{{secret}}` which is replaced with the secret
-   * value before the fetch is executed (e.g. for API-key-in-URL patterns).
+   * The target URL. May contain `{{secret}}` or `{{secret:name}}` which is
+   * replaced with the secret value before the fetch is executed.
    */
   url: string
   /** HTTP method (defaults to `'GET'` when omitted). */
   method?: string | undefined
   /**
-   * Request headers. Any header value may contain `{{secret}}`, which is
-   * replaced with the secret value before the request is sent.
+   * Request headers. Any header value may contain `{{secret}}` or
+   * `{{secret:name}}`, which is replaced with the secret value before
+   * the request is sent.
    */
   headers?: Record<string, string> | undefined
   /**
-   * Request body. May contain `{{secret}}`, which is replaced with the secret
-   * value before the request is sent.
+   * Request body. May contain `{{secret}}` or `{{secret:name}}`, which is
+   * replaced with the secret value before the request is sent.
    */
   body?: string | undefined
 }
@@ -100,22 +102,23 @@ export interface FetchRequest {
 /**
  * Request for delegated command execution.
  *
- * String values in `args` and `env` may include the placeholder `{{secret}}`,
- * which is replaced with the actual secret value immediately before the command
- * is spawned.
+ * String values in `args` and `env` may include the placeholder `{{secret}}`
+ * (single-token mode) or `{{secret:name}}` (multi-token mode), which are
+ * replaced with actual secret values immediately before the command is spawned.
  */
 export interface ExecRequest {
   /** The command (binary) to execute. */
   command: string
   /**
-   * Command-line arguments. Any argument may contain `{{secret}}`, which is
-   * replaced with the secret value before the command is spawned.
+   * Command-line arguments. Any argument may contain `{{secret}}` or
+   * `{{secret:name}}`, which is replaced with the secret value before the
+   * command is spawned.
    */
   args?: string[] | undefined
   /**
    * Additional environment variables to merge into the child process
-   * environment. Any value may contain `{{secret}}`, which is replaced with
-   * the secret value before the command is spawned.
+   * environment. Any value may contain `{{secret}}` or `{{secret:name}}`,
+   * which is replaced with the secret value before the command is spawned.
    */
   env?: Record<string, string> | undefined
   /** Working directory for the spawned process. */
