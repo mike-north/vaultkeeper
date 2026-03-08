@@ -5,6 +5,11 @@
 ```ts
 
 // @public
+export class AccessorConsumedError extends VaultError {
+    constructor(message: string);
+}
+
+// @public
 export class AuthorizationDeniedError extends VaultError {
     constructor(message: string);
 }
@@ -65,6 +70,12 @@ export class DeviceNotPresentError extends VaultError {
 }
 
 // @public
+export class ExecError extends VaultError {
+    constructor(message: string, command: string);
+    readonly command: string;
+}
+
+// @public
 export interface ExecRequest {
     args?: string[] | undefined;
     command: string;
@@ -106,6 +117,11 @@ export class InvalidAlgorithmError extends VaultError {
     constructor(message: string, algorithm: string, allowed: string[]);
     readonly algorithm: string;
     readonly allowed: string[];
+}
+
+// @public
+export class InvalidTokenError extends VaultError {
+    constructor(message: string);
 }
 
 // @public
