@@ -10,6 +10,7 @@
  */
 
 import type { SecretAccessor } from '../types.js'
+import { AccessorConsumedError } from '../errors.js'
 
 const INSPECT_CUSTOM = Symbol.for('nodejs.util.inspect.custom')
 
@@ -58,7 +59,7 @@ export function createSecretAccessor(secretValue: string): SecretAccessor {
   // Close over the actual read logic.
   function readImpl(callback: (buf: Buffer) => void): void {
     if (consumed) {
-      throw new Error('SecretAccessor has already been consumed — call getSecret() again to obtain a new accessor')
+      throw new AccessorConsumedError('SecretAccessor has already been consumed — call getSecret() again to obtain a new accessor')
     }
     consumed = true
 

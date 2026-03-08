@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { createToken, decryptToken, extractKid } from '../../../src/jwe/token.js'
 import type { VaultClaims } from '../../../src/types.js'
-import { VaultError } from '../../../src/errors.js'
+import { VaultError, InvalidTokenError } from '../../../src/errors.js'
 
 /** Creates a minimal valid VaultClaims for testing. */
 function makeTestClaims(overrides: Partial<VaultClaims> = {}): VaultClaims {
@@ -107,7 +107,7 @@ describe('createToken / decryptToken', () => {
 
   it('decryption fails with a completely invalid string', async () => {
     const key = makeKey()
-    await expect(decryptToken(key, 'not-a-jwe')).rejects.toBeInstanceOf(VaultError)
+    await expect(decryptToken(key, 'not-a-jwe')).rejects.toBeInstanceOf(InvalidTokenError)
   })
 
   it('decryption fails if payload is not valid JSON', async () => {
@@ -130,11 +130,11 @@ describe('extractKid', () => {
     expect(extractKid(jwe)).toBeUndefined()
   })
 
-  it('throws VaultError for malformed JWE (wrong number of parts)', () => {
-    expect(() => extractKid('a.b.c')).toThrow(VaultError)
+  it('throws InvalidTokenError for malformed JWE (wrong number of parts)', () => {
+    expect(() => extractKid('a.b.c')).toThrow(InvalidTokenError)
   })
 
-  it('throws VaultError for empty string', () => {
-    expect(() => extractKid('')).toThrow(VaultError)
+  it('throws InvalidTokenError for empty string', () => {
+    expect(() => extractKid('')).toThrow(InvalidTokenError)
   })
 })

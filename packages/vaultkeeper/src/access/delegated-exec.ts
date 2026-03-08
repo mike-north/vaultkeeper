@@ -7,6 +7,7 @@
 
 import { spawn } from 'node:child_process'
 import type { ExecRequest, ExecResult } from '../types.js'
+import { ExecError } from '../errors.js'
 
 const PLACEHOLDER = '{{secret}}'
 
@@ -37,6 +38,13 @@ export function delegatedExec(
   secret: string,
   request: ExecRequest,
 ): Promise<ExecResult> {
+  if (request.command.includes(PLACEHOLDER)) {
+    throw new ExecError(
+      `The {{secret}} placeholder is not supported in the command field. Use args or env instead.`,
+      request.command,
+    )
+  }
+
   const args = (request.args ?? []).map((arg) => replacePlaceholder(arg, secret))
   const env =
     request.env !== undefined ? replaceInRecord(request.env, secret) : undefined
@@ -69,7 +77,22 @@ export function delegatedExec(
     })
 
     proc.on('error', (error) => {
-      reject(error)
+      const isEnoent = error instanceof Error && 'code' in error && error.code === 'ENOENT'
+      if (isEnoent) {
+        reject(
+          new ExecError(
+            `Command not found: ${request.command}. Verify the command exists and is in PATH.`,
+            request.command,
+          ),
+        )
+      } else {
+        reject(
+          new ExecError(
+            `Failed to execute command: ${request.command}. ${error instanceof Error ? error.message : String(error)}`,
+            request.command,
+          ),
+        )
+      }
     })
   })
 }
