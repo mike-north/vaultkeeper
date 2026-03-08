@@ -96,17 +96,17 @@ export class VaultKeeper {
    * Runs doctor checks (unless skipped), loads config, and sets up the key manager.
    */
   static async init(options?: VaultKeeperOptions): Promise<VaultKeeper> {
+    const configDir = options?.configDir ?? getDefaultConfigDir()
+    const config = options?.config ?? (await loadConfig(configDir))
+
     if (options?.skipDoctor !== true) {
-      const doctorResult = await runDoctor()
+      const doctorResult = await runDoctor({ backends: config.backends })
       if (!doctorResult.ready) {
         throw new VaultError(
           `System not ready: ${doctorResult.nextSteps.join('; ')}`,
         )
       }
     }
-
-    const configDir = options?.configDir ?? getDefaultConfigDir()
-    const config = options?.config ?? (await loadConfig(configDir))
 
     const keyManager = new KeyManager()
     await keyManager.init()

@@ -55,8 +55,14 @@ impl VaultKeeper {
     ) -> Result<Self, VaultError> {
         let opts = options.unwrap_or_default();
 
+        let cfg = match opts.config {
+            Some(c) => c,
+            None => config::load_config(host).await?,
+        };
+
         if !opts.skip_doctor {
-            let doctor_result = crate::doctor::run_doctor(host).await;
+            let doctor_result =
+                crate::doctor::run_doctor(host, Some(&cfg.backends)).await;
             if !doctor_result.ready {
                 return Err(VaultError::Other(format!(
                     "System not ready: {}",
@@ -64,11 +70,6 @@ impl VaultKeeper {
                 )));
             }
         }
-
-        let cfg = match opts.config {
-            Some(c) => c,
-            None => config::load_config(host).await?,
-        };
 
         let mut key_manager = KeyManager::new();
         key_manager.init()?;
@@ -83,7 +84,7 @@ impl VaultKeeper {
 
     /// Run doctor checks without full initialization.
     pub async fn doctor(host: &dyn HostPlatform) -> PreflightResult {
-        crate::doctor::run_doctor(host).await
+        crate::doctor::run_doctor(host, None).await
     }
 
     /// Get a reference to the current config.
