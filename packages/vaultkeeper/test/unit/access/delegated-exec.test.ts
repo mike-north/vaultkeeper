@@ -148,6 +148,49 @@ describe('delegatedExec', () => {
     })
   })
 
+  describe('named-secret mode (Record)', () => {
+    it('replaces {{secret:name}} in args', async () => {
+      const request: ExecRequest = {
+        command: 'sh',
+        args: ['-c', 'echo {{secret:greeting}}'],
+      }
+
+      const result = await delegatedExec({ greeting: 'hello' }, request)
+
+      expect(result.stdout.trim()).toBe('hello')
+      expect(result.exitCode).toBe(0)
+    })
+
+    it('replaces multiple named secrets in args', async () => {
+      const request: ExecRequest = {
+        command: 'sh',
+        args: ['-c', 'echo {{secret:a}}-{{secret:b}}'],
+      }
+
+      const result = await delegatedExec({ a: 'x', b: 'y' }, request)
+
+      expect(result.stdout.trim()).toBe('x-y')
+    })
+
+    it('replaces named secrets in env values', async () => {
+      const request: ExecRequest = {
+        command: 'sh',
+        args: ['-c', 'echo $API_KEY $DB_PASS'],
+        env: {
+          API_KEY: '{{secret:apiKey}}',
+          DB_PASS: '{{secret:dbPass}}',
+        },
+      }
+
+      const result = await delegatedExec(
+        { apiKey: 'key123', dbPass: 'pass456' },
+        request,
+      )
+
+      expect(result.stdout.trim()).toBe('key123 pass456')
+    })
+  })
+
   describe('negative cases', () => {
     it('rejects with ExecError when the command is not found', async () => {
       const request: ExecRequest = { command: 'nonexistent-command-xyz-123' }
@@ -164,7 +207,16 @@ describe('delegatedExec', () => {
 
       await expect(delegatedExec('s', request)).rejects.toThrow(ExecError)
       await expect(delegatedExec('s', request)).rejects.toThrow(
-        /placeholder is not supported in the command field/,
+        /placeholders are not supported in the command field/,
+      )
+    })
+
+    it('rejects with ExecError when {{secret:name}} is used in the command field', async () => {
+      const request: ExecRequest = { command: '{{secret:apiKey}}' }
+
+      await expect(delegatedExec({ apiKey: 'val' }, request)).rejects.toThrow(ExecError)
+      await expect(delegatedExec({ apiKey: 'val' }, request)).rejects.toThrow(
+        /placeholders are not supported in the command field/,
       )
     })
   })
