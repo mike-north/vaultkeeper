@@ -1,15 +1,5 @@
 # vaultkeeper
 
-## 0.6.0
-
-### Minor Changes
-
-- [#48](https://github.com/mike-north/vaultkeeper/pull/48) [`9dde9f7`](https://github.com/mike-north/vaultkeeper/commit/9dde9f74987bd4c56cf2bccc20a7514666e309e3) Thanks [@mike-north](https://github.com/mike-north)! - Improve developer experience: wrap ENOENT spawn errors in PluginNotFoundError, add store() and delete() convenience methods to VaultKeeper, clarify setup() JSDoc, and add missing @public tag on InvalidAlgorithmError
-
-- [#50](https://github.com/mike-north/vaultkeeper/pull/50) [`7f7def6`](https://github.com/mike-north/vaultkeeper/commit/7f7def60e2d9b6b707cd297a26821dc755f08e99) Thanks [@mike-north](https://github.com/mike-north)! - Standardize authorize() return type to use vaultResponse (matching exec/fetch/sign), accept RunDoctorOptions in VaultKeeper.doctor(), and include reason in required dependency error messages
-
-- [#51](https://github.com/mike-north/vaultkeeper/pull/51) [`1092a20`](https://github.com/mike-north/vaultkeeper/commit/1092a20b7ad109b092dcdaff725977925c7a1c69) Thanks [@mike-north](https://github.com/mike-north)! - Add ExecError, InvalidTokenError, and AccessorConsumedError for precise error handling; validate secret names are non-empty; detect {{secret}} in exec command field; update README quick start with store() step
-
 ## 0.5.3
 
 ### Patch Changes
