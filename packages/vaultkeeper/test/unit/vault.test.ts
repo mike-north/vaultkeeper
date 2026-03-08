@@ -334,5 +334,27 @@ describe('VaultKeeper', () => {
         vault.setup('nonexistent', { executablePath: 'dev' }),
       ).rejects.toThrow('Secret not found')
     })
+
+    it('should reject store with empty secret name', async () => {
+      const vault = await initVault()
+      await expect(vault.store('', 'value')).rejects.toThrow('Secret name must not be empty')
+    })
+
+    it('should reject store with whitespace-only secret name', async () => {
+      const vault = await initVault()
+      await expect(vault.store('   ', 'value')).rejects.toThrow('Secret name must not be empty')
+    })
+
+    it('should reject delete with empty secret name', async () => {
+      const vault = await initVault()
+      await expect(vault.delete('')).rejects.toThrow('Secret name must not be empty')
+    })
+
+    it('should reject setup with empty secret name', async () => {
+      const vault = await initVault()
+      await expect(
+        vault.setup('', { executablePath: 'dev' }),
+      ).rejects.toThrow('Secret name must not be empty')
+    })
   })
 })
