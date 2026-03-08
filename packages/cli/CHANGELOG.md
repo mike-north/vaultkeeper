@@ -1,5 +1,12 @@
 # @vaultkeeper/cli
 
+## 0.1.9
+
+### Patch Changes
+
+- Updated dependencies [[`5bbff5a`](https://github.com/mike-north/vaultkeeper/commit/5bbff5a7c6129a5240b3307c6915e4957b3889c1), [`5bbff5a`](https://github.com/mike-north/vaultkeeper/commit/5bbff5a7c6129a5240b3307c6915e4957b3889c1), [`a7540d1`](https://github.com/mike-north/vaultkeeper/commit/a7540d1b2198dceace73c1e1abba2dcd0f565f03), [`a7540d1`](https://github.com/mike-north/vaultkeeper/commit/a7540d1b2198dceace73c1e1abba2dcd0f565f03)]:
+  - vaultkeeper@0.6.0
+
 ## 0.1.8
 
 ### Patch Changes

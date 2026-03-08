@@ -1,5 +1,14 @@
 # @vaultkeeper/test-helpers
 
+## 0.2.7
+
+### Patch Changes
+
+- [`5bbff5a`](https://github.com/mike-north/vaultkeeper/commit/5bbff5a7c6129a5240b3307c6915e4957b3889c1) Thanks [@mike-north](https://github.com/mike-north)! - Standardize authorize() return type to use vaultResponse (matching exec/fetch/sign), accept RunDoctorOptions in VaultKeeper.doctor(), and include reason in required dependency error messages
+
+- Updated dependencies [[`5bbff5a`](https://github.com/mike-north/vaultkeeper/commit/5bbff5a7c6129a5240b3307c6915e4957b3889c1), [`5bbff5a`](https://github.com/mike-north/vaultkeeper/commit/5bbff5a7c6129a5240b3307c6915e4957b3889c1), [`a7540d1`](https://github.com/mike-north/vaultkeeper/commit/a7540d1b2198dceace73c1e1abba2dcd0f565f03), [`a7540d1`](https://github.com/mike-north/vaultkeeper/commit/a7540d1b2198dceace73c1e1abba2dcd0f565f03)]:
+  - vaultkeeper@0.6.0
+
 ## 0.2.6
 
 ### Patch Changes
