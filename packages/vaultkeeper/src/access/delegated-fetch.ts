@@ -1,49 +1,37 @@
 /**
  * Delegated HTTP fetch access pattern.
  *
- * Replaces `{{secret}}` placeholders in the request URL, headers, and body
- * with the actual secret value, then executes the fetch.
+ * Replaces `{{secret}}` or `{{secret:name}}` placeholders in the request
+ * URL, headers, and body with actual secret values, then executes the fetch.
  */
 
 import type { FetchRequest } from '../types.js'
-
-const PLACEHOLDER = '{{secret}}'
-
-function replacePlaceholder(value: string, secret: string): string {
-  return value.replaceAll(PLACEHOLDER, secret)
-}
-
-function replaceInRecord(
-  record: Record<string, string>,
-  secret: string,
-): Record<string, string> {
-  const result: Record<string, string> = {}
-  for (const [key, value] of Object.entries(record)) {
-    result[key] = replacePlaceholder(value, secret)
-  }
-  return result
-}
+import {
+  resolvePlaceholders,
+  resolvePlaceholdersInRecord,
+} from './placeholder.js'
 
 /**
- * Execute a delegated HTTP fetch with the secret injected into the request.
+ * Execute a delegated HTTP fetch with secrets injected into the request.
  *
- * @param secret - The secret value to inject
- * @param request - The fetch request template with `{{secret}}` placeholders
+ * @param secrets - A single secret string (replaces `{{secret}}`) or a
+ *   name-to-value map (replaces `{{secret:name}}`)
+ * @param request - The fetch request template with placeholders
  * @returns The fetch Response
  * @internal
  */
 export async function delegatedFetch(
-  secret: string,
+  secrets: string | Record<string, string>,
   request: FetchRequest,
 ): Promise<Response> {
-  const url = replacePlaceholder(request.url, secret)
+  const url = resolvePlaceholders(request.url, secrets)
   const headers =
     request.headers !== undefined
-      ? replaceInRecord(request.headers, secret)
+      ? resolvePlaceholdersInRecord(request.headers, secrets)
       : undefined
   const body =
     request.body !== undefined
-      ? replacePlaceholder(request.body, secret)
+      ? resolvePlaceholders(request.body, secrets)
       : undefined
 
   const init: RequestInit = {}

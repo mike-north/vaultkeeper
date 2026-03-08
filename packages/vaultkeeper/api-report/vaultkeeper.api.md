@@ -210,6 +210,9 @@ export class SecretNotFoundError extends VaultError {
 }
 
 // @public
+export type SecretTokenMap = Record<string, CapabilityToken>;
+
+// @public
 export interface SetupChoice {
     readonly label: string;
     readonly value: string;
@@ -302,11 +305,11 @@ export class VaultKeeper {
     }>;
     delete(name: string): Promise<void>;
     static doctor(options?: RunDoctorOptions): Promise<PreflightResult>;
-    exec(token: CapabilityToken, request: ExecRequest): Promise<{
+    exec(token: CapabilityToken | SecretTokenMap, request: ExecRequest): Promise<{
         result: ExecResult;
         vaultResponse: VaultResponse;
     }>;
-    fetch(token: CapabilityToken, request: FetchRequest): Promise<{
+    fetch(token: CapabilityToken | SecretTokenMap, request: FetchRequest): Promise<{
         response: Response;
         vaultResponse: VaultResponse;
     }>;
