@@ -216,6 +216,8 @@ export class IdentityMismatchError extends VaultError {
 /**
  * Thrown when a caller requests a signing/verification algorithm that is not
  * in the allowed set (e.g. `'md5'`).
+ *
+ * @public
  */
 export class InvalidAlgorithmError extends VaultError {
   /**

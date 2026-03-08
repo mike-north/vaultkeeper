@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { execCommand, execCommandFull } from '../../../src/util/exec.js'
+import { PluginNotFoundError } from '../../../src/errors.js'
 
 describe('execCommand', () => {
   it('returns trimmed stdout on success', async () => {
@@ -50,5 +51,11 @@ describe('execCommandFull', () => {
     const result = await execCommandFull('cat', [], { stdin: 'from-stdin' })
     expect(result.stdout).toBe('from-stdin')
     expect(result.exitCode).toBe(0)
+  })
+
+  it('wraps ENOENT spawn error in PluginNotFoundError', async () => {
+    await expect(
+      execCommandFull('this-binary-absolutely-does-not-exist-anywhere', ['--version']),
+    ).rejects.toThrow(PluginNotFoundError)
   })
 })

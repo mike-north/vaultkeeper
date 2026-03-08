@@ -3,6 +3,7 @@
  */
 
 import { spawn } from 'node:child_process'
+import { PluginNotFoundError } from '../errors.js'
 
 /** Options for command execution. */
 export interface ExecCommandOptions {
@@ -75,7 +76,17 @@ export function execCommandFull(
     })
 
     proc.on('error', (error) => {
-      reject(error)
+      if ('code' in error && error.code === 'ENOENT') {
+        reject(
+          new PluginNotFoundError(
+            `'${command}' is not installed or not found in PATH`,
+            command,
+            '',
+          ),
+        )
+      } else {
+        reject(error)
+      }
     })
   })
 }

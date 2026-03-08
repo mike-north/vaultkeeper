@@ -288,6 +288,40 @@ describe('VaultKeeper', () => {
     })
   })
 
+  describe('store', () => {
+    it('should delegate to the active backend', async () => {
+      const storeSpy = vi.fn(() => Promise.resolve())
+      const backend = createMockBackend()
+      backend.store = storeSpy
+      BackendRegistry.register('test', () => backend)
+
+      const vault = await VaultKeeper.init({
+        skipDoctor: true,
+        config: testConfig(),
+        configDir: '/tmp/vaultkeeper-test',
+      })
+      await vault.store('new-secret', 'new-value')
+      expect(storeSpy).toHaveBeenCalledWith('new-secret', 'new-value')
+    })
+  })
+
+  describe('delete', () => {
+    it('should delegate to the active backend', async () => {
+      const deleteSpy = vi.fn(() => Promise.resolve())
+      const backend = createMockBackend({ 'my-secret': 'hunter2' })
+      backend.delete = deleteSpy
+      BackendRegistry.register('test', () => backend)
+
+      const vault = await VaultKeeper.init({
+        skipDoctor: true,
+        config: testConfig(),
+        configDir: '/tmp/vaultkeeper-test',
+      })
+      await vault.delete('my-secret')
+      expect(deleteSpy).toHaveBeenCalledWith('my-secret')
+    })
+  })
+
   describe('negative cases', () => {
     it('should reject authorize with corrupted JWE', async () => {
       const vault = await initVault()
