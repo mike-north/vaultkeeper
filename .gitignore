@@ -168,3 +168,5 @@ scratch/
 **/scratch
 !scratch/.gitkeep
 !**/scratch/.gitkeep
+# Claude Code local configuration (auto-added)
+.claude/*.local.*
