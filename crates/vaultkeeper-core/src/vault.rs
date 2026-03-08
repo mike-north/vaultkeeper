@@ -61,8 +61,7 @@ impl VaultKeeper {
         };
 
         if !opts.skip_doctor {
-            let doctor_result =
-                crate::doctor::run_doctor(host, Some(&cfg.backends)).await;
+            let doctor_result = crate::doctor::run_doctor(host, Some(&cfg.backends)).await;
             if !doctor_result.ready {
                 return Err(VaultError::Other(format!(
                     "System not ready: {}",

@@ -115,8 +115,7 @@ async fn run_platform_checks(
             // (or no backend list was provided — backward-compatible default).
             entries.push(CheckEntry {
                 result: check_security(host).await,
-                required: enabled_types
-                    .is_none_or(|types| types.contains("keychain")),
+                required: enabled_types.is_none_or(|types| types.contains("keychain")),
             });
             entries.push(CheckEntry {
                 result: check_bash(host).await,
@@ -126,8 +125,7 @@ async fn run_platform_checks(
         Platform::Windows => {
             entries.push(CheckEntry {
                 result: check_powershell(host).await,
-                required: enabled_types
-                    .is_none_or(|types| types.contains("dpapi")),
+                required: enabled_types.is_none_or(|types| types.contains("dpapi")),
             });
         }
         Platform::Linux => {
@@ -137,8 +135,7 @@ async fn run_platform_checks(
             });
             entries.push(CheckEntry {
                 result: check_secret_tool(host).await,
-                required: enabled_types
-                    .is_none_or(|types| types.contains("secret-tool")),
+                required: enabled_types.is_none_or(|types| types.contains("secret-tool")),
             });
         }
     }
@@ -147,13 +144,11 @@ async fn run_platform_checks(
     // explicitly enabled; otherwise optional (informational).
     entries.push(CheckEntry {
         result: check_op(host).await,
-        required: enabled_types
-            .is_some_and(|types| types.contains("1password")),
+        required: enabled_types.is_some_and(|types| types.contains("1password")),
     });
     entries.push(CheckEntry {
         result: check_ykman(host).await,
-        required: enabled_types
-            .is_some_and(|types| types.contains("yubikey")),
+        required: enabled_types.is_some_and(|types| types.contains("yubikey")),
     });
 
     entries
