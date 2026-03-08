@@ -1,5 +1,17 @@
 # vaultkeeper
 
+## 0.6.0
+
+### Minor Changes
+
+- [`5bbff5a`](https://github.com/mike-north/vaultkeeper/commit/5bbff5a7c6129a5240b3307c6915e4957b3889c1) Thanks [@mike-north](https://github.com/mike-north)! - Improve developer experience: wrap ENOENT spawn errors in PluginNotFoundError, add store() and delete() convenience methods to VaultKeeper, clarify setup() JSDoc, and add missing @public tag on InvalidAlgorithmError
+
+- [`5bbff5a`](https://github.com/mike-north/vaultkeeper/commit/5bbff5a7c6129a5240b3307c6915e4957b3889c1) Thanks [@mike-north](https://github.com/mike-north)! - Standardize authorize() return type to use vaultResponse (matching exec/fetch/sign), accept RunDoctorOptions in VaultKeeper.doctor(), and include reason in required dependency error messages
+
+- [#54](https://github.com/mike-north/vaultkeeper/pull/54) [`a7540d1`](https://github.com/mike-north/vaultkeeper/commit/a7540d1b2198dceace73c1e1abba2dcd0f565f03) Thanks [@mike-north](https://github.com/mike-north)! - Add ExecError, InvalidTokenError, and AccessorConsumedError for precise error handling; validate secret names are non-empty; detect {{secret}} in exec command field; update README quick start with store() step
+
+- [#54](https://github.com/mike-north/vaultkeeper/pull/54) [`a7540d1`](https://github.com/mike-north/vaultkeeper/commit/a7540d1b2198dceace73c1e1abba2dcd0f565f03) Thanks [@mike-north](https://github.com/mike-north)! - Add multi-secret support for delegated exec and fetch via `SecretTokenMap` and `{{secret:name}}` placeholders.
+
 ## 0.5.3
 
 ### Patch Changes
