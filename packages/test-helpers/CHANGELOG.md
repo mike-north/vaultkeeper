@@ -1,5 +1,14 @@
 # @vaultkeeper/test-helpers
 
+## 0.2.5
+
+### Patch Changes
+
+- [#44](https://github.com/mike-north/vaultkeeper/pull/44) [`3b5868f`](https://github.com/mike-north/vaultkeeper/commit/3b5868f676e6b4131e5d99c244246c7cbb325845) Thanks [@mike-north](https://github.com/mike-north)! - Fix error type correctness: `InMemoryBackend` now throws `SecretNotFoundError` (not plain `Error`), exceeding a token's use limit throws `UsageLimitExceededError` (not `TokenRevokedError`), and double-reading a `SecretAccessor` throws a descriptive error instead of a raw Proxy `TypeError`.
+
+- Updated dependencies [[`f0fe162`](https://github.com/mike-north/vaultkeeper/commit/f0fe16247ebcfc33ad0dd65a57695a101ca07b61), [`3b5868f`](https://github.com/mike-north/vaultkeeper/commit/3b5868f676e6b4131e5d99c244246c7cbb325845)]:
+  - vaultkeeper@0.5.2
+
 ## 0.2.4
 
 ### Patch Changes
