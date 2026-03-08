@@ -48,8 +48,8 @@ describe('VaultKeeper e2e lifecycle', () => {
     expect(typeof jwe).toBe('string')
 
     // Authorize: decrypt and validate the token
-    const { token, response } = await vault.authorize(jwe)
-    expect(response.keyStatus).toBe('current')
+    const { token, vaultResponse } = await vault.authorize(jwe)
+    expect(vaultResponse.keyStatus).toBe('current')
 
     // GetSecret: read the secret value through the accessor
     const accessor = vault.getSecret(token)

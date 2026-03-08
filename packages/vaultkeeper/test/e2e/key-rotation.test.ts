@@ -48,9 +48,9 @@ describe('Key rotation e2e', () => {
     await vault.rotateKey()
 
     // Authorize with the old JWE — should still work but indicate key is 'previous'
-    const { token, response } = await vault.authorize(originalJwe)
-    expect(response.keyStatus).toBe('previous')
-    expect(response.rotatedJwt).toBeDefined()
+    const { token, vaultResponse } = await vault.authorize(originalJwe)
+    expect(vaultResponse.keyStatus).toBe('previous')
+    expect(vaultResponse.rotatedJwt).toBeDefined()
 
     // The secret should still be accessible
     let secretValue = ''
@@ -60,12 +60,12 @@ describe('Key rotation e2e', () => {
     expect(secretValue).toBe('pg-secret-123')
 
     // The rotated JWE should work with the current key
-    const rotatedJwt = response.rotatedJwt
+    const rotatedJwt = vaultResponse.rotatedJwt
     expect(rotatedJwt).toBeDefined()
     if (rotatedJwt === undefined) throw new Error('unreachable')
-    const { response: newResponse } = await vault.authorize(rotatedJwt)
-    expect(newResponse.keyStatus).toBe('current')
-    expect(newResponse.rotatedJwt).toBeUndefined()
+    const { vaultResponse: newVaultResponse } = await vault.authorize(rotatedJwt)
+    expect(newVaultResponse.keyStatus).toBe('current')
+    expect(newVaultResponse.rotatedJwt).toBeUndefined()
   })
 
   it('should reject old JWE after key revocation', async () => {
@@ -99,8 +99,8 @@ describe('Key rotation e2e', () => {
 
     // New setup with the new key should work
     const jwe = await vault.setup('new-secret', { executablePath: 'dev' })
-    const { token, response } = await vault.authorize(jwe)
-    expect(response.keyStatus).toBe('current')
+    const { token, vaultResponse } = await vault.authorize(jwe)
+    expect(vaultResponse.keyStatus).toBe('current')
 
     let val = ''
     vault.getSecret(token).read((buf) => {
@@ -126,7 +126,7 @@ describe('Key rotation e2e', () => {
 
     // JWEs created after the first rotation should use the current key
     const jwe = await vault.setup('secret', { executablePath: 'dev' })
-    const { response } = await vault.authorize(jwe)
-    expect(response.keyStatus).toBe('current')
+    const { vaultResponse } = await vault.authorize(jwe)
+    expect(vaultResponse.keyStatus).toBe('current')
   })
 })

@@ -79,9 +79,9 @@ describe('TestVault', () => {
     expect(typeof jwe).toBe('string')
     expect(jwe.length).toBeGreaterThan(0)
 
-    const { token, response } = await vault.keeper.authorize(jwe)
+    const { token, vaultResponse } = await vault.keeper.authorize(jwe)
     expect(token).toBeDefined()
-    expect(response.keyStatus).toBe('current')
+    expect(vaultResponse.keyStatus).toBe('current')
   })
 
   it('should support custom TTL', async () => {

@@ -282,10 +282,10 @@ export class VaultError extends Error {
 export class VaultKeeper {
     authorize(jwe: string): Promise<{
         token: CapabilityToken;
-        response: VaultResponse;
+        vaultResponse: VaultResponse;
     }>;
     delete(name: string): Promise<void>;
-    static doctor(): Promise<PreflightResult>;
+    static doctor(options?: RunDoctorOptions): Promise<PreflightResult>;
     exec(token: CapabilityToken, request: ExecRequest): Promise<{
         result: ExecResult;
         vaultResponse: VaultResponse;

@@ -86,7 +86,9 @@ export async function runDoctor(options?: RunDoctorOptions): Promise<PreflightRe
   for (const { required, result } of resolved) {
     if (result.status === 'missing') {
       if (required) {
-        nextSteps.push(`Install missing required dependency: ${result.name}`)
+        nextSteps.push(
+          `Install missing required dependency: ${result.name}${result.reason !== undefined ? ` — ${result.reason}` : ''}`,
+        )
       } else {
         warnings.push(
           `Optional dependency not found: ${result.name}${result.reason !== undefined ? ` — ${result.reason}` : ''}`,
