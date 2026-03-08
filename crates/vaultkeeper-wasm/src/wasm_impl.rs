@@ -282,7 +282,7 @@ pub async fn create_vault_keeper(
 impl WasmVaultKeeper {
     /// Run doctor checks and return a PreflightResult as JSON.
     pub async fn doctor(&self) -> Result<JsValue, JsError> {
-        let result = vaultkeeper_core::doctor::run_doctor(self.host.as_ref()).await;
+        let result = vaultkeeper_core::doctor::run_doctor(self.host.as_ref(), None).await;
         to_js_value(&result)
     }
 
