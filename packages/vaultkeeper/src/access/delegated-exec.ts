@@ -1,46 +1,53 @@
 /**
  * Delegated command execution access pattern.
  *
- * Replaces `{{secret}}` or `{{secret:name}}` placeholders in command args
- * and environment values, then executes the command.
+ * Replaces `{{secret}}` placeholders in command args and environment values,
+ * then executes the command.
  */
 
 import { spawn } from 'node:child_process'
 import type { ExecRequest, ExecResult } from '../types.js'
 import { ExecError } from '../errors.js'
-import {
-  ANY_PLACEHOLDER_RE,
-  resolvePlaceholders,
-  resolvePlaceholdersInRecord,
-} from './placeholder.js'
+
+const PLACEHOLDER = '{{secret}}'
+
+function replacePlaceholder(value: string, secret: string): string {
+  return value.replaceAll(PLACEHOLDER, secret)
+}
+
+function replaceInRecord(
+  record: Record<string, string>,
+  secret: string,
+): Record<string, string> {
+  const result: Record<string, string> = {}
+  for (const [key, value] of Object.entries(record)) {
+    result[key] = replacePlaceholder(value, secret)
+  }
+  return result
+}
 
 /**
- * Execute a delegated command with secrets injected into args and env.
+ * Execute a delegated command with the secret injected into args and env.
  *
- * @param secrets - A single secret string (replaces `{{secret}}`) or a
- *   name-to-value map (replaces `{{secret:name}}`)
- * @param request - The exec request template with placeholders
+ * @param secret - The secret value to inject
+ * @param request - The exec request template with `{{secret}}` placeholders
  * @returns The command result (stdout, stderr, exitCode)
  * @internal
  */
 export function delegatedExec(
-  secrets: string | Record<string, string>,
+  secret: string,
   request: ExecRequest,
 ): Promise<ExecResult> {
-  if (ANY_PLACEHOLDER_RE.test(request.command)) {
+  if (request.command.includes(PLACEHOLDER)) {
     throw new ExecError(
-      `Secret placeholders are not supported in the command field. Use args or env instead.`,
+      `The {{secret}} placeholder is not supported in the command field. Use args or env instead.`,
       request.command,
     )
   }
 
-  const args = (request.args ?? []).map((arg) =>
-    resolvePlaceholders(arg, secrets),
-  )
+  const args = (request.args ?? []).map((arg) => replacePlaceholder(arg, secret))
   const env =
-    request.env !== undefined
-      ? resolvePlaceholdersInRecord(request.env, secrets)
-      : undefined
+    request.env !== undefined ? replaceInRecord(request.env, secret) : undefined
 
   return new Promise((resolve, reject) => {
     const spawnOptions: Parameters<typeof spawn>[2] = {
