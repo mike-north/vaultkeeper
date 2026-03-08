@@ -151,18 +151,19 @@ describe('delegatedExec', () => {
   describe('negative cases', () => {
     it('rejects with ExecError when the command is not found', async () => {
       const request: ExecRequest = { command: 'nonexistent-command-xyz-123' }
+      const promise = delegatedExec('s', request)
 
-      await expect(delegatedExec('s', request)).rejects.toThrow(ExecError)
+      await expect(promise).rejects.toThrow(ExecError)
       await expect(delegatedExec('s', request)).rejects.toThrow(
         /Command not found: nonexistent-command-xyz-123/,
       )
     })
 
-    it('throws ExecError when {{secret}} is used in the command field', () => {
+    it('rejects with ExecError when {{secret}} is used in the command field', async () => {
       const request: ExecRequest = { command: '{{secret}}' }
 
-      expect(() => delegatedExec('s', request)).toThrow(ExecError)
-      expect(() => delegatedExec('s', request)).toThrow(
+      await expect(delegatedExec('s', request)).rejects.toThrow(ExecError)
+      await expect(delegatedExec('s', request)).rejects.toThrow(
         /placeholder is not supported in the command field/,
       )
     })

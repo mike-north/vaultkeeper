@@ -402,8 +402,8 @@ All errors extend `VaultError`.
 | `TokenRevokedError` | Token has been blocked (e.g. single-use token already consumed) |
 | `UsageLimitExceededError` | Token presented more times than its `use` limit allows |
 | `IdentityMismatchError` | Executable hash changed since TOFU approval |
-| `ExecError` | `exec()` command not found or failed to spawn |
-| `InvalidTokenError` | JWE string is structurally malformed |
+| `ExecError` | `exec()` request was invalid (e.g. `{{secret}}` in the command field) or the command could not be started (not found or failed to spawn) |
+| `InvalidTokenError` | JWE could not be decrypted or validated (e.g. structurally malformed, tampered, or failed decryption) |
 | `AccessorConsumedError` | `SecretAccessor.read()` called after already consumed |
 | `InvalidAlgorithmError` | Signing/verifying with a disallowed algorithm (e.g. `md5`) |
 | `SetupError` | Required system dependency missing or incompatible at init |

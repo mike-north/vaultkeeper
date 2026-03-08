@@ -34,7 +34,7 @@ function replaceInRecord(
  * @returns The command result (stdout, stderr, exitCode)
  * @internal
  */
-export function delegatedExec(
+export async function delegatedExec(
   secret: string,
   request: ExecRequest,
 ): Promise<ExecResult> {
