@@ -218,7 +218,7 @@ async fn cmd_exec(token: &str, command: &[String]) -> i32 {
 
 async fn cmd_doctor() -> i32 {
     let host = make_host();
-    let result = vaultkeeper_core::doctor::run_doctor(host.as_ref()).await;
+    let result = vaultkeeper_core::doctor::run_doctor(host.as_ref(), None).await;
 
     for check in &result.checks {
         let icon = if check.status == vaultkeeper_core::PreflightCheckStatus::Ok {

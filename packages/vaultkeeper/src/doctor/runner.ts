@@ -12,7 +12,7 @@ import {
   checkYkman,
 } from './checks.js'
 import { currentPlatform } from '../util/platform.js'
-import type { PreflightCheck, PreflightResult } from '../types.js'
+import type { BackendConfig, PreflightCheck, PreflightResult } from '../types.js'
 import type { Platform } from '../util/platform.js'
 
 /**
@@ -22,6 +22,16 @@ import type { Platform } from '../util/platform.js'
 export interface RunDoctorOptions {
   /** Override the platform detection (useful for testing). */
   platform?: Platform
+  /**
+   * When provided, doctor checks are scoped to the given backends.
+   * Checks for system dependencies that are only needed by backends not in
+   * this list are demoted from required to optional (still run for
+   * informational purposes, but will not block readiness).
+   *
+   * When omitted, all platform-default checks are treated as required
+   * (backward-compatible behavior).
+   */
+  backends?: BackendConfig[]
 }
 
 /** A doctor check entry pairing the check function with whether it is required. */
@@ -53,7 +63,8 @@ export async function runDoctor(options?: RunDoctorOptions): Promise<PreflightRe
     }
   }
 
-  const entries: CheckEntry[] = buildCheckList(platform)
+  const enabledTypes = enabledBackendTypes(options?.backends)
+  const entries: CheckEntry[] = buildCheckList(platform, enabledTypes)
 
   const resolved: ResolvedEntry[] = await Promise.all(
     entries.map(async ({ check, required }) => {
@@ -94,23 +105,61 @@ export async function runDoctor(options?: RunDoctorOptions): Promise<PreflightRe
   return { checks, ready, warnings, nextSteps }
 }
 
-function buildCheckList(platform: Platform): CheckEntry[] {
+/**
+ * Extract the set of enabled backend type strings from the config.
+ * Returns `null` when no backend list was provided, signalling that the
+ * caller should fall back to platform defaults (backward-compatible).
+ */
+function enabledBackendTypes(
+  backends: BackendConfig[] | undefined,
+): Set<string> | null {
+  if (backends === undefined) return null
+  const types = new Set<string>()
+  for (const b of backends) {
+    if (b.enabled) types.add(b.type)
+  }
+  return types
+}
+
+function buildCheckList(
+  platform: Platform,
+  enabledTypes: Set<string> | null,
+): CheckEntry[] {
+  // Core checks are always required regardless of backends.
   const entries: CheckEntry[] = [{ check: checkOpenssl, required: true }]
 
   if (platform === 'darwin') {
-    entries.push({ check: checkSecurity, required: true })
+    // `security` is required only if keychain backend is configured (or no
+    // backend list was provided, preserving backward-compatible defaults).
+    entries.push({
+      check: checkSecurity,
+      required: enabledTypes === null || enabledTypes.has('keychain'),
+    })
     entries.push({ check: checkBash, required: false })
   } else if (platform === 'win32') {
-    entries.push({ check: checkPowershell, required: true })
+    entries.push({
+      check: checkPowershell,
+      required: enabledTypes === null || enabledTypes.has('dpapi'),
+    })
   } else {
     // linux
     entries.push({ check: checkBash, required: true })
-    entries.push({ check: checkSecretTool, required: true })
+    entries.push({
+      check: checkSecretTool,
+      required: enabledTypes === null || enabledTypes.has('secret-tool'),
+    })
   }
 
-  // Optional tools on all platforms
-  entries.push({ check: checkOp, required: false })
-  entries.push({ check: checkYkman, required: false })
+  // Plugin backend tools — required only if the corresponding backend is
+  // explicitly enabled; otherwise optional (informational).
+  entries.push({
+    check: checkOp,
+    required: enabledTypes?.has('1password') ?? false,
+  })
+  entries.push({
+    check: checkYkman,
+    required: enabledTypes?.has('yubikey') ?? false,
+  })
 
   return entries
 }

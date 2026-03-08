@@ -168,6 +168,7 @@ export function runDoctor(options?: RunDoctorOptions): Promise<PreflightResult>;
 
 // @public
 export interface RunDoctorOptions {
+    backends?: BackendConfig[];
     platform?: Platform;
 }
 

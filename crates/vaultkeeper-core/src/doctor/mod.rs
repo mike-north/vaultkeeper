@@ -5,8 +5,10 @@ mod types;
 
 pub use types::DoctorCheckFn;
 
+use std::collections::HashSet;
+
 use crate::backend::{HostPlatform, Platform};
-use crate::types::{PreflightCheck, PreflightCheckStatus, PreflightResult};
+use crate::types::{BackendConfig, PreflightCheck, PreflightCheckStatus, PreflightResult};
 use checks::{
     check_bash, check_op, check_openssl, check_powershell, check_secret_tool, check_security,
     check_ykman,
@@ -19,9 +21,22 @@ struct CheckEntry {
 }
 
 /// Run all platform-appropriate preflight checks and return the aggregated result.
-pub async fn run_doctor(host: &dyn HostPlatform) -> PreflightResult {
+///
+/// When `backends` is `Some`, checks are scoped so that only system
+/// dependencies needed by the enabled backends are treated as required.
+/// When `None`, all platform-default checks are required (backward compat).
+pub async fn run_doctor(
+    host: &dyn HostPlatform,
+    backends: Option<&[BackendConfig]>,
+) -> PreflightResult {
     let platform = host.platform();
-    let entries = run_platform_checks(host, platform).await;
+    let enabled_types = backends.map(|bs| {
+        bs.iter()
+            .filter(|b| b.enabled)
+            .map(|b| b.backend_type.as_str().to_owned())
+            .collect::<HashSet<String>>()
+    });
+    let entries = run_platform_checks(host, platform, enabled_types.as_ref()).await;
 
     let ready = entries.iter().all(|e| {
         if !e.required {
@@ -81,7 +96,12 @@ pub async fn run_doctor(host: &dyn HostPlatform) -> PreflightResult {
     }
 }
 
-async fn run_platform_checks(host: &dyn HostPlatform, platform: Platform) -> Vec<CheckEntry> {
+async fn run_platform_checks(
+    host: &dyn HostPlatform,
+    platform: Platform,
+    enabled_types: Option<&HashSet<String>>,
+) -> Vec<CheckEntry> {
+    // Core checks are always required regardless of backends.
     let mut entries = vec![CheckEntry {
         result: check_openssl(host).await,
         required: true,
@@ -89,9 +109,12 @@ async fn run_platform_checks(host: &dyn HostPlatform, platform: Platform) -> Vec
 
     match platform {
         Platform::Darwin => {
+            // `security` is only required if keychain backend is configured
+            // (or no backend list was provided — backward-compatible default).
             entries.push(CheckEntry {
                 result: check_security(host).await,
-                required: true,
+                required: enabled_types
+                    .is_none_or(|types| types.contains("keychain")),
             });
             entries.push(CheckEntry {
                 result: check_bash(host).await,
@@ -101,7 +124,8 @@ async fn run_platform_checks(host: &dyn HostPlatform, platform: Platform) -> Vec
         Platform::Windows => {
             entries.push(CheckEntry {
                 result: check_powershell(host).await,
-                required: true,
+                required: enabled_types
+                    .is_none_or(|types| types.contains("dpapi")),
             });
         }
         Platform::Linux => {
@@ -111,19 +135,23 @@ async fn run_platform_checks(host: &dyn HostPlatform, platform: Platform) -> Vec
             });
             entries.push(CheckEntry {
                 result: check_secret_tool(host).await,
-                required: true,
+                required: enabled_types
+                    .is_none_or(|types| types.contains("secret-tool")),
             });
         }
     }
 
-    // Optional tools on all platforms
+    // Plugin backend tools — required only if the corresponding backend is
+    // explicitly enabled; otherwise optional (informational).
     entries.push(CheckEntry {
         result: check_op(host).await,
-        required: false,
+        required: enabled_types
+            .is_some_and(|types| types.contains("1password")),
     });
     entries.push(CheckEntry {
         result: check_ykman(host).await,
-        required: false,
+        required: enabled_types
+            .is_some_and(|types| types.contains("yubikey")),
     });
 
     entries

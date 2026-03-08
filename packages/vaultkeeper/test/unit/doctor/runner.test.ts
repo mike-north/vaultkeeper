@@ -367,3 +367,166 @@ describe('runDoctor on unsupported platform', () => {
     expect(mockCheckYkman).not.toHaveBeenCalled()
   })
 })
+
+// ---------------------------------------------------------------------------
+// Backend-aware doctor checks — when backends are provided, only the
+// system dependencies needed by enabled backends should be required.
+// ---------------------------------------------------------------------------
+
+describe('backend-aware checks on linux', () => {
+  it('demotes secret-tool from required to optional when only file backend is enabled', async () => {
+    mockCheckOpenssl.mockReturnValue(mockOk('openssl'))
+    mockCheckBash.mockReturnValue(mockOk('bash'))
+    mockCheckSecretTool.mockReturnValue(mockMissing('secret-tool', 'not found'))
+    mockCheckOp.mockReturnValue(mockMissing('op'))
+    mockCheckYkman.mockReturnValue(mockMissing('ykman'))
+
+    const result = await runDoctor({
+      platform: 'linux',
+      backends: [{ type: 'file', enabled: true }],
+    })
+
+    // secret-tool is missing but file backend does not need it → ready
+    expect(result.ready).toBe(true)
+    // secret-tool should appear as a warning, not a nextStep
+    expect(result.warnings.some((w) => w.includes('secret-tool'))).toBe(true)
+    expect(result.nextSteps).toHaveLength(0)
+  })
+
+  it('keeps secret-tool required when secret-tool backend is enabled', async () => {
+    mockCheckOpenssl.mockReturnValue(mockOk('openssl'))
+    mockCheckBash.mockReturnValue(mockOk('bash'))
+    mockCheckSecretTool.mockReturnValue(mockMissing('secret-tool', 'not found'))
+    mockCheckOp.mockReturnValue(mockMissing('op'))
+    mockCheckYkman.mockReturnValue(mockMissing('ykman'))
+
+    const result = await runDoctor({
+      platform: 'linux',
+      backends: [{ type: 'secret-tool', enabled: true }],
+    })
+
+    expect(result.ready).toBe(false)
+    expect(result.nextSteps.some((s) => s.includes('secret-tool'))).toBe(true)
+  })
+
+  it('falls back to platform defaults when no backends option is provided', async () => {
+    mockCheckOpenssl.mockReturnValue(mockOk('openssl'))
+    mockCheckBash.mockReturnValue(mockOk('bash'))
+    mockCheckSecretTool.mockReturnValue(mockMissing('secret-tool', 'not found'))
+    mockCheckOp.mockReturnValue(mockMissing('op'))
+    mockCheckYkman.mockReturnValue(mockMissing('ykman'))
+
+    const result = await runDoctor({ platform: 'linux' })
+
+    // Without backends option, secret-tool is required on linux (backward compat)
+    expect(result.ready).toBe(false)
+    expect(result.nextSteps.some((s) => s.includes('secret-tool'))).toBe(true)
+  })
+
+  it('promotes op to required when 1password backend is enabled', async () => {
+    mockCheckOpenssl.mockReturnValue(mockOk('openssl'))
+    mockCheckBash.mockReturnValue(mockOk('bash'))
+    mockCheckSecretTool.mockReturnValue(mockOk('secret-tool'))
+    mockCheckOp.mockReturnValue(mockMissing('op', 'not found'))
+    mockCheckYkman.mockReturnValue(mockOk('ykman'))
+
+    const result = await runDoctor({
+      platform: 'linux',
+      backends: [
+        { type: 'file', enabled: true },
+        { type: '1password', enabled: true, plugin: true },
+      ],
+    })
+
+    expect(result.ready).toBe(false)
+    expect(result.nextSteps.some((s) => s.includes('op'))).toBe(true)
+  })
+})
+
+describe('backend-aware checks on darwin', () => {
+  it('demotes security from required to optional when only file backend is enabled', async () => {
+    mockCheckOpenssl.mockReturnValue(mockOk('openssl'))
+    mockCheckSecurity.mockReturnValue(mockMissing('security', 'not found'))
+    mockCheckBash.mockReturnValue(mockOk('bash'))
+    mockCheckOp.mockReturnValue(mockMissing('op'))
+    mockCheckYkman.mockReturnValue(mockMissing('ykman'))
+
+    const result = await runDoctor({
+      platform: 'darwin',
+      backends: [{ type: 'file', enabled: true }],
+    })
+
+    expect(result.ready).toBe(true)
+    expect(result.warnings.some((w) => w.includes('security'))).toBe(true)
+    expect(result.nextSteps).toHaveLength(0)
+  })
+
+  it('keeps security required when keychain backend is enabled', async () => {
+    mockCheckOpenssl.mockReturnValue(mockOk('openssl'))
+    mockCheckSecurity.mockReturnValue(mockMissing('security', 'not found'))
+    mockCheckBash.mockReturnValue(mockOk('bash'))
+    mockCheckOp.mockReturnValue(mockMissing('op'))
+    mockCheckYkman.mockReturnValue(mockMissing('ykman'))
+
+    const result = await runDoctor({
+      platform: 'darwin',
+      backends: [{ type: 'keychain', enabled: true }],
+    })
+
+    expect(result.ready).toBe(false)
+    expect(result.nextSteps.some((s) => s.includes('security'))).toBe(true)
+  })
+})
+
+describe('backend-aware checks on win32', () => {
+  it('demotes powershell from required to optional when only file backend is enabled', async () => {
+    mockCheckOpenssl.mockReturnValue(mockOk('openssl'))
+    mockCheckPowershell.mockReturnValue(mockMissing('powershell', 'not found'))
+    mockCheckOp.mockReturnValue(mockMissing('op'))
+    mockCheckYkman.mockReturnValue(mockMissing('ykman'))
+
+    const result = await runDoctor({
+      platform: 'win32',
+      backends: [{ type: 'file', enabled: true }],
+    })
+
+    expect(result.ready).toBe(true)
+    expect(result.warnings.some((w) => w.includes('powershell'))).toBe(true)
+    expect(result.nextSteps).toHaveLength(0)
+  })
+
+  it('keeps powershell required when dpapi backend is enabled', async () => {
+    mockCheckOpenssl.mockReturnValue(mockOk('openssl'))
+    mockCheckPowershell.mockReturnValue(mockMissing('powershell', 'not found'))
+    mockCheckOp.mockReturnValue(mockMissing('op'))
+    mockCheckYkman.mockReturnValue(mockMissing('ykman'))
+
+    const result = await runDoctor({
+      platform: 'win32',
+      backends: [{ type: 'dpapi', enabled: true }],
+    })
+
+    expect(result.ready).toBe(false)
+    expect(result.nextSteps.some((s) => s.includes('powershell'))).toBe(true)
+  })
+})
+
+describe('backend-aware checks ignore disabled backends', () => {
+  it('does not require secret-tool when secret-tool backend is present but disabled', async () => {
+    mockCheckOpenssl.mockReturnValue(mockOk('openssl'))
+    mockCheckBash.mockReturnValue(mockOk('bash'))
+    mockCheckSecretTool.mockReturnValue(mockMissing('secret-tool', 'not found'))
+    mockCheckOp.mockReturnValue(mockMissing('op'))
+    mockCheckYkman.mockReturnValue(mockMissing('ykman'))
+
+    const result = await runDoctor({
+      platform: 'linux',
+      backends: [
+        { type: 'file', enabled: true },
+        { type: 'secret-tool', enabled: false },
+      ],
+    })
+
+    expect(result.ready).toBe(true)
+  })
+})
