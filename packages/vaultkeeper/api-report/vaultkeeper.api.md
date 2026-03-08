@@ -284,6 +284,7 @@ export class VaultKeeper {
         token: CapabilityToken;
         response: VaultResponse;
     }>;
+    delete(name: string): Promise<void>;
     static doctor(): Promise<PreflightResult>;
     exec(token: CapabilityToken, request: ExecRequest): Promise<{
         result: ExecResult;
@@ -303,6 +304,7 @@ export class VaultKeeper {
         result: SignResult;
         vaultResponse: VaultResponse;
     }>;
+    store(name: string, value: string): Promise<void>;
     static verify(request: VerifyRequest): boolean;
 }
 

@@ -129,7 +129,37 @@ export class VaultKeeper {
   }
 
   /**
-   * Retrieve a secret from the backend and return a JWE token that encapsulates it.
+   * Store a secret in the configured backend.
+   *
+   * This is a convenience method that delegates to the active backend's
+   * `store()` method. If a secret with the same name already exists, it is
+   * overwritten.
+   *
+   * @param name - Identifier for the secret.
+   * @param value - The secret value to store.
+   * @public
+   */
+  async store(name: string, value: string): Promise<void> {
+    const backend = this.#requireBackend()
+    await backend.store(name, value)
+  }
+
+  /**
+   * Delete a secret from the configured backend.
+   *
+   * This is a convenience method that delegates to the active backend's
+   * `delete()` method.
+   *
+   * @param name - Identifier for the secret to delete.
+   * @public
+   */
+  async delete(name: string): Promise<void> {
+    const backend = this.#requireBackend()
+    await backend.delete(name)
+  }
+
+  /**
+   * Read a stored secret from the backend and mint a JWE token that encapsulates it.
    *
    * @param secretName - Identifier for the secret
    * @param options - Setup options
