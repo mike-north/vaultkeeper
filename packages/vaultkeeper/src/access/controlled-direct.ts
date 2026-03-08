@@ -1,12 +1,11 @@
 /**
  * Controlled direct access pattern.
  *
- * Provides a `SecretAccessor` backed by a revocable Proxy that:
+ * Provides a `SecretAccessor` backed by a Proxy that:
  * - Exposes a single `.read()` method
  * - Passes a Buffer containing the secret to the callback
  * - Zeros the buffer after the callback returns
- * - Prevents double-read (throws on second call)
- * - Revokes the proxy synchronously after the first `read()` call completes
+ * - Prevents double-read (throws a descriptive Error on second call)
  * - Redacts itself from Node.js inspect output
  */
 
@@ -45,18 +44,16 @@ class SecretAccessorTarget implements SecretAccessorInternal {
  * Create a `SecretAccessor` for the given secret value.
  * @internal
  *
- * The accessor is backed by a revocable Proxy with all 13 traps implemented.
- * The proxy is revoked synchronously after the first `read()` call completes
- * (in the `finally` block, after zeroing the buffer). Any subsequent property
- * access will throw a TypeError.
- *
- * This avoids the `queueMicrotask(revoke)` approach which breaks async callers
- * that `await` between receiving the accessor and calling `.read()`.
+ * The accessor is backed by a Proxy with all 13 traps implemented. The
+ * `consumed` flag blocks re-execution after the first `read()` call, and the
+ * buffer containing the secret is zeroed in the `finally` block regardless of
+ * whether the callback throws. No proxy revocation is used: the `consumed`
+ * flag already prevents double-reads, and revocation would surface a raw V8
+ * `TypeError: Cannot perform 'get' on a proxy that has been revoked` before
+ * the descriptive error message can be thrown.
  */
 export function createSecretAccessor(secretValue: string): SecretAccessor {
   let consumed = false
-  // Holder allows readImpl to close over the revoke function without a let/reassignment.
-  const revokeHolder: { fn: (() => void) | undefined } = { fn: undefined }
 
   // Close over the actual read logic.
   function readImpl(callback: (buf: Buffer) => void): void {
@@ -70,8 +67,6 @@ export function createSecretAccessor(secretValue: string): SecretAccessor {
       callback(buf)
     } finally {
       buf.fill(0)
-      // Revoke the proxy synchronously so no further property access is possible.
-      revokeHolder.fn?.()
     }
   }
 
@@ -141,9 +136,5 @@ export function createSecretAccessor(secretValue: string): SecretAccessor {
     },
   }
 
-  const { proxy, revoke } = Proxy.revocable(target, handler)
-  // Wire up the revoke function so readImpl can call it after the callback returns.
-  revokeHolder.fn = revoke
-
-  return proxy
+  return new Proxy(target, handler)
 }

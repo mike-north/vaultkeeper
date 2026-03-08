@@ -4,6 +4,7 @@ import type { VaultConfig } from '../../src/types.js'
 import { BackendRegistry } from '../../src/backend/registry.js'
 import type { SecretBackend } from '../../src/backend/types.js'
 import { clearBlocklist } from '../../src/jwe/claims.js'
+import { UsageLimitExceededError } from '../../src/errors.js'
 import * as delegatedFetchModule from '../../src/access/delegated-fetch.js'
 import * as delegatedExecModule from '../../src/access/delegated-exec.js'
 import * as delegatedSignModule from '../../src/access/delegated-sign.js'
@@ -108,7 +109,7 @@ describe('VaultKeeper', () => {
       expect(typeof jwe).toBe('string')
     })
 
-    it('should respect use limit', async () => {
+    it('should respect use limit — throws UsageLimitExceededError after limit reached', async () => {
       const vault = await initVault()
       const jwe = await vault.setup('my-secret', {
         executablePath: 'dev',
@@ -118,8 +119,26 @@ describe('VaultKeeper', () => {
       // First authorize succeeds
       await vault.authorize(jwe)
 
-      // Second authorize should fail — the token was blocked after first use
-      await expect(vault.authorize(jwe)).rejects.toThrow()
+      // Second authorize must throw UsageLimitExceededError, not TokenRevokedError.
+      // Regression: previously the token was added to the blocklist on first use,
+      // causing the second call to throw TokenRevokedError instead.
+      await expect(vault.authorize(jwe)).rejects.toThrow(UsageLimitExceededError)
+    })
+
+    it('should throw UsageLimitExceededError (not TokenRevokedError) for use=2 after second use', async () => {
+      const vault = await initVault()
+      const jwe = await vault.setup('my-secret', {
+        executablePath: 'dev',
+        useLimit: 2,
+      })
+
+      // First two authorizations succeed
+      await vault.authorize(jwe)
+      await vault.authorize(jwe)
+
+      // Third call must be UsageLimitExceededError
+      const err = await vault.authorize(jwe).catch((e: unknown) => e)
+      expect(err).toBeInstanceOf(UsageLimitExceededError)
     })
   })
 

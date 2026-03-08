@@ -3,6 +3,7 @@
  */
 
 import type { ListableBackend } from 'vaultkeeper'
+import { SecretNotFoundError } from 'vaultkeeper'
 
 /**
  * A fully in-memory `SecretBackend` for testing.
@@ -33,7 +34,7 @@ export class InMemoryBackend implements ListableBackend {
   retrieve(id: string): Promise<string> {
     const val = this.#store.get(id)
     if (val === undefined) {
-      return Promise.reject(new Error(`Secret not found: ${id}`))
+      return Promise.reject(new SecretNotFoundError(`Secret not found: ${id}`))
     }
     return Promise.resolve(val)
   }

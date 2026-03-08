@@ -69,6 +69,13 @@ export interface SetupOptions {
 const usageCounts = new Map<string, number>()
 
 /**
+ * Maximum number of JTIs the in-memory usage-count map will retain.
+ * When the cap is reached, the oldest inserted entry is evicted (FIFO).
+ * This prevents unbounded growth for long-running processes.
+ */
+const USAGE_MAP_MAX_SIZE = 10_000
+
+/**
  * Main entry point for vaultkeeper. Orchestrates backends, keys, JWE tokens,
  * identity verification, and access patterns.
  */
@@ -183,15 +190,23 @@ export class VaultKeeper {
     const currentCount = usageCounts.get(jti) ?? 0
     validateClaims(claims, currentCount)
 
-    // Track usage and evict finished tokens to prevent unbounded map growth.
-    const newCount = currentCount + 1
-    if (claims.use !== null && newCount >= claims.use) {
-      // Token has reached its usage limit — remove from tracking and block it
-      // so future attempts hit the blocklist rather than the usageCounts map.
-      usageCounts.delete(jti)
-      blockToken(jti)
-    } else {
+    // Only track usage for tokens with a finite use limit. Unlimited tokens
+    // (claims.use === null) never need count checks, so tracking them would
+    // waste memory and cause unnecessary evictions of limited-token entries.
+    if (claims.use !== null) {
+      const newCount = currentCount + 1
       usageCounts.set(jti, newCount)
+
+      // Evict the oldest entry when the map exceeds its size cap to prevent
+      // unbounded memory growth in long-running processes. Block the evicted
+      // JTI so that it cannot be silently re-authorized with a reset count.
+      if (usageCounts.size > USAGE_MAP_MAX_SIZE) {
+        const oldest = usageCounts.keys().next().value
+        if (oldest !== undefined) {
+          usageCounts.delete(oldest)
+          blockToken(oldest)
+        }
+      }
     }
 
     const token = createCapabilityToken(claims)
