@@ -94,10 +94,10 @@ describe('VaultKeeper', () => {
       expect(typeof jwe).toBe('string')
       expect(jwe.split('.')).toHaveLength(5) // compact JWE
 
-      const { token, response } = await vault.authorize(jwe)
+      const { token, vaultResponse } = await vault.authorize(jwe)
       expect(token).toBeDefined()
-      expect(response.keyStatus).toBe('current')
-      expect(response.rotatedJwt).toBeUndefined()
+      expect(vaultResponse.keyStatus).toBe('current')
+      expect(vaultResponse.rotatedJwt).toBeUndefined()
     })
 
     it('should respect TTL override', async () => {
@@ -164,17 +164,17 @@ describe('VaultKeeper', () => {
 
       await vault.rotateKey()
 
-      const { response } = await vault.authorize(jwe)
-      expect(response.keyStatus).toBe('previous')
-      expect(response.rotatedJwt).toBeDefined()
-      expect(typeof response.rotatedJwt).toBe('string')
+      const { vaultResponse } = await vault.authorize(jwe)
+      expect(vaultResponse.keyStatus).toBe('previous')
+      expect(vaultResponse.rotatedJwt).toBeDefined()
+      expect(typeof vaultResponse.rotatedJwt).toBe('string')
 
       // The rotated JWE should work with current key
-      const rotatedJwt = response.rotatedJwt
+      const rotatedJwt = vaultResponse.rotatedJwt
       expect(rotatedJwt).toBeDefined()
       if (rotatedJwt === undefined) throw new Error('unreachable')
-      const { response: response2 } = await vault.authorize(rotatedJwt)
-      expect(response2.keyStatus).toBe('current')
+      const { vaultResponse: vaultResponse2 } = await vault.authorize(rotatedJwt)
+      expect(vaultResponse2.keyStatus).toBe('current')
     })
   })
 

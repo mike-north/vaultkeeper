@@ -38,7 +38,7 @@ Description
 </th></tr></thead>
 <tbody><tr><td>
 
-[create(type)](./vaultkeeper.backendregistry.create.md)
+[create(type, config)](./vaultkeeper.backendregistry.create.md)
 
 
 </td><td>
@@ -49,6 +49,38 @@ Description
 </td><td>
 
 Create a backend instance by type.
+
+
+</td></tr>
+<tr><td>
+
+[getAvailableTypes()](./vaultkeeper.backendregistry.getavailabletypes.md)
+
+
+</td><td>
+
+`static`
+
+
+</td><td>
+
+Returns backend types that are available on the current system.
+
+
+</td></tr>
+<tr><td>
+
+[getSetup(type)](./vaultkeeper.backendregistry.getsetup.md)
+
+
+</td><td>
+
+`static`
+
+
+</td><td>
+
+Get the setup factory for a backend type, if one is registered.
 
 
 </td></tr>
@@ -70,6 +102,22 @@ Get all registered backend type identifiers.
 </td></tr>
 <tr><td>
 
+[hasSetup(type)](./vaultkeeper.backendregistry.hassetup.md)
+
+
+</td><td>
+
+`static`
+
+
+</td><td>
+
+Check whether a setup factory is registered for the given backend type.
+
+
+</td></tr>
+<tr><td>
+
 [register(type, factory)](./vaultkeeper.backendregistry.register.md)
 
 
@@ -81,6 +129,22 @@ Get all registered backend type identifiers.
 </td><td>
 
 Register a backend factory.
+
+
+</td></tr>
+<tr><td>
+
+[registerSetup(type, factory)](./vaultkeeper.backendregistry.registersetup.md)
+
+
+</td><td>
+
+`static`
+
+
+</td><td>
+
+Register a setup factory for a backend type.
 
 
 </td></tr>

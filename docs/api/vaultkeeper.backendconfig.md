@@ -56,6 +56,25 @@ Whether this backend is active. Only enabled backends are considered during init
 </td></tr>
 <tr><td>
 
+[options?](./vaultkeeper.backendconfig.options.md)
+
+
+</td><td>
+
+
+</td><td>
+
+Record&lt;string, string&gt; \| undefined
+
+
+</td><td>
+
+_(Optional)_ Backend-specific options collected during interactive setup.
+
+
+</td></tr>
+<tr><td>
+
 [path?](./vaultkeeper.backendconfig.path.md)
 
 

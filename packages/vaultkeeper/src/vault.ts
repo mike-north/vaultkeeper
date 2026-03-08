@@ -34,6 +34,7 @@ import { createSecretAccessor } from './access/controlled-direct.js'
 import { delegatedSign } from './access/delegated-sign.js'
 import { delegatedVerify } from './access/delegated-verify.js'
 import { runDoctor } from './doctor/runner.js'
+import type { RunDoctorOptions } from './doctor/runner.js'
 import {
   IdentityMismatchError,
   BackendUnavailableError,
@@ -120,12 +121,14 @@ export class VaultKeeper {
   /**
    * Run doctor checks without full initialization.
    *
-   * Uses conservative platform defaults — all platform-native dependency
-   * checks are treated as required regardless of any backend configuration.
-   * For config-aware scoping, call `runDoctor({ backends })` directly.
+   * When called without arguments, uses conservative platform defaults —
+   * all platform-native dependency checks are treated as required. Pass
+   * `{ backends }` to scope checks to only the backends you plan to use.
+   *
+   * @param options - Optional doctor options (e.g. `{ backends }` to scope checks).
    */
-  static async doctor(): Promise<PreflightResult> {
-    return runDoctor()
+  static async doctor(options?: RunDoctorOptions): Promise<PreflightResult> {
+    return runDoctor(options)
   }
 
   /**
@@ -215,9 +218,12 @@ export class VaultKeeper {
    * an opaque CapabilityToken.
    *
    * @param jwe - Compact JWE string from setup()
-   * @returns Opaque capability token for use with fetch/exec/getSecret
+   * @returns Object containing an opaque {@link CapabilityToken} for use with
+   *   fetch/exec/getSecret, and a {@link VaultResponse} describing key status.
+   *   When the JWE was decrypted with a non-current key,
+   *   `vaultResponse.rotatedJwt` contains a re-encrypted JWE for the current key.
    */
-  async authorize(jwe: string): Promise<{ token: CapabilityToken; response: VaultResponse }> {
+  async authorize(jwe: string): Promise<{ token: CapabilityToken; vaultResponse: VaultResponse }> {
     const kid = extractKid(jwe)
     const { claims, keyStatus } = await this.#decryptWithKeyResolution(jwe, kid)
 
@@ -247,15 +253,15 @@ export class VaultKeeper {
 
     const token = createCapabilityToken(claims)
 
-    const response: VaultResponse = { keyStatus }
+    const vaultResponse: VaultResponse = { keyStatus }
     if (keyStatus === 'previous') {
       // Re-encrypt with current key
       const currentKey = this.#keyManager.getCurrentKey()
       const rotatedJwt = await createToken(currentKey.key, claims, { kid: currentKey.id })
-      response.rotatedJwt = rotatedJwt
+      vaultResponse.rotatedJwt = rotatedJwt
     }
 
-    return { token, response }
+    return { token, vaultResponse }
   }
 
   /**

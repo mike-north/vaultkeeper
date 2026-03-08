@@ -19,15 +19,6 @@ Description
 </th></tr></thead>
 <tbody><tr><td>
 
-[@vaultkeeper/test-helpers](./test-helpers.md)
-
-
-</td><td>
-
-
-</td></tr>
-<tr><td>
-
 [vaultkeeper](./vaultkeeper.md)
 
 

@@ -6,11 +6,50 @@
 
 Run doctor checks without full initialization.
 
+When called without arguments, uses conservative platform defaults — all platform-native dependency checks are treated as required. Pass `{ backends }` to scope checks to only the backends you plan to use.
+
 **Signature:**
 
 ```typescript
-static doctor(): Promise<PreflightResult>;
+static doctor(options?: RunDoctorOptions): Promise<PreflightResult>;
 ```
+
+## Parameters
+
+<table><thead><tr><th>
+
+Parameter
+
+
+</th><th>
+
+Type
+
+
+</th><th>
+
+Description
+
+
+</th></tr></thead>
+<tbody><tr><td>
+
+options
+
+
+</td><td>
+
+[RunDoctorOptions](./vaultkeeper.rundoctoroptions.md)
+
+
+</td><td>
+
+_(Optional)_ Optional doctor options (e.g. `{ backends }` to scope checks).
+
+
+</td></tr>
+</tbody></table>
+
 **Returns:**
 
 Promise&lt;[PreflightResult](./vaultkeeper.preflightresult.md)<!-- -->&gt;

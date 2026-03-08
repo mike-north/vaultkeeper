@@ -81,14 +81,14 @@ The returned JWE is an opaque compact string (five dot-separated Base64URL segme
 ### Step 3 — Authorize (JWE → CapabilityToken)
 
 ```ts
-const { token, response } = await vault.authorize(jwe)
+const { token, vaultResponse } = await vault.authorize(jwe)
 
 // Always check for rotatedJwt and persist it if present:
-if (response.rotatedJwt !== undefined) {
+if (vaultResponse.rotatedJwt !== undefined) {
   // Overwrite the stored JWE with the re-encrypted version.
   // If you do not do this, the JWE will eventually fail decryption
   // once the grace period expires.
-  persistJwe(response.rotatedJwt)
+  persistJwe(vaultResponse.rotatedJwt)
 }
 ```
 
@@ -309,7 +309,7 @@ await vault.rotateKey()
 After rotation:
 - A new current key is generated.
 - The previous key remains valid for decryption during the grace period (`keyRotation.gracePeriodDays` from config).
-- JWEs presented during the grace period decrypt successfully and `authorize()` returns `response.keyStatus === 'previous'` along with a `rotatedJwt` field containing the same claims re-encrypted under the new key.
+- JWEs presented during the grace period decrypt successfully and `authorize()` returns `vaultResponse.keyStatus === 'previous'` along with a `rotatedJwt` field containing the same claims re-encrypted under the new key.
 - After the grace period, the previous key is automatically discarded. JWEs encrypted with the old key will then throw `KeyRotatedError` on `authorize()`.
 
 `rotateKey()` throws `RotationInProgressError` if a previous rotation is still within its grace period (i.e. you cannot stack rotations).
@@ -328,10 +328,10 @@ Always check for `rotatedJwt` after every `authorize()` call and persist it if p
 
 ```ts
 const { token, response } = await vault.authorize(storedJwe)
-if (response.rotatedJwt !== undefined) {
+if (vaultResponse.rotatedJwt !== undefined) {
   // Replace the persisted JWE with the re-encrypted version.
   // The old JWE will fail once the grace period expires.
-  await saveJwe(response.rotatedJwt)
+  await saveJwe(vaultResponse.rotatedJwt)
 }
 ```
 
@@ -437,9 +437,9 @@ import {
 } from 'vaultkeeper'
 
 try {
-  const { token, response } = await vault.authorize(jwe)
-  if (response.rotatedJwt !== undefined) {
-    await persistJwe(response.rotatedJwt)
+  const { token, vaultResponse } = await vault.authorize(jwe)
+  if (vaultResponse.rotatedJwt !== undefined) {
+    await persistJwe(vaultResponse.rotatedJwt)
   }
   // ... use token
 } catch (err) {
@@ -495,7 +495,7 @@ await vault.backend.store('db-password', 'hunter2')
 
 // Now use the keeper normally:
 const jwe = await vault.keeper.setup('db-password')
-const { token, response } = await vault.keeper.authorize(jwe)
+const { token, vaultResponse } = await vault.keeper.authorize(jwe)
 
 // Reset between tests:
 vault.reset()  // clears all stored secrets; same as vault.backend.clear()
@@ -742,8 +742,8 @@ const vault = await VaultKeeper.init({ skipDoctor: true, config })
 const jwe = await vault.setup('secret-name', { ttlMinutes: 60, useLimit: null })
 
 // Authorize
-const { token, response } = await vault.authorize(jwe)
-if (response.rotatedJwt) await persist(response.rotatedJwt)
+const { token, vaultResponse } = await vault.authorize(jwe)
+if (vaultResponse.rotatedJwt) await persist(vaultResponse.rotatedJwt)
 
 // Access: delegated fetch
 const { response } = await vault.fetch(token, {
