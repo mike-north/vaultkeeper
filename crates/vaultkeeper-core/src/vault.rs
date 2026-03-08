@@ -83,6 +83,10 @@ impl VaultKeeper {
     }
 
     /// Run doctor checks without full initialization.
+    ///
+    /// Uses conservative platform defaults — all platform-native dependency
+    /// checks are treated as required regardless of any backend configuration.
+    /// For config-aware scoping, call `run_doctor` with `Some(backends)`.
     pub async fn doctor(host: &dyn HostPlatform) -> PreflightResult {
         crate::doctor::run_doctor(host, None).await
     }

@@ -117,7 +117,13 @@ export class VaultKeeper {
     return vault
   }
 
-  /** Run doctor checks without full initialization. */
+  /**
+   * Run doctor checks without full initialization.
+   *
+   * Uses conservative platform defaults — all platform-native dependency
+   * checks are treated as required regardless of any backend configuration.
+   * For config-aware scoping, call `runDoctor({ backends })` directly.
+   */
   static async doctor(): Promise<PreflightResult> {
     return runDoctor()
   }

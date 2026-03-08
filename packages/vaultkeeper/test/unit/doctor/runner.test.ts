@@ -441,6 +441,42 @@ describe('backend-aware checks on linux', () => {
     expect(result.ready).toBe(false)
     expect(result.nextSteps.some((s) => s.includes('op'))).toBe(true)
   })
+
+  it('promotes ykman to required when yubikey backend is enabled', async () => {
+    mockCheckOpenssl.mockReturnValue(mockOk('openssl'))
+    mockCheckBash.mockReturnValue(mockOk('bash'))
+    mockCheckSecretTool.mockReturnValue(mockOk('secret-tool'))
+    mockCheckOp.mockReturnValue(mockOk('op'))
+    mockCheckYkman.mockReturnValue(mockMissing('ykman', 'not found'))
+
+    const result = await runDoctor({
+      platform: 'linux',
+      backends: [
+        { type: 'file', enabled: true },
+        { type: 'yubikey', enabled: true, plugin: true },
+      ],
+    })
+
+    expect(result.ready).toBe(false)
+    expect(result.nextSteps.some((s) => s.includes('ykman'))).toBe(true)
+  })
+
+  it('demotes all platform checks when backends is an empty array', async () => {
+    mockCheckOpenssl.mockReturnValue(mockOk('openssl'))
+    mockCheckBash.mockReturnValue(mockOk('bash'))
+    mockCheckSecretTool.mockReturnValue(mockMissing('secret-tool', 'not found'))
+    mockCheckOp.mockReturnValue(mockMissing('op'))
+    mockCheckYkman.mockReturnValue(mockMissing('ykman'))
+
+    const result = await runDoctor({
+      platform: 'linux',
+      backends: [],
+    })
+
+    // Empty backends = no backend needs secret-tool → demoted to optional
+    expect(result.ready).toBe(true)
+    expect(result.warnings.some((w) => w.includes('secret-tool'))).toBe(true)
+  })
 })
 
 describe('backend-aware checks on darwin', () => {
@@ -528,5 +564,25 @@ describe('backend-aware checks ignore disabled backends', () => {
     })
 
     expect(result.ready).toBe(true)
+    expect(result.warnings.some((w) => w.includes('secret-tool'))).toBe(true)
+  })
+
+  it('does not require security when keychain backend is present but disabled on darwin', async () => {
+    mockCheckOpenssl.mockReturnValue(mockOk('openssl'))
+    mockCheckSecurity.mockReturnValue(mockMissing('security', 'not found'))
+    mockCheckBash.mockReturnValue(mockOk('bash'))
+    mockCheckOp.mockReturnValue(mockMissing('op'))
+    mockCheckYkman.mockReturnValue(mockMissing('ykman'))
+
+    const result = await runDoctor({
+      platform: 'darwin',
+      backends: [
+        { type: 'file', enabled: true },
+        { type: 'keychain', enabled: false },
+      ],
+    })
+
+    expect(result.ready).toBe(true)
+    expect(result.warnings.some((w) => w.includes('security'))).toBe(true)
   })
 })

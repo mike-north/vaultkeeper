@@ -24,6 +24,8 @@ struct CheckEntry {
 ///
 /// When `backends` is `Some`, checks are scoped so that only system
 /// dependencies needed by the enabled backends are treated as required.
+/// Plugin tools (`op`, `ykman`) are promoted from optional to required when
+/// their backend (`1password`, `yubikey`) is explicitly enabled.
 /// When `None`, all platform-default checks are required (backward compat).
 pub async fn run_doctor(
     host: &dyn HostPlatform,
