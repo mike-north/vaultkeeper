@@ -4,7 +4,7 @@
 
 ## VaultKeeper.setup() method
 
-Store a secret and return a JWE token that encapsulates it.
+Read a stored secret from the backend and mint a JWE token that encapsulates it.
 
 **Signature:**
 

@@ -9,7 +9,7 @@ Create a backend instance by type.
 **Signature:**
 
 ```typescript
-static create(type: string): SecretBackend;
+static create(type: string, config?: BackendConfig): SecretBackend;
 ```
 
 ## Parameters
@@ -46,6 +46,22 @@ Backend type identifier
 
 
 </td></tr>
+<tr><td>
+
+config
+
+
+</td><td>
+
+[BackendConfig](./vaultkeeper.backendconfig.md)
+
+
+</td><td>
+
+_(Optional)_ Optional backend configuration forwarded to the factory
+
+
+</td></tr>
 </tbody></table>
 
 **Returns:**
@@ -56,5 +72,5 @@ A SecretBackend instance
 
 ## Exceptions
 
-Error if the backend type is not registered
+[BackendUnavailableError](./vaultkeeper.backendunavailableerror.md) if the backend type is not registered
 

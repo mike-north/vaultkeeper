@@ -100,7 +100,7 @@ const vault = await VaultKeeper.init()
 const jwe = await vault.setup('MY_API_KEY')
 
 // 3. Authorize: decrypt and validate the token
-const { token, response } = await vault.authorize(jwe)
+const { token, vaultResponse } = await vault.authorize(jwe)
 
 // 4a. Delegated fetch — secret injected into the request, never returned
 const { response: httpResponse } = await vault.fetch(token, {
@@ -281,9 +281,9 @@ Keys are AES-256-GCM. After rotation the previous key remains valid for decrypti
 await vault.rotateKey()
 
 // After authorize(), check whether to persist a new token
-const { token, response } = await vault.authorize(jwe)
-if (response.rotatedJwt !== undefined) {
-  await persistToken(response.rotatedJwt)
+const { token, vaultResponse } = await vault.authorize(jwe)
+if (vaultResponse.rotatedJwt !== undefined) {
+  await persistToken(vaultResponse.rotatedJwt)
 }
 
 // Emergency revocation — previous key invalidated immediately

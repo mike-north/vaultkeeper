@@ -218,7 +218,10 @@ export class VaultKeeper {
    * an opaque CapabilityToken.
    *
    * @param jwe - Compact JWE string from setup()
-   * @returns Opaque capability token for use with fetch/exec/getSecret
+   * @returns Object containing an opaque {@link CapabilityToken} for use with
+   *   fetch/exec/getSecret, and a {@link VaultResponse} describing key status.
+   *   When the JWE was decrypted with a non-current key,
+   *   `vaultResponse.rotatedJwt` contains a re-encrypted JWE for the current key.
    */
   async authorize(jwe: string): Promise<{ token: CapabilityToken; vaultResponse: VaultResponse }> {
     const kid = extractKid(jwe)

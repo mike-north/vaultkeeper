@@ -109,6 +109,17 @@ Callers must re-approve the executable before a new token can be issued for it.
 </td></tr>
 <tr><td>
 
+[InvalidAlgorithmError](./vaultkeeper.invalidalgorithmerror.md)
+
+
+</td><td>
+
+Thrown when a caller requests a signing/verification algorithm that is not in the allowed set (e.g. `'md5'`<!-- -->).
+
+
+</td></tr>
+<tr><td>
+
 [KeyRevokedError](./vaultkeeper.keyrevokederror.md)
 
 
@@ -230,6 +241,43 @@ Main entry point for vaultkeeper. Orchestrates backends, keys, JWE tokens, ident
 </td></tr>
 </tbody></table>
 
+## Functions
+
+<table><thead><tr><th>
+
+Function
+
+
+</th><th>
+
+Description
+
+
+</th></tr></thead>
+<tbody><tr><td>
+
+[isListableBackend(backend)](./vaultkeeper.islistablebackend.md)
+
+
+</td><td>
+
+Type guard for backends that support listing.
+
+
+</td></tr>
+<tr><td>
+
+[runDoctor(options)](./vaultkeeper.rundoctor.md)
+
+
+</td><td>
+
+Run all platform-appropriate preflight checks and aggregate the results.
+
+
+</td></tr>
+</tbody></table>
+
 ## Interfaces
 
 <table><thead><tr><th>
@@ -293,6 +341,17 @@ String values in `url`<!-- -->, `headers`<!-- -->, and `body` may include the pl
 </td></tr>
 <tr><td>
 
+[ListableBackend](./vaultkeeper.listablebackend.md)
+
+
+</td><td>
+
+Backend that can enumerate stored secret IDs.
+
+
+</td></tr>
+<tr><td>
+
 [PreflightCheck](./vaultkeeper.preflightcheck.md)
 
 
@@ -310,6 +369,17 @@ Result of a preflight check for a single dependency.
 </td><td>
 
 Aggregated result from all preflight checks.
+
+
+</td></tr>
+<tr><td>
+
+[RunDoctorOptions](./vaultkeeper.rundoctoroptions.md)
+
+
+</td><td>
+
+Options for running the doctor.
 
 
 </td></tr>
@@ -339,12 +409,69 @@ Abstraction interface for all secret storage backends.
 </td></tr>
 <tr><td>
 
+[SetupChoice](./vaultkeeper.setupchoice.md)
+
+
+</td><td>
+
+A choice within a setup question.
+
+
+</td></tr>
+<tr><td>
+
 [SetupOptions](./vaultkeeper.setupoptions.md)
 
 
 </td><td>
 
 Options for the setup operation.
+
+
+</td></tr>
+<tr><td>
+
+[SetupQuestion](./vaultkeeper.setupquestion.md)
+
+
+</td><td>
+
+A question yielded by a backend setup generator.
+
+
+</td></tr>
+<tr><td>
+
+[SetupResult](./vaultkeeper.setupresult.md)
+
+
+</td><td>
+
+Result returned when a backend setup generator completes.
+
+
+</td></tr>
+<tr><td>
+
+[SignRequest](./vaultkeeper.signrequest.md)
+
+
+</td><td>
+
+Request for delegated signing.
+
+The `data` field is the payload to sign. Strings are UTF-8-encoded before signing.
+
+
+</td></tr>
+<tr><td>
+
+[SignResult](./vaultkeeper.signresult.md)
+
+
+</td><td>
+
+Result from a delegated signing operation.
 
 
 </td></tr>
@@ -381,6 +508,19 @@ Response from a vault access operation.
 
 
 </td></tr>
+<tr><td>
+
+[VerifyRequest](./vaultkeeper.verifyrequest.md)
+
+
+</td><td>
+
+Request for signature verification.
+
+This is a static operation that only requires public key material — no VaultKeeper instance or capability token is needed.
+
+
+</td></tr>
 </tbody></table>
 
 ## Type Aliases
@@ -409,12 +549,34 @@ Factory function for creating a SecretBackend instance.
 </td></tr>
 <tr><td>
 
+[BackendSetupFactory](./vaultkeeper.backendsetupfactory.md)
+
+
+</td><td>
+
+Factory that creates a backend setup generator.
+
+
+</td></tr>
+<tr><td>
+
 [KeyStatus](./vaultkeeper.keystatus.md)
 
 
 </td><td>
 
 Key status in the rotation lifecycle.
+
+
+</td></tr>
+<tr><td>
+
+[Platform](./vaultkeeper.platform.md)
+
+
+</td><td>
+
+The OS platform identifier used for platform-specific behavior.
 
 
 </td></tr>

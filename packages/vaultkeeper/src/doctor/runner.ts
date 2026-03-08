@@ -84,18 +84,16 @@ export async function runDoctor(options?: RunDoctorOptions): Promise<PreflightRe
   const nextSteps: string[] = []
 
   for (const { required, result } of resolved) {
+    const reasonSuffix = result.reason !== undefined ? ` — ${result.reason}` : ''
+
     if (result.status === 'missing') {
       if (required) {
-        nextSteps.push(
-          `Install missing required dependency: ${result.name}${result.reason !== undefined ? ` — ${result.reason}` : ''}`,
-        )
+        nextSteps.push(`Install missing required dependency: ${result.name}${reasonSuffix}`)
       } else {
-        warnings.push(
-          `Optional dependency not found: ${result.name}${result.reason !== undefined ? ` — ${result.reason}` : ''}`,
-        )
+        warnings.push(`Optional dependency not found: ${result.name}${reasonSuffix}`)
       }
     } else if (result.status === 'version-unsupported') {
-      const msg = `${result.name} version is unsupported${result.reason !== undefined ? `: ${result.reason}` : ''}`
+      const msg = `${result.name} version is unsupported${reasonSuffix}`
       if (required) {
         nextSteps.push(`Upgrade required dependency: ${msg}`)
       } else {

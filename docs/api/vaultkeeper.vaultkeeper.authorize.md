@@ -11,7 +11,7 @@ Decrypt a JWE, validate claims, verify executable identity, and return an opaque
 ```typescript
 authorize(jwe: string): Promise<{
         token: CapabilityToken;
-        response: VaultResponse;
+        vaultResponse: VaultResponse;
     }>;
 ```
 
@@ -53,7 +53,7 @@ Compact JWE string from setup()
 
 **Returns:**
 
-Promise&lt;{ token: [CapabilityToken](./vaultkeeper.capabilitytoken.md)<!-- -->; response: [VaultResponse](./vaultkeeper.vaultresponse.md)<!-- -->; }&gt;
+Promise&lt;{ token: [CapabilityToken](./vaultkeeper.capabilitytoken.md)<!-- -->; vaultResponse: [VaultResponse](./vaultkeeper.vaultresponse.md)<!-- -->; }&gt;
 
-Opaque capability token for use with fetch/exec/getSecret
+Object containing an opaque [CapabilityToken](./vaultkeeper.capabilitytoken.md) for use with fetch/exec/getSecret, and a [VaultResponse](./vaultkeeper.vaultresponse.md) describing key status. When the JWE was decrypted with a non-current key, `vaultResponse.rotatedJwt` contains a re-encrypted JWE for the current key.
 

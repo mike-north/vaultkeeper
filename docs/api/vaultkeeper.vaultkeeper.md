@@ -46,7 +46,23 @@ Decrypt a JWE, validate claims, verify executable identity, and return an opaque
 </td></tr>
 <tr><td>
 
-[doctor()](./vaultkeeper.vaultkeeper.doctor.md)
+[delete(name)](./vaultkeeper.vaultkeeper.delete.md)
+
+
+</td><td>
+
+
+</td><td>
+
+Delete a secret from the configured backend.
+
+This is a convenience method that delegates to the active backend's `delete()` method.
+
+
+</td></tr>
+<tr><td>
+
+[doctor(options)](./vaultkeeper.vaultkeeper.doctor.md)
 
 
 </td><td>
@@ -57,6 +73,8 @@ Decrypt a JWE, validate claims, verify executable identity, and return an opaque
 </td><td>
 
 Run doctor checks without full initialization.
+
+When called without arguments, uses conservative platform defaults — all platform-native dependency checks are treated as required. Pass `{ backends }` to scope checks to only the backends you plan to use.
 
 
 </td></tr>
@@ -182,7 +200,59 @@ When an executable is in the development-mode list, identity verification (TOFU 
 
 </td><td>
 
-Store a secret and return a JWE token that encapsulates it.
+Read a stored secret from the backend and mint a JWE token that encapsulates it.
+
+
+</td></tr>
+<tr><td>
+
+[sign(token, request)](./vaultkeeper.vaultkeeper.sign.md)
+
+
+</td><td>
+
+
+</td><td>
+
+Sign data using the private key embedded in a capability token.
+
+The signing key is extracted from the token's encrypted claims, used for a single `crypto.sign()` call, and never exposed to the caller. The algorithm is auto-detected from the key type unless overridden in the request.
+
+
+</td></tr>
+<tr><td>
+
+[store(name, value)](./vaultkeeper.vaultkeeper.store.md)
+
+
+</td><td>
+
+
+</td><td>
+
+Store a secret in the configured backend.
+
+This is a convenience method that delegates to the active backend's `store()` method. If a secret with the same name already exists, it is overwritten.
+
+
+</td></tr>
+<tr><td>
+
+[verify(request)](./vaultkeeper.vaultkeeper.verify.md)
+
+
+</td><td>
+
+`static`
+
+
+</td><td>
+
+Verify a signature using a public key.
+
+This is a static method — no VaultKeeper instance, secrets, or capability tokens are required. It is safe to call from CI or any context that has access to public key material.
+
+Returns `false` for invalid key material, malformed signatures, or any verification failure (except disallowed algorithms, which throw).
 
 
 </td></tr>
