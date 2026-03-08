@@ -211,6 +211,57 @@ export class IdentityMismatchError extends VaultError {
   }
 }
 
+// --- Access Pattern Failures ---
+
+/**
+ * Thrown when a delegated `exec()` call fails due to an invalid request
+ * (e.g. a `{{secret}}` placeholder in the `command` field) or a
+ * process-level error (e.g. the command binary is not found or cannot
+ * be spawned).
+ *
+ * @public
+ */
+export class ExecError extends VaultError {
+  /**
+   * The command that failed to execute.
+   */
+  readonly command: string
+
+  constructor(message: string, command: string) {
+    super(message)
+    this.name = 'ExecError'
+    this.command = command
+  }
+}
+
+/**
+ * Thrown when a JWE string is invalid or cannot be processed — for example,
+ * it is structurally malformed (wrong number of segments, invalid
+ * Base64URL), decryption fails (wrong key, tampered ciphertext), or the
+ * decrypted payload does not match the expected claims schema.
+ *
+ * @public
+ */
+export class InvalidTokenError extends VaultError {
+  constructor(message: string) {
+    super(message)
+    this.name = 'InvalidTokenError'
+  }
+}
+
+/**
+ * Thrown when `SecretAccessor.read()` is called after the accessor has
+ * already been consumed.
+ *
+ * @public
+ */
+export class AccessorConsumedError extends VaultError {
+  constructor(message: string) {
+    super(message)
+    this.name = 'AccessorConsumedError'
+  }
+}
+
 // --- Infrastructure Failures ---
 
 /**

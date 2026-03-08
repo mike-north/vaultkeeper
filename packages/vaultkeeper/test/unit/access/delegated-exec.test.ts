@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { delegatedExec } from '../../../src/access/delegated-exec.js'
+import { ExecError } from '../../../src/errors.js'
 import type { ExecRequest } from '../../../src/access/types.js'
 
 describe('delegatedExec', () => {
@@ -147,11 +148,88 @@ describe('delegatedExec', () => {
     })
   })
 
-  describe('negative cases', () => {
-    it('rejects when the command is not found', async () => {
-      const request: ExecRequest = { command: 'nonexistent-command-xyz-123' }
+  describe('named-secret mode (Record)', () => {
+    it('replaces {{secret:name}} in args', async () => {
+      const request: ExecRequest = {
+        command: 'sh',
+        args: ['-c', 'echo {{secret:greeting}}'],
+      }
 
-      await expect(delegatedExec('s', request)).rejects.toThrow()
+      const result = await delegatedExec({ greeting: 'hello' }, request)
+
+      expect(result.stdout.trim()).toBe('hello')
+      expect(result.exitCode).toBe(0)
+    })
+
+    it('replaces multiple named secrets in args', async () => {
+      const request: ExecRequest = {
+        command: 'sh',
+        args: ['-c', 'echo {{secret:a}}-{{secret:b}}'],
+      }
+
+      const result = await delegatedExec({ a: 'x', b: 'y' }, request)
+
+      expect(result.stdout.trim()).toBe('x-y')
+    })
+
+    it('replaces named secrets in env values', async () => {
+      const request: ExecRequest = {
+        command: 'sh',
+        args: ['-c', 'echo $API_KEY $DB_PASS'],
+        env: {
+          API_KEY: '{{secret:apiKey}}',
+          DB_PASS: '{{secret:dbPass}}',
+        },
+      }
+
+      const result = await delegatedExec(
+        { apiKey: 'key123', dbPass: 'pass456' },
+        request,
+      )
+
+      expect(result.stdout.trim()).toBe('key123 pass456')
+    })
+  })
+
+  describe('negative cases', () => {
+    it('rejects with ExecError when the command is not found', async () => {
+      const request: ExecRequest = { command: 'nonexistent-command-xyz-123' }
+      const promise = delegatedExec('s', request)
+
+      await expect(promise).rejects.toThrow(ExecError)
+      await expect(delegatedExec('s', request)).rejects.toThrow(
+        /Command not found: nonexistent-command-xyz-123/,
+      )
+    })
+
+    it('rejects with ExecError when {{secret}} is used in the command field', async () => {
+      const request: ExecRequest = { command: '{{secret}}' }
+
+      await expect(delegatedExec('s', request)).rejects.toThrow(ExecError)
+      await expect(delegatedExec('s', request)).rejects.toThrow(
+        /placeholders are not supported in the command field/,
+      )
+    })
+
+    it('rejects with ExecError when {{secret:name}} is used in the command field', async () => {
+      const request: ExecRequest = { command: '{{secret:apiKey}}' }
+
+      await expect(delegatedExec({ apiKey: 'val' }, request)).rejects.toThrow(ExecError)
+      await expect(delegatedExec({ apiKey: 'val' }, request)).rejects.toThrow(
+        /placeholders are not supported in the command field/,
+      )
+    })
+
+    it('rejects with ExecError when a named placeholder references an unknown secret', async () => {
+      const request: ExecRequest = {
+        command: 'echo',
+        args: ['{{secret:missing}}'],
+      }
+
+      await expect(delegatedExec({ apiKey: 'val' }, request)).rejects.toThrow(ExecError)
+      await expect(delegatedExec({ apiKey: 'val' }, request)).rejects.toThrow(
+        /Unknown secret name.*missing/,
+      )
     })
   })
 })

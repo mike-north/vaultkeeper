@@ -94,21 +94,22 @@ import { VaultKeeper } from 'vaultkeeper'
 // 1. Initialize (runs doctor preflight checks)
 const vault = await VaultKeeper.init()
 
-// 2. Retrieve a stored secret and mint a JWE token
-//    The secret must already exist in the backend (e.g. macOS Keychain).
-//    See "Storing secrets" below for how to populate the backend.
+// 2. Store a secret in the configured backend
+await vault.store('MY_API_KEY', 'my-secret-value')
+
+// 3. Mint a JWE token for the stored secret
 const jwe = await vault.setup('MY_API_KEY')
 
-// 3. Authorize: decrypt and validate the token
+// 4. Authorize: decrypt and validate the token
 const { token, vaultResponse } = await vault.authorize(jwe)
 
-// 4a. Delegated fetch — secret injected into the request, never returned
+// 5a. Delegated fetch — secret injected into the request, never returned
 const { response: httpResponse } = await vault.fetch(token, {
   url: 'https://api.example.com/data',
   headers: { Authorization: 'Bearer {{secret}}' },
 })
 
-// 4b. Delegated exec — secret injected via env var, never on the command line
+// 5b. Delegated exec — secret injected via env var, never on the command line
 //     Avoid putting secrets in `args` — process arguments are visible via `ps`.
 const { result } = await vault.exec(token, {
   command: 'my-api-client',
@@ -116,7 +117,7 @@ const { result } = await vault.exec(token, {
   env: { MY_API_TOKEN: '{{secret}}' },
 })
 
-// 4c. Controlled direct access — buffer is zeroed after the callback returns
+// 5c. Controlled direct access — buffer is zeroed after the callback returns
 const accessor = vault.getSecret(token)
 accessor.read((buf) => {
   // Use buf here. Do not store a reference beyond this callback.
@@ -401,6 +402,9 @@ All errors extend `VaultError`.
 | `TokenRevokedError` | Token has been blocked (e.g. single-use token already consumed) |
 | `UsageLimitExceededError` | Token presented more times than its `use` limit allows |
 | `IdentityMismatchError` | Executable hash changed since TOFU approval |
+| `ExecError` | `exec()` request was invalid (e.g. `{{secret}}` in the command field) or the command could not be started (not found or failed to spawn) |
+| `InvalidTokenError` | JWE could not be decrypted or validated (e.g. structurally malformed, tampered, or failed decryption) |
+| `AccessorConsumedError` | `SecretAccessor.read()` called after already consumed |
 | `InvalidAlgorithmError` | Signing/verifying with a disallowed algorithm (e.g. `md5`) |
 | `SetupError` | Required system dependency missing or incompatible at init |
 | `FilesystemError` | Config directory not readable or writable |

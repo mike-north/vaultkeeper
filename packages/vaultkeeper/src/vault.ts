@@ -36,11 +36,34 @@ import { delegatedVerify } from './access/delegated-verify.js'
 import { runDoctor } from './doctor/runner.js'
 import type { RunDoctorOptions } from './doctor/runner.js'
 import {
+  AuthorizationDeniedError,
   IdentityMismatchError,
   BackendUnavailableError,
   VaultError,
   KeyRevokedError,
 } from './errors.js'
+
+/**
+ * Map of named secrets to their capability tokens.
+ *
+ * Use with `exec()` or `fetch()` to inject multiple secrets into a single
+ * request. Each key becomes the name referenced in `{{secret:name}}`
+ * placeholders.
+ *
+ * @example
+ * ```ts
+ * const { token: apiToken } = await vault.authorize(apiJwe)
+ * const { token: dbToken } = await vault.authorize(dbJwe)
+ *
+ * await vault.exec(
+ *   { apiKey: apiToken, dbPass: dbToken },
+ *   { command: 'deploy', env: { API_KEY: '{{secret:apiKey}}', DB: '{{secret:dbPass}}' } },
+ * )
+ * ```
+ *
+ * @public
+ */
+export type SecretTokenMap = Record<string, CapabilityToken>
 
 /** Options for initializing VaultKeeper. */
 export interface VaultKeeperOptions {
@@ -143,6 +166,7 @@ export class VaultKeeper {
    * @public
    */
   async store(name: string, value: string): Promise<void> {
+    VaultKeeper.#validateSecretName(name)
     const backend = this.#requireBackend()
     await backend.store(name, value)
   }
@@ -157,6 +181,7 @@ export class VaultKeeper {
    * @public
    */
   async delete(name: string): Promise<void> {
+    VaultKeeper.#validateSecretName(name)
     const backend = this.#requireBackend()
     await backend.delete(name)
   }
@@ -169,6 +194,7 @@ export class VaultKeeper {
    * @returns Compact JWE string
    */
   async setup(secretName: string, options?: SetupOptions): Promise<string> {
+    VaultKeeper.#validateSecretName(secretName)
     const backend = this.#requireBackend()
     const backendType = options?.backendType ?? backend.type
     const ttlMinutes = options?.ttlMinutes ?? this.#config.defaults.ttlMinutes
@@ -265,26 +291,32 @@ export class VaultKeeper {
   }
 
   /**
-   * Execute a delegated HTTP fetch, injecting the secret from the token.
+   * Execute a delegated HTTP fetch, injecting secrets from the token(s).
    *
-   * The secret value is substituted for every `{{secret}}` placeholder found
-   * in `request.url`, `request.headers`, and `request.body` before the fetch
-   * is executed. The raw secret is never exposed in the return value.
+   * **Single token:** every `{{secret}}` placeholder in `request.url`,
+   * `request.headers`, and `request.body` is replaced with the secret value.
    *
-   * @param token - A `CapabilityToken` obtained from `authorize()`.
-   * @param request - The fetch request template. Use `{{secret}}` as a
-   *   placeholder wherever the secret value should be injected.
+   * **Token map ({@link SecretTokenMap}):** every `{{secret:name}}` placeholder
+   * is replaced with the secret from the corresponding named token.
+   *
+   * The raw secret is never exposed in the return value.
+   *
+   * @param token - A single `CapabilityToken` or a `SecretTokenMap` mapping
+   *   names to tokens obtained from `authorize()`.
+   * @param request - The fetch request template with placeholders.
    * @returns The `Response` from the underlying `fetch()` call, together with
    *   the vault metadata (`vaultResponse`).
-   * @throws {Error} If `token` is invalid or was not created by this vault
-   *   instance.
+   * @throws {AuthorizationDeniedError} If any token is invalid or was not
+   *   created by this vault instance.
+   * @throws {VaultError} If a named placeholder references an unknown
+   *   secret name.
    */
   async fetch(
-    token: CapabilityToken,
+    token: CapabilityToken | SecretTokenMap,
     request: FetchRequest,
   ): Promise<{ response: Response; vaultResponse: VaultResponse }> {
-    const claims = validateCapabilityToken(token)
-    const response = await delegatedFetch(claims.val, request)
+    const secrets = VaultKeeper.#resolveSecrets(token)
+    const response = await delegatedFetch(secrets, request)
     return {
       response,
       vaultResponse: { keyStatus: 'current' },
@@ -292,26 +324,33 @@ export class VaultKeeper {
   }
 
   /**
-   * Execute a delegated command, injecting the secret from the token.
+   * Execute a delegated command, injecting secrets from the token(s).
    *
-   * The secret value is substituted for every `{{secret}}` placeholder found
-   * in `request.args` and `request.env` values before the process is spawned.
+   * **Single token:** every `{{secret}}` placeholder in `request.args` and
+   * `request.env` values is replaced with the secret value.
+   *
+   * **Token map ({@link SecretTokenMap}):** every `{{secret:name}}` placeholder
+   * is replaced with the secret from the corresponding named token.
+   *
    * The raw secret is never exposed in the return value.
    *
-   * @param token - A `CapabilityToken` obtained from `authorize()`.
-   * @param request - The exec request template. Use `{{secret}}` as a
-   *   placeholder wherever the secret value should be injected.
+   * @param token - A single `CapabilityToken` or a `SecretTokenMap` mapping
+   *   names to tokens obtained from `authorize()`.
+   * @param request - The exec request template with placeholders.
    * @returns The command result (`stdout`, `stderr`, `exitCode`) together with
    *   the vault metadata (`vaultResponse`).
-   * @throws {Error} If `token` is invalid or was not created by this vault
-   *   instance.
+   * @throws {AuthorizationDeniedError} If any token is invalid or was not
+   *   created by this vault instance.
+   * @throws {ExecError} If the command cannot be started (e.g. ENOENT),
+   *   a placeholder references an unknown secret name, or a secret
+   *   placeholder appears in the `command` field.
    */
   async exec(
-    token: CapabilityToken,
+    token: CapabilityToken | SecretTokenMap,
     request: ExecRequest,
   ): Promise<{ result: ExecResult; vaultResponse: VaultResponse }> {
-    const claims = validateCapabilityToken(token)
-    const result = await delegatedExec(claims.val, request)
+    const secrets = VaultKeeper.#resolveSecrets(token)
+    const result = await delegatedExec(secrets, request)
     return {
       result,
       vaultResponse: { keyStatus: 'current' },
@@ -452,6 +491,30 @@ export class VaultKeeper {
   // ---------------------------------------------------------------------------
   // Private helpers
   // ---------------------------------------------------------------------------
+
+  static #resolveSecrets(
+    token: CapabilityToken | SecretTokenMap,
+  ): string | Record<string, string> {
+    if (token instanceof CapabilityToken) {
+      return validateCapabilityToken(token).val
+    }
+    const result: Record<string, string> = {}
+    for (const [name, t] of Object.entries(token)) {
+      if (!(t instanceof CapabilityToken)) {
+        throw new AuthorizationDeniedError(
+          `Invalid capability token for secret "${name}" — expected a CapabilityToken from authorize()`,
+        )
+      }
+      result[name] = validateCapabilityToken(t).val
+    }
+    return result
+  }
+
+  static #validateSecretName(name: string): void {
+    if (name.trim() === '') {
+      throw new VaultError('Secret name must not be empty')
+    }
+  }
 
   #resolveBackend(): SecretBackend {
     const enabledBackends = this.#config.backends.filter((b) => b.enabled)

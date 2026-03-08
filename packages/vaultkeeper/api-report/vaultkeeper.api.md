@@ -5,6 +5,11 @@
 ```ts
 
 // @public
+export class AccessorConsumedError extends VaultError {
+    constructor(message: string);
+}
+
+// @public
 export class AuthorizationDeniedError extends VaultError {
     constructor(message: string);
 }
@@ -65,6 +70,12 @@ export class DeviceNotPresentError extends VaultError {
 }
 
 // @public
+export class ExecError extends VaultError {
+    constructor(message: string, command: string);
+    readonly command: string;
+}
+
+// @public
 export interface ExecRequest {
     args?: string[] | undefined;
     command: string;
@@ -106,6 +117,11 @@ export class InvalidAlgorithmError extends VaultError {
     constructor(message: string, algorithm: string, allowed: string[]);
     readonly algorithm: string;
     readonly allowed: string[];
+}
+
+// @public
+export class InvalidTokenError extends VaultError {
+    constructor(message: string);
 }
 
 // @public
@@ -192,6 +208,9 @@ export interface SecretBackend {
 export class SecretNotFoundError extends VaultError {
     constructor(message: string);
 }
+
+// @public
+export type SecretTokenMap = Record<string, CapabilityToken>;
 
 // @public
 export interface SetupChoice {
@@ -286,11 +305,11 @@ export class VaultKeeper {
     }>;
     delete(name: string): Promise<void>;
     static doctor(options?: RunDoctorOptions): Promise<PreflightResult>;
-    exec(token: CapabilityToken, request: ExecRequest): Promise<{
+    exec(token: CapabilityToken | SecretTokenMap, request: ExecRequest): Promise<{
         result: ExecResult;
         vaultResponse: VaultResponse;
     }>;
-    fetch(token: CapabilityToken, request: FetchRequest): Promise<{
+    fetch(token: CapabilityToken | SecretTokenMap, request: FetchRequest): Promise<{
         response: Response;
         vaultResponse: VaultResponse;
     }>;

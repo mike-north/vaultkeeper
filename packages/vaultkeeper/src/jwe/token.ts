@@ -4,7 +4,7 @@
 
 import { CompactEncrypt, compactDecrypt } from 'jose'
 import type { VaultClaims } from '../types.js'
-import { VaultError } from '../errors.js'
+import { InvalidTokenError } from '../errors.js'
 
 const ALGORITHM = 'dir'
 const ENCRYPTION = 'A256GCM'
@@ -97,19 +97,19 @@ export async function decryptToken(key: Uint8Array, jwe: string): Promise<VaultC
     plaintext = result.plaintext
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
-    throw new VaultError(`JWE decryption failed: ${message}`)
+    throw new InvalidTokenError(`JWE decryption failed: ${message}`)
   }
 
   let parsed: unknown
   try {
     parsed = JSON.parse(new TextDecoder().decode(plaintext))
   } catch {
-    throw new VaultError('JWE payload is not valid JSON')
+    throw new InvalidTokenError('JWE payload is not valid JSON')
   }
 
   const claims = parseVaultClaims(parsed)
   if (claims === undefined) {
-    throw new VaultError('JWE payload does not match VaultClaims schema')
+    throw new InvalidTokenError('JWE payload does not match VaultClaims schema')
   }
 
   return claims
@@ -128,24 +128,24 @@ export async function decryptToken(key: Uint8Array, jwe: string): Promise<VaultC
 export function extractKid(jwe: string): string | undefined {
   const parts = jwe.split('.')
   if (parts.length !== 5) {
-    throw new VaultError('Invalid JWE compact serialization: expected 5 parts')
+    throw new InvalidTokenError('Invalid JWE compact serialization: expected 5 parts')
   }
   const headerSegment = parts[0]
   if (headerSegment === undefined || headerSegment === '') {
-    throw new VaultError('Invalid JWE compact serialization: missing header segment')
+    throw new InvalidTokenError('Invalid JWE compact serialization: missing header segment')
   }
   let headerJson: string
   try {
     headerJson = Buffer.from(headerSegment, 'base64url').toString('utf-8')
   } catch {
-    throw new VaultError('Invalid JWE compact serialization: header is not valid Base64URL')
+    throw new InvalidTokenError('Invalid JWE compact serialization: header is not valid Base64URL')
   }
 
   let header: unknown
   try {
     header = JSON.parse(headerJson)
   } catch {
-    throw new VaultError('Invalid JWE compact serialization: header is not valid JSON')
+    throw new InvalidTokenError('Invalid JWE compact serialization: header is not valid JSON')
   }
 
   if (!isObject(header)) {
