@@ -7,7 +7,7 @@
 
 import { spawn } from 'node:child_process'
 import type { ExecRequest, ExecResult } from '../types.js'
-import { ExecError } from '../errors.js'
+import { ExecError, VaultError } from '../errors.js'
 import {
   ANY_PLACEHOLDER_RE,
   resolvePlaceholders,
@@ -34,13 +34,22 @@ export async function delegatedExec(
     )
   }
 
-  const args = (request.args ?? []).map((arg) =>
-    resolvePlaceholders(arg, secrets),
-  )
-  const env =
-    request.env !== undefined
-      ? resolvePlaceholdersInRecord(request.env, secrets)
-      : undefined
+  let args: string[]
+  let env: Record<string, string> | undefined
+  try {
+    args = (request.args ?? []).map((arg) =>
+      resolvePlaceholders(arg, secrets),
+    )
+    env =
+      request.env !== undefined
+        ? resolvePlaceholdersInRecord(request.env, secrets)
+        : undefined
+  } catch (error) {
+    if (error instanceof VaultError) {
+      throw new ExecError(error.message, request.command)
+    }
+    throw error
+  }
 
   return new Promise((resolve, reject) => {
     const spawnOptions: Parameters<typeof spawn>[2] = {

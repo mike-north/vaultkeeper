@@ -219,5 +219,17 @@ describe('delegatedExec', () => {
         /placeholders are not supported in the command field/,
       )
     })
+
+    it('rejects with ExecError when a named placeholder references an unknown secret', async () => {
+      const request: ExecRequest = {
+        command: 'echo',
+        args: ['{{secret:missing}}'],
+      }
+
+      await expect(delegatedExec({ apiKey: 'val' }, request)).rejects.toThrow(ExecError)
+      await expect(delegatedExec({ apiKey: 'val' }, request)).rejects.toThrow(
+        /Unknown secret name.*missing/,
+      )
+    })
   })
 })

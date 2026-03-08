@@ -36,6 +36,7 @@ import { delegatedVerify } from './access/delegated-verify.js'
 import { runDoctor } from './doctor/runner.js'
 import type { RunDoctorOptions } from './doctor/runner.js'
 import {
+  AuthorizationDeniedError,
   IdentityMismatchError,
   BackendUnavailableError,
   VaultError,
@@ -307,6 +308,8 @@ export class VaultKeeper {
    *   the vault metadata (`vaultResponse`).
    * @throws {AuthorizationDeniedError} If any token is invalid or was not
    *   created by this vault instance.
+   * @throws {VaultError} If a named placeholder references an unknown
+   *   secret name.
    */
   async fetch(
     token: CapabilityToken | SecretTokenMap,
@@ -338,6 +341,9 @@ export class VaultKeeper {
    *   the vault metadata (`vaultResponse`).
    * @throws {AuthorizationDeniedError} If any token is invalid or was not
    *   created by this vault instance.
+   * @throws {ExecError} If the command cannot be started (e.g. ENOENT),
+   *   a placeholder references an unknown secret name, or a secret
+   *   placeholder appears in the `command` field.
    */
   async exec(
     token: CapabilityToken | SecretTokenMap,
@@ -494,6 +500,11 @@ export class VaultKeeper {
     }
     const result: Record<string, string> = {}
     for (const [name, t] of Object.entries(token)) {
+      if (!(t instanceof CapabilityToken)) {
+        throw new AuthorizationDeniedError(
+          `Invalid capability token for secret "${name}" — expected a CapabilityToken from authorize()`,
+        )
+      }
       result[name] = validateCapabilityToken(t).val
     }
     return result
