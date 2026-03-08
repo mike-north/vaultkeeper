@@ -218,7 +218,14 @@ async fn cmd_exec(token: &str, command: &[String]) -> i32 {
 
 async fn cmd_doctor() -> i32 {
     let host = make_host();
-    let result = vaultkeeper_core::doctor::run_doctor(host.as_ref(), None).await;
+
+    // Load config so doctor checks are scoped to the enabled backends.
+    // Fall back to None (platform defaults) if config loading fails.
+    let backends = match vaultkeeper_core::config::load_config(host.as_ref()).await {
+        Ok(cfg) => Some(cfg.backends),
+        Err(_) => None,
+    };
+    let result = vaultkeeper_core::doctor::run_doctor(host.as_ref(), backends.as_deref()).await;
 
     for check in &result.checks {
         let icon = if check.status == vaultkeeper_core::PreflightCheckStatus::Ok {

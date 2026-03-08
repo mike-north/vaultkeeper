@@ -806,6 +806,33 @@ mod vault_keeper {
     }
 
     #[tokio::test]
+    async fn init_with_doctor_scopes_to_backends() {
+        // TestHost returns "openssl OK" for all exec calls and platform is Linux.
+        // With file-only backends, secret-tool is demoted, so init should succeed
+        // even though secret-tool is "missing" (all exec calls return openssl output,
+        // which passes the openssl check but not secret-tool; however, since file
+        // backend doesn't require secret-tool, it's demoted to optional).
+        let host = TestHost::with_config();
+        let result = VaultKeeper::init(
+            &host,
+            Some(VaultKeeperOptions {
+                skip_doctor: false, // exercise the doctor path
+                ..Default::default()
+            }),
+        )
+        .await;
+
+        // The exec mock returns generic openssl output for every command,
+        // which makes openssl pass. bash will also "pass" because exit_code=0.
+        // secret-tool check may report "missing" but since file backend is the
+        // only enabled backend, it is demoted to optional, so init succeeds.
+        assert!(
+            result.is_ok(),
+            "init with file-only backend should succeed even if secret-tool would fail"
+        );
+    }
+
+    #[tokio::test]
     async fn authorize_enforces_use_limit() {
         let host = TestHost::with_config();
         let mut vault = VaultKeeper::init(
@@ -838,6 +865,152 @@ mod vault_keeper {
             matches!(err, VaultError::UsageLimitExceeded { .. })
                 || matches!(err, VaultError::TokenRevoked { .. }),
             "Expected UsageLimitExceeded or TokenRevoked, got: {err}"
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Doctor backend-aware scoping tests
+// ---------------------------------------------------------------------------
+
+mod doctor_scoping {
+    use super::*;
+    use std::path::Path;
+
+    /// A test host that returns a fixed platform and generic "ok" exec output.
+    /// All check functions will see exit_code=0 and openssl-like stdout, which
+    /// means they will either pass or be classified based on their version
+    /// parsing logic (some checks look for specific version strings).
+    struct DoctorTestHost {
+        plat: Platform,
+    }
+
+    #[async_trait::async_trait]
+    impl HostPlatform for DoctorTestHost {
+        async fn exec(
+            &self,
+            _cmd: &str,
+            _args: &[&str],
+            _stdin: Option<&[u8]>,
+        ) -> Result<ExecOutput, VaultError> {
+            // Return a generic successful output that passes most checks.
+            Ok(ExecOutput {
+                stdout: b"OpenSSL 3.0.0 1 Jan 2024\nGNU bash, version 5.2\n".to_vec(),
+                stderr: Vec::new(),
+                exit_code: 0,
+            })
+        }
+        async fn read_file(&self, _path: &Path) -> Result<Vec<u8>, VaultError> {
+            Err(VaultError::Other("not found".into()))
+        }
+        async fn write_file(
+            &self,
+            _path: &Path,
+            _content: &[u8],
+            _mode: u32,
+        ) -> Result<(), VaultError> {
+            Ok(())
+        }
+        async fn file_exists(&self, _path: &Path) -> Result<bool, VaultError> {
+            Ok(false)
+        }
+        async fn delete_file(&self, _path: &Path) -> Result<(), VaultError> {
+            Ok(())
+        }
+        async fn list_dir(&self, _path: &Path) -> Result<Vec<String>, VaultError> {
+            Ok(Vec::new())
+        }
+        fn platform(&self) -> Platform {
+            self.plat
+        }
+        fn config_dir(&self) -> &Path {
+            Path::new("/test/config")
+        }
+    }
+
+    #[tokio::test]
+    async fn none_backends_uses_platform_defaults() {
+        let host = DoctorTestHost {
+            plat: Platform::Linux,
+        };
+        let result = vaultkeeper_core::doctor::run_doctor(&host, None).await;
+
+        // With None, all platform-default checks are required (backward compat).
+        // The generic exec output passes openssl and bash, but secret-tool's
+        // version parsing may or may not pass. Regardless, all checks should run.
+        assert!(result.checks.len() >= 4); // openssl, bash, secret-tool, op, ykman
+    }
+
+    #[tokio::test]
+    async fn file_only_backend_on_linux_demotes_secret_tool() {
+        let host = DoctorTestHost {
+            plat: Platform::Linux,
+        };
+        let backends = vec![BackendConfig {
+            backend_type: "file".to_string(),
+            enabled: true,
+            plugin: None,
+            path: None,
+            options: None,
+        }];
+        let result = vaultkeeper_core::doctor::run_doctor(&host, Some(&backends)).await;
+
+        // With file-only backend, secret-tool is demoted to optional.
+        // Even if secret-tool check reports non-ok, ready should still be true
+        // because it's not required.
+        // (openssl and bash should pass with our mock output)
+        assert!(
+            result.ready,
+            "file-only backend should not block on secret-tool: next_steps={:?}",
+            result.next_steps
+        );
+    }
+
+    #[tokio::test]
+    async fn disabled_backend_does_not_require_its_tool() {
+        let host = DoctorTestHost {
+            plat: Platform::Linux,
+        };
+        let backends = vec![
+            BackendConfig {
+                backend_type: "file".to_string(),
+                enabled: true,
+                plugin: None,
+                path: None,
+                options: None,
+            },
+            BackendConfig {
+                backend_type: "secret-tool".to_string(),
+                enabled: false,
+                plugin: None,
+                path: None,
+                options: None,
+            },
+        ];
+        let result = vaultkeeper_core::doctor::run_doctor(&host, Some(&backends)).await;
+
+        // Disabled secret-tool backend should not make secret-tool required
+        assert!(
+            result.ready,
+            "disabled secret-tool backend should not block readiness: next_steps={:?}",
+            result.next_steps
+        );
+    }
+
+    #[tokio::test]
+    async fn empty_backends_demotes_all_platform_checks() {
+        let host = DoctorTestHost {
+            plat: Platform::Linux,
+        };
+        let backends: Vec<BackendConfig> = vec![];
+        let result = vaultkeeper_core::doctor::run_doctor(&host, Some(&backends)).await;
+
+        // Empty backends = no backend needs any platform tool.
+        // Only core checks (openssl) remain required.
+        assert!(
+            result.ready,
+            "empty backends should demote all platform checks: next_steps={:?}",
+            result.next_steps
         );
     }
 }

@@ -24,9 +24,11 @@ export interface RunDoctorOptions {
   platform?: Platform
   /**
    * When provided, doctor checks are scoped to the given backends.
-   * Checks for system dependencies that are only needed by backends not in
-   * this list are demoted from required to optional (still run for
-   * informational purposes, but will not block readiness).
+   * Platform-native dependency checks (e.g. `secret-tool`, `security`,
+   * `powershell`) are demoted from required to optional when the
+   * corresponding backend is not enabled. Plugin tool checks (`op`,
+   * `ykman`) are promoted from optional to required when their backend
+   * (`1password`, `yubikey`) is explicitly enabled.
    *
    * When omitted, all platform-default checks are treated as required
    * (backward-compatible behavior).
