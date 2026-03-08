@@ -143,7 +143,6 @@ export class VaultKeeper {
    * @public
    */
   async store(name: string, value: string): Promise<void> {
-    VaultKeeper.#validateSecretName(name)
     const backend = this.#requireBackend()
     await backend.store(name, value)
   }
@@ -158,7 +157,6 @@ export class VaultKeeper {
    * @public
    */
   async delete(name: string): Promise<void> {
-    VaultKeeper.#validateSecretName(name)
     const backend = this.#requireBackend()
     await backend.delete(name)
   }
@@ -171,7 +169,6 @@ export class VaultKeeper {
    * @returns Compact JWE string
    */
   async setup(secretName: string, options?: SetupOptions): Promise<string> {
-    VaultKeeper.#validateSecretName(secretName)
     const backend = this.#requireBackend()
     const backendType = options?.backendType ?? backend.type
     const ttlMinutes = options?.ttlMinutes ?? this.#config.defaults.ttlMinutes
@@ -455,12 +452,6 @@ export class VaultKeeper {
   // ---------------------------------------------------------------------------
   // Private helpers
   // ---------------------------------------------------------------------------
-
-  static #validateSecretName(name: string): void {
-    if (name.trim() === '') {
-      throw new VaultError('Secret name must not be empty')
-    }
-  }
 
   #resolveBackend(): SecretBackend {
     const enabledBackends = this.#config.backends.filter((b) => b.enabled)

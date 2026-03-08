@@ -1,6 +1,5 @@
 import { describe, it, expect } from 'vitest'
 import { createSecretAccessor } from '../../../src/access/controlled-direct.js'
-import { AccessorConsumedError } from '../../../src/errors.js'
 import type { SecretAccessor } from '../../../src/types.js'
 
 // Symbol used by Node.js for custom inspect
@@ -71,7 +70,7 @@ describe('createSecretAccessor', () => {
       }).toThrow('already been consumed')
     })
 
-    it('second read() throws AccessorConsumedError (not TypeError or plain Error)', () => {
+    it('second read() error is not a TypeError (no raw proxy error)', () => {
       const accessor = createSecretAccessor('secret')
 
       accessor.read(() => {
@@ -87,7 +86,7 @@ describe('createSecretAccessor', () => {
         caught = err
       }
 
-      expect(caught).toBeInstanceOf(AccessorConsumedError)
+      expect(caught).toBeInstanceOf(Error)
       expect(caught).not.toBeInstanceOf(TypeError)
     })
 

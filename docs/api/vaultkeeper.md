@@ -19,17 +19,6 @@ Description
 </th></tr></thead>
 <tbody><tr><td>
 
-[AccessorConsumedError](./vaultkeeper.accessorconsumederror.md)
-
-
-</td><td>
-
-Thrown when `SecretAccessor.read()` is called after the accessor has already been consumed.
-
-
-</td></tr>
-<tr><td>
-
 [AuthorizationDeniedError](./vaultkeeper.authorizationdeniederror.md)
 
 
@@ -96,17 +85,6 @@ Thrown when a hardware device (e.g. YubiKey or smart card) required for authenti
 </td></tr>
 <tr><td>
 
-[ExecError](./vaultkeeper.execerror.md)
-
-
-</td><td>
-
-Thrown when a delegated `exec()` call fails due to a process-level error (e.g. the command binary is not found or cannot be spawned).
-
-
-</td></tr>
-<tr><td>
-
 [FilesystemError](./vaultkeeper.filesystemerror.md)
 
 
@@ -137,17 +115,6 @@ Callers must re-approve the executable before a new token can be issued for it.
 </td><td>
 
 Thrown when a caller requests a signing/verification algorithm that is not in the allowed set (e.g. `'md5'`<!-- -->).
-
-
-</td></tr>
-<tr><td>
-
-[InvalidTokenError](./vaultkeeper.invalidtokenerror.md)
-
-
-</td><td>
-
-Thrown when a JWE string cannot be parsed because it is structurally malformed (e.g. wrong number of segments, invalid Base64URL header, or unparseable JSON header).
 
 
 </td></tr>
