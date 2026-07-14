@@ -79,11 +79,12 @@ vaultkeeper delete --name MY_API_KEY
 # Pre-approve an executable (TOFU): records its SHA-256 in the trust manifest
 vaultkeeper approve --script /usr/local/bin/my-tool
 
-# Toggle development mode for a script
-vaultkeeper dev-mode --path /path/to/script --enable
+# Enable (or disable) development mode for a script
+vaultkeeper dev-mode enable --script /path/to/script
 
-# Run a command with a secret injected as VAULTKEEPER_SECRET
-vaultkeeper exec --token <jwe-token> -- my-command --flag
+# Run a command with a secret injected into an env var (approve the caller first,
+# above; see "Running in CI" below for the non-interactive form)
+vaultkeeper exec --secret MY_API_KEY --env MY_API_KEY --caller /usr/local/bin/my-tool -- my-command --flag
 
 # Rotate the encryption key (previous key stays valid during grace period)
 vaultkeeper rotate-key
