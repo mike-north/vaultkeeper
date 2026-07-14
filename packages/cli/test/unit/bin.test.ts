@@ -294,4 +294,66 @@ describe('bin.ts entry point', () => {
       expect(result.stdout).toMatch(/letters, digits/)
     })
   })
+
+  // Regression (PR #95 review): exec's --secret/--env/--caller each had a
+  // different, wrong exit code for an empty value — --secret exited 1 (a
+  // VaultError from deep inside the vault), --caller exited 1 (a
+  // FilesystemError from resolving '' to the current directory), and --env
+  // exited 0 (silently injected the secret into an unusable '' env key and
+  // ran the wrapped command anyway). All three must now exit 2, consistent
+  // with store/delete's --name validation.
+  describe('exec flag value validation', () => {
+    it('should exit 2 for an empty --secret, not the deep VaultError exit 1', async () => {
+      const result = await runCli([
+        'exec',
+        '--secret',
+        '',
+        '--env',
+        'FOO',
+        '--caller',
+        './x',
+        '--skip-doctor',
+        '--',
+        'echo',
+        'hi',
+      ])
+      expect(result.exitCode).toBe(2)
+      expect(result.stderr).toContain('must not be empty or whitespace-only')
+    })
+
+    it('should exit 2 for an empty --env, not silently succeed', async () => {
+      const result = await runCli([
+        'exec',
+        '--secret',
+        'my-key',
+        '--env',
+        '',
+        '--caller',
+        './x',
+        '--skip-doctor',
+        '--',
+        'echo',
+        'hi',
+      ])
+      expect(result.exitCode).toBe(2)
+      expect(result.stdout).not.toContain('hi')
+    })
+
+    it('should exit 2 for an empty --caller, not the deep FilesystemError exit 1', async () => {
+      const result = await runCli([
+        'exec',
+        '--secret',
+        'my-key',
+        '--env',
+        'FOO',
+        '--caller',
+        '',
+        '--skip-doctor',
+        '--',
+        'echo',
+        'hi',
+      ])
+      expect(result.exitCode).toBe(2)
+    })
+  })
 })

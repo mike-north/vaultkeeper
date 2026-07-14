@@ -273,6 +273,27 @@ export async function execCommand(args: string[], configDir: string): Promise<nu
     return 2
   }
 
+  // Reject empty/whitespace-only values with the same exit code and error
+  // style as a missing flag (consistent with store/delete's --name check).
+  // Before this fix each had its own gap:
+  //   --secret ""  -> vault.secretExists() threw VaultError, exit 1
+  //   --caller ""  -> path.resolve('') resolves to cwd, a directory; hashing
+  //                   it threw FilesystemError (EISDIR), exit 1
+  //   --env ""     -> silently succeeded (exit 0): '' is a syntactically
+  //                   valid env var key, so the secret was injected into an
+  //                   unusable key and the wrapped command ran normally —
+  //                   the worst of the three, since it failed silently.
+  if (secret.trim() === '' || envVar.trim() === '' || caller.trim() === '') {
+    process.stderr.write(
+      'Error: --secret, --env, and --caller must not be empty or whitespace-only\n',
+    )
+    process.stderr.write(
+      'Usage: vaultkeeper exec --secret <name> --env <VAR> --caller <path> [options] -- <command...>\n',
+    )
+    // Exit code 2: usage error (invalid flag value)
+    return 2
+  }
+
   const callerPath = path.resolve(caller)
   // parseArgs with default: false types these as boolean (never undefined)
   const useCache: boolean = values.cache

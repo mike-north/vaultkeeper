@@ -204,6 +204,70 @@ describe('execCommand', () => {
     })
   })
 
+  // Regression (PR #95 review): an empty/whitespace-only value for --secret,
+  // --env, or --caller previously exited inconsistently — --secret hit
+  // vault.secretExists()'s VaultError (exit 1), --caller hit a FilesystemError
+  // resolving to cwd (exit 1), and --env silently succeeded (exit 0, secret
+  // injected into an unusable '' env key). All three must now exit 2 with a
+  // usage-style message, matching store/delete's --name validation, and must
+  // never reach VaultKeeper.init() (an empty flag value is caught before any
+  // backend/vault interaction).
+  describe('empty/whitespace flag value validation', () => {
+    it('should return 2 for an empty --secret', async () => {
+      const code = await execCommand(
+        ['--secret', '', '--env', 'MY_VAR', '--caller', '/path/to/script.sh', '--', 'echo', 'hi'],
+        configDir,
+      )
+      expect(code).toBe(2)
+      expect(stderrOutput).toContain('must not be empty or whitespace-only')
+      expect(mockInit).not.toHaveBeenCalled()
+    })
+
+    it('should return 2 for a whitespace-only --secret', async () => {
+      const code = await execCommand(
+        [
+          '--secret',
+          '   ',
+          '--env',
+          'MY_VAR',
+          '--caller',
+          '/path/to/script.sh',
+          '--',
+          'echo',
+          'hi',
+        ],
+        configDir,
+      )
+      expect(code).toBe(2)
+    })
+
+    it('should return 2 for an empty --env', async () => {
+      const code = await execCommand(
+        ['--secret', 'my-key', '--env', '', '--caller', '/path/to/script.sh', '--', 'echo', 'hi'],
+        configDir,
+      )
+      expect(code).toBe(2)
+      expect(mockInit).not.toHaveBeenCalled()
+    })
+
+    it('should return 2 for an empty --caller', async () => {
+      const code = await execCommand(
+        ['--secret', 'my-key', '--env', 'MY_VAR', '--caller', '', '--', 'echo', 'hi'],
+        configDir,
+      )
+      expect(code).toBe(2)
+      expect(mockInit).not.toHaveBeenCalled()
+    })
+
+    it('should return 2 for a whitespace-only --caller', async () => {
+      const code = await execCommand(
+        ['--secret', 'my-key', '--env', 'MY_VAR', '--caller', '   ', '--', 'echo', 'hi'],
+        configDir,
+      )
+      expect(code).toBe(2)
+    })
+  })
+
   describe('--skip-doctor flag', () => {
     // These drive the full command with a never-approved (pending) caller under
     // a simulated TTY, so the trust gate reaches promptApproval (mocked to
