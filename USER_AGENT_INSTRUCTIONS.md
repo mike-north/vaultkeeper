@@ -613,7 +613,7 @@ When generating code that uses vaultkeeper, enforce the following rules. Do not 
 
 ### Never pass secrets as CLI arguments
 
-`{{secret}}` is not supported in `args` — process arguments are visible to other processes via `/proc` or `ps` and are often collected in logs and telemetry. `delegatedExec` throws `ExecError` if a placeholder appears in `args` (or `command`). Always inject via `env` instead.
+`{{secret}}` is not supported in `args` — process arguments are visible to other processes via `/proc` or `ps` and are often collected in logs and telemetry. `vault.exec()` throws `ExecError` if a placeholder appears in `args` (or `command`). Always inject via `env` instead.
 
 ```ts
 // Correct: inject via environment variable

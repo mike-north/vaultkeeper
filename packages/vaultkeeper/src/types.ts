@@ -108,7 +108,7 @@ export interface FetchRequest {
  * (single-token mode) or `{{secret:name}}` (multi-token mode), which are
  * replaced with actual secret values immediately before the command is
  * spawned. Placeholders are **not** supported in `command` or `args` —
- * `delegatedExec` throws `ExecError` if one appears there.
+ * `VaultKeeper.exec()` throws `ExecError` if one appears there.
  */
 export interface ExecRequest {
   /** The command (binary) to execute. */
@@ -117,8 +117,8 @@ export interface ExecRequest {
    * Command-line arguments. Secret placeholders (`{{secret}}` or
    * `{{secret:name}}`) are **not** supported here — process arguments are
    * visible to other processes via `ps` and often collected in logs and
-   * telemetry. `delegatedExec` throws `ExecError` if a placeholder appears
-   * in any argument. Use `env` to inject secrets instead.
+   * telemetry. `VaultKeeper.exec()` throws `ExecError` if a placeholder
+   * appears in any argument. Use `env` to inject secrets instead.
    */
   args?: string[] | undefined
   /**
