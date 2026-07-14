@@ -8,8 +8,9 @@
  *    trusted caller passes without a prompt; an untrusted caller is prompted
  *    interactively, unless `--yes`/`VAULTKEEPER_YES` approves it non-interactively
  *    or, on non-TTY stdin, the command fails with remediation guidance
- * 3. If `--cache`, check for a cached JWE token; otherwise retrieve and setup
- *    the secret into a fresh JWE
+ * 3. For an already-trusted caller with `--cache`, reuse a cached JWE token;
+ *    otherwise (including a just-approved caller) retrieve and setup the secret
+ *    into a fresh JWE, which also records a just-approved caller's trust
  * 4. Authorize the JWE → obtain a CapabilityToken
  * 5. Read the secret value via the accessor
  * 6. Spawn the child process with the secret injected as an env var
@@ -34,7 +35,18 @@ import { readCachedToken, writeCachedToken, invalidateCache } from '../cache.js'
 import { RedactingStream } from '../redact.js'
 import { shouldSkipDoctor } from '../skip-doctor.js'
 import { shouldAutoApprove } from '../auto-approve.js'
+import { shellQuote } from '../shell-quote.js'
 import { formatError } from '../output.js'
+
+/**
+ * Outcome of the TOFU trust gate.
+ *
+ * - `trusted`: the caller's current hash is already approved in the manifest.
+ * - `approved`: the caller was just approved for this invocation (interactive
+ *   `y` or `--yes`/`VAULTKEEPER_YES`) and its hash is not yet recorded.
+ * - `denied`: the user declined the interactive prompt.
+ */
+type TrustGateOutcome = 'trusted' | 'approved' | 'denied'
 
 /**
  * Enforce the TOFU trust gate for `callerPath` before any secret is retrieved
@@ -59,7 +71,9 @@ import { formatError } from '../output.js'
  * - **Never approved**, interactive TTY: shows an approval prompt and returns
  *   its result (`false` if the user declines).
  *
- * @returns `true` if access is authorized, `false` if the user declined.
+ * @returns the {@link TrustGateOutcome}: `trusted` (already approved), `approved`
+ *   (just approved this run — the caller still needs recording via `setup()`),
+ *   or `denied` (user declined).
  * @throws {IdentityMismatchError} When the caller's hash changed from a
  *   previously approved value.
  * @throws When approval is required but cannot be obtained (non-TTY stdin
@@ -71,53 +85,57 @@ async function enforceTrustGate(
   secret: string,
   reason: string | undefined,
   autoApprove: boolean,
-): Promise<boolean> {
+): Promise<TrustGateOutcome> {
   const trust = await vault.checkExecutableTrust(callerPath)
   if (trust.trusted) {
     process.stderr.write('Trust: verified (hash matches trust manifest)\n')
-    return true
+    return 'trusted'
   }
 
   if (trust.hashMismatch) {
     // On a mismatch the manifest holds at least one prior approved hash; report
     // the most recently approved one as previousHash and the on-disk hash as
-    // currentHash so the error payload is accurate for diagnosis.
+    // currentHash so the error payload is accurate for diagnosis. The remediation
+    // command shell-quotes the path so it is safe to copy and paste verbatim.
     const previousHash = trust.approvedHashes.at(-1) ?? trust.hash
     throw new IdentityMismatchError(
       `Executable at ${callerPath} has changed since it was approved. ` +
-        `If this change is expected, re-approve it with: vaultkeeper approve --script ${callerPath}`,
+        `If this change is expected, re-approve it with: vaultkeeper approve --script ${shellQuote(callerPath)}`,
       previousHash,
       trust.hash,
     )
   }
 
   // Never-approved caller. --yes / VAULTKEEPER_YES approves this invocation
-  // without prompting; setup() then records the hash via TOFU just as an
-  // interactive "y" would.
+  // without prompting; the caller reports "approved" so the command records the
+  // hash via setup() (TOFU first-encounter) just as an interactive "y" would.
   if (autoApprove) {
     process.stderr.write('Trust: approved via --yes (recording caller in trust manifest)\n')
-    return true
+    return 'approved'
   }
 
   // No non-interactive approval and no TTY to prompt on: fail with actionable
-  // guidance instead of the raw "requires interactive approval" error.
+  // guidance instead of the raw "requires interactive approval" error. The
+  // caller path is shell-quoted so the suggested command is copy-paste safe.
   // isTTY is `true` only on a real terminal; `undefined`/`false` means non-TTY.
   if (!process.stdin.isTTY) {
     throw new Error(
       `Secret access for ${callerPath} requires approval, but stdin is not a TTY, ` +
         `so no interactive prompt can be shown.\n` +
         `To approve non-interactively, either:\n` +
-        `  - pre-approve the caller once:  vaultkeeper approve --script ${callerPath}\n` +
+        `  - pre-approve the caller once:  vaultkeeper approve --script ${shellQuote(callerPath)}\n` +
         `  - or approve just this run:      re-run with --yes (or set VAULTKEEPER_YES=1)`,
     )
   }
 
-  return promptApproval({
+  return (await promptApproval({
     caller: callerPath,
     trustInfo: 'Pending verification',
     secret,
     reason,
-  })
+  }))
+    ? 'approved'
+    : 'denied'
 }
 
 function printExecHelp(): void {
@@ -139,7 +157,7 @@ function printExecHelp(): void {
       '  A caller that is not yet trusted requires approval. On an interactive\n' +
       '  terminal you are prompted [y/N]. With non-TTY stdin (CI, pipes) there is\n' +
       '  no prompt, so you must either pre-approve the caller with\n' +
-      '  `vaultkeeper approve --script <caller>` or pass --yes (or VAULTKEEPER_YES=1)\n' +
+      '  "vaultkeeper approve --script <caller>" or pass --yes (or VAULTKEEPER_YES=1)\n' +
       '  to approve this invocation. Once trusted, exec never prompts again.\n\n' +
       'Environment variables:\n' +
       '  VAULTKEEPER_YES=1           Approve an untrusted caller non-interactively\n' +
@@ -215,15 +233,20 @@ export async function execCommand(args: string[]): Promise<number> {
     // previously cached JWE can never let a modified or never-approved caller
     // inherit trust it no longer (or never) held. A modified caller surfaces an
     // identity-mismatch error here rather than silently reusing a cached token.
-    const approved = await enforceTrustGate(vault, callerPath, secret, values.reason, autoApprove)
-    if (!approved) {
+    const outcome = await enforceTrustGate(vault, callerPath, secret, values.reason, autoApprove)
+    if (outcome === 'denied') {
       process.stderr.write('Access denied by user.\n')
       return 1
     }
 
-    // Check cache only after the caller has cleared the trust gate.
+    // Only a caller that was ALREADY trusted may reuse a cached token. A caller
+    // that was just approved this run (--yes or interactive "y") must go through
+    // setup(), which records its hash in the trust manifest (TOFU first
+    // encounter) — a cached token (the cache dir is independent of the trust
+    // manifest) must never short-circuit that recording, or the approval would
+    // not persist for later runs.
     let jwe: string | undefined
-    if (useCache) {
+    if (useCache && outcome === 'trusted') {
       jwe = await readCachedToken(callerPath, secret)
     }
 

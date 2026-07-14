@@ -390,7 +390,8 @@ describe('execCommand', () => {
       expect(setup).not.toHaveBeenCalled()
       expect(authorize).not.toHaveBeenCalled()
       expect(stderrOutput).toContain('has changed since it was approved')
-      expect(stderrOutput).toContain('vaultkeeper approve --script /path/to/script.sh')
+      // Remediation shell-quotes the caller path (safe to copy/paste).
+      expect(stderrOutput).toContain("vaultkeeper approve --script '/path/to/script.sh'")
 
       // Regression for review threads 3582262153 / 3582262187: the constructed
       // error carries the REAL hashes — the manifest-recorded approved hash and
@@ -514,6 +515,41 @@ describe('execCommand', () => {
       expect(stderrOutput).toContain('approved via --yes')
     })
 
+    // Regression for review thread 3582539153: --yes must record trust via
+    // setup() even when a cached token exists. A just-approved (untrusted)
+    // caller must not ride a cached token and skip recording — the cache is
+    // reserved for callers that were ALREADY trusted.
+    it('records trust via setup for a --yes caller even when a cached token exists', async () => {
+      const setup = vi.fn().mockResolvedValue('fresh.jwe')
+      const authorize = vi.fn().mockResolvedValue({ token: {}, vaultResponse: {} })
+      const getSecret = vi.fn().mockReturnValue({
+        read: (cb: (buf: Buffer) => void) => {
+          cb(Buffer.from('s3cr3t'))
+        },
+      })
+      const checkExecutableTrust = vi.fn().mockResolvedValue({
+        trusted: false,
+        hashMismatch: false,
+        hash: 'pending-hash',
+        approvedHashes: [],
+        reason: 'Executable not yet approved',
+      })
+      mockInit.mockResolvedValue({ checkExecutableTrust, setup, authorize, getSecret })
+      // A stale cached token exists — it must NOT be read or used for a caller
+      // that is only being approved this run.
+      vi.mocked(readCachedToken).mockResolvedValueOnce('cached.jwe.token')
+
+      const code = await execCommand(['--cache', '--yes', ...EXEC_ARGS])
+
+      expect(code).toBe(0)
+      // The cache was not even consulted for a just-approved caller.
+      expect(readCachedToken).not.toHaveBeenCalled()
+      // setup() ran, recording the approval, and its fresh token was authorized.
+      expect(setup).toHaveBeenCalledWith('my-key', { executablePath: '/path/to/script.sh' })
+      expect(authorize).toHaveBeenCalledWith('fresh.jwe')
+      expect(authorize).not.toHaveBeenCalledWith('cached.jwe.token')
+    })
+
     // Issue #58, criterion 3: an untrusted caller on non-TTY stdin without --yes
     // fails, but the error tells the user exactly how to proceed (approve or --yes)
     // rather than the raw "requires interactive approval" message.
@@ -528,7 +564,8 @@ describe('execCommand', () => {
         expect(code).toBe(1)
         expect(promptApproval).not.toHaveBeenCalled()
         expect(vault.setup).not.toHaveBeenCalled()
-        expect(stderrOutput).toContain('vaultkeeper approve --script /path/to/script.sh')
+        // Remediation shell-quotes the caller path (safe to copy/paste).
+        expect(stderrOutput).toContain("vaultkeeper approve --script '/path/to/script.sh'")
         expect(stderrOutput).toContain('--yes')
         expect(stderrOutput).toContain('VAULTKEEPER_YES=1')
       } finally {

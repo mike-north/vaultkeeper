@@ -126,7 +126,8 @@ describe('exec trust gate', () => {
     // Fails on the hash mismatch, not the interactive prompt.
     expect(result.stderr).not.toContain('interactive approval')
     expect(result.stderr).toContain('has changed since it was approved')
-    expect(result.stderr).toContain(`vaultkeeper approve --script ${caller}`)
+    // The path is shell-quoted so the suggested command is copy-paste safe.
+    expect(result.stderr).toContain(`vaultkeeper approve --script '${caller}'`)
     expect(result.stdout).not.toContain('ready=yes')
   })
 
@@ -141,7 +142,8 @@ describe('exec trust gate', () => {
     expect(result.exitCode).not.toBe(0)
     expect(result.stderr).not.toContain('Trust: verified')
     expect(result.stdout).not.toContain('ready=yes')
-    expect(result.stderr).toContain(`vaultkeeper approve --script ${caller}`)
+    // The path is shell-quoted so the suggested command is copy-paste safe.
+    expect(result.stderr).toContain(`vaultkeeper approve --script '${caller}'`)
     expect(result.stderr).toContain('--yes')
     expect(result.stderr).toContain('VAULTKEEPER_YES=1')
   })
