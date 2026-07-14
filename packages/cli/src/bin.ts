@@ -35,7 +35,12 @@ function readPackageVersion(): string {
   try {
     const pkgPath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../package.json')
     const raw: unknown = JSON.parse(fs.readFileSync(pkgPath, 'utf8'))
-    if (raw !== null && typeof raw === 'object' && 'version' in raw && typeof raw.version === 'string') {
+    if (
+      raw !== null &&
+      typeof raw === 'object' &&
+      'version' in raw &&
+      typeof raw.version === 'string'
+    ) {
       return raw.version
     }
   } catch {

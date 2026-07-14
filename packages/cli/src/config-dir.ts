@@ -81,4 +81,5 @@ export function resolveConfigDir(flagValue: string | undefined): string {
 export const CONFIG_DIR_HELP_OPTION = '  --config-dir <path>  Override the config directory\n'
 
 /** Help text fragment for the `VAULTKEEPER_CONFIG_DIR` env var. */
-export const CONFIG_DIR_HELP_ENV = '  VAULTKEEPER_CONFIG_DIR=<path>   Override the config directory\n'
+export const CONFIG_DIR_HELP_ENV =
+  '  VAULTKEEPER_CONFIG_DIR=<path>   Override the config directory\n'

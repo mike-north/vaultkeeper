@@ -23,20 +23,10 @@ interface CliResult {
 
 function runCli(args: string[]): Promise<CliResult> {
   return new Promise((resolve) => {
-    execFile(
-      TSX_BIN,
-      [BIN_PATH, ...args],
-      { timeout: 15000 },
-      (error, stdout, stderr) => {
-        const exitCode =
-          error !== null
-            ? typeof error.code === 'number'
-              ? error.code
-              : 1
-            : 0
-        resolve({ stdout, stderr, exitCode })
-      },
-    )
+    execFile(TSX_BIN, [BIN_PATH, ...args], { timeout: 15000 }, (error, stdout, stderr) => {
+      const exitCode = error !== null ? (typeof error.code === 'number' ? error.code : 1) : 0
+      resolve({ stdout, stderr, exitCode })
+    })
   })
 }
 

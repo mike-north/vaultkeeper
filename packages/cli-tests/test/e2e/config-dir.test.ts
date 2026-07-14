@@ -92,7 +92,9 @@ describe('CLI config-dir override', () => {
     env = await createCliTestEnv({ configDirMode: 'flag' })
     const result = await env.run(['--config-dir', nestedConfigDir, 'config', 'init'])
     expect(result.exitCode).toBe(0)
-    expect(result.stdout).toContain(`Config created at ${path.join(nestedConfigDir, 'config.json')}`)
+    expect(result.stdout).toContain(
+      `Config created at ${path.join(nestedConfigDir, 'config.json')}`,
+    )
 
     const content = await fs.readFile(path.join(nestedConfigDir, 'config.json'), 'utf8')
     const parsed: unknown = JSON.parse(content)

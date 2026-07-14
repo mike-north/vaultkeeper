@@ -61,7 +61,17 @@ describe('help and usage', () => {
   it('should list all expected commands in help output', async () => {
     env = await createCliTestEnv()
     const result = await env.run(['--help'])
-    const commands = ['exec', 'doctor', 'approve', 'dev-mode', 'store', 'delete', 'config', 'rotate-key', 'revoke-key']
+    const commands = [
+      'exec',
+      'doctor',
+      'approve',
+      'dev-mode',
+      'store',
+      'delete',
+      'config',
+      'rotate-key',
+      'revoke-key',
+    ]
     for (const cmd of commands) {
       expect(result.stdout).toContain(cmd)
     }

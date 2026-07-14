@@ -56,9 +56,7 @@ export async function devModeCommand(args: string[], configDir: string): Promise
   try {
     const vault = await VaultKeeper.init({ configDir, skipDoctor })
     await vault.setDevelopmentMode(scriptPath, enabled)
-    process.stdout.write(
-      `Development mode ${enabled ? 'enabled' : 'disabled'} for ${scriptPath}\n`,
-    )
+    process.stdout.write(`Development mode ${enabled ? 'enabled' : 'disabled'} for ${scriptPath}\n`)
     return 0
   } catch (err) {
     process.stderr.write(`${formatError(err)}\n`)

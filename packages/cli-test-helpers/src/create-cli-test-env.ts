@@ -51,12 +51,7 @@ function runProcess(
       [binPath, ...args],
       { timeout, env },
       (error, stdout, stderr) => {
-        const exitCode =
-          error !== null
-            ? typeof error.code === 'number'
-              ? error.code
-              : 1
-            : 0
+        const exitCode = error !== null ? (typeof error.code === 'number' ? error.code : 1) : 0
         resolve({ stdout, stderr, exitCode })
       },
     )
@@ -78,12 +73,8 @@ function runProcess(
  * @returns A disposable test environment with `run()`, `runWithStdin()`, and `cleanup()`.
  * @public
  */
-export async function createCliTestEnv(
-  options?: CliTestEnvOptions,
-): Promise<CliTestEnv> {
-  const configDir = await fs.mkdtemp(
-    path.join(os.tmpdir(), 'vaultkeeper-cli-test-'),
-  )
+export async function createCliTestEnv(options?: CliTestEnvOptions): Promise<CliTestEnv> {
+  const configDir = await fs.mkdtemp(path.join(os.tmpdir(), 'vaultkeeper-cli-test-'))
 
   const secretsDir = path.join(configDir, 'secrets')
   await fs.mkdir(secretsDir, { recursive: true })
