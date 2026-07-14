@@ -16,6 +16,7 @@ vi.mock('vaultkeeper', () => ({
     getTypes: mockGetTypes,
     create: mockCreate,
   },
+  platformDefaultBackendType: vi.fn().mockReturnValue('file'),
 }))
 
 describe('deleteCommand', () => {

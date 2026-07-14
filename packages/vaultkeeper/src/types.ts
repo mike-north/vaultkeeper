@@ -10,8 +10,13 @@ export type TrustTier = 1 | 2 | 3
 /** Key status in the rotation lifecycle. */
 export type KeyStatus = 'current' | 'previous' | 'deprecated'
 
-/** Status of a preflight check. */
-export type PreflightCheckStatus = 'ok' | 'missing' | 'version-unsupported'
+/**
+ * Status of a preflight check.
+ *
+ * `'invalid'` applies specifically to the `config` check: the config file
+ * exists but fails to parse or fails schema validation (see issue #68).
+ */
+export type PreflightCheckStatus = 'ok' | 'missing' | 'version-unsupported' | 'invalid'
 
 /** Result of a preflight check for a single dependency. */
 export interface PreflightCheck {

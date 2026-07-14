@@ -1,8 +1,9 @@
 import { parseArgs } from 'node:util'
-import { VaultKeeper } from 'vaultkeeper'
+import { VaultKeeper, platformDefaultBackendType } from 'vaultkeeper'
 import { shouldSkipDoctor } from '../skip-doctor.js'
 import { formatError } from '../output.js'
 import { CONFIG_DIR_HELP_OPTION, CONFIG_DIR_HELP_ENV } from '../config-dir.js'
+import { configFileExists, noConfigMessage } from '../config-status.js'
 
 function printDeleteHelp(): void {
   process.stdout.write(
@@ -44,6 +45,13 @@ export async function deleteCommand(args: string[], configDir: string): Promise<
   const skipDoctor = shouldSkipDoctor(values['skip-doctor'])
 
   try {
+    // No-config story is uniform across store/delete/exec/config show/doctor
+    // (issue #68): fall back to platform defaults and say so, rather than
+    // silently defaulting.
+    if (!(await configFileExists(configDir))) {
+      process.stderr.write(noConfigMessage(platformDefaultBackendType()))
+    }
+
     // Delete via VaultKeeper, which resolves the first enabled backend from the
     // loaded config and forwards that backend's config (including `path`).
     const vault = await VaultKeeper.init({ configDir, skipDoctor })
