@@ -1,0 +1,95 @@
+/**
+ * Shared AES-256-GCM helpers for encrypting data at rest under a locally
+ * stored wrapping key.
+ *
+ * @remarks
+ * These primitives back both the encrypted {@link FileBackend} secret store and
+ * the persisted {@link KeyManager} key material. Keeping a single implementation
+ * ensures every at-rest write in the codebase uses the same authenticated
+ * cipher (AES-256-GCM, never AES-CBC) and the same on-disk envelope, rather than
+ * re-deriving crypto per consumer.
+ *
+ * Envelope format (all parts base64, colon-separated):
+ *   `<iv>:<authTag>:<ciphertext>`
+ *
+ * @internal
+ */
+
+import * as fs from 'node:fs/promises'
+import * as crypto from 'node:crypto'
+
+const GCM_IV_BYTES = 12
+const GCM_KEY_BYTES = 32
+const GCM_TAG_LENGTH_BITS = 128
+
+/**
+ * Encrypt `plaintext` with AES-256-GCM under `key`, returning the
+ * `iv:authTag:ciphertext` envelope described in the module docs.
+ *
+ * @param key - 32-byte AES-256 wrapping key.
+ * @param plaintext - UTF-8 string to encrypt.
+ * @internal
+ */
+export function encryptGcm(key: Buffer, plaintext: string): string {
+  const iv = crypto.randomBytes(GCM_IV_BYTES)
+  const cipher = crypto.createCipheriv('aes-256-gcm', key, iv, {
+    authTagLength: GCM_TAG_LENGTH_BITS / 8,
+  })
+  const encrypted = Buffer.concat([cipher.update(plaintext, 'utf8'), cipher.final()])
+  const authTag = cipher.getAuthTag()
+  return [iv.toString('base64'), authTag.toString('base64'), encrypted.toString('base64')].join(':')
+}
+
+/**
+ * Decrypt an `iv:authTag:ciphertext` envelope produced by {@link encryptGcm}.
+ *
+ * @param key - The same 32-byte AES-256 wrapping key used to encrypt.
+ * @param encoded - The colon-separated envelope.
+ * @returns The decrypted UTF-8 plaintext.
+ * @throws {Error} If the envelope is malformed or authentication fails.
+ * @internal
+ */
+export function decryptGcm(key: Buffer, encoded: string): string {
+  const parts = encoded.split(':')
+  if (parts.length !== 3) {
+    throw new Error('Invalid encrypted envelope: expected iv:authTag:ciphertext')
+  }
+  const [ivB64, authTagB64, ciphertextB64] = parts
+  if (ivB64 === undefined || authTagB64 === undefined || ciphertextB64 === undefined) {
+    throw new Error('Invalid encrypted envelope: missing part')
+  }
+  const iv = Buffer.from(ivB64, 'base64')
+  const authTag = Buffer.from(authTagB64, 'base64')
+  const ciphertext = Buffer.from(ciphertextB64, 'base64')
+
+  const decipher = crypto.createDecipheriv('aes-256-gcm', key, iv, {
+    authTagLength: GCM_TAG_LENGTH_BITS / 8,
+  })
+  decipher.setAuthTag(authTag)
+  const decrypted = Buffer.concat([decipher.update(ciphertext), decipher.final()])
+  return decrypted.toString('utf8')
+}
+
+/**
+ * Read the 32-byte wrapping key at `keyPath`, generating and persisting a fresh
+ * random one (mode `0o600`) if the file does not yet exist.
+ *
+ * @remarks
+ * The caller is responsible for ensuring the parent directory exists. The
+ * returned {@link Buffer} holds key material; zero it after use where practical.
+ *
+ * @param keyPath - Absolute path to the wrapping-key file.
+ * @internal
+ */
+export async function getOrCreateWrapKey(keyPath: string): Promise<Buffer> {
+  try {
+    return await fs.readFile(keyPath)
+  } catch (err) {
+    if (err instanceof Error && 'code' in err && err.code === 'ENOENT') {
+      const key = crypto.randomBytes(GCM_KEY_BYTES)
+      await fs.writeFile(keyPath, key, { mode: 0o600 })
+      return key
+    }
+    throw err
+  }
+}
