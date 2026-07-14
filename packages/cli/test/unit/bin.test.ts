@@ -44,7 +44,7 @@ describe('bin.ts entry point', () => {
   it('should print help and exit 0 when no arguments are given', async () => {
     const result = await runCli([])
     expect(result.exitCode).toBe(0)
-    expect(result.stdout).toContain('Usage: vaultkeeper <command>')
+    expect(result.stdout).toContain('Usage: vaultkeeper [--config-dir <path>] <command>')
     expect(result.stdout).toContain('exec')
     expect(result.stdout).toContain('doctor')
   })
@@ -52,13 +52,13 @@ describe('bin.ts entry point', () => {
   it('should print help and exit 0 for --help', async () => {
     const result = await runCli(['--help'])
     expect(result.exitCode).toBe(0)
-    expect(result.stdout).toContain('Usage: vaultkeeper <command>')
+    expect(result.stdout).toContain('Usage: vaultkeeper [--config-dir <path>] <command>')
   })
 
   it('should print help and exit 0 for -h', async () => {
     const result = await runCli(['-h'])
     expect(result.exitCode).toBe(0)
-    expect(result.stdout).toContain('Usage: vaultkeeper <command>')
+    expect(result.stdout).toContain('Usage: vaultkeeper [--config-dir <path>] <command>')
   })
 
   it('should write an error to stderr and exit 2 for an unknown command', async () => {
@@ -70,7 +70,7 @@ describe('bin.ts entry point', () => {
   it('should include help text after an unknown command error', async () => {
     const result = await runCli(['totally-bogus'])
     expect(result.exitCode).toBe(2)
-    expect(result.stdout).toContain('Usage: vaultkeeper <command>')
+    expect(result.stdout).toContain('Usage: vaultkeeper [--config-dir <path>] <command>')
   })
 
   it('should list all known commands in the help output', async () => {

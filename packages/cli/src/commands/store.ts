@@ -2,6 +2,7 @@ import { parseArgs } from 'node:util'
 import { VaultKeeper } from 'vaultkeeper'
 import { shouldSkipDoctor } from '../skip-doctor.js'
 import { formatError } from '../output.js'
+import { CONFIG_DIR_HELP_OPTION, CONFIG_DIR_HELP_ENV } from '../config-dir.js'
 
 function printStoreHelp(): void {
   process.stdout.write(
@@ -9,13 +10,15 @@ function printStoreHelp(): void {
       'Options:\n' +
       '  --name <name>      Name to store the secret under\n' +
       '  --skip-doctor      Skip doctor preflight checks\n' +
+      CONFIG_DIR_HELP_OPTION +
       '  -h, --help         Show this help message\n\n' +
       'Environment variables:\n' +
-      '  VAULTKEEPER_SKIP_DOCTOR=1   Skip doctor preflight checks\n',
+      '  VAULTKEEPER_SKIP_DOCTOR=1   Skip doctor preflight checks\n' +
+      CONFIG_DIR_HELP_ENV,
   )
 }
 
-export async function storeCommand(args: string[]): Promise<number> {
+export async function storeCommand(args: string[], configDir: string): Promise<number> {
   // Handle --help / -h before parseArgs to avoid strict-mode rejection of -h.
   if (args.includes('--help') || args.includes('-h')) {
     printStoreHelp()
@@ -61,7 +64,7 @@ export async function storeCommand(args: string[]): Promise<number> {
 
     // Store via VaultKeeper, which resolves the first enabled backend from the
     // loaded config and forwards that backend's config (including `path`).
-    const vault = await VaultKeeper.init({ skipDoctor })
+    const vault = await VaultKeeper.init({ configDir, skipDoctor })
     await vault.store(values.name, secret)
     process.stdout.write(`Secret "${values.name}" stored successfully.\n`)
     return 0

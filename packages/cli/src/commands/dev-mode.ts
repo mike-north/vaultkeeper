@@ -3,6 +3,7 @@ import * as path from 'node:path'
 import { VaultKeeper } from 'vaultkeeper'
 import { shouldSkipDoctor } from '../skip-doctor.js'
 import { formatError } from '../output.js'
+import { CONFIG_DIR_HELP_OPTION, CONFIG_DIR_HELP_ENV } from '../config-dir.js'
 
 function printDevModeHelp(): void {
   process.stdout.write(
@@ -14,13 +15,15 @@ function printDevModeHelp(): void {
       'Options:\n' +
       '  --script <path>    Path to the script\n' +
       '  --skip-doctor      Skip doctor preflight checks\n' +
+      CONFIG_DIR_HELP_OPTION +
       '  -h, --help         Show this help message\n\n' +
       'Environment variables:\n' +
-      '  VAULTKEEPER_SKIP_DOCTOR=1   Skip doctor preflight checks\n',
+      '  VAULTKEEPER_SKIP_DOCTOR=1   Skip doctor preflight checks\n' +
+      CONFIG_DIR_HELP_ENV,
   )
 }
 
-export async function devModeCommand(args: string[]): Promise<number> {
+export async function devModeCommand(args: string[], configDir: string): Promise<number> {
   // Handle --help / -h before parseArgs.
   if (args.includes('--help') || args.includes('-h')) {
     printDevModeHelp()
@@ -51,7 +54,7 @@ export async function devModeCommand(args: string[]): Promise<number> {
   const skipDoctor = shouldSkipDoctor(values['skip-doctor'])
 
   try {
-    const vault = await VaultKeeper.init({ skipDoctor })
+    const vault = await VaultKeeper.init({ configDir, skipDoctor })
     await vault.setDevelopmentMode(scriptPath, enabled)
     process.stdout.write(
       `Development mode ${enabled ? 'enabled' : 'disabled'} for ${scriptPath}\n`,

@@ -2,6 +2,7 @@ import { parseArgs } from 'node:util'
 import * as path from 'node:path'
 import { VaultKeeper } from 'vaultkeeper'
 import { formatError } from '../output.js'
+import { CONFIG_DIR_HELP_OPTION, CONFIG_DIR_HELP_ENV } from '../config-dir.js'
 
 function printApproveHelp(): void {
   process.stdout.write(
@@ -11,11 +12,14 @@ function printApproveHelp(): void {
       'approved, unchanged script is idempotent.\n\n' +
       'Options:\n' +
       '  --script <path>   Path to the script to approve\n' +
-      '  -h, --help        Show this help message\n',
+      CONFIG_DIR_HELP_OPTION +
+      '  -h, --help        Show this help message\n\n' +
+      'Environment variables:\n' +
+      CONFIG_DIR_HELP_ENV,
   )
 }
 
-export async function approveCommand(args: string[]): Promise<number> {
+export async function approveCommand(args: string[], configDir: string): Promise<number> {
   // Handle --help / -h before strict parseArgs.
   if (args.includes('--help') || args.includes('-h')) {
     printApproveHelp()
@@ -44,7 +48,7 @@ export async function approveCommand(args: string[]): Promise<number> {
     // trust manifest, never the secret backend. Skip the doctor preflight, and
     // VaultKeeper.init() itself resolves the backend lazily, so approve works
     // even when the configured backend or plugin is unavailable.
-    const vault = await VaultKeeper.init({ skipDoctor: true })
+    const vault = await VaultKeeper.init({ configDir, skipDoctor: true })
     const status = await vault.approveExecutable(scriptPath)
     process.stdout.write(`Approved ${scriptPath} (hash: ${status.hash})\n`)
     return 0
