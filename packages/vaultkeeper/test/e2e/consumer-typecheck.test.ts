@@ -93,8 +93,8 @@ describe('published .d.ts typechecks Buffer-typed API in strict consumers (issue
     project.linkDependency('vaultkeeper', { target: vaultkeeperRoot })
 
     // Link the monorepo's own typescript and @types/node so the consumer
-    // project typechecks with the same compiler/lib versions as CI, without
-    // a network install.
+    // project typechecks with the same compiler/lib versions as CI,
+    // without a network install.
     const typescriptRoot = dirname(require.resolve('typescript/package.json'))
     project.linkDependency('typescript', { target: typescriptRoot })
 
@@ -105,11 +105,15 @@ describe('published .d.ts typechecks Buffer-typed API in strict consumers (issue
 
     const tscBin = resolve(typescriptRoot, 'bin', 'tsc')
 
+    // A real tsc invocation (loading the compiler, @types/node's lib
+    // files, and the vaultkeeper rollup) is slow on CI runners relative
+    // to vitest's 5s default test timeout, so both the test and the
+    // child process get a generous budget here.
     await expect(
       execFileAsync('node', [tscBin, '--noEmit'], {
         cwd: project.baseDir,
-        timeout: 30_000,
+        timeout: 90_000,
       }),
     ).resolves.toBeDefined()
-  })
+  }, 120_000)
 })
