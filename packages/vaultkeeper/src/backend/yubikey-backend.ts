@@ -38,7 +38,19 @@ interface YubikeyMetadata {
   entries: Record<string, string>
 }
 
-function getStorageDir(): string {
+/**
+ * Resolve the storage directory for a YubikeyBackend instance.
+ *
+ * When `configuredPath` is provided (from `BackendConfig.path`), encrypted
+ * secrets are stored directly under that directory. Otherwise the default
+ * `$HOME/.vaultkeeper/yubikey` location is used.
+ */
+function resolveStorageDir(configuredPath?: string): string {
+  // Config validation (see validateConfig) rejects empty/whitespace-only
+  // paths, so any defined value here is guaranteed non-blank.
+  if (configuredPath !== undefined) {
+    return configuredPath
+  }
   return path.join(os.homedir(), STORAGE_DIR_NAME)
 }
 
@@ -162,8 +174,7 @@ function decryptGcm(key: Buffer, encoded: string): string {
 
   // Determine whether the first segment is a numeric version prefix at all.
   const parsedVersion = parseInt(versionSegment, 10)
-  const isNumericVersion =
-    String(parsedVersion) === versionSegment && !Number.isNaN(parsedVersion)
+  const isNumericVersion = String(parsedVersion) === versionSegment && !Number.isNaN(parsedVersion)
 
   if (!isNumericVersion) {
     // No recognisable version prefix — treat as legacy CBC or corrupt file.
@@ -240,6 +251,17 @@ export class YubikeyBackend implements ListableBackend {
   readonly type = 'yubikey'
   readonly displayName = 'YubiKey'
 
+  readonly #storageDir: string
+
+  /**
+   * @param storageDir - Directory in which encrypted secrets and metadata are
+   *   stored. Sourced from `BackendConfig.path`. Defaults to
+   *   `$HOME/.vaultkeeper/yubikey`.
+   */
+  constructor(storageDir?: string) {
+    this.#storageDir = resolveStorageDir(storageDir)
+  }
+
   async isAvailable(): Promise<boolean> {
     try {
       const result = await execCommandFull('ykman', ['--version'])
@@ -284,7 +306,7 @@ export class YubikeyBackend implements ListableBackend {
   async store(id: string, secret: string): Promise<void> {
     await this.requireDevice()
 
-    const storageDir = getStorageDir()
+    const storageDir = this.#storageDir
     await fs.mkdir(storageDir, { recursive: true, mode: 0o700 })
 
     const hmacResponse = await this.challengeResponse(id)
@@ -302,7 +324,7 @@ export class YubikeyBackend implements ListableBackend {
   async retrieve(id: string): Promise<string> {
     await this.requireDevice()
 
-    const storageDir = getStorageDir()
+    const storageDir = this.#storageDir
     const entryPath = getEntryPath(storageDir, id)
 
     try {
@@ -321,7 +343,7 @@ export class YubikeyBackend implements ListableBackend {
   async delete(id: string): Promise<void> {
     await this.requireDevice()
 
-    const storageDir = getStorageDir()
+    const storageDir = this.#storageDir
     const entryPath = getEntryPath(storageDir, id)
 
     try {
@@ -340,7 +362,7 @@ export class YubikeyBackend implements ListableBackend {
   }
 
   async exists(id: string): Promise<boolean> {
-    const storageDir = getStorageDir()
+    const storageDir = this.#storageDir
     const entryPath = getEntryPath(storageDir, id)
 
     try {
@@ -352,7 +374,7 @@ export class YubikeyBackend implements ListableBackend {
   }
 
   async list(): Promise<string[]> {
-    const storageDir = getStorageDir()
+    const storageDir = this.#storageDir
     const metadata = await loadMetadata(storageDir)
     return Object.keys(metadata.entries)
   }

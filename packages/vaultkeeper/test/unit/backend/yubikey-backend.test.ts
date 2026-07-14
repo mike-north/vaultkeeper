@@ -8,6 +8,7 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import * as crypto from 'node:crypto'
+import * as path from 'node:path'
 import type { ExecCommandResult } from '../../../src/util/exec.js'
 
 vi.mock('../../../src/util/exec.js', () => ({
@@ -80,9 +81,12 @@ function makeEncryptedBlob(plaintext: string, id: string): string {
   const encrypted = Buffer.concat([cipher.update(plaintext, 'utf8'), cipher.final()])
   const authTag = cipher.getAuthTag()
 
-  return ['1', iv.toString('base64'), authTag.toString('base64'), encrypted.toString('base64')].join(
-    ':',
-  )
+  return [
+    '1',
+    iv.toString('base64'),
+    authTag.toString('base64'),
+    encrypted.toString('base64'),
+  ].join(':')
 }
 
 describe('YubikeyBackend', () => {
@@ -198,6 +202,28 @@ describe('YubikeyBackend', () => {
         DeviceNotPresentError,
       )
     })
+
+    // Regression: issue #60 — BackendConfig.path was silently ignored.
+    it('should honor a custom storage path from config', async () => {
+      const customDir = path.join(path.sep, 'custom', 'yubikey', 'dir')
+      const customBackend = new YubikeyBackend(customDir)
+      mockDeviceAvailable()
+      mockChallengeResponse(FAKE_HMAC_RESPONSE)
+      mockFs.mkdir.mockResolvedValue(undefined)
+      mockFs.readFile.mockRejectedValue(Object.assign(new Error('ENOENT'), { code: 'ENOENT' }))
+      mockFs.writeFile.mockResolvedValue(undefined)
+
+      await customBackend.store('my-secret', 'secret-value')
+
+      expect(mockFs.mkdir).toHaveBeenCalledWith(
+        customDir,
+        expect.objectContaining({ recursive: true }),
+      )
+      const secretFileCall = mockFs.writeFile.mock.calls.find(
+        ([p]) => typeof p === 'string' && p.endsWith('.enc'),
+      )
+      expect(secretFileCall?.[0]).toEqual(expect.stringContaining(customDir))
+    })
   })
 
   // ---------------------------------------------------------------------------
@@ -240,8 +266,7 @@ describe('YubikeyBackend', () => {
       // XOR the first byte to ensure the ciphertext differs from what the auth
       // tag covers — GCM must reject this.
       ciphertextBytes[0] = (ciphertextBytes[0] ?? 0) ^ 0xff
-      const corruptedBlob =
-        blob.slice(0, lastColon + 1) + ciphertextBytes.toString('base64')
+      const corruptedBlob = blob.slice(0, lastColon + 1) + ciphertextBytes.toString('base64')
 
       mockDeviceAvailable()
       mockChallengeResponse(FAKE_HMAC_RESPONSE)
@@ -276,9 +301,7 @@ describe('YubikeyBackend', () => {
       mockFs.access.mockResolvedValue(undefined)
       mockFs.readFile.mockResolvedValue(futureVersionBlob)
 
-      await expect(backend.retrieve('future-secret')).rejects.toThrow(
-        /[Uu]nsupported.*version.*42/,
-      )
+      await expect(backend.retrieve('future-secret')).rejects.toThrow(/[Uu]nsupported.*version.*42/)
     })
 
     it('should give a clear error for an invalid HMAC response (not 40 hex chars)', async () => {

@@ -1,5 +1,5 @@
 import { parseArgs } from 'node:util'
-import { BackendRegistry, VaultKeeper } from 'vaultkeeper'
+import { VaultKeeper } from 'vaultkeeper'
 import { shouldSkipDoctor } from '../skip-doctor.js'
 import { formatError } from '../output.js'
 
@@ -41,18 +41,10 @@ export async function deleteCommand(args: string[]): Promise<number> {
   const skipDoctor = shouldSkipDoctor(values['skip-doctor'])
 
   try {
-    // Initialize vault to ensure backends are registered and doctor passes
-    await VaultKeeper.init({ skipDoctor })
-
-    const types = BackendRegistry.getTypes()
-    const firstType = types[0]
-    if (firstType === undefined) {
-      process.stderr.write('Error: No backends available\n')
-      return 1
-    }
-
-    const backend = BackendRegistry.create(firstType)
-    await backend.delete(values.name)
+    // Delete via VaultKeeper, which resolves the first enabled backend from the
+    // loaded config and forwards that backend's config (including `path`).
+    const vault = await VaultKeeper.init({ skipDoctor })
+    await vault.delete(values.name)
     process.stdout.write(`Secret "${values.name}" deleted.\n`)
     return 0
   } catch (err) {

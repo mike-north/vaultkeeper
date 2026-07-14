@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { validateConfig, loadConfig, getDefaultConfigDir } from '../../src/config.js'
+import { ConfigValidationError } from '../../src/errors.js'
 
 vi.mock('node:fs/promises', () => ({
   readFile: vi.fn(),
@@ -47,9 +48,35 @@ describe('validateConfig', () => {
     expect(result.backends[0]?.path).toBe('/opt/plugin.js')
   })
 
+  it('should reject a whitespace-only backend path (regression: PR #78 review)', () => {
+    // A path of " " previously passed validation and was treated as a real
+    // storage directory by file-based backends instead of being rejected.
+    const input = validConfigJson()
+    input.backends = [{ type: 'file', enabled: true, path: ' ' }]
+    expect(() => validateConfig(input)).toThrow(ConfigValidationError)
+    expect(() => validateConfig(input)).toThrow('must not be empty or whitespace-only')
+  })
+
+  it('should reject an empty-string backend path', () => {
+    const input = validConfigJson()
+    input.backends = [{ type: 'file', enabled: true, path: '' }]
+    expect(() => validateConfig(input)).toThrow(ConfigValidationError)
+  })
+
+  it('should reject a non-string backend path as ConfigValidationError (consistency: PR #78 review)', () => {
+    // The adjacent type check for `path` previously threw a plain Error while
+    // the whitespace check threw ConfigValidationError — both now agree.
+    const input = validConfigJson()
+    input.backends = [{ type: 'file', enabled: true, path: 42 }]
+    expect(() => validateConfig(input)).toThrow(ConfigValidationError)
+    expect(() => validateConfig(input)).toThrow('path must be a string')
+  })
+
   it('should accept backend with valid options object', () => {
     const input = validConfigJson()
-    input.backends = [{ type: 'file', enabled: true, options: { region: 'us-east-1', vault: 'my-vault' } }]
+    input.backends = [
+      { type: 'file', enabled: true, options: { region: 'us-east-1', vault: 'my-vault' } },
+    ]
     const result = validateConfig(input)
     expect(result.backends[0]?.options).toEqual({ region: 'us-east-1', vault: 'my-vault' })
   })
@@ -73,14 +100,35 @@ describe('validateConfig', () => {
     expect(() => validateConfig(input)).toThrow('must be a string')
   })
 
+  it('should report a bracketed, quoted field path for an invalid option value (PR #78 review)', () => {
+    // Option keys are user-defined and may contain characters that aren't
+    // valid identifier segments (dashes, spaces, dots); the field path must
+    // bracket-and-quote the key rather than dot-append it.
+    const input = validConfigJson()
+    input.backends = [{ type: 'file', enabled: true, options: { 'weird key.name': 42 } }]
+    try {
+      validateConfig(input)
+      expect.unreachable('validateConfig should have thrown')
+    } catch (err) {
+      if (!(err instanceof ConfigValidationError)) {
+        throw err
+      }
+      expect(err.field).toBe('backends[0].options["weird key.name"]')
+    }
+  })
+
   // Negative tests
   it('should reject non-object', () => {
+    expect(() => validateConfig('string')).toThrow(ConfigValidationError)
     expect(() => validateConfig('string')).toThrow('Config must be an object')
     expect(() => validateConfig(null)).toThrow('Config must be an object')
     expect(() => validateConfig(42)).toThrow('Config must be an object')
   })
 
   it('should reject wrong version', () => {
+    expect(() => validateConfig({ ...validConfigJson(), version: 2 })).toThrow(
+      ConfigValidationError,
+    )
     expect(() => validateConfig({ ...validConfigJson(), version: 2 })).toThrow('version must be 1')
   })
 
@@ -91,9 +139,12 @@ describe('validateConfig', () => {
   })
 
   it('should reject backend with missing type', () => {
-    expect(() =>
-      validateConfig({ ...validConfigJson(), backends: [{ enabled: true }] }),
-    ).toThrow('type must be a non-empty string')
+    expect(() => validateConfig({ ...validConfigJson(), backends: [{ enabled: true }] })).toThrow(
+      ConfigValidationError,
+    )
+    expect(() => validateConfig({ ...validConfigJson(), backends: [{ enabled: true }] })).toThrow(
+      'type must be a non-empty string',
+    )
   })
 
   it('should reject backend with non-boolean enabled', () => {

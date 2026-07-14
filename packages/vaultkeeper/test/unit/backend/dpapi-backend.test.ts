@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+import * as path from 'node:path'
 import type { ExecCommandResult } from '../../../src/util/exec.js'
 
 vi.mock('../../../src/util/exec.js', () => ({
@@ -96,6 +97,25 @@ describe('DpapiBackend', () => {
         (arg) => typeof arg === 'string' && arg.includes('my-secret-value'),
       )
       expect(script).toBeDefined()
+    })
+
+    // Regression: issue #60 — BackendConfig.path was silently ignored.
+    it('should honor a custom storage path from config', async () => {
+      const customDir = path.join(path.sep, 'custom', 'dpapi', 'dir')
+      const customBackend = new DpapiBackend(customDir)
+      mockFs.mkdir.mockResolvedValue(undefined)
+      mockExecCommand.mockResolvedValue('')
+
+      await customBackend.store('my-secret', 'secret-value')
+
+      expect(mockFs.mkdir).toHaveBeenCalledWith(
+        customDir,
+        expect.objectContaining({ recursive: true }),
+      )
+      const writePathArg = mockExecCommand.mock.calls[0]?.[1]?.find(
+        (arg) => typeof arg === 'string' && arg.includes(customDir),
+      )
+      expect(writePathArg).toBeDefined()
     })
   })
 

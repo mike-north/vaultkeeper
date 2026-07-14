@@ -24,7 +24,19 @@ const GCM_IV_BYTES = 12
 const GCM_KEY_BYTES = 32
 const GCM_TAG_LENGTH = 128 // bits
 
-function getStorageDir(): string {
+/**
+ * Resolve the storage directory for a FileBackend instance.
+ *
+ * When `configuredPath` is provided (from `BackendConfig.path`), secrets are
+ * stored directly under that directory. Otherwise the default
+ * `$HOME/.vaultkeeper/file` location is used.
+ */
+function resolveStorageDir(configuredPath?: string): string {
+  // Config validation (see validateConfig) rejects empty/whitespace-only
+  // paths, so any defined value here is guaranteed non-blank.
+  if (configuredPath !== undefined) {
+    return configuredPath
+  }
   return path.join(os.homedir(), STORAGE_DIR_NAME)
 }
 
@@ -108,11 +120,20 @@ export class FileBackend implements ListableBackend {
   readonly type = 'file'
   readonly displayName = 'Encrypted File Store'
 
+  readonly #storageDir: string
+
+  /**
+   * @param storageDir - Directory in which encrypted secrets are stored.
+   *   Sourced from `BackendConfig.path`. Defaults to `$HOME/.vaultkeeper/file`.
+   */
+  constructor(storageDir?: string) {
+    this.#storageDir = resolveStorageDir(storageDir)
+  }
+
   async isAvailable(): Promise<boolean> {
     // Node.js crypto is always available; check we can create the storage dir.
     try {
-      const storageDir = getStorageDir()
-      await ensureStorageDir(storageDir)
+      await ensureStorageDir(this.#storageDir)
       return true
     } catch {
       return false
@@ -120,7 +141,7 @@ export class FileBackend implements ListableBackend {
   }
 
   async store(id: string, secret: string): Promise<void> {
-    const storageDir = getStorageDir()
+    const storageDir = this.#storageDir
     await ensureStorageDir(storageDir)
     const key = await getOrCreateKey(storageDir)
     const entryPath = getEntryPath(storageDir, id)
@@ -129,7 +150,7 @@ export class FileBackend implements ListableBackend {
   }
 
   async retrieve(id: string): Promise<string> {
-    const storageDir = getStorageDir()
+    const storageDir = this.#storageDir
     const entryPath = getEntryPath(storageDir, id)
 
     let encoded: string
@@ -153,7 +174,7 @@ export class FileBackend implements ListableBackend {
   }
 
   async delete(id: string): Promise<void> {
-    const storageDir = getStorageDir()
+    const storageDir = this.#storageDir
     const entryPath = getEntryPath(storageDir, id)
 
     try {
@@ -167,7 +188,7 @@ export class FileBackend implements ListableBackend {
   }
 
   async exists(id: string): Promise<boolean> {
-    const storageDir = getStorageDir()
+    const storageDir = this.#storageDir
     const entryPath = getEntryPath(storageDir, id)
 
     try {
@@ -179,7 +200,7 @@ export class FileBackend implements ListableBackend {
   }
 
   async list(): Promise<string[]> {
-    const storageDir = getStorageDir()
+    const storageDir = this.#storageDir
     let entries: string[]
     try {
       entries = await fs.readdir(storageDir)

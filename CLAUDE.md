@@ -227,7 +227,7 @@ Never throw plain `Error` objects — always use a typed subclass from the error
 
 ### Backends
 
-All backends implement `SecretBackend` from `packages/vaultkeeper/src/backend/types.ts`. Register new backends with `BackendRegistry.register(type, factory)`. The factory must be a zero-argument function returning a `SecretBackend` instance.
+All backends implement `SecretBackend` from `packages/vaultkeeper/src/backend/types.ts`. Register new backends with `BackendRegistry.register(type, factory)`. The factory is a `BackendFactory` — it receives the backend's own `BackendConfig` (forwarded by `BackendRegistry.create(type, config)`) and returns a `SecretBackend` instance. A factory that needs no configuration may ignore the argument. File-based backends should honor `BackendConfig.path` as their storage directory (see `FileBackend`, `DpapiBackend`, `YubikeyBackend`).
 
 Plugin backends (1Password, YubiKey) are flagged with `plugin: true` in `BackendConfig`.
 

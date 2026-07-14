@@ -68,6 +68,12 @@ export class CapabilityToken {
 }
 
 // @public
+export class ConfigValidationError extends VaultError {
+    constructor(message: string, field: string);
+    readonly field: string;
+}
+
+// @public
 export class DeviceNotPresentError extends VaultError {
     constructor(message: string, timeoutMs: number);
     readonly timeoutMs: number;
