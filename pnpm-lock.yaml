@@ -149,6 +149,9 @@ importers:
 
   packages/vaultkeeper-wasm:
     devDependencies:
+      '@microsoft/api-extractor':
+        specifier: ^7.57.2
+        version: 7.57.2(@types/node@22.19.11)
       '@types/node':
         specifier: ^22.0.0
         version: 22.19.11

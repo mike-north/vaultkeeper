@@ -6,7 +6,7 @@ import { cpSync, mkdirSync, readdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 
 const outputDir = 'tmp/api-documenter';
-const packages = ['packages/vaultkeeper', 'packages/test-helpers'];
+const packages = ['packages/vaultkeeper', 'packages/test-helpers', 'packages/vaultkeeper-wasm'];
 
 rmSync(outputDir, { recursive: true, force: true });
 mkdirSync(outputDir, { recursive: true });

@@ -14,6 +14,8 @@
  * // `claims` never contains the raw secret; read it once via the accessor:
  * const first4 = secret.read((value) => value.slice(0, 4));
  * ```
+ *
+ * @packageDocumentation
  */
 
 // Re-export types

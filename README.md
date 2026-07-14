@@ -4,6 +4,12 @@ Unified, policy-enforced secret storage across OS backends. Secrets are stored i
 
 Available as a **native Rust CLI**, a **TypeScript library**, a **WASM-backed SDK**, and a **Node.js CLI**.
 
+## Which package should I use?
+
+- **`vaultkeeper`** — the pure TypeScript library. Use this by default: it offers the delegated access patterns (`fetch`, `exec`, `createSecretAccessor`) that keep raw secrets out of application memory. With no config file present it falls back to the file backend, same as the WASM SDK; run `vaultkeeper config init` to write the platform-default backend instead (Keychain on macOS, DPAPI on Windows, `file` on Linux).
+- **`@vaultkeeper/wasm`** — a WASM-backed SDK with a similar feature set, backed by the Rust core instead of the `jose` npm package. Reach for it when you specifically need the Rust implementation (e.g. to match native-CLI behavior exactly) or want to avoid a `jose` dependency. It hardcodes the file backend rather than using platform defaults — see [WASM SDK quick start](#wasm-sdk-quick-start).
+- **`@vaultkeeper/cli`** — the Node.js CLI (`vaultkeeper` on the command line). Use this for shell scripts, CI pipelines, or interactive use where you don't need a library API at all.
+
 ## Installation
 
 ### Native CLI (Rust)
@@ -205,6 +211,8 @@ const jwe = await keeper.setup('MY_API_KEY')
 
 The WASM SDK exposes lower-level APIs than the TypeScript library's delegated patterns. Methods like `store()` and `retrieve()` handle raw secret values directly — use the delegated access patterns (fetch/exec) from the TypeScript library when you need to avoid exposing secrets in application memory.
 
+**The WASM SDK always uses the file backend.** Unlike the native and Node.js CLIs and the TypeScript library, it does not read the `backends` config and does not use the platform-default credential store (Keychain, DPAPI, `secret-tool`) — secrets are always stored in the AES-256-GCM encrypted file backend regardless of platform.
+
 ```ts
 import { createVaultKeeper } from '@vaultkeeper/wasm'
 
@@ -216,8 +224,10 @@ await vault.store('MY_API_KEY', 'my-secret-value')
 // Mint a JWE token
 const jwe = vault.setup('MY_API_KEY', 'my-secret-value')
 
-// Authorize: decrypt and validate
+// Authorize: decrypt and validate. The result's `claims` never contain the
+// raw secret — read it exactly once through the one-time accessor.
 const result = vault.authorize(jwe)
+const apiKey = result.secret.read((value) => value)
 
 // Rotate or revoke keys
 vault.rotateKey()
@@ -226,6 +236,22 @@ vault.revokeKey()
 // Clean up
 vault.dispose()
 ```
+
+### `VaultKeeper` methods (`@vaultkeeper/wasm`)
+
+| Method                                     | Description                                                                                                             |
+| ------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------- |
+| `static create(options?, configDir?)`      | Create a new instance (also available as the `createVaultKeeper()` convenience function)                                |
+| `doctor()`                                 | Run preflight checks                                                                                                    |
+| `setup(secretName, secretValue, options?)` | Create a JWE token encapsulating a secret                                                                               |
+| `authorize(jwe)`                           | Decrypt and validate a JWE token; returns `{ claims, response, secret }`, where `secret` is a one-time `SecretAccessor` |
+| `rotateKey()`                              | Rotate the encryption key (previous key stays valid during the grace period)                                            |
+| `revokeKey()`                              | Emergency key revocation — removes the previous key and generates a new current key                                     |
+| `config()`                                 | Get the current configuration                                                                                           |
+| `store(id, secret)`                        | Store a secret via the file backend                                                                                     |
+| `retrieve(id)`                             | Retrieve a secret via the file backend                                                                                  |
+| `delete(id)`                               | Delete a secret via the file backend                                                                                    |
+| `dispose()`                                | Free the underlying WASM resources                                                                                      |
 
 ## Backends
 
@@ -432,29 +458,29 @@ const jwe = await vault.setup('SECRET_NAME', {
 
 ## Error types
 
-All errors extend `VaultError`.
+All errors extend `VaultError`. The `@vaultkeeper/wasm` package exports and throws a subset of this hierarchy (see the "In `@vaultkeeper/wasm`" column) — errors tied to platform credential-store integration or executable-identity checks that don't apply to the WASM SDK's file-backend-only, lower-level surface are TS-library-only.
 
-| Class                      | When thrown                                                                                                                                          |
-| -------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `BackendLockedError`       | Keychain or credential store is locked                                                                                                               |
-| `DeviceNotPresentError`    | Required hardware device not connected                                                                                                               |
-| `AuthorizationDeniedError` | User denied an OS permission dialog                                                                                                                  |
-| `BackendUnavailableError`  | No configured backend is reachable                                                                                                                   |
-| `PluginNotFoundError`      | A required plugin binary is not installed                                                                                                            |
-| `SecretNotFoundError`      | Secret does not exist in the backend                                                                                                                 |
-| `TokenExpiredError`        | JWE has passed its `exp` claim                                                                                                                       |
-| `KeyRotatedError`          | Key exited grace period; JWE is permanently unreadable                                                                                               |
-| `KeyRevokedError`          | Key was explicitly revoked                                                                                                                           |
-| `TokenRevokedError`        | Token has been blocked (e.g. single-use token already consumed)                                                                                      |
-| `UsageLimitExceededError`  | Token presented more times than its `use` limit allows                                                                                               |
-| `IdentityMismatchError`    | Executable hash changed since TOFU approval                                                                                                          |
-| `ExecError`                | `exec()` request was invalid (e.g. `{{secret}}` in the `command` or `args` field) or the command could not be started (not found or failed to spawn) |
-| `InvalidTokenError`        | JWE could not be decrypted or validated (e.g. structurally malformed, tampered, or failed decryption)                                                |
-| `AccessorConsumedError`    | `SecretAccessor.read()` called after already consumed                                                                                                |
-| `InvalidAlgorithmError`    | Signing/verifying with a disallowed algorithm (e.g. `md5`)                                                                                           |
-| `SetupError`               | Required system dependency missing or incompatible at init                                                                                           |
-| `FilesystemError`          | Config directory not readable or writable                                                                                                            |
-| `RotationInProgressError`  | `rotateKey()` called while previous key is still in grace period                                                                                     |
+| Class                      | When thrown                                                                                                                                          | In `@vaultkeeper/wasm` |
+| -------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- | :--------------------: |
+| `BackendLockedError`       | Keychain or credential store is locked                                                                                                               |    TS-library-only     |
+| `DeviceNotPresentError`    | Required hardware device not connected                                                                                                               |    TS-library-only     |
+| `AuthorizationDeniedError` | User denied an OS permission dialog                                                                                                                  |    TS-library-only     |
+| `BackendUnavailableError`  | No configured backend is reachable                                                                                                                   |    TS-library-only     |
+| `PluginNotFoundError`      | A required plugin binary is not installed                                                                                                            |    TS-library-only     |
+| `SecretNotFoundError`      | Secret does not exist in the backend                                                                                                                 |          Yes           |
+| `TokenExpiredError`        | JWE has passed its `exp` claim                                                                                                                       |          Yes           |
+| `KeyRotatedError`          | Key exited grace period; JWE is permanently unreadable                                                                                               |          Yes           |
+| `KeyRevokedError`          | Key was explicitly revoked                                                                                                                           |          Yes           |
+| `TokenRevokedError`        | Token has been blocked (e.g. single-use token already consumed)                                                                                      |          Yes           |
+| `UsageLimitExceededError`  | Token presented more times than its `use` limit allows                                                                                               |          Yes           |
+| `IdentityMismatchError`    | Executable hash changed since TOFU approval                                                                                                          |    TS-library-only     |
+| `ExecError`                | `exec()` request was invalid (e.g. `{{secret}}` in the `command` or `args` field) or the command could not be started (not found or failed to spawn) |    TS-library-only     |
+| `InvalidTokenError`        | JWE could not be decrypted or validated (e.g. structurally malformed, tampered, or failed decryption)                                                |          Yes           |
+| `AccessorConsumedError`    | `SecretAccessor.read()` called after already consumed                                                                                                |          Yes           |
+| `InvalidAlgorithmError`    | Signing/verifying with a disallowed algorithm (e.g. `md5`)                                                                                           |    TS-library-only     |
+| `SetupError`               | Required system dependency missing or incompatible at init                                                                                           |    TS-library-only     |
+| `FilesystemError`          | Config directory not readable or writable                                                                                                            |    TS-library-only     |
+| `RotationInProgressError`  | `rotateKey()` called while previous key is still in grace period                                                                                     |          Yes           |
 
 ## Architecture
 
