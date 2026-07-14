@@ -1,6 +1,91 @@
 /* @ts-self-types="./vaultkeeper_wasm.d.ts" */
 
 /**
+ * Result of a successful [`WasmVaultKeeper::authorize`] call.
+ *
+ * Holds the validated claims (with the raw secret redacted) and the raw
+ * secret behind a one-time read. The secret is deliberately not part of the
+ * `claims` shape — callers must opt in explicitly via [`Self::read_secret`],
+ * which yields the value exactly once.
+ */
+class WasmAuthorization {
+    static __wrap(ptr) {
+        ptr = ptr >>> 0;
+        const obj = Object.create(WasmAuthorization.prototype);
+        obj.__wbg_ptr = ptr;
+        WasmAuthorizationFinalization.register(obj, obj.__wbg_ptr, obj);
+        return obj;
+    }
+    __destroy_into_raw() {
+        const ptr = this.__wbg_ptr;
+        this.__wbg_ptr = 0;
+        WasmAuthorizationFinalization.unregister(this);
+        return ptr;
+    }
+    free() {
+        const ptr = this.__destroy_into_raw();
+        wasm.__wbg_wasmauthorization_free(ptr, 0);
+    }
+    /**
+     * The validated token claims, with the raw secret (`val`) redacted.
+     * @returns {any}
+     */
+    get claims() {
+        const ret = wasm.wasmauthorization_claims(this.__wbg_ptr);
+        if (ret[2]) {
+            throw takeFromExternrefTable0(ret[1]);
+        }
+        return takeFromExternrefTable0(ret[0]);
+    }
+    /**
+     * Read the raw secret value exactly once. Subsequent calls throw an
+     * `accessor-consumed` error. This is the explicit, deliberately-named
+     * escape hatch for flows that must touch the plaintext secret.
+     * @returns {string}
+     */
+    readSecret() {
+        let deferred2_0;
+        let deferred2_1;
+        try {
+            const ret = wasm.wasmauthorization_readSecret(this.__wbg_ptr);
+            var ptr1 = ret[0];
+            var len1 = ret[1];
+            if (ret[3]) {
+                ptr1 = 0; len1 = 0;
+                throw takeFromExternrefTable0(ret[2]);
+            }
+            deferred2_0 = ptr1;
+            deferred2_1 = len1;
+            return getStringFromWasm0(ptr1, len1);
+        } finally {
+            wasm.__wbindgen_free(deferred2_0, deferred2_1, 1);
+        }
+    }
+    /**
+     * The authorization response (key status, optional rotated token).
+     * @returns {any}
+     */
+    get response() {
+        const ret = wasm.wasmauthorization_response(this.__wbg_ptr);
+        if (ret[2]) {
+            throw takeFromExternrefTable0(ret[1]);
+        }
+        return takeFromExternrefTable0(ret[0]);
+    }
+    /**
+     * Whether the secret is still available to read (i.e. `read_secret` has
+     * not yet been called).
+     * @returns {boolean}
+     */
+    get secretAvailable() {
+        const ret = wasm.wasmauthorization_secretAvailable(this.__wbg_ptr);
+        return ret !== 0;
+    }
+}
+if (Symbol.dispose) WasmAuthorization.prototype[Symbol.dispose] = WasmAuthorization.prototype.free;
+exports.WasmAuthorization = WasmAuthorization;
+
+/**
  * WASM-exposed VaultKeeper wrapper.
  */
 class WasmVaultKeeper {
@@ -22,9 +107,15 @@ class WasmVaultKeeper {
         wasm.__wbg_wasmvaultkeeper_free(ptr, 0);
     }
     /**
-     * Decrypt a JWE token, validate its claims, and return { claims, response }.
+     * Decrypt a JWE token, validate its claims, and return a
+     * [`WasmAuthorization`].
+     *
+     * The returned object's `claims` **never** contains the raw secret value
+     * (`val` is redacted). The secret is held internally and can be read
+     * exactly once via [`WasmAuthorization::read_secret`], mirroring the TS
+     * library's one-time accessor pattern.
      * @param {string} jwe
-     * @returns {any}
+     * @returns {WasmAuthorization}
      */
     authorize(jwe) {
         const ptr0 = passStringToWasm0(jwe, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
@@ -33,7 +124,7 @@ class WasmVaultKeeper {
         if (ret[2]) {
             throw takeFromExternrefTable0(ret[1]);
         }
-        return takeFromExternrefTable0(ret[0]);
+        return WasmAuthorization.__wrap(ret[0]);
     }
     /**
      * Get the current configuration as JSON.
@@ -277,6 +368,10 @@ function __wbg_get_imports() {
             const ret = new Array();
             return ret;
         },
+        __wbg_new_ab79df5bd7c26067: function() {
+            const ret = new Object();
+            return ret;
+        },
         __wbg_new_typed_aaaeaf29cf802876: function(arg0, arg1) {
             try {
                 var state0 = {a: arg0, b: arg1};
@@ -284,7 +379,7 @@ function __wbg_get_imports() {
                     const a = state0.a;
                     state0.a = 0;
                     try {
-                        return wasm_bindgen__convert__closures_____invoke__h20801636f3b67db9(a, state0.b, arg0, arg1);
+                        return wasm_bindgen__convert__closures_____invoke__h1d09f6aac4bd3d03(a, state0.b, arg0, arg1);
                     } finally {
                         state0.a = a;
                     }
@@ -325,6 +420,10 @@ function __wbg_get_imports() {
             const ret = Promise.resolve(arg0);
             return ret;
         },
+        __wbg_set_7eaa4f96924fd6b3: function() { return handleError(function (arg0, arg1, arg2) {
+            const ret = Reflect.set(arg0, arg1, arg2);
+            return ret;
+        }, arguments); },
         __wbg_set_8c0b3ffcf05d61c2: function(arg0, arg1, arg2) {
             arg0.set(getArrayU8FromWasm0(arg1, arg2));
         },
@@ -364,8 +463,8 @@ function __wbg_get_imports() {
             return ret;
         },
         __wbindgen_cast_0000000000000001: function(arg0, arg1) {
-            // Cast intrinsic for `Closure(Closure { dtor_idx: 157, function: Function { arguments: [Externref], shim_idx: 158, ret: Result(Unit), inner_ret: Some(Result(Unit)) }, mutable: true }) -> Externref`.
-            const ret = makeMutClosure(arg0, arg1, wasm.wasm_bindgen__closure__destroy__had4a06f88502d92d, wasm_bindgen__convert__closures_____invoke__h245423d8564c58d0);
+            // Cast intrinsic for `Closure(Closure { dtor_idx: 146, function: Function { arguments: [Externref], shim_idx: 147, ret: Result(Unit), inner_ret: Some(Result(Unit)) }, mutable: true }) -> Externref`.
+            const ret = makeMutClosure(arg0, arg1, wasm.wasm_bindgen__closure__destroy__h1722208547e491cb, wasm_bindgen__convert__closures_____invoke__h8760ba3086f56474);
             return ret;
         },
         __wbindgen_cast_0000000000000002: function(arg0) {
@@ -394,17 +493,20 @@ function __wbg_get_imports() {
     };
 }
 
-function wasm_bindgen__convert__closures_____invoke__h245423d8564c58d0(arg0, arg1, arg2) {
-    const ret = wasm.wasm_bindgen__convert__closures_____invoke__h245423d8564c58d0(arg0, arg1, arg2);
+function wasm_bindgen__convert__closures_____invoke__h8760ba3086f56474(arg0, arg1, arg2) {
+    const ret = wasm.wasm_bindgen__convert__closures_____invoke__h8760ba3086f56474(arg0, arg1, arg2);
     if (ret[1]) {
         throw takeFromExternrefTable0(ret[0]);
     }
 }
 
-function wasm_bindgen__convert__closures_____invoke__h20801636f3b67db9(arg0, arg1, arg2, arg3) {
-    wasm.wasm_bindgen__convert__closures_____invoke__h20801636f3b67db9(arg0, arg1, arg2, arg3);
+function wasm_bindgen__convert__closures_____invoke__h1d09f6aac4bd3d03(arg0, arg1, arg2, arg3) {
+    wasm.wasm_bindgen__convert__closures_____invoke__h1d09f6aac4bd3d03(arg0, arg1, arg2, arg3);
 }
 
+const WasmAuthorizationFinalization = (typeof FinalizationRegistry === 'undefined')
+    ? { register: () => {}, unregister: () => {} }
+    : new FinalizationRegistry(ptr => wasm.__wbg_wasmauthorization_free(ptr >>> 0, 1));
 const WasmVaultKeeperFinalization = (typeof FinalizationRegistry === 'undefined')
     ? { register: () => {}, unregister: () => {} }
     : new FinalizationRegistry(ptr => wasm.__wbg_wasmvaultkeeper_free(ptr >>> 0, 1));

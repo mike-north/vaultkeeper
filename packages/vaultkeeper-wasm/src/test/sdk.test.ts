@@ -16,7 +16,14 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { writeFile } from 'node:fs/promises';
-import { VaultKeeper } from '../index.js';
+import {
+  VaultKeeper,
+  VaultError,
+  SecretNotFoundError,
+  InvalidTokenError,
+  RotationInProgressError,
+  AccessorConsumedError,
+} from '../index.js';
 
 async function withTempDir(fn: (dir: string) => Promise<void>): Promise<void> {
   const dir = await mkdtemp(join(tmpdir(), 'vk-wasm-test-'));
@@ -77,7 +84,9 @@ describe('@vaultkeeper/wasm SDK', () => {
       const result = vault.authorize(token);
 
       assert.equal(result.claims.sub, 'my-key');
-      assert.equal(result.claims.val, 'super-secret');
+      // The raw secret is not on the claims — read it via the one-time accessor.
+      const secret = result.secret.read((value) => value);
+      assert.equal(secret, 'super-secret');
       assert.equal(result.response.keyStatus, 'current');
       vault.dispose();
     });
@@ -169,7 +178,10 @@ describe('@vaultkeeper/wasm SDK', () => {
       // The re-encrypted token should work with the current key
       const result2 = vault.authorize(result.response.rotatedJwt);
       assert.equal(result2.response.keyStatus, 'current');
-      assert.equal(result2.claims.val, 'rotate-value');
+      assert.equal(
+        result2.secret.read((value) => value),
+        'rotate-value',
+      );
       vault.dispose();
     });
   });
@@ -184,7 +196,10 @@ describe('@vaultkeeper/wasm SDK', () => {
       // New tokens should still work
       const newToken = vault.setup('post-revoke', 'new-value');
       const result = vault.authorize(newToken);
-      assert.equal(result.claims.val, 'new-value');
+      assert.equal(
+        result.secret.read((value) => value),
+        'new-value',
+      );
       assert.equal(result.response.keyStatus, 'current');
       vault.dispose();
     });
@@ -244,7 +259,6 @@ describe('@vaultkeeper/wasm SDK', () => {
       assert.ok(typeof claims.exp === 'number');
       assert.ok(typeof claims.iat === 'number');
       assert.equal(claims.sub, 'claim-key');
-      assert.equal(claims.val, 'claim-value');
       assert.equal(claims.ref, 'claim-key');
       assert.ok(typeof claims.exe === 'string');
       assert.ok(typeof claims.tid === 'string');
@@ -385,6 +399,108 @@ describe('@vaultkeeper/wasm SDK', () => {
       const result = vault.authorize(token);
       // exp should be iat + 60 seconds (1 minute)
       assert.equal(result.claims.exp - result.claims.iat, 60);
+      vault.dispose();
+    });
+  });
+});
+
+// Regression tests for issue #66 — WASM SDK security parity:
+// authorize() must not return the raw secret, a safe consumption path must
+// exist, and errors must be typed VaultError instances.
+describe('@vaultkeeper/wasm security parity (issue #66)', () => {
+  it('authorize() return shape contains no secret material', async () => {
+    await withTempDir(async (dir) => {
+      const vault = await createTestVault(dir);
+      const token = vault.setup('leak-key', 'test-secret-123');
+      const result = vault.authorize(token);
+
+      // The pre-fix leak was at result.claims.val — it must be gone.
+      assert.equal(
+        Object.prototype.hasOwnProperty.call(result.claims, 'val'),
+        false,
+        'claims must not carry a val field',
+      );
+
+      // No property anywhere in the serialized claims/response may equal the
+      // raw secret.
+      const serialized = JSON.stringify({ claims: result.claims, response: result.response });
+      assert.equal(
+        serialized.includes('test-secret-123'),
+        false,
+        'no part of the authorize() return shape may contain the raw secret',
+      );
+      vault.dispose();
+    });
+  });
+
+  it('safe consumption path: one-time accessor reads the secret exactly once', async () => {
+    await withTempDir(async (dir) => {
+      const vault = await createTestVault(dir);
+      const token = vault.setup('accessor-key', 'accessor-secret');
+      const result = vault.authorize(token);
+
+      assert.equal(result.secret.available, true);
+      const value = result.secret.read((s) => s.toUpperCase());
+      assert.equal(value, 'ACCESSOR-SECRET');
+      assert.equal(result.secret.available, false, 'accessor must be consumed after read');
+
+      // A second read must fail with a typed AccessorConsumedError.
+      assert.throws(
+        () => result.secret.read((s) => s),
+        (err: unknown) => err instanceof AccessorConsumedError && err instanceof VaultError,
+      );
+      vault.dispose();
+    });
+  });
+
+  it('retrieve() of a missing secret throws a typed SecretNotFoundError', async () => {
+    await withTempDir(async (dir) => {
+      const vault = await createTestVault(dir);
+      await assert.rejects(
+        () => vault.retrieve('does-not-exist'),
+        (err: unknown) => err instanceof SecretNotFoundError && err instanceof VaultError,
+      );
+      vault.dispose();
+    });
+  });
+
+  it('authorize() of a malformed token throws a typed InvalidTokenError', async () => {
+    await withTempDir(async (dir) => {
+      const vault = await createTestVault(dir);
+      assert.throws(
+        () => vault.authorize('not-a-valid-jwe'),
+        (err: unknown) => err instanceof InvalidTokenError && err instanceof VaultError,
+      );
+      vault.dispose();
+    });
+  });
+
+  it('authorize() of a tampered token throws a typed InvalidTokenError', async () => {
+    await withTempDir(async (dir) => {
+      const vault = await createTestVault(dir);
+      const token = vault.setup('tamper-key', 'tamper-value');
+      const parts = token.split('.');
+      const segment = parts[3];
+      assert.ok(segment, 'JWE should have a 4th segment');
+      parts[3] = segment.slice(0, -4) + 'XXXX';
+      assert.throws(
+        () => vault.authorize(parts.join('.')),
+        (err: unknown) => err instanceof InvalidTokenError,
+      );
+      vault.dispose();
+    });
+  });
+
+  it('double key rotation throws a typed RotationInProgressError', async () => {
+    await withTempDir(async (dir) => {
+      const vault = await createTestVault(dir);
+      vault.rotateKey();
+      assert.throws(
+        () => {
+          vault.rotateKey();
+        },
+        (err: unknown) => err instanceof RotationInProgressError && err instanceof VaultError,
+      );
       vault.dispose();
     });
   });
