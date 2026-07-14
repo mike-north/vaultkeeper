@@ -339,9 +339,12 @@ export class ConfigValidationError extends VaultError {
   readonly field: string
 
   /**
-   * The absolute path of the config file that failed validation, when the
-   * error originated from loading a file on disk (via `loadConfig`) rather
-   * than from validating an in-memory value directly.
+   * The path of the config file that failed validation, when the error
+   * originated from loading a file on disk (via `loadConfig`) rather than
+   * from validating an in-memory value directly. This is `configDir` joined
+   * with `config.json` exactly as provided to `loadConfig` — it is not
+   * guaranteed to be absolute (`loadConfig` does not resolve a relative
+   * `configDir`).
    */
   readonly configFilePath: string | undefined
 
@@ -364,7 +367,10 @@ export class ConfigValidationError extends VaultError {
  */
 export class ConfigParseError extends VaultError {
   /**
-   * The absolute path of the config file that failed to parse.
+   * The path of the config file that failed to parse. This is `configDir`
+   * joined with `config.json` exactly as provided to `loadConfig` — it is
+   * not guaranteed to be absolute (`loadConfig` does not resolve a relative
+   * `configDir`).
    */
   readonly path: string
 
@@ -405,7 +411,10 @@ export class SetupError extends VaultError {
  */
 export class FilesystemError extends VaultError {
   /**
-   * The absolute path of the file or directory that caused the error.
+   * The path of the file or directory that caused the error, as provided by
+   * the caller. Not guaranteed to be absolute — e.g. `loadConfig` throws this
+   * with `configDir` joined with `config.json` exactly as given, without
+   * resolving a relative `configDir`.
    */
   readonly path: string
 
