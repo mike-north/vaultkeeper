@@ -363,6 +363,8 @@ if (vaultResponse.rotatedJwt !== undefined) {
 await vault.revokeKey()
 ```
 
+Key material is persisted across processes. When `VaultKeeper` loads its configuration from the config directory (the CLI's normal mode — no injected `config` or `backend`), the encryption keys are written there, encrypted at rest with AES-256-GCM under an owner-only (`0600`) wrapping key. This means a token minted by one CLI process stays authorizable by a later process within its validity window, and the rotation grace period is enforced across invocations: `rotate-key` run twice while the previous key is still in its grace period fails the second time with `RotationInProgressError`. Instances created with an injected `config` or `backend` keep keys in memory only, so tests and embedders stay hermetic.
+
 ## Trust tiers
 
 Executable identity is verified during `setup()`. A `trustTier` value can be attached to the resulting token as a policy label.
