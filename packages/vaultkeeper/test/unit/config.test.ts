@@ -1,5 +1,10 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { validateConfig, loadConfig, getDefaultConfigDir } from '../../src/config.js'
+import {
+  validateConfig,
+  loadConfig,
+  getDefaultConfigDir,
+  platformDefaultBackendType,
+} from '../../src/config.js'
 import { ConfigValidationError } from '../../src/errors.js'
 
 vi.mock('node:fs/promises', () => ({
@@ -319,5 +324,26 @@ describe('loadConfig', () => {
   it('should throw on invalid config structure', async () => {
     vi.mocked(readFile).mockResolvedValue(JSON.stringify({ version: 99 }))
     await expect(loadConfig('/fake')).rejects.toThrow('version must be 1')
+  })
+
+  it('should resolve the platform-default backend when no config file exists', async () => {
+    vi.mocked(readFile).mockRejectedValue(new Error('ENOENT'))
+    const config = await loadConfig('/nonexistent')
+    const firstBackend = config.backends[0]
+    expect(firstBackend?.type).toBe(platformDefaultBackendType())
+  })
+})
+
+// ---------------------------------------------------------------------------
+// platformDefaultBackendType
+// ---------------------------------------------------------------------------
+
+describe('platformDefaultBackendType', () => {
+  it('should map the current platform to its native credential store', () => {
+    // Resolution contract (see platformDefaultBackendType docs):
+    // macOS -> keychain, Windows -> dpapi, everything else -> file.
+    const expected =
+      process.platform === 'darwin' ? 'keychain' : process.platform === 'win32' ? 'dpapi' : 'file'
+    expect(platformDefaultBackendType()).toBe(expected)
   })
 })

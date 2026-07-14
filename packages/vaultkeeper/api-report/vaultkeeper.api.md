@@ -179,6 +179,9 @@ export interface ListableBackend extends SecretBackend {
 export type Platform = 'darwin' | 'win32' | 'linux';
 
 // @public
+export function platformDefaultBackendType(): string;
+
+// @public
 export class PluginNotFoundError extends VaultError {
     constructor(message: string, plugin: string, installUrl: string);
     readonly installUrl: string;
@@ -329,6 +332,7 @@ export class VaultError extends Error {
 
 // @public
 export class VaultKeeper {
+    get activeBackendType(): string;
     approveExecutable(executablePath: string): Promise<ExecutableTrustStatus>;
     authorize(jwe: string): Promise<{
         token: CapabilityToken;

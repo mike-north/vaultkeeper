@@ -69,7 +69,16 @@ import {
  */
 export type SecretTokenMap = Record<string, CapabilityToken>
 
-/** Options for initializing VaultKeeper. */
+/**
+ * Options for initializing VaultKeeper.
+ *
+ * @remarks
+ * When neither `config` nor a config file (at `configDir`) is present, the
+ * active backend falls back to the platform default resolved by
+ * {@link platformDefaultBackendType} — `keychain` on macOS, `dpapi` on
+ * Windows, `file` elsewhere. Inspect {@link VaultKeeper.activeBackendType}
+ * after `init()` to confirm which backend a given instance resolved to.
+ */
 export interface VaultKeeperOptions {
   /** Override the config directory. */
   configDir?: string | undefined
@@ -193,6 +202,23 @@ export class VaultKeeper {
    */
   static async doctor(options?: RunDoctorOptions): Promise<PreflightResult> {
     return runDoctor(options)
+  }
+
+  /**
+   * The type identifier of the active backend — the first enabled backend in
+   * the resolved configuration (the one `store()`, `delete()`, and `setup()`
+   * operate on).
+   *
+   * @remarks
+   * Use this to confirm which backend an instance resolved to, especially when
+   * no config file exists and the platform default applies (see
+   * {@link platformDefaultBackendType}). On macOS this reads `keychain` by
+   * default, meaning operations target the real OS Keychain.
+   *
+   * @public
+   */
+  get activeBackendType(): string {
+    return this.#requireBackend().type
   }
 
   /**

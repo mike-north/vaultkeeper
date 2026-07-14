@@ -27,11 +27,47 @@ export function getDefaultConfigDir(): string {
   return path.join(os.homedir(), '.config', 'vaultkeeper')
 }
 
-/** Default configuration when no config file exists. */
+/**
+ * Resolve the backend type that vaultkeeper uses by default on the current
+ * platform when no backend is explicitly configured.
+ *
+ * @remarks
+ * The default deliberately targets the platform-native OS credential store so
+ * that secrets are protected by the operating system out of the box:
+ *
+ * - **macOS** → `keychain` (macOS Keychain)
+ * - **Windows** → `dpapi` (Windows DPAPI)
+ * - **all other platforms** (Linux, etc.) → `file` (AES-256-GCM encrypted file)
+ *
+ * On macOS and Windows this means a bare {@link VaultKeeper.(init:1)} — or a
+ * `vaultkeeper config init` with no `--backend` flag — writes to the real OS
+ * credential store. Choose `file` explicitly for a portable, CI-friendly store
+ * that requires no system credential service.
+ *
+ * @returns The default backend type identifier for the current platform.
+ * @public
+ */
+export function platformDefaultBackendType(): string {
+  if (process.platform === 'darwin') {
+    return 'keychain'
+  }
+  if (process.platform === 'win32') {
+    return 'dpapi'
+  }
+  // Linux and other Unix-like systems. Use 'file' rather than 'secret-tool'
+  // because secret-tool requires libsecret-tools, which many systems lack.
+  return 'file'
+}
+
+/**
+ * Default configuration when no config file exists.
+ *
+ * The active backend is resolved by {@link platformDefaultBackendType}.
+ */
 function defaultConfig(): VaultConfig {
   return {
     version: 1,
-    backends: [{ type: 'file', enabled: true }],
+    backends: [{ type: platformDefaultBackendType(), enabled: true }],
     keyRotation: { gracePeriodDays: 7 },
     defaults: { ttlMinutes: 60, trustTier: 3 },
   }

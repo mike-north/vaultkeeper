@@ -76,6 +76,32 @@ describe('VaultKeeper', () => {
     })
   })
 
+  describe('activeBackendType', () => {
+    it('should expose the type of the first enabled backend', async () => {
+      const vault = await initVault()
+      expect(vault.activeBackendType).toBe('test')
+    })
+
+    it('should reflect the first enabled backend when several are configured', async () => {
+      const backend = createMockBackend()
+      BackendRegistry.register('test', () => backend)
+      const vault = await VaultKeeper.init({
+        skipDoctor: true,
+        configDir: '/tmp/vaultkeeper-test',
+        config: {
+          version: 1,
+          backends: [
+            { type: 'disabled-first', enabled: false },
+            { type: 'test', enabled: true },
+          ],
+          keyRotation: { gracePeriodDays: 7 },
+          defaults: { ttlMinutes: 60, trustTier: 3 },
+        },
+      })
+      expect(vault.activeBackendType).toBe('test')
+    })
+  })
+
   describe('doctor', () => {
     it('should return a preflight result', async () => {
       const result = await VaultKeeper.doctor()
@@ -234,9 +260,7 @@ describe('VaultKeeper', () => {
       const { token } = await vault.authorize(jwe)
 
       const mockResult = { stdout: 'hunter2\n', stderr: '', exitCode: 0 }
-      const execSpy = vi
-        .spyOn(delegatedExecModule, 'delegatedExec')
-        .mockResolvedValue(mockResult)
+      const execSpy = vi.spyOn(delegatedExecModule, 'delegatedExec').mockResolvedValue(mockResult)
 
       const { result, vaultResponse } = await vault.exec(token, {
         command: 'echo',
@@ -257,9 +281,7 @@ describe('VaultKeeper', () => {
       const { token } = await vault.authorize(jwe)
 
       const mockResult = { signature: 'c2lnbmF0dXJl', algorithm: 'ed25519' }
-      const signSpy = vi
-        .spyOn(delegatedSignModule, 'delegatedSign')
-        .mockReturnValue(mockResult)
+      const signSpy = vi.spyOn(delegatedSignModule, 'delegatedSign').mockReturnValue(mockResult)
 
       const { result, vaultResponse } = await vault.sign(token, { data: 'test-data' })
 
@@ -273,9 +295,7 @@ describe('VaultKeeper', () => {
 
   describe('verify', () => {
     it('delegates to delegatedVerify', () => {
-      const verifySpy = vi
-        .spyOn(delegatedVerifyModule, 'delegatedVerify')
-        .mockReturnValue(true)
+      const verifySpy = vi.spyOn(delegatedVerifyModule, 'delegatedVerify').mockReturnValue(true)
 
       const result = VaultKeeper.verify({
         data: 'test',
@@ -330,9 +350,9 @@ describe('VaultKeeper', () => {
 
     it('should reject setup for nonexistent secret', async () => {
       const vault = await initVault()
-      await expect(
-        vault.setup('nonexistent', { executablePath: 'dev' }),
-      ).rejects.toThrow('Secret not found')
+      await expect(vault.setup('nonexistent', { executablePath: 'dev' })).rejects.toThrow(
+        'Secret not found',
+      )
     })
 
     it('should reject store with empty secret name', async () => {
@@ -352,9 +372,9 @@ describe('VaultKeeper', () => {
 
     it('should reject setup with empty secret name', async () => {
       const vault = await initVault()
-      await expect(
-        vault.setup('', { executablePath: 'dev' }),
-      ).rejects.toThrow('Secret name must not be empty')
+      await expect(vault.setup('', { executablePath: 'dev' })).rejects.toThrow(
+        'Secret name must not be empty',
+      )
     })
   })
 })
