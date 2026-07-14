@@ -25,6 +25,7 @@ import {
   BackendRegistry,
   IdentityMismatchError,
   FilesystemError,
+  BackendUnavailableError,
 } from '../../src/index.js'
 import type { VaultConfig, SecretBackend } from '../../src/index.js'
 import { createInMemoryBackend } from '../helpers/backend.js'
@@ -200,5 +201,69 @@ describe('exec approval recording (setup) → subsequent trust', () => {
     await expect(vault.setup('API_KEY', { executablePath: caller })).rejects.toBeInstanceOf(
       IdentityMismatchError,
     )
+  })
+
+  // Regression for review thread 3582165425: setup() must resolve its
+  // executablePath to an absolute path before consulting the manifest, exactly
+  // as approveExecutable() and checkExecutableTrust() do. Otherwise a caller
+  // approved under its absolute key would not match when setup() is handed a
+  // non-normalized (or relative) path referring to the same file.
+  it('setup matches an approved executable given a non-normalized path (no duplicate entry)', async () => {
+    await backend.store('API_KEY', 's3cr3t')
+    const exe = await writeExecutable('caller', 'caller-bytes\n')
+    const vault = await createVault()
+
+    // Approve under the canonical absolute path.
+    await vault.approveExecutable(exe)
+
+    // A non-normalized path (redundant "/./" segment) that resolves to the same
+    // file but whose raw string differs from the manifest key.
+    const rawWithDot = `${scratchDir}/./caller`
+    expect(rawWithDot).not.toBe(path.resolve(exe))
+
+    await vault.setup('API_KEY', { executablePath: rawWithDot })
+
+    // The manifest still holds a single entry keyed by the resolved path — no
+    // duplicate was TOFU-recorded under the raw key.
+    const entries = await readManifestEntries()
+    expect(Object.keys(entries)).toEqual([path.resolve(exe)])
+    // And the executable remains trusted (matched, not recorded anew).
+    expect((await vault.checkExecutableTrust(exe)).trusted).toBe(true)
+  })
+})
+
+describe('trust-only operations without a healthy backend (review thread 3582165455)', () => {
+  const UNAVAILABLE_CONFIG: VaultConfig = {
+    version: 1,
+    // A backend type that is never registered — resolving it would throw.
+    backends: [{ type: 'not-registered', enabled: true }],
+    keyRotation: { gracePeriodDays: 1 },
+    defaults: { ttlMinutes: 5, trustTier: 3 },
+  }
+
+  // approve only needs the config dir + trust manifest, so it must succeed even
+  // when the configured backend cannot be resolved (unavailable/unregistered).
+  it('approveExecutable succeeds even when the configured backend is unregistered', async () => {
+    const exe = await writeExecutable('deploy.sh', '#!/bin/sh\necho hi\n')
+    const vault = await VaultKeeper.init({
+      skipDoctor: true,
+      config: UNAVAILABLE_CONFIG,
+      configDir,
+    })
+
+    const status = await vault.approveExecutable(exe)
+    expect(status.trusted).toBe(true)
+  })
+
+  // A secret operation still surfaces the backend problem — resolution is
+  // deferred, not skipped.
+  it('a secret operation still surfaces BackendUnavailableError', async () => {
+    const vault = await VaultKeeper.init({
+      skipDoctor: true,
+      config: UNAVAILABLE_CONFIG,
+      configDir,
+    })
+
+    await expect(vault.store('API_KEY', 'x')).rejects.toBeInstanceOf(BackendUnavailableError)
   })
 })

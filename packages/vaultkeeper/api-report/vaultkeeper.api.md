@@ -109,6 +109,12 @@ export interface ExecutableTrustStatus {
 }
 
 // @public
+export class FetchError extends VaultError {
+    constructor(message: string, url: string);
+    readonly url: string;
+}
+
+// @public
 export interface FetchRequest {
     body?: string | undefined;
     headers?: Record<string, string> | undefined;
@@ -135,6 +141,11 @@ export class InvalidAlgorithmError extends VaultError {
     constructor(message: string, algorithm: string, allowed: string[]);
     readonly algorithm: string;
     readonly allowed: string[];
+}
+
+// @public
+export class InvalidKeyMaterialError extends VaultError {
+    constructor(message: string);
 }
 
 // @public

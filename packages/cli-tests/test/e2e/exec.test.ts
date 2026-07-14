@@ -99,10 +99,11 @@ describe('exec trust gate', () => {
     expect(second.stderr).not.toMatch(/Allow\?|\[y\/N\]/)
   })
 
-  // Criterion 5: a caller modified after approval is NOT silently trusted — it
-  // falls through to the interactive prompt (which fails on non-TTY stdin),
-  // never reporting a verified/trusted state.
-  it('treats a modified caller as untrusted (no silent trust inheritance)', async () => {
+  // Criterion 5: a caller modified after approval is NOT silently trusted. A
+  // hash mismatch fails directly with an identity-mismatch error and re-approval
+  // guidance (no interactive prompt, since setup() would reject the same hash
+  // conflict regardless of the answer), never reporting a verified state.
+  it('rejects a modified caller with an identity-mismatch error (no silent trust inheritance)', async () => {
     if (env === undefined) throw new Error('env not initialized')
     const caller = await writeCaller('#!/bin/sh\necho original\n')
     await env.run(['approve', '--script', caller])
@@ -113,7 +114,10 @@ describe('exec trust gate', () => {
     const result = await env.run(execArgs(caller))
     expect(result.exitCode).not.toBe(0)
     expect(result.stderr).not.toContain('Trust: verified')
-    expect(result.stderr).toContain('interactive approval')
+    // Fails on the hash mismatch, not the interactive prompt.
+    expect(result.stderr).not.toContain('interactive approval')
+    expect(result.stderr).toContain('has changed since it was approved')
+    expect(result.stderr).toContain(`vaultkeeper approve --script ${caller}`)
     expect(result.stdout).not.toContain('ready=yes')
   })
 

@@ -150,6 +150,12 @@ export class VaultKeeper {
   /**
    * Initialize a new VaultKeeper instance.
    * Runs doctor checks (unless skipped), loads config, and sets up the key manager.
+   *
+   * The configured secret backend is resolved lazily on first use, not during
+   * `init()`. Trust-only operations (e.g. {@link VaultKeeper.approveExecutable},
+   * {@link VaultKeeper.checkExecutableTrust}) therefore succeed even when the
+   * configured backend or plugin is unavailable or unregistered; a
+   * misconfigured backend surfaces only when a secret operation is invoked.
    */
   static async init(options?: VaultKeeperOptions): Promise<VaultKeeper> {
     const configDir = options?.configDir ?? getDefaultConfigDir()
@@ -165,10 +171,7 @@ export class VaultKeeper {
     const keyManager = new KeyManager()
     await keyManager.init()
 
-    const vault = new VaultKeeper(config, keyManager, configDir)
-    vault.#backend = vault.#resolveBackend()
-
-    return vault
+    return new VaultKeeper(config, keyManager, configDir)
   }
 
   /**
@@ -238,7 +241,11 @@ export class VaultKeeper {
     if (executablePath === 'dev' || this.#isDevModeExecutable(executablePath)) {
       exeIdentity = 'dev'
     } else {
-      const trustResult = await verifyTrust(executablePath, {
+      // Resolve to an absolute path before verification so the manifest is
+      // keyed consistently with approveExecutable() and checkExecutableTrust(),
+      // both of which resolve. A relative path approved earlier (stored under
+      // its absolute key) therefore matches here too.
+      const trustResult = await verifyTrust(path.resolve(executablePath), {
         configDir: this.#configDir,
       })
       if (trustResult.tofuConflict) {
@@ -657,9 +664,10 @@ export class VaultKeeper {
   }
 
   #requireBackend(): SecretBackend {
-    if (this.#backend === undefined) {
-      throw new VaultError('VaultKeeper backend not initialized')
-    }
+    // Resolve the configured backend lazily on first use so that trust-only
+    // operations never require a healthy/registered backend. #resolveBackend()
+    // throws BackendUnavailableError if none is enabled or it cannot be built.
+    this.#backend ??= this.#resolveBackend()
     return this.#backend
   }
 

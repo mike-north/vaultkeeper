@@ -40,7 +40,10 @@ export async function approveCommand(args: string[]): Promise<number> {
   const scriptPath = path.resolve(values.script)
 
   try {
-    // Approving a hash does not need backend health, so skip doctor preflight.
+    // Approving a hash is a trust-only operation: it touches the config dir and
+    // trust manifest, never the secret backend. Skip the doctor preflight, and
+    // VaultKeeper.init() itself resolves the backend lazily, so approve works
+    // even when the configured backend or plugin is unavailable.
     const vault = await VaultKeeper.init({ skipDoctor: true })
     const status = await vault.approveExecutable(scriptPath)
     process.stdout.write(`Approved ${scriptPath} (hash: ${status.hash})\n`)
