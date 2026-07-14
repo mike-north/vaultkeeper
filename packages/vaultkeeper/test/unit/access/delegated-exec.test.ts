@@ -4,39 +4,52 @@ import { ExecError } from '../../../src/errors.js'
 import type { ExecRequest } from '../../../src/access/types.js'
 
 describe('delegatedExec', () => {
-  describe('args placeholder replacement', () => {
-    it('replaces {{secret}} in command args', async () => {
+  describe('args placeholder guardrail', () => {
+    // Regression test for issue #70: {{secret}} in args was silently
+    // substituted, exposing the plaintext secret on the process command
+    // line (visible via `ps`). This must throw ExecError before spawning,
+    // exactly like the command field does.
+    it('rejects with ExecError when {{secret}} is used in args, without spawning', async () => {
       const request: ExecRequest = {
         command: 'echo',
         args: ['{{secret}}'],
+        env: {},
       }
 
-      const result = await delegatedExec('hello', request)
-
-      expect(result.stdout.trim()).toBe('hello')
-      expect(result.exitCode).toBe(0)
+      await expect(delegatedExec('hello', request)).rejects.toThrow(ExecError)
+      await expect(delegatedExec('hello', request)).rejects.toThrow(
+        /placeholders are not supported in the args field/,
+      )
     })
 
-    it('replaces multiple occurrences in a single arg', async () => {
+    it('rejects with ExecError when {{secret}} appears alongside static text in an arg', async () => {
       const request: ExecRequest = {
         command: 'sh',
         args: ['-c', 'echo {{secret}}-{{secret}}'],
       }
 
-      const result = await delegatedExec('x', request)
-
-      expect(result.stdout.trim()).toBe('x-x')
+      await expect(delegatedExec('x', request)).rejects.toThrow(ExecError)
     })
 
-    it('replaces placeholders in multiple args', async () => {
+    it('rejects with ExecError when {{secret}} appears in any element of a multi-arg array', async () => {
       const request: ExecRequest = {
         command: 'sh',
-        args: ['-c', 'echo {{secret}} static {{secret}}'],
+        args: ['-c', 'echo static', '{{secret}}'],
       }
 
-      const result = await delegatedExec('val', request)
+      await expect(delegatedExec('val', request)).rejects.toThrow(ExecError)
+    })
 
-      expect(result.stdout.trim()).toBe('val static val')
+    it('rejects with ExecError when {{secret:name}} is used in args', async () => {
+      const request: ExecRequest = {
+        command: 'sh',
+        args: ['-c', 'echo {{secret:greeting}}'],
+      }
+
+      await expect(delegatedExec({ greeting: 'hello' }, request)).rejects.toThrow(ExecError)
+      await expect(delegatedExec({ greeting: 'hello' }, request)).rejects.toThrow(
+        /placeholders are not supported in the args field/,
+      )
     })
 
     it('handles empty args array', async () => {
@@ -149,29 +162,6 @@ describe('delegatedExec', () => {
   })
 
   describe('named-secret mode (Record)', () => {
-    it('replaces {{secret:name}} in args', async () => {
-      const request: ExecRequest = {
-        command: 'sh',
-        args: ['-c', 'echo {{secret:greeting}}'],
-      }
-
-      const result = await delegatedExec({ greeting: 'hello' }, request)
-
-      expect(result.stdout.trim()).toBe('hello')
-      expect(result.exitCode).toBe(0)
-    })
-
-    it('replaces multiple named secrets in args', async () => {
-      const request: ExecRequest = {
-        command: 'sh',
-        args: ['-c', 'echo {{secret:a}}-{{secret:b}}'],
-      }
-
-      const result = await delegatedExec({ a: 'x', b: 'y' }, request)
-
-      expect(result.stdout.trim()).toBe('x-y')
-    })
-
     it('replaces named secrets in env values', async () => {
       const request: ExecRequest = {
         command: 'sh',
@@ -182,10 +172,7 @@ describe('delegatedExec', () => {
         },
       }
 
-      const result = await delegatedExec(
-        { apiKey: 'key123', dbPass: 'pass456' },
-        request,
-      )
+      const result = await delegatedExec({ apiKey: 'key123', dbPass: 'pass456' }, request)
 
       expect(result.stdout.trim()).toBe('key123 pass456')
     })
@@ -223,7 +210,7 @@ describe('delegatedExec', () => {
     it('rejects with ExecError when a named placeholder references an unknown secret', async () => {
       const request: ExecRequest = {
         command: 'echo',
-        args: ['{{secret:missing}}'],
+        env: { MISSING: '{{secret:missing}}' },
       }
 
       await expect(delegatedExec({ apiKey: 'val' }, request)).rejects.toThrow(ExecError)

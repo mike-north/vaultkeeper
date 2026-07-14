@@ -112,9 +112,11 @@ export interface ExecRequest {
   /** The command (binary) to execute. */
   command: string
   /**
-   * Command-line arguments. Any argument may contain `{{secret}}` or
-   * `{{secret:name}}`, which is replaced with the secret value before the
-   * command is spawned.
+   * Command-line arguments. Secret placeholders (`{{secret}}` or
+   * `{{secret:name}}`) are **not** supported here — process arguments are
+   * visible to other processes via `ps` and often collected in logs and
+   * telemetry. `delegatedExec` throws `ExecError` if a placeholder appears
+   * in any argument. Use `env` to inject secrets instead.
    */
   args?: string[] | undefined
   /**
@@ -237,10 +239,12 @@ export interface VaultConfig {
     trustTier: TrustTier
   }
   /** Development mode configuration. When present, identity checks are relaxed for listed executables. */
-  developmentMode?: {
-    /** Paths of executables that bypass identity verification in development mode. */
-    executables: string[]
-  } | undefined
+  developmentMode?:
+    | {
+        /** Paths of executables that bypass identity verification in development mode. */
+        executables: string[]
+      }
+    | undefined
 }
 
 /** Configuration for a single backend. */

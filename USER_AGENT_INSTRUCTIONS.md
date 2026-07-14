@@ -68,10 +68,10 @@ const jwe = await vault.setup('my-api-key')
 
 // With options:
 const jwe = await vault.setup('my-api-key', {
-  ttlMinutes: 30,          // default comes from config
-  useLimit: 1,             // null = unlimited (default)
-  executablePath: '/usr/local/bin/myapp',  // enables TOFU identity binding
-  trustTier: 2,            // 1 | 2 | 3, default comes from config
+  ttlMinutes: 30, // default comes from config
+  useLimit: 1, // null = unlimited (default)
+  executablePath: '/usr/local/bin/myapp', // enables TOFU identity binding
+  trustTier: 2, // 1 | 2 | 3, default comes from config
   backendType: 'keychain', // override the backend used
 })
 ```
@@ -106,25 +106,25 @@ Use the `CapabilityToken` with one of the access methods described in section 5.
 
 ```ts
 interface VaultConfig {
-  version: number          // must be 1
-  backends: BackendConfig[]  // ordered; the first enabled backend wins
+  version: number // must be 1
+  backends: BackendConfig[] // ordered; the first enabled backend wins
   keyRotation: {
-    gracePeriodDays: number  // how long the previous key decrypts after rotation
+    gracePeriodDays: number // how long the previous key decrypts after rotation
   }
   defaults: {
-    ttlMinutes: number       // default JWE TTL
-    trustTier: TrustTier     // 1 | 2 | 3
+    ttlMinutes: number // default JWE TTL
+    trustTier: TrustTier // 1 | 2 | 3
   }
   developmentMode?: {
-    executables: string[]    // paths that bypass TOFU in dev
+    executables: string[] // paths that bypass TOFU in dev
   }
 }
 
 interface BackendConfig {
-  type: string      // e.g. 'keychain', 'file', '1password'
+  type: string // e.g. 'keychain', 'file', '1password'
   enabled: boolean
-  plugin?: boolean  // true for 1password and yubikey
-  path?: string     // for file backend
+  plugin?: boolean // true for 1password and yubikey
+  path?: string // for file backend
 }
 ```
 
@@ -143,10 +143,10 @@ interface BackendConfig {
 
 `VaultKeeper.init()` looks for `config.json` inside the platform-appropriate directory:
 
-| Platform | Path |
-|----------|------|
-| macOS / Linux | `~/.config/vaultkeeper/config.json` |
-| Windows | `%APPDATA%\vaultkeeper\config.json` (falls back to `~/AppData/Roaming/vaultkeeper/config.json`) |
+| Platform      | Path                                                                                            |
+| ------------- | ----------------------------------------------------------------------------------------------- |
+| macOS / Linux | `~/.config/vaultkeeper/config.json`                                                             |
+| Windows       | `%APPDATA%\vaultkeeper\config.json` (falls back to `~/AppData/Roaming/vaultkeeper/config.json`) |
 
 Override the directory with `VaultKeeperOptions.configDir` or by passing a `VaultConfig` object directly via `VaultKeeperOptions.config`.
 
@@ -172,11 +172,13 @@ const { response, vaultResponse } = await vault.fetch(token, {
 ```
 
 The `{{secret}}` placeholder is replaced in:
+
 - `url` — for API-key-in-URL patterns
 - any `headers` value
 - `body` — for POST bodies
 
 The `FetchRequest` interface:
+
 ```ts
 interface FetchRequest {
   url: string
@@ -187,19 +189,23 @@ interface FetchRequest {
 ```
 
 The return type:
+
 ```ts
-{ response: Response; vaultResponse: VaultResponse }
+{
+  response: Response
+  vaultResponse: VaultResponse
+}
 ```
 
 ### 5b. Delegated Exec
 
-Use when the secret must be passed to a subprocess — for example, authenticating a CLI tool. Never put the secret in `args` as a plain string value; use `{{secret}}` so vaultkeeper injects it after you cannot accidentally log it.
+Use when the secret must be passed to a subprocess — for example, authenticating a CLI tool. Always inject via `env`, never via `args`: process arguments are visible to other users via `ps` and are often collected in logs and telemetry.
 
 The secret is injected into:
-- any element of `args` that contains `{{secret}}`
+
 - any value in the `env` map that contains `{{secret}}`
 
-The secret is NEVER injected into `command` itself. Do not use it there.
+`{{secret}}` is NEVER injected into `command` or `args`. `exec()` throws `ExecError` if a placeholder appears in either field — put the placeholder in `env` instead.
 
 ```ts
 const { result, vaultResponse } = await vault.exec(token, {
@@ -216,6 +222,7 @@ console.log(result.exitCode)
 ```
 
 The `ExecRequest` interface:
+
 ```ts
 interface ExecRequest {
   command: string
@@ -226,6 +233,7 @@ interface ExecRequest {
 ```
 
 The `ExecResult` interface:
+
 ```ts
 interface ExecResult {
   stdout: string
@@ -253,6 +261,7 @@ accessor.read((buf) => {
 ```
 
 The `SecretAccessor` interface:
+
 ```ts
 interface SecretAccessor {
   read(callback: (buf: Buffer) => void): void
@@ -260,6 +269,7 @@ interface SecretAccessor {
 ```
 
 Key properties of `SecretAccessor`:
+
 - **Single-use.** The second call to `read()` throws. If you need to read the secret again, call `vault.getSecret(token)` again (which requires another `authorize()` call if the token has a `useLimit` of 1).
 - **Auto-zeroing.** The `Buffer` passed to the callback is filled with zeros in the `finally` block immediately after the callback returns, even if the callback throws.
 - **Revocable proxy.** After the first `read()` completes, the proxy is revoked. Any subsequent property access on the accessor object throws a `TypeError`.
@@ -271,14 +281,14 @@ Key properties of `SecretAccessor`:
 
 Six backends are available. vaultkeeper uses the first enabled backend in the `backends` array.
 
-| Type | Platform | Plugin | Storage |
-|------|----------|--------|---------|
-| `keychain` | macOS only | No | macOS Keychain via `security` CLI |
-| `dpapi` | Windows only | No | Windows DPAPI via PowerShell; blobs stored in `~/.vaultkeeper/dpapi/` |
-| `secret-tool` | Linux only | No | GNOME Keyring / libsecret via `secret-tool` CLI |
-| `file` | All | No | AES-256-GCM encrypted file; default path `~/.config/vaultkeeper/secrets/` |
-| `1password` | All | Yes | 1Password via `op` CLI |
-| `yubikey` | All | Yes | YubiKey PIV via `ykman` CLI |
+| Type          | Platform     | Plugin | Storage                                                                   |
+| ------------- | ------------ | ------ | ------------------------------------------------------------------------- |
+| `keychain`    | macOS only   | No     | macOS Keychain via `security` CLI                                         |
+| `dpapi`       | Windows only | No     | Windows DPAPI via PowerShell; blobs stored in `~/.vaultkeeper/dpapi/`     |
+| `secret-tool` | Linux only   | No     | GNOME Keyring / libsecret via `secret-tool` CLI                           |
+| `file`        | All          | No     | AES-256-GCM encrypted file; default path `~/.config/vaultkeeper/secrets/` |
+| `1password`   | All          | Yes    | 1Password via `op` CLI                                                    |
+| `yubikey`     | All          | Yes    | YubiKey PIV via `ykman` CLI                                               |
 
 Plugin backends (`1password`, `yubikey`) require an external binary and are flagged with `plugin: true` in `BackendConfig`. If the binary is not installed, `store()` and `retrieve()` throw `PluginNotFoundError` with a `.plugin` field (the binary name) and an `.installUrl` field.
 
@@ -307,6 +317,7 @@ await vault.rotateKey()
 ```
 
 After rotation:
+
 - A new current key is generated.
 - The previous key remains valid for decryption during the grace period (`keyRotation.gracePeriodDays` from config).
 - JWEs presented during the grace period decrypt successfully and `authorize()` returns `vaultResponse.keyStatus === 'previous'` along with a `rotatedJwt` field containing the same claims re-encrypted under the new key.
@@ -345,11 +356,11 @@ Failing to persist `rotatedJwt` means the stored JWE will eventually be unreadab
 
 `TrustTier` is `1 | 2 | 3`. Higher numbers mean stricter verification.
 
-| Tier | Meaning |
-|------|---------|
-| 1 | SHA-256 hash of the executable binary — basic TOFU (trust-on-first-use) |
-| 2 | SHA-256 hash + sigstore / code-signing verification (when available) |
-| 3 | Full sigstore verification required; setup fails if sigstore is unavailable |
+| Tier | Meaning                                                                     |
+| ---- | --------------------------------------------------------------------------- |
+| 1    | SHA-256 hash of the executable binary — basic TOFU (trust-on-first-use)     |
+| 2    | SHA-256 hash + sigstore / code-signing verification (when available)        |
+| 3    | Full sigstore verification required; setup fails if sigstore is unavailable |
 
 The tier is embedded in the JWE claims (`tid` field) and enforced when `setup()` computes the executable identity. Specify it in config `defaults.trustTier` or override per-call with `SetupOptions.trustTier`.
 
@@ -404,24 +415,24 @@ VaultError
 
 ### Error class reference
 
-| Class | When thrown | Key typed fields |
-|-------|-------------|-----------------|
-| `VaultError` | Base class — never thrown directly (except one case during init when system not ready) | — |
-| `BackendLockedError` | Keychain / DPAPI requires user interaction before access | `interactive: boolean` — when `true`, prompting the user and retrying may succeed |
-| `DeviceNotPresentError` | YubiKey or smart card is not plugged in | `timeoutMs: number` — how long the operation waited |
-| `AuthorizationDeniedError` | User cancelled an OS permission dialog | — |
-| `BackendUnavailableError` | No enabled backend is configured, or all attempted backends failed | `reason: string` (e.g. `'none-enabled'`, `'all-failed'`, `'unknown-type'`); `attempted: string[]` |
-| `PluginNotFoundError` | `op` or `ykman` binary not installed | `plugin: string` (binary name); `installUrl: string` |
-| `SecretNotFoundError` | The requested secret does not exist in the backend | — |
-| `TokenExpiredError` | JWE `exp` claim has passed | `canRefresh: boolean` — when `true`, the secret still exists and `setup()` can issue a new token |
-| `KeyRotatedError` | JWE was encrypted with a key that has passed its grace period | — |
-| `KeyRevokedError` | JWE was encrypted with a key that was explicitly revoked | — |
-| `TokenRevokedError` | JWE has been blocklisted (e.g. after a single-use token was consumed) | — |
-| `UsageLimitExceededError` | Token presented more times than its `use` limit allows | — |
-| `IdentityMismatchError` | Executable hash changed since it was first approved (TOFU conflict) | `previousHash: string`; `currentHash: string` |
-| `SetupError` | Required system dependency missing or incompatible during init | `dependency: string` (dependency name) |
-| `FilesystemError` | Config directory or secret file not accessible | `path: string`; `permission: string` (e.g. `'read'`, `'write'`) |
-| `RotationInProgressError` | `rotateKey()` called while a grace period is still active | — |
+| Class                      | When thrown                                                                            | Key typed fields                                                                                  |
+| -------------------------- | -------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
+| `VaultError`               | Base class — never thrown directly (except one case during init when system not ready) | —                                                                                                 |
+| `BackendLockedError`       | Keychain / DPAPI requires user interaction before access                               | `interactive: boolean` — when `true`, prompting the user and retrying may succeed                 |
+| `DeviceNotPresentError`    | YubiKey or smart card is not plugged in                                                | `timeoutMs: number` — how long the operation waited                                               |
+| `AuthorizationDeniedError` | User cancelled an OS permission dialog                                                 | —                                                                                                 |
+| `BackendUnavailableError`  | No enabled backend is configured, or all attempted backends failed                     | `reason: string` (e.g. `'none-enabled'`, `'all-failed'`, `'unknown-type'`); `attempted: string[]` |
+| `PluginNotFoundError`      | `op` or `ykman` binary not installed                                                   | `plugin: string` (binary name); `installUrl: string`                                              |
+| `SecretNotFoundError`      | The requested secret does not exist in the backend                                     | —                                                                                                 |
+| `TokenExpiredError`        | JWE `exp` claim has passed                                                             | `canRefresh: boolean` — when `true`, the secret still exists and `setup()` can issue a new token  |
+| `KeyRotatedError`          | JWE was encrypted with a key that has passed its grace period                          | —                                                                                                 |
+| `KeyRevokedError`          | JWE was encrypted with a key that was explicitly revoked                               | —                                                                                                 |
+| `TokenRevokedError`        | JWE has been blocklisted (e.g. after a single-use token was consumed)                  | —                                                                                                 |
+| `UsageLimitExceededError`  | Token presented more times than its `use` limit allows                                 | —                                                                                                 |
+| `IdentityMismatchError`    | Executable hash changed since it was first approved (TOFU conflict)                    | `previousHash: string`; `currentHash: string`                                                     |
+| `SetupError`               | Required system dependency missing or incompatible during init                         | `dependency: string` (dependency name)                                                            |
+| `FilesystemError`          | Config directory or secret file not accessible                                         | `path: string`; `permission: string` (e.g. `'read'`, `'write'`)                                   |
+| `RotationInProgressError`  | `rotateKey()` called while a grace period is still active                              | —                                                                                                 |
 
 ### Recommended error handling pattern
 
@@ -468,7 +479,7 @@ try {
     // Catch-all for any other library error
     console.error(err.message)
   } else {
-    throw err  // Re-throw non-library errors
+    throw err // Re-throw non-library errors
   }
 }
 ```
@@ -498,13 +509,14 @@ const jwe = await vault.keeper.setup('db-password')
 const { token, vaultResponse } = await vault.keeper.authorize(jwe)
 
 // Reset between tests:
-vault.reset()  // clears all stored secrets; same as vault.backend.clear()
+vault.reset() // clears all stored secrets; same as vault.backend.clear()
 ```
 
 With options:
+
 ```ts
 const vault = await TestVault.create({
-  ttlMinutes: 1,   // short TTL for expiry tests
+  ttlMinutes: 1, // short TTL for expiry tests
   trustTier: 2,
 })
 ```
@@ -521,8 +533,8 @@ const backend = new InMemoryBackend()
 BackendRegistry.register('memory', () => backend)
 
 await backend.store('api-key', 'test-value')
-console.log(backend.size)  // 1
-await backend.clear()      // remove all entries
+console.log(backend.size) // 1
+await backend.clear() // remove all entries
 ```
 
 `InMemoryBackend` is always available (`isAvailable()` returns `true`). Its `type` is `'memory'` and `displayName` is `'In-Memory Backend'`.
@@ -553,10 +565,10 @@ describe('my vault consumer', () => {
   })
 
   it('should throw TokenExpiredError on expired token', async () => {
-    const shortVault = await TestVault.create({ ttlMinutes: 0.001 })  // ~60ms
+    const shortVault = await TestVault.create({ ttlMinutes: 0.001 }) // ~60ms
     await shortVault.backend.store('api-key', 'value')
     const jwe = await shortVault.keeper.setup('api-key')
-    await new Promise(resolve => setTimeout(resolve, 100))  // let it expire
+    await new Promise((resolve) => setTimeout(resolve, 100)) // let it expire
     await expect(shortVault.keeper.authorize(jwe)).rejects.toBeInstanceOf(TokenExpiredError)
   })
 })
@@ -579,17 +591,17 @@ const result = await VaultKeeper.doctor()
 
 ```ts
 interface PreflightResult {
-  checks: PreflightCheck[]  // one per dependency inspected
-  ready: boolean            // true when all required checks pass
-  warnings: string[]        // non-fatal, optional dependencies missing
-  nextSteps: string[]       // action items for failed required checks
+  checks: PreflightCheck[] // one per dependency inspected
+  ready: boolean // true when all required checks pass
+  warnings: string[] // non-fatal, optional dependencies missing
+  nextSteps: string[] // action items for failed required checks
 }
 
 interface PreflightCheck {
   name: string
   status: 'ok' | 'missing' | 'version-unsupported'
-  version?: string    // detected version, when found
-  reason?: string     // human-readable explanation when status is not 'ok'
+  version?: string // detected version, when found
+  reason?: string // human-readable explanation when status is not 'ok'
 }
 ```
 
@@ -601,23 +613,23 @@ When generating code that uses vaultkeeper, enforce the following rules. Do not 
 
 ### Never pass secrets as CLI arguments
 
-`delegatedExec` uses `spawn()` with an argument array. While the secret is injected into `args` elements at the last moment before spawning, this means the secret appears in the process argument list visible to other processes via `/proc` or `ps`. When possible, inject the secret via `env` instead of `args`.
+`{{secret}}` is not supported in `args` — process arguments are visible to other processes via `/proc` or `ps` and are often collected in logs and telemetry. `delegatedExec` throws `ExecError` if a placeholder appears in `args` (or `command`). Always inject via `env` instead.
 
 ```ts
-// Prefer: inject via environment variable
+// Correct: inject via environment variable
 vault.exec(token, {
   command: 'my-tool',
   env: { MY_TOOL_SECRET: '{{secret}}' },
 })
 
-// Acceptable but higher risk: inject via arg (still supported by the API)
+// WRONG — throws ExecError: placeholders are not supported in args
 vault.exec(token, {
   command: 'my-tool',
   args: ['--password', '{{secret}}'],
 })
 ```
 
-Never construct a command string with the secret concatenated as a plain value and then split it into args. Always use the `{{secret}}` placeholder.
+Never construct a command string with the secret concatenated as a plain value and then split it into args. Always use the `{{secret}}` placeholder — but only in `env`.
 
 ### Never store a reference to the Buffer outside the SecretAccessor callback
 
@@ -625,7 +637,7 @@ Never construct a command string with the secret concatenated as a plain value a
 // WRONG — storing a reference means the secret outlives the zeroing:
 let leaked: Buffer
 accessor.read((buf) => {
-  leaked = buf  // DO NOT DO THIS
+  leaked = buf // DO NOT DO THIS
 })
 // leaked now contains zeroed bytes and is a security footprint
 
@@ -644,8 +656,10 @@ accessor.read((buf) => {
 // WRONG:
 function getApiKey(accessor: SecretAccessor): string {
   let key = ''
-  accessor.read((buf) => { key = buf.toString('utf8') })
-  return key  // raw secret is now a long-lived string
+  accessor.read((buf) => {
+    key = buf.toString('utf8')
+  })
+  return key // raw secret is now a long-lived string
 }
 
 // CORRECT: compute what you need inside the callback
@@ -654,7 +668,7 @@ function signRequest(accessor: SecretAccessor, payload: string): string {
   accessor.read((buf) => {
     signature = crypto.createHmac('sha256', buf).update(payload).digest('hex')
   })
-  return signature  // derived value only, not the secret
+  return signature // derived value only, not the secret
 }
 ```
 
@@ -707,6 +721,7 @@ Error: SecretAccessor has already been consumed — call getSecret() again to ob
 ```
 
 To read the secret multiple times in a single flow, either:
+
 - Do all work inside a single `read()` callback, or
 - Call `vault.getSecret(token)` again (which works for tokens with `useLimit: null` or a limit greater than the number of accesses consumed so far).
 
@@ -764,7 +779,7 @@ vault.getSecret(token).read((buf) => {
 
 // Key rotation
 await vault.rotateKey()
-await vault.revokeKey()  // emergency only
+await vault.revokeKey() // emergency only
 
 // Doctor
 const preflight = await VaultKeeper.doctor()
@@ -772,5 +787,5 @@ const preflight = await VaultKeeper.doctor()
 // Tests
 const vault = await TestVault.create()
 await vault.backend.store('my-secret', 'value')
-vault.reset()  // clear between tests
+vault.reset() // clear between tests
 ```

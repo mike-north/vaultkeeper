@@ -230,7 +230,7 @@ const { response } = await vault.fetch(token, {
 
 ### Delegated exec
 
-The secret is substituted for every `{{secret}}` placeholder in `env` values before the process is spawned. Do **not** pass secrets in CLI arguments — process arguments may be visible to other users via `ps` or collected in logs and telemetry.
+The secret is substituted for every `{{secret}}` placeholder in `env` values before the process is spawned. Secret placeholders are **not supported** in `command` or `args` — `exec()` throws `ExecError` if one appears there. Process arguments are visible to other users via `ps` and are often collected in logs and telemetry, so inject secrets via `env` instead.
 
 ```ts
 const { result } = await vault.exec(token, {
@@ -394,27 +394,27 @@ const jwe = await vault.setup('SECRET_NAME', {
 
 All errors extend `VaultError`.
 
-| Class                      | When thrown                                                                                                                              |
-| -------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
-| `BackendLockedError`       | Keychain or credential store is locked                                                                                                   |
-| `DeviceNotPresentError`    | Required hardware device not connected                                                                                                   |
-| `AuthorizationDeniedError` | User denied an OS permission dialog                                                                                                      |
-| `BackendUnavailableError`  | No configured backend is reachable                                                                                                       |
-| `PluginNotFoundError`      | A required plugin binary is not installed                                                                                                |
-| `SecretNotFoundError`      | Secret does not exist in the backend                                                                                                     |
-| `TokenExpiredError`        | JWE has passed its `exp` claim                                                                                                           |
-| `KeyRotatedError`          | Key exited grace period; JWE is permanently unreadable                                                                                   |
-| `KeyRevokedError`          | Key was explicitly revoked                                                                                                               |
-| `TokenRevokedError`        | Token has been blocked (e.g. single-use token already consumed)                                                                          |
-| `UsageLimitExceededError`  | Token presented more times than its `use` limit allows                                                                                   |
-| `IdentityMismatchError`    | Executable hash changed since TOFU approval                                                                                              |
-| `ExecError`                | `exec()` request was invalid (e.g. `{{secret}}` in the command field) or the command could not be started (not found or failed to spawn) |
-| `InvalidTokenError`        | JWE could not be decrypted or validated (e.g. structurally malformed, tampered, or failed decryption)                                    |
-| `AccessorConsumedError`    | `SecretAccessor.read()` called after already consumed                                                                                    |
-| `InvalidAlgorithmError`    | Signing/verifying with a disallowed algorithm (e.g. `md5`)                                                                               |
-| `SetupError`               | Required system dependency missing or incompatible at init                                                                               |
-| `FilesystemError`          | Config directory not readable or writable                                                                                                |
-| `RotationInProgressError`  | `rotateKey()` called while previous key is still in grace period                                                                         |
+| Class                      | When thrown                                                                                                                                          |
+| -------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `BackendLockedError`       | Keychain or credential store is locked                                                                                                               |
+| `DeviceNotPresentError`    | Required hardware device not connected                                                                                                               |
+| `AuthorizationDeniedError` | User denied an OS permission dialog                                                                                                                  |
+| `BackendUnavailableError`  | No configured backend is reachable                                                                                                                   |
+| `PluginNotFoundError`      | A required plugin binary is not installed                                                                                                            |
+| `SecretNotFoundError`      | Secret does not exist in the backend                                                                                                                 |
+| `TokenExpiredError`        | JWE has passed its `exp` claim                                                                                                                       |
+| `KeyRotatedError`          | Key exited grace period; JWE is permanently unreadable                                                                                               |
+| `KeyRevokedError`          | Key was explicitly revoked                                                                                                                           |
+| `TokenRevokedError`        | Token has been blocked (e.g. single-use token already consumed)                                                                                      |
+| `UsageLimitExceededError`  | Token presented more times than its `use` limit allows                                                                                               |
+| `IdentityMismatchError`    | Executable hash changed since TOFU approval                                                                                                          |
+| `ExecError`                | `exec()` request was invalid (e.g. `{{secret}}` in the `command` or `args` field) or the command could not be started (not found or failed to spawn) |
+| `InvalidTokenError`        | JWE could not be decrypted or validated (e.g. structurally malformed, tampered, or failed decryption)                                                |
+| `AccessorConsumedError`    | `SecretAccessor.read()` called after already consumed                                                                                                |
+| `InvalidAlgorithmError`    | Signing/verifying with a disallowed algorithm (e.g. `md5`)                                                                                           |
+| `SetupError`               | Required system dependency missing or incompatible at init                                                                                           |
+| `FilesystemError`          | Config directory not readable or writable                                                                                                            |
+| `RotationInProgressError`  | `rotateKey()` called while previous key is still in grace period                                                                                     |
 
 ## Architecture
 
