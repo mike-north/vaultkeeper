@@ -12,7 +12,6 @@
   "type": "module",
   "main": "./dist/index.cjs",
   "module": "./dist/index.js",
-  "types": "./dist/test-helpers-public.d.ts",
   "exports": {
     ".": {
       "import": {

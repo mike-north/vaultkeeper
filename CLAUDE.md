@@ -62,34 +62,35 @@ All workspace-level scripts use Nx for dependency-graph-aware execution with cac
 
 ### Workspace-level scripts
 
-| Script | Purpose |
-|--------|---------|
-| `pnpm build` | Build all TS packages (Nx resolves dependency order) |
-| `pnpm clean` | Clean all packages |
-| `pnpm test` | Run all tests across all packages |
-| `pnpm test:watch` | Run tests in watch mode (vitest workspace) |
-| `pnpm check` | Run typecheck + lint + API report validation |
-| `pnpm check:typecheck` | `tsc --noEmit` in all packages |
-| `pnpm check:lint-ts` | `eslint .` in all packages |
-| `pnpm check:api-report` | Validate API reports |
-| `pnpm generate:api-report` | Update API reports |
+| Script                     | Purpose                                              |
+| -------------------------- | ---------------------------------------------------- |
+| `pnpm build`               | Build all TS packages (Nx resolves dependency order) |
+| `pnpm clean`               | Clean all packages                                   |
+| `pnpm test`                | Run all tests across all packages                    |
+| `pnpm test:watch`          | Run tests in watch mode (vitest workspace)           |
+| `pnpm check`               | Run typecheck + lint + API report validation         |
+| `pnpm check:typecheck`     | `tsc --noEmit` in all packages                       |
+| `pnpm check:lint-ts`       | `eslint .` in all packages                           |
+| `pnpm check:api-report`    | Validate API reports                                 |
+| `pnpm generate:api-report` | Update API reports                                   |
 
 ### Rust builds
 
 Rust builds are separate from Nx (Cargo manages its own dependency graph):
 
-| Command | Purpose |
-|---------|---------|
-| `cargo build` | Build all Rust crates |
-| `cargo test` | Run all Rust tests (130 tests) |
-| `cargo clippy` | Lint Rust code |
-| `wasm-pack build --target nodejs crates/vaultkeeper-wasm` | Build WASM module |
+| Command                                                   | Purpose                        |
+| --------------------------------------------------------- | ------------------------------ |
+| `cargo build`                                             | Build all Rust crates          |
+| `cargo test`                                              | Run all Rust tests (130 tests) |
+| `cargo clippy`                                            | Lint Rust code                 |
+| `wasm-pack build --target nodejs crates/vaultkeeper-wasm` | Build WASM module              |
 
 The WASM output (`packages/vaultkeeper-wasm/wasm/`) is committed to git so TypeScript builds work without wasm-pack installed.
 
 ### Package-level (run with `--filter`)
 
 Use `pnpm --filter <name>` to target a specific package:
+
 - `pnpm --filter vaultkeeper build`
 - `pnpm --filter @vaultkeeper/wasm test`
 
@@ -159,6 +160,7 @@ Tests use vitest (except `@vaultkeeper/wasm` which uses `node:test`). Coverage c
 ### Conformance testing
 
 Both CLIs (Rust native and TS) are tested against the same data-driven test cases:
+
 1. Cases defined in `crates/vaultkeeper-conformance/src/lib.rs`
 2. Exported as JSON via `cargo run -p export-conformance`
 3. JS runner in `packages/cli-tests/test/conformance/` loads `cases.json` and tests the Rust binary
@@ -206,6 +208,7 @@ Generated files in `**/wasm/**` (wasm-pack output) are excluded from linting.
 API Extractor v7 (`@microsoft/api-extractor`) is configured per-package in `api-extractor.json`. Each package generates its own `.d.ts` rollup and API report.
 
 Workflow:
+
 1. `pnpm build` — produces `dist/*.d.ts` source files
 2. `pnpm generate:api-report` — updates API reports in all packages
 3. Commit `api-report/` when the public API changes
@@ -213,11 +216,14 @@ Workflow:
 
 Every exported symbol in a package's `src/index.ts` must have a `@public` or `@packageDocumentation` JSDoc tag (or be marked `@internal` / `@alpha` / `@beta` if not yet stable).
 
+Publishable dual ESM/CJS packages (`vaultkeeper`, `@vaultkeeper/test-helpers`, `@vaultkeeper/cli-test-helpers`) do not set a top-level `package.json#types` field. The API Extractor `dtsRollup` output (`dist/<name>-public.d.ts`) is only produced by `generate:api-report`/`check:api-report`, which the release pipeline does not run before `changeset publish` — a top-level `types` pointing at it would reference a file missing from the published tarball. Types resolve entirely through the conditional `exports` map (`import.types` / `require.types`, pointing at the real per-format `tsup` output), which is sufficient for `moduleResolution: NodeNext`/`bundler` consumers and is what the packed-install and pack-contents tests in `packages/cli-tests/test/packaging/` verify.
+
 ## Conventions
 
 ### Errors
 
 All errors extend `VaultError` (defined in `packages/vaultkeeper/src/errors.ts`). When adding a new error class:
+
 - Extend the closest existing base (e.g. `VaultError` directly if no better parent exists)
 - Set `this.name` in the constructor to match the class name
 - Add strongly-typed extra fields for machine-readable context
