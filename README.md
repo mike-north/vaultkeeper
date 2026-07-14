@@ -40,7 +40,7 @@ vaultkeeper --help
 pnpm add vaultkeeper
 ```
 
-`vaultkeeper`'s public API references Node's `Buffer` type (e.g. `SecretAccessor.read()`, `SignRequest`, `VerifyRequest`). Consuming projects need `@types/node` installed to typecheck against it — `@types/node` is declared as an optional peer dependency, so most setups already have it as a transitive `devDependency`. If your tsconfig scopes `compilerOptions.types` explicitly (e.g. `"types": []`), add it yourself:
+`vaultkeeper`'s public API references Node's `Buffer` type (e.g. `SecretAccessor.read()`, `SignRequest`, `VerifyRequest`). Install `@types/node` as a devDependency so your project typechecks against it — it's declared as an optional peer dependency, but npm/pnpm/yarn do not install optional peers automatically, so you need to add it yourself:
 
 ```sh
 pnpm add -D @types/node
