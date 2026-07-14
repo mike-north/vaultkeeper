@@ -46,7 +46,9 @@ interface YubikeyMetadata {
  * `$HOME/.vaultkeeper/yubikey` location is used.
  */
 function resolveStorageDir(configuredPath?: string): string {
-  if (configuredPath !== undefined && configuredPath !== '') {
+  // Config validation (see validateConfig) rejects empty/whitespace-only
+  // paths, so any defined value here is guaranteed non-blank.
+  if (configuredPath !== undefined) {
     return configuredPath
   }
   return path.join(os.homedir(), STORAGE_DIR_NAME)

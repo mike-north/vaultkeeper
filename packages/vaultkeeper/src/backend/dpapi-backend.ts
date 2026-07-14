@@ -21,7 +21,9 @@ import type { ListableBackend } from './types.js'
  * `$HOME/.vaultkeeper/dpapi` location is used.
  */
 function resolveStorageDir(configuredPath?: string): string {
-  if (configuredPath !== undefined && configuredPath !== '') {
+  // Config validation (see validateConfig) rejects empty/whitespace-only
+  // paths, so any defined value here is guaranteed non-blank.
+  if (configuredPath !== undefined) {
     return configuredPath
   }
   return path.join(os.homedir(), '.vaultkeeper', 'dpapi')

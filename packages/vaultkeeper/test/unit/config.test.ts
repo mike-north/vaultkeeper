@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { validateConfig, loadConfig, getDefaultConfigDir } from '../../src/config.js'
+import { ConfigValidationError } from '../../src/errors.js'
 
 vi.mock('node:fs/promises', () => ({
   readFile: vi.fn(),
@@ -47,9 +48,26 @@ describe('validateConfig', () => {
     expect(result.backends[0]?.path).toBe('/opt/plugin.js')
   })
 
+  it('should reject a whitespace-only backend path (regression: PR #78 review)', () => {
+    // A path of " " previously passed validation and was treated as a real
+    // storage directory by file-based backends instead of being rejected.
+    const input = validConfigJson()
+    input.backends = [{ type: 'file', enabled: true, path: ' ' }]
+    expect(() => validateConfig(input)).toThrow(ConfigValidationError)
+    expect(() => validateConfig(input)).toThrow('must not be empty or whitespace-only')
+  })
+
+  it('should reject an empty-string backend path', () => {
+    const input = validConfigJson()
+    input.backends = [{ type: 'file', enabled: true, path: '' }]
+    expect(() => validateConfig(input)).toThrow(ConfigValidationError)
+  })
+
   it('should accept backend with valid options object', () => {
     const input = validConfigJson()
-    input.backends = [{ type: 'file', enabled: true, options: { region: 'us-east-1', vault: 'my-vault' } }]
+    input.backends = [
+      { type: 'file', enabled: true, options: { region: 'us-east-1', vault: 'my-vault' } },
+    ]
     const result = validateConfig(input)
     expect(result.backends[0]?.options).toEqual({ region: 'us-east-1', vault: 'my-vault' })
   })
@@ -91,9 +109,9 @@ describe('validateConfig', () => {
   })
 
   it('should reject backend with missing type', () => {
-    expect(() =>
-      validateConfig({ ...validConfigJson(), backends: [{ enabled: true }] }),
-    ).toThrow('type must be a non-empty string')
+    expect(() => validateConfig({ ...validConfigJson(), backends: [{ enabled: true }] })).toThrow(
+      'type must be a non-empty string',
+    )
   })
 
   it('should reject backend with non-boolean enabled', () => {

@@ -6,6 +6,7 @@ import * as fs from 'node:fs/promises'
 import * as path from 'node:path'
 import * as os from 'node:os'
 import type { VaultConfig, BackendConfig, TrustTier } from './types.js'
+import { ConfigValidationError } from './errors.js'
 
 /**
  * Return the platform-appropriate default config directory.
@@ -73,6 +74,12 @@ function validateBackendEntry(entry: unknown, index: number): BackendConfig {
     if (typeof entry.path !== 'string') {
       throw new Error(`backends[${String(index)}].path must be a string`)
     }
+    if (entry.path.trim() === '') {
+      throw new ConfigValidationError(
+        `backends[${String(index)}].path must not be empty or whitespace-only`,
+        `backends[${String(index)}].path`,
+      )
+    }
     result.path = entry.path
   }
 
@@ -83,9 +90,7 @@ function validateBackendEntry(entry: unknown, index: number): BackendConfig {
     const opts: Record<string, string> = {}
     for (const [k, v] of Object.entries(entry.options)) {
       if (typeof v !== 'string') {
-        throw new Error(
-          `backends[${String(index)}].options["${k}"] must be a string`,
-        )
+        throw new Error(`backends[${String(index)}].options["${k}"] must be a string`)
       }
       opts[k] = v
     }

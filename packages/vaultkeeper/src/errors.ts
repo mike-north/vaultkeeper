@@ -328,6 +328,24 @@ export class FetchError extends VaultError {
 }
 
 /**
+ * Thrown when a config value fails structural or semantic validation (e.g. a
+ * whitespace-only `BackendConfig.path`).
+ */
+export class ConfigValidationError extends VaultError {
+  /**
+   * The dotted/bracketed path to the offending config field (e.g.
+   * `'backends[0].path'`).
+   */
+  readonly field: string
+
+  constructor(message: string, field: string) {
+    super(message)
+    this.name = 'ConfigValidationError'
+    this.field = field
+  }
+}
+
+/**
  * Thrown during initialization when a required system dependency (e.g. OpenSSL
  * or a native credential helper) is missing or incompatible.
  */
