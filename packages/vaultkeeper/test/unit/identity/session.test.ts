@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest'
+import * as publicApi from '../../../src/index.js'
 import {
   CapabilityToken,
   createCapabilityToken,
@@ -50,6 +51,21 @@ describe('CapabilityToken', () => {
   })
 })
 
+// Regression guard for issue #74: the CapabilityToken doc promises there is no
+// public API for reading claims. The claims-unwrapping helpers must therefore
+// stay internal — exporting them would leak the secret and make the doc false.
+describe('CapabilityToken public surface (issue #74)', () => {
+  it('exports the CapabilityToken class', () => {
+    expect('CapabilityToken' in publicApi).toBe(true)
+  })
+
+  it('does not export the internal claims-unwrapping helpers', () => {
+    // Mirrors the issue repro: `'validateCapabilityToken' in import('vaultkeeper')`.
+    expect('validateCapabilityToken' in publicApi).toBe(false)
+    expect('createCapabilityToken' in publicApi).toBe(false)
+  })
+})
+
 describe('createCapabilityToken', () => {
   it('creates a distinct token for each call', () => {
     const claims = makeClaims()
@@ -79,7 +95,9 @@ describe('validateCapabilityToken', () => {
   it('throws AuthorizationDeniedError for a token not created by createCapabilityToken', () => {
     const forgery = new CapabilityToken()
     expect(() => validateCapabilityToken(forgery)).toThrow(AuthorizationDeniedError)
-    expect(() => validateCapabilityToken(forgery)).toThrow('Invalid or unrecognized capability token')
+    expect(() => validateCapabilityToken(forgery)).toThrow(
+      'Invalid or unrecognized capability token',
+    )
   })
 
   it('throws AuthorizationDeniedError for a plain object cast-free forgery attempt', () => {
