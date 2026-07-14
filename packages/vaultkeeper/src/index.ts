@@ -71,6 +71,7 @@ export type {
 } from './vault.js'
 
 export { platformDefaultBackendType } from './config.js'
+export { getDefaultConfigDir, loadConfig } from './config.js'
 
 export { runDoctor } from './doctor/runner.js'
 export type { RunDoctorOptions } from './doctor/runner.js'

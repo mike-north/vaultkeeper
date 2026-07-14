@@ -131,6 +131,9 @@ export class FilesystemError extends VaultError {
 }
 
 // @public
+export function getDefaultConfigDir(): string;
+
+// @public
 export class IdentityMismatchError extends VaultError {
     constructor(message: string, previousHash: string, currentHash: string);
     readonly currentHash: string;
@@ -174,6 +177,9 @@ export type KeyStatus = 'current' | 'previous' | 'deprecated';
 export interface ListableBackend extends SecretBackend {
     list(): Promise<string[]>;
 }
+
+// @public
+export function loadConfig(configDir?: string): Promise<VaultConfig>;
 
 // @public
 export type Platform = 'darwin' | 'win32' | 'linux';
