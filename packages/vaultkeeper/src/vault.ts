@@ -20,6 +20,7 @@ import type {
 } from './types.js'
 import { loadConfig, getDefaultConfigDir } from './config.js'
 import { KeyManager } from './keys/manager.js'
+import { loadKeyState, saveKeyState } from './keys/storage.js'
 import { BackendRegistry } from './backend/registry.js'
 import type { SecretBackend } from './backend/types.js'
 import { createToken, decryptToken, extractKid, validateClaims, blockToken } from './jwe/index.js'
@@ -200,17 +201,27 @@ export class VaultKeeper {
   readonly #config: VaultConfig
   readonly #keyManager: KeyManager
   readonly #configDir: string
+  /**
+   * Whether key material is persisted to (and reloaded from) `#configDir`.
+   * Enabled only when the vault operates against a real on-disk config — i.e.
+   * neither `config` nor `backend` was injected in-process (see
+   * {@link VaultKeeper.init}). Injected-config/backend instances keep keys
+   * purely in memory so tests and embedders stay hermetic.
+   */
+  readonly #persistKeys: boolean
   #backend: SecretBackend | undefined
 
   private constructor(
     config: VaultConfig,
     keyManager: KeyManager,
     configDir: string,
+    persistKeys: boolean,
     backend?: SecretBackend,
   ) {
     this.#config = config
     this.#keyManager = keyManager
     this.#configDir = configDir
+    this.#persistKeys = persistKeys
     this.#backend = backend
   }
 
@@ -239,10 +250,26 @@ export class VaultKeeper {
       }
     }
 
-    const keyManager = new KeyManager()
-    await keyManager.init()
+    // Persist key material to disk only when operating against a real on-disk
+    // config directory. When either `config` or `backend` is injected, the
+    // caller is assembling the vault in-process (tests, embedders), so keys stay
+    // in memory and never touch the config dir.
+    const persistKeys = options?.config === undefined && options?.backend === undefined
 
-    return new VaultKeeper(config, keyManager, configDir, options?.backend)
+    const keyManager = new KeyManager()
+    if (persistKeys) {
+      const loaded = await loadKeyState(configDir)
+      if (loaded !== undefined) {
+        keyManager.hydrate(loaded)
+      } else {
+        await keyManager.init()
+        await saveKeyState(configDir, keyManager.snapshot())
+      }
+    } else {
+      await keyManager.init()
+    }
+
+    return new VaultKeeper(config, keyManager, configDir, persistKeys, options?.backend)
   }
 
   /**
@@ -593,8 +620,10 @@ export class VaultKeeper {
    */
   async rotateKey(): Promise<void> {
     const gracePeriodMs = this.#config.keyRotation.gracePeriodDays * 24 * 60 * 60 * 1000
+    // Throws RotationInProgressError synchronously if a prior rotation's grace
+    // period is still active — including one persisted by an earlier process.
     this.#keyManager.rotateKey(gracePeriodMs)
-    await Promise.resolve()
+    await this.#persistKeyState()
   }
 
   /**
@@ -606,7 +635,18 @@ export class VaultKeeper {
    */
   async revokeKey(): Promise<void> {
     this.#keyManager.revokeKey()
-    await Promise.resolve()
+    await this.#persistKeyState()
+  }
+
+  /**
+   * Persist the current key state to the config dir when persistence is
+   * enabled. A no-op for injected-config/backend instances (in-memory keys).
+   */
+  async #persistKeyState(): Promise<void> {
+    if (!this.#persistKeys) {
+      return
+    }
+    await saveKeyState(this.#configDir, this.#keyManager.snapshot())
   }
 
   /**

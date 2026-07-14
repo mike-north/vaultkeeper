@@ -48,9 +48,7 @@ describe('KeyManager.generateKey', () => {
     const a = mgr.generateKey()
     const b = mgr.generateKey()
     // Keys should not share the same raw bytes (astronomically unlikely).
-    expect(Buffer.from(a.key).toString('hex')).not.toBe(
-      Buffer.from(b.key).toString('hex'),
-    )
+    expect(Buffer.from(a.key).toString('hex')).not.toBe(Buffer.from(b.key).toString('hex'))
   })
 })
 
@@ -102,8 +100,12 @@ describe('KeyManager before init', () => {
 
   it('rotateKey throws SetupError if not initialized', () => {
     const mgr = makeManager()
-    expect(() => { mgr.rotateKey(1000) }).toThrow(SetupError)
-    expect(() => { mgr.rotateKey(1000) }).toThrow('KeyManager has not been initialized')
+    expect(() => {
+      mgr.rotateKey(1000)
+    }).toThrow(SetupError)
+    expect(() => {
+      mgr.rotateKey(1000)
+    }).toThrow('KeyManager has not been initialized')
   })
 })
 
@@ -201,7 +203,9 @@ describe('KeyManager.rotateKey — concurrent rotation guard', () => {
     const mgr = await makeInitializedManager()
     mgr.rotateKey(5_000)
 
-    expect(() => { mgr.rotateKey(5_000) }).toThrowError(RotationInProgressError)
+    expect(() => {
+      mgr.rotateKey(5_000)
+    }).toThrowError(RotationInProgressError)
   })
 
   it('allows a new rotation after the grace period expires', async () => {
@@ -210,7 +214,9 @@ describe('KeyManager.rotateKey — concurrent rotation guard', () => {
 
     vi.advanceTimersByTime(1_001)
 
-    expect(() => { mgr.rotateKey(1_000) }).not.toThrow()
+    expect(() => {
+      mgr.rotateKey(1_000)
+    }).not.toThrow()
   })
 })
 
@@ -259,12 +265,16 @@ describe('KeyManager.revokeKey', () => {
     mgr.rotateKey(1_000)
     mgr.revokeKey()
 
-    expect(() => { mgr.rotateKey(1_000) }).not.toThrow()
+    expect(() => {
+      mgr.rotateKey(1_000)
+    }).not.toThrow()
   })
 
   it('can be called without a prior rotation', async () => {
     const mgr = await makeInitializedManager()
-    expect(() => { mgr.revokeKey() }).not.toThrow()
+    expect(() => {
+      mgr.revokeKey()
+    }).not.toThrow()
     expect(mgr.getPreviousKey()).toBeUndefined()
   })
 })
@@ -272,6 +282,80 @@ describe('KeyManager.revokeKey', () => {
 // ---------------------------------------------------------------------------
 // findKeyById
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// hydrate / snapshot — cross-process state (issue #59)
+// ---------------------------------------------------------------------------
+
+describe('KeyManager.snapshot / hydrate', () => {
+  it('round-trips the current key into a fresh manager', async () => {
+    const mgr = await makeInitializedManager()
+    const current = mgr.getCurrentKey()
+
+    const restored = makeManager()
+    restored.hydrate(mgr.snapshot())
+
+    expect(restored.getCurrentKey().id).toBe(current.id)
+    expect(Buffer.from(restored.getCurrentKey().key).toString('hex')).toBe(
+      Buffer.from(current.key).toString('hex'),
+    )
+  })
+
+  it('a snapshot taken mid-grace-period restores the previous key and the rotation guard', async () => {
+    const mgr = await makeInitializedManager()
+    const original = mgr.getCurrentKey()
+    mgr.rotateKey(60_000)
+
+    const restored = makeManager()
+    restored.hydrate(mgr.snapshot())
+
+    // Previous key and grace state survive into the new manager…
+    expect(restored.findKeyById(original.id)?.id).toBe(original.id)
+    expect(restored.isInGracePeriod()).toBe(true)
+    // …so a second rotation is rejected across the "process" boundary.
+    expect(() => {
+      restored.rotateKey(60_000)
+    }).toThrow(RotationInProgressError)
+  })
+
+  it('does not restore an already-expired grace period (previous key dropped)', async () => {
+    vi.useFakeTimers()
+    try {
+      const mgr = await makeInitializedManager()
+      const original = mgr.getCurrentKey()
+      mgr.rotateKey(5_000)
+      const snap = mgr.snapshot()
+
+      // Time passes beyond the grace period before the next manager loads it.
+      vi.advanceTimersByTime(5_001)
+
+      const restored = makeManager()
+      restored.hydrate(snap)
+      expect(restored.isInGracePeriod()).toBe(false)
+      expect(restored.findKeyById(original.id)).toBeUndefined()
+      // A fresh rotation is permitted again.
+      expect(() => {
+        restored.rotateKey(5_000)
+      }).not.toThrow()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('snapshot omits the previous key once the grace period has expired', async () => {
+    vi.useFakeTimers()
+    try {
+      const mgr = await makeInitializedManager()
+      mgr.rotateKey(5_000)
+      vi.advanceTimersByTime(5_001)
+      const snap = mgr.snapshot()
+      expect(snap.previous).toBeUndefined()
+      expect(snap.gracePeriodExpiresAt).toBeUndefined()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+})
 
 describe('KeyManager.findKeyById', () => {
   it('finds the current key by id', async () => {
