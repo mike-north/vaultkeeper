@@ -1,7 +1,23 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { delegatedExec } from '../../../src/access/delegated-exec.js'
 import { ExecError } from '../../../src/errors.js'
 import type { ExecRequest } from '../../../src/access/types.js'
+
+// spawn is wrapped (not replaced) so every other test in this file still
+// spawns real child processes — only the guardrail test below asserts
+// against call count.
+vi.mock('node:child_process', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:child_process')>()
+  return { ...actual, spawn: vi.fn(actual.spawn) }
+})
+
+import { spawn } from 'node:child_process'
+
+const mockSpawn = vi.mocked(spawn)
+
+beforeEach(() => {
+  mockSpawn.mockClear()
+})
 
 describe('delegatedExec', () => {
   describe('args placeholder guardrail', () => {
@@ -20,6 +36,7 @@ describe('delegatedExec', () => {
 
       await expect(promise).rejects.toThrow(ExecError)
       await expect(promise).rejects.toThrow(/placeholders are not supported in the args field/)
+      expect(mockSpawn).not.toHaveBeenCalled()
     })
 
     it('rejects with ExecError when {{secret}} appears alongside static text in an arg', async () => {
