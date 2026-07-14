@@ -16,8 +16,13 @@
  * record the approval, and an untrusted caller on non-TTY stdin fails with
  * actionable remediation.
  *
+ * Issue #59 adds coverage for cross-process cached-token reuse (persisted key
+ * material) and accurate error surfacing on the cached-token path: a revoked
+ * key must be reported as `KeyRevokedError`, not a generic "expired" message.
+ *
  * @see https://github.com/mike-north/vaultkeeper/issues/57
  * @see https://github.com/mike-north/vaultkeeper/issues/58
+ * @see https://github.com/mike-north/vaultkeeper/issues/59
  */
 import * as fs from 'node:fs/promises'
 import * as os from 'node:os'
@@ -209,6 +214,56 @@ describe('exec trust gate', () => {
     } finally {
       await yesEnv.cleanup()
     }
+  })
+
+  // Issue #59, criterion 3 (definitive cross-process proof): two sequential
+  // exec --cache invocations by the same trusted caller — separate node
+  // subprocesses sharing the config dir and HOME. The second run reuses the
+  // token cached by the first (persisted key material lets its kid still
+  // resolve) and must NOT re-mint or print the "expired"/re-auth notice.
+  it('reuses a cached token across processes without re-authenticating', async () => {
+    if (env === undefined) throw new Error('env not initialized')
+    const caller = await writeCaller('#!/bin/sh\necho hi\n')
+    await env.run(['approve', '--script', caller])
+
+    const first = await env.run(execArgs(caller, ['--cache']))
+    expect(first.exitCode).toBe(0)
+    expect(first.stdout).toContain('ready=yes')
+
+    const second = await env.run(execArgs(caller, ['--cache']))
+    expect(second.exitCode).toBe(0)
+    expect(second.stdout).toContain('ready=yes')
+    expect(second.stderr).toContain('Trust: verified')
+    // The cached token authorized cleanly — no re-mint, no misleading notice.
+    expect(second.stderr).not.toContain('re-authenticating')
+    expect(second.stderr).not.toContain('expired')
+    expect(second.stderr).not.toContain('could not be authorized')
+  })
+
+  // Issue #59, criterion 4: when the key behind a cached token is revoked
+  // between runs, the cached-token path reports the ACTUAL failure
+  // (KeyRevokedError) rather than collapsing it into a generic "expired"
+  // message, and still recovers by minting a fresh token for the trusted caller.
+  it('surfaces KeyRevokedError (not "expired") when a cached token\'s key was revoked', async () => {
+    if (env === undefined) throw new Error('env not initialized')
+    const caller = await writeCaller('#!/bin/sh\necho hi\n')
+    await env.run(['approve', '--script', caller])
+
+    // Mint and cache a token.
+    const first = await env.run(execArgs(caller, ['--cache']))
+    expect(first.exitCode).toBe(0)
+
+    // Revoke the key — the cached token's kid is now unresolvable.
+    const revoked = await env.run(['revoke-key'])
+    expect(revoked.exitCode).toBe(0)
+
+    const second = await env.run(execArgs(caller, ['--cache']))
+    // Recovers (fresh mint for the trusted caller)…
+    expect(second.exitCode).toBe(0)
+    expect(second.stdout).toContain('ready=yes')
+    // …but the notice names the real cause, not a bogus "expired".
+    expect(second.stderr).toContain('KeyRevokedError')
+    expect(second.stderr).not.toContain('Cached token expired')
   })
 
   // Issue #58, criterion 4: exec --help documents the TTY requirement and both

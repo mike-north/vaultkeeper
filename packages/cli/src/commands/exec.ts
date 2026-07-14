@@ -138,6 +138,19 @@ async function enforceTrustGate(
     : 'denied'
 }
 
+/**
+ * Render a concise, accurate description of why authorizing a cached token
+ * failed, for the re-authentication notice. Preserves the error's class name
+ * (e.g. `KeyRevokedError`, `TokenExpiredError`) so distinct failures are no
+ * longer collapsed into a single misleading "expired" message.
+ */
+function describeAuthzFailure(err: unknown): string {
+  if (err instanceof Error) {
+    return err.name !== '' ? `${err.name}: ${err.message}` : err.message
+  }
+  return String(err)
+}
+
 function printExecHelp(): void {
   process.stdout.write(
     'Usage: vaultkeeper exec --secret <name> --env <VAR> --caller <path> [options] -- <command...>\n\n' +
@@ -149,7 +162,11 @@ function printExecHelp(): void {
       '  --yes              Approve an untrusted caller for this invocation without\n' +
       '                     an interactive prompt, recording it in the trust manifest\n' +
       '                     (for CI/non-interactive use; never the default)\n' +
-      '  --cache            Cache the JWE token for subsequent invocations\n' +
+      '  --cache            Cache the JWE token so a later invocation by the same\n' +
+      '                     trusted caller reuses it without re-minting. The token\n' +
+      "                     is reusable until it expires (the secret's TTL); after\n" +
+      '                     that, or after a key rotation/revocation, exec mints a\n' +
+      '                     fresh one automatically\n' +
       '  --no-redact        Do not redact the secret from output\n' +
       '  --skip-doctor      Skip doctor preflight checks\n' +
       '  -h, --help         Show this help message\n\n' +
@@ -246,8 +263,10 @@ export async function execCommand(args: string[]): Promise<number> {
     // manifest) must never short-circuit that recording, or the approval would
     // not persist for later runs.
     let jwe: string | undefined
+    let jweFromCache = false
     if (useCache && outcome === 'trusted') {
       jwe = await readCachedToken(callerPath, secret)
+      jweFromCache = jwe !== undefined
     }
 
     if (jwe === undefined) {
@@ -268,22 +287,30 @@ export async function execCommand(args: string[]): Promise<number> {
         secretValue = buf.toString('utf8')
       })
     } catch (err) {
-      // If the cached token failed (e.g. expired), invalidate and mint a fresh
-      // one. Trust was already enforced above, so no re-prompt is needed.
-      if (useCache) {
-        await invalidateCache(callerPath, secret)
-        process.stderr.write('Cached token expired, re-authenticating...\n')
-        jwe = await vault.setup(secret, { executablePath: callerPath })
-        // Write the new token back to cache so subsequent invocations benefit
-        await writeCachedToken(callerPath, secret, jwe)
-        const retryResult = await vault.authorize(jwe)
-        const retryAccessor = vault.getSecret(retryResult.token)
-        retryAccessor.read((buf) => {
-          secretValue = buf.toString('utf8')
-        })
-      } else {
+      // Only a token that came from the cache is transparently recoverable: the
+      // caller was already trusted (the trust gate ran above), so we can mint a
+      // fresh token without re-prompting. A freshly-minted token that fails to
+      // authorize is a genuine error and must surface unchanged.
+      //
+      // Crucially, we report the ACTUAL failure (e.g. KeyRevokedError,
+      // TokenExpiredError) rather than mislabeling every failure as "expired" —
+      // the previous behavior hid key-revocation and other faults behind a
+      // generic "Cached token expired" message.
+      if (!jweFromCache) {
         throw err
       }
+      await invalidateCache(callerPath, secret)
+      process.stderr.write(
+        `Cached token could not be authorized (${describeAuthzFailure(err)}); re-authenticating...\n`,
+      )
+      jwe = await vault.setup(secret, { executablePath: callerPath })
+      // Write the new token back to cache so subsequent invocations benefit
+      await writeCachedToken(callerPath, secret, jwe)
+      const retryResult = await vault.authorize(jwe)
+      const retryAccessor = vault.getSecret(retryResult.token)
+      retryAccessor.read((buf) => {
+        secretValue = buf.toString('utf8')
+      })
     }
 
     if (secretValue === undefined) {
