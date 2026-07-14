@@ -52,15 +52,23 @@ describe('CapabilityToken', () => {
 })
 
 // Regression guard for issue #74: the CapabilityToken doc promises there is no
-// public API for reading claims. The claims-unwrapping helpers must therefore
-// stay internal — exporting them would leak the secret and make the doc false.
+// public API for reading claims, so both token helpers must stay internal — for
+// different reasons. Exporting validateCapabilityToken would directly leak the
+// secret, since it reads the claims (including the secret value) back out.
+// Exporting createCapabilityToken would not read claims, but it mints a token
+// around caller-supplied claims, letting callers forge tokens outside the
+// authorize() flow and bypass its validation and usage tracking. Neither is
+// exported.
 describe('CapabilityToken public surface (issue #74)', () => {
   it('exports the CapabilityToken class', () => {
     expect('CapabilityToken' in publicApi).toBe(true)
   })
 
-  it('does not export the internal claims-unwrapping helpers', () => {
-    // Mirrors the issue repro: `'validateCapabilityToken' in import('vaultkeeper')`.
+  it('does not export the internal token helpers', () => {
+    // Asserts the source entrypoint's (src/index.ts) export surface. The issue
+    // repro checks the built package at runtime
+    // (`'validateCapabilityToken' in await import('vaultkeeper')`); both resolve
+    // to the same export set, so this is the fast unit-level equivalent.
     expect('validateCapabilityToken' in publicApi).toBe(false)
     expect('createCapabilityToken' in publicApi).toBe(false)
   })
