@@ -12,7 +12,7 @@
  *
  * @see https://github.com/mike-north/vaultkeeper/issues/62
  */
-import * as fs from 'node:fs/promises'
+import { readFileSync } from 'node:fs'
 import * as path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, it, expect, beforeAll, afterAll } from 'vitest'
@@ -114,6 +114,27 @@ export function extractHelpFlags(helpText: string): Set<string> {
   return flags
 }
 
+/**
+ * Parse the subcommand names from the top-level `vaultkeeper --help` output —
+ * the indented entries under the `Commands:` heading. This is the source of
+ * truth for which commands actually exist, used to catch a README example that
+ * references an unknown command.
+ */
+export function extractCommandNames(topLevelHelp: string): Set<string> {
+  const names = new Set<string>()
+  let inCommands = false
+  for (const rawLine of topLevelHelp.split('\n')) {
+    if (!inCommands) {
+      if (rawLine.trim() === 'Commands:') inCommands = true
+      continue
+    }
+    if (rawLine.trim() === '') break
+    const match = /^\s+([a-z][a-z0-9-]*)\b/.exec(rawLine)
+    if (match?.[1] !== undefined) names.add(match[1])
+  }
+  return names
+}
+
 const README_PATH = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
   '..',
@@ -123,44 +144,64 @@ const README_PATH = path.resolve(
   'README.md',
 )
 
+// Parse the README synchronously at collection time so the per-command drift
+// checks below can be registered from the README's own contents. This means a
+// newly added example for a new command (with flags) is covered automatically —
+// there is no hard-coded command list to fall out of sync.
+const INVOCATIONS = parseReadmeInvocations(readFileSync(README_PATH, 'utf8'))
+const COMMANDS_WITH_FLAGS = [
+  ...new Set(INVOCATIONS.filter((i) => i.flags.length > 0).map((i) => i.command)),
+].sort()
+
 describe('README CLI examples do not drift from --help', () => {
-  let env: CliTestEnv
-  let invocations: CliInvocation[]
-  let commandsWithFlags: string[]
+  let env: CliTestEnv | undefined
 
   beforeAll(async () => {
-    const markdown = await fs.readFile(README_PATH, 'utf8')
-    invocations = parseReadmeInvocations(markdown)
-    commandsWithFlags = [
-      ...new Set(invocations.filter((i) => i.flags.length > 0).map((i) => i.command)),
-    ].sort()
     env = await createCliTestEnv()
   })
 
   afterAll(async () => {
-    await env.cleanup()
+    // Guard: env may be undefined if createCliTestEnv() threw, in which case
+    // calling cleanup() would throw a TypeError and mask the real failure.
+    if (env !== undefined) await env.cleanup()
   })
 
-  it('finds vaultkeeper CLI examples in the README', () => {
+  function requireEnv(): CliTestEnv {
+    if (env === undefined) throw new Error('CLI test env was not initialized')
+    return env
+  }
+
+  it('finds vaultkeeper CLI examples with flags in the README', () => {
     // Guard against a parser that silently matches nothing (which would make the
-    // whole drift check vacuously pass).
-    expect(invocations.length).toBeGreaterThan(0)
-    expect(commandsWithFlags).toContain('exec')
+    // whole drift check vacuously pass by registering zero per-command checks).
+    expect(INVOCATIONS.length).toBeGreaterThan(0)
+    expect(COMMANDS_WITH_FLAGS).toContain('exec')
   })
 
-  it('checks every command that uses flags in a README example', () => {
-    // Data-driven registration below depends on this being non-empty.
-    expect(commandsWithFlags.length).toBeGreaterThan(0)
+  // Coverage guard: every flag-using command in the README is a real top-level
+  // command (per `vaultkeeper --help`). Combined with the README-derived
+  // registration below, this ensures no example escapes the drift check — a
+  // typo'd or removed command surfaces here, and a genuine new command's flags
+  // are checked automatically.
+  it('only references real CLI commands, each of which gets a drift check', async () => {
+    const help = await requireEnv().run(['--help'])
+    expect(help.exitCode).toBe(0)
+    const realCommands = extractCommandNames(help.stdout)
+    expect(realCommands.size).toBeGreaterThan(0)
+
+    const unknown = COMMANDS_WITH_FLAGS.filter((c) => !realCommands.has(c))
+    expect(
+      unknown,
+      `README example(s) reference command(s) not in \`vaultkeeper --help\`: ${unknown.join(', ')}`,
+    ).toEqual([])
   })
 
-  // One assertion per command so a failure names exactly which command drifted.
-  for (const command of ['approve', 'delete', 'dev-mode', 'exec', 'store']) {
+  // One assertion per command (derived from the README) so a failure names
+  // exactly which command drifted.
+  for (const command of COMMANDS_WITH_FLAGS) {
     it(`every flag used in \`vaultkeeper ${command}\` README examples is accepted by its --help`, async () => {
-      const used = invocations.filter((i) => i.command === command)
-      // Only assert for commands actually exemplified with flags in the README.
-      if (used.length === 0 || used.every((i) => i.flags.length === 0)) return
-
-      const help = await env.run([command, '--help'])
+      const used = INVOCATIONS.filter((i) => i.command === command)
+      const help = await requireEnv().run([command, '--help'])
       expect(help.exitCode, `\`${command} --help\` should exit 0`).toBe(0)
       const known = extractHelpFlags(help.stdout)
 
@@ -198,6 +239,24 @@ describe('drift detector logic', () => {
     expect(known.has('--secret')).toBe(true)
     // The historical broken example `exec --token` must be caught.
     expect(known.has('--token')).toBe(false)
+  })
+
+  it('extracts subcommand names from the top-level Commands: block', () => {
+    const help = [
+      'Usage: vaultkeeper <command> [options]',
+      '',
+      'Commands:',
+      '  exec         Run a command with a secret',
+      '  dev-mode     Toggle development mode',
+      '  rotate-key   Rotate the encryption key',
+    ].join('\n')
+    const names = extractCommandNames(help)
+    expect(names.has('exec')).toBe(true)
+    expect(names.has('dev-mode')).toBe(true)
+    expect(names.has('rotate-key')).toBe(true)
+    // The usage line and heading are not commands.
+    expect(names.has('vaultkeeper')).toBe(false)
+    expect(names.has('Commands')).toBe(false)
   })
 
   it('ignores comments, package-manager lines, and non-shell fences', () => {
