@@ -104,9 +104,11 @@ export interface FetchRequest {
 /**
  * Request for delegated command execution.
  *
- * String values in `args` and `env` may include the placeholder `{{secret}}`
+ * String values in `env` may include the placeholder `{{secret}}`
  * (single-token mode) or `{{secret:name}}` (multi-token mode), which are
- * replaced with actual secret values immediately before the command is spawned.
+ * replaced with actual secret values immediately before the command is
+ * spawned. Placeholders are **not** supported in `command` or `args` —
+ * `delegatedExec` throws `ExecError` if one appears there.
  */
 export interface ExecRequest {
   /** The command (binary) to execute. */

@@ -6,7 +6,7 @@
 
 Request for delegated command execution.
 
-String values in `args` and `env` may include the placeholder `{{secret}}`<!-- -->, which is replaced with the actual secret value immediately before the command is spawned.
+String values in `env` may include the placeholder `{{secret}}` (single-token mode) or `{{secret:name}}` (multi-token mode), which are replaced with actual secret values immediately before the command is spawned. Placeholders are \*\*not\*\* supported in `command` or `args` — `delegatedExec` throws `ExecError` if one appears there.
 
 **Signature:**
 
@@ -52,7 +52,7 @@ string\[\] \| undefined
 
 </td><td>
 
-_(Optional)_ Command-line arguments. Any argument may contain `{{secret}}`<!-- -->, which is replaced with the secret value before the command is spawned.
+_(Optional)_ Command-line arguments. Secret placeholders (`{{secret}}` or `{{secret:name}}`<!-- -->) are \*\*not\*\* supported here — process arguments are visible to other processes via `ps` and often collected in logs and telemetry. `delegatedExec` throws `ExecError` if a placeholder appears in any argument. Use `env` to inject secrets instead.
 
 
 </td></tr>
@@ -109,7 +109,7 @@ Record&lt;string, string&gt; \| undefined
 
 </td><td>
 
-_(Optional)_ Additional environment variables to merge into the child process environment. Any value may contain `{{secret}}`<!-- -->, which is replaced with the secret value before the command is spawned.
+_(Optional)_ Additional environment variables to merge into the child process environment. Any value may contain `{{secret}}` or `{{secret:name}}`<!-- -->, which is replaced with the secret value before the command is spawned.
 
 
 </td></tr>
