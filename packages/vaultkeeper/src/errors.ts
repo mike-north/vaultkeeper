@@ -315,8 +315,9 @@ export class InvalidKeyMaterialError extends VaultError {
 export class FetchError extends VaultError {
   /**
    * The unresolved URL template that fetch failed to request, with
-   * `{{secret}}` placeholders left intact. The placeholder-resolved URL is
-   * deliberately never stored here, so an injected secret is never exposed.
+   * `{{secret}}`/`{{secret:name}}` placeholders left intact. The
+   * placeholder-resolved URL is deliberately never stored here, so an
+   * injected secret is never exposed.
    */
   readonly url: string
 

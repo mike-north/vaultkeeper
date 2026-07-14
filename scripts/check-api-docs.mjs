@@ -20,9 +20,10 @@ const committedDir = 'docs/api'
 
 try {
   readdirSync(collectedDir)
-} catch {
+} catch (err) {
+  const reason = err instanceof Error ? err.message : String(err)
   throw new Error(
-    `Missing collected API JSON at ${collectedDir}. Run "pnpm build && pnpm generate:api-report && node scripts/collect-api-json.mjs" first.`,
+    `Cannot read ${collectedDir} (${reason}). Run "pnpm build && pnpm generate:api-report && node scripts/collect-api-json.mjs" first.`,
   )
 }
 

@@ -229,7 +229,7 @@ Workflow:
 1. Change a public API signature or its JSDoc (an exported symbol in `src/index.ts`, its parameters, or its doc comments).
 2. Run `pnpm build && pnpm generate:api-docs` — this rebuilds, regenerates `api-report/`, and rewrites `docs/api/` from the fresh doc model.
 3. Commit the changed/added/removed files under `docs/api/`.
-4. `pnpm check:api-docs` regenerates into a temp directory and diffs it against the committed `docs/api/`; it fails (and CI fails) if they differ — this catches both a stale regen and a hand-edited or prettier-mangled `docs/api/` file.
+4. `pnpm check:api-docs` regenerates into a temp directory and diffs it against the committed `docs/api/`; it fails (and CI fails) if they differ — this catches both a stale regen and a hand-edited or prettier-mangled `docs/api/` file. It is **not** self-contained: it consumes the API Extractor doc-model JSON (`tmp/api-extractor/*.api.json`) that `pnpm build && pnpm check:api-report` (or `generate:api-report`) already produced — run one of those first, exactly as CI does (`check:api-report` immediately before `check:api-docs`).
 
 `docs/api/` is marked `linguist-generated=true` in `.gitattributes` and listed in `.prettierignore` — **never run Prettier over it**. `@microsoft/api-documenter`'s Markdown output is sensitive to exact blank-line placement (its own renderer, not Prettier's), and Prettier collapses/reflows that structure, corrupting the file. If `docs/api/` needs reformatting, that only ever happens by re-running `pnpm generate:api-docs`, never by hand or via Prettier.
 
