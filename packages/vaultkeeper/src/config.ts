@@ -92,9 +92,10 @@ function validateBackendEntry(entry: unknown, index: number): BackendConfig {
     const opts: Record<string, string> = {}
     for (const [k, v] of Object.entries(entry.options)) {
       if (typeof v !== 'string') {
+        const quotedKey = JSON.stringify(k)
         throw new ConfigValidationError(
-          `${base}.options["${k}"] must be a string`,
-          `${base}.options.${k}`,
+          `${base}.options[${quotedKey}] must be a string`,
+          `${base}.options[${quotedKey}]`,
         )
       }
       opts[k] = v

@@ -100,6 +100,23 @@ describe('validateConfig', () => {
     expect(() => validateConfig(input)).toThrow('must be a string')
   })
 
+  it('should report a bracketed, quoted field path for an invalid option value (PR #78 review)', () => {
+    // Option keys are user-defined and may contain characters that aren't
+    // valid identifier segments (dashes, spaces, dots); the field path must
+    // bracket-and-quote the key rather than dot-append it.
+    const input = validConfigJson()
+    input.backends = [{ type: 'file', enabled: true, options: { 'weird key.name': 42 } }]
+    try {
+      validateConfig(input)
+      expect.unreachable('validateConfig should have thrown')
+    } catch (err) {
+      if (!(err instanceof ConfigValidationError)) {
+        throw err
+      }
+      expect(err.field).toBe('backends[0].options["weird key.name"]')
+    }
+  })
+
   // Negative tests
   it('should reject non-object', () => {
     expect(() => validateConfig('string')).toThrow(ConfigValidationError)
