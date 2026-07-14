@@ -72,6 +72,23 @@ function pendingVaultMock(): {
   }
 }
 
+/**
+ * Force `process.stdin.isTTY` to a fixed value for the duration of a test and
+ * return a restore function. The trust gate only reaches the interactive prompt
+ * on a TTY; on non-TTY stdin an untrusted caller fails with remediation instead.
+ */
+function forceStdinTTY(value: boolean): () => void {
+  const original = Object.getOwnPropertyDescriptor(process.stdin, 'isTTY')
+  Object.defineProperty(process.stdin, 'isTTY', { value, configurable: true })
+  return () => {
+    if (original === undefined) {
+      Reflect.deleteProperty(process.stdin, 'isTTY')
+    } else {
+      Object.defineProperty(process.stdin, 'isTTY', original)
+    }
+  }
+}
+
 describe('execCommand', () => {
   let stderrOutput: string
   let stdoutOutput: string
@@ -94,6 +111,7 @@ describe('execCommand', () => {
     vi.restoreAllMocks()
     vi.clearAllMocks()
     delete process.env.VAULTKEEPER_SKIP_DOCTOR
+    delete process.env.VAULTKEEPER_YES
   })
 
   describe('-- separator validation', () => {
@@ -208,12 +226,24 @@ describe('execCommand', () => {
   })
 
   describe('--skip-doctor flag', () => {
-    // These drive the full command with a never-approved (pending) caller, so
-    // the trust gate reaches promptApproval (mocked to decline) and the command
-    // exits at "Access denied". Asserting the gate was reached keeps these tests
-    // genuinely exercising the trust path — if the default mock stopped providing
-    // checkExecutableTrust, execCommand would throw before promptApproval and
-    // these assertions would fail.
+    // These drive the full command with a never-approved (pending) caller under
+    // a simulated TTY, so the trust gate reaches promptApproval (mocked to
+    // decline) and the command exits at "Access denied". Asserting the gate was
+    // reached keeps these tests genuinely exercising the trust path — if the
+    // default mock stopped providing checkExecutableTrust, execCommand would
+    // throw before promptApproval and these assertions would fail. (On non-TTY
+    // stdin an untrusted caller fails with remediation instead of prompting;
+    // that path is covered by the "trust gate" tests below.)
+    let restoreTTY: () => void = () => {
+      /* replaced in beforeEach */
+    }
+    beforeEach(() => {
+      restoreTTY = forceStdinTTY(true)
+    })
+    afterEach(() => {
+      restoreTTY()
+    })
+
     it('should pass skipDoctor: false to VaultKeeper.init by default', async () => {
       mockInit.mockResolvedValue(pendingVaultMock())
       await execCommand([
@@ -426,6 +456,85 @@ describe('execCommand', () => {
       expect(authorize).toHaveBeenCalledWith('cached.jwe.token')
       expect(stderrOutput).toContain('Trust: verified')
     })
+
+    // Issue #58, criterion 2: --yes approves a never-approved caller without a
+    // prompt and records the approval the same way an interactive "y" would —
+    // via setup(), which TOFU-records the caller hash on first encounter.
+    it('approves an untrusted caller non-interactively with --yes and records trust via setup', async () => {
+      const setup = vi.fn().mockResolvedValue('fresh.jwe')
+      const authorize = vi.fn().mockResolvedValue({ token: {}, vaultResponse: {} })
+      const getSecret = vi.fn().mockReturnValue({
+        read: (cb: (buf: Buffer) => void) => {
+          cb(Buffer.from('s3cr3t'))
+        },
+      })
+      const checkExecutableTrust = vi.fn().mockResolvedValue({
+        trusted: false,
+        hashMismatch: false,
+        hash: 'pending-hash',
+        approvedHashes: [],
+        reason: 'Executable not yet approved',
+      })
+      mockInit.mockResolvedValue({ checkExecutableTrust, setup, authorize, getSecret })
+
+      const code = await execCommand(['--yes', ...EXEC_ARGS])
+
+      expect(code).toBe(0)
+      expect(promptApproval).not.toHaveBeenCalled()
+      // Trust recording is delegated to setup() with the caller path, exactly as
+      // the interactive "y" path does.
+      expect(setup).toHaveBeenCalledWith('my-key', { executablePath: '/path/to/script.sh' })
+      expect(stderrOutput).toContain('approved via --yes')
+    })
+
+    // Issue #58, criterion 2: VAULTKEEPER_YES=1 is equivalent to --yes.
+    it('approves an untrusted caller non-interactively via VAULTKEEPER_YES=1', async () => {
+      process.env.VAULTKEEPER_YES = '1'
+      const setup = vi.fn().mockResolvedValue('fresh.jwe')
+      const authorize = vi.fn().mockResolvedValue({ token: {}, vaultResponse: {} })
+      const getSecret = vi.fn().mockReturnValue({
+        read: (cb: (buf: Buffer) => void) => {
+          cb(Buffer.from('s3cr3t'))
+        },
+      })
+      const checkExecutableTrust = vi.fn().mockResolvedValue({
+        trusted: false,
+        hashMismatch: false,
+        hash: 'pending-hash',
+        approvedHashes: [],
+        reason: 'Executable not yet approved',
+      })
+      mockInit.mockResolvedValue({ checkExecutableTrust, setup, authorize, getSecret })
+
+      const code = await execCommand(EXEC_ARGS)
+
+      expect(code).toBe(0)
+      expect(promptApproval).not.toHaveBeenCalled()
+      expect(setup).toHaveBeenCalledWith('my-key', { executablePath: '/path/to/script.sh' })
+      expect(stderrOutput).toContain('approved via --yes')
+    })
+
+    // Issue #58, criterion 3: an untrusted caller on non-TTY stdin without --yes
+    // fails, but the error tells the user exactly how to proceed (approve or --yes)
+    // rather than the raw "requires interactive approval" message.
+    it('fails with remediation guidance for an untrusted caller on non-TTY stdin', async () => {
+      const restoreTTY = forceStdinTTY(false)
+      try {
+        const vault = pendingVaultMock()
+        mockInit.mockResolvedValue(vault)
+
+        const code = await execCommand(EXEC_ARGS)
+
+        expect(code).toBe(1)
+        expect(promptApproval).not.toHaveBeenCalled()
+        expect(vault.setup).not.toHaveBeenCalled()
+        expect(stderrOutput).toContain('vaultkeeper approve --script /path/to/script.sh')
+        expect(stderrOutput).toContain('--yes')
+        expect(stderrOutput).toContain('VAULTKEEPER_YES=1')
+      } finally {
+        restoreTTY()
+      }
+    })
   })
 
   describe('--help flag', () => {
@@ -437,6 +546,20 @@ describe('execCommand', () => {
     it('should include VAULTKEEPER_SKIP_DOCTOR env var in help output', async () => {
       await execCommand(['--help'])
       expect(stdoutOutput).toContain('VAULTKEEPER_SKIP_DOCTOR')
+    })
+
+    // Issue #58, criterion 4: help documents the TTY requirement and both escape
+    // hatches (--yes and VAULTKEEPER_YES), plus the approve alternative.
+    it('documents the --yes flag and VAULTKEEPER_YES env var', async () => {
+      await execCommand(['--help'])
+      expect(stdoutOutput).toContain('--yes')
+      expect(stdoutOutput).toContain('VAULTKEEPER_YES')
+    })
+
+    it('documents the TTY requirement and how to approve non-interactively', async () => {
+      await execCommand(['--help'])
+      expect(stdoutOutput).toContain('non-TTY')
+      expect(stdoutOutput).toContain('vaultkeeper approve --script')
     })
   })
 })

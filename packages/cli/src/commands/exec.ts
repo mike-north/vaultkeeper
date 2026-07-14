@@ -4,7 +4,10 @@
  * Flow:
  * 1. Parse flags and the command after `--`
  * 2. Enforce the TOFU trust gate for the caller (runs on every invocation,
- *    including `--cache` hits, so a cached token never bypasses trust)
+ *    including `--cache` hits, so a cached token never bypasses trust). A
+ *    trusted caller passes without a prompt; an untrusted caller is prompted
+ *    interactively, unless `--yes`/`VAULTKEEPER_YES` approves it non-interactively
+ *    or, on non-TTY stdin, the command fails with remediation guidance
  * 3. If `--cache`, check for a cached JWE token; otherwise retrieve and setup
  *    the secret into a fresh JWE
  * 4. Authorize the JWE → obtain a CapabilityToken
@@ -30,6 +33,7 @@ import { promptApproval } from '../approval.js'
 import { readCachedToken, writeCachedToken, invalidateCache } from '../cache.js'
 import { RedactingStream } from '../redact.js'
 import { shouldSkipDoctor } from '../skip-doctor.js'
+import { shouldAutoApprove } from '../auto-approve.js'
 import { formatError } from '../output.js'
 
 /**
@@ -44,20 +48,29 @@ import { formatError } from '../output.js'
  *   since approval): throws {@link IdentityMismatchError} with re-approval
  *   guidance. It does not prompt — `VaultKeeper.setup()` rejects the same hash
  *   conflict regardless of the user's answer, so prompting would waste it.
- * - **Never approved**: shows an interactive approval prompt and returns its
- *   result (`false` if the user declines).
+ *   `autoApprove` never overrides this: a changed binary must be re-approved
+ *   with `vaultkeeper approve`, not silently trusted.
+ * - **Never approved**, with `autoApprove` set (`--yes`/`VAULTKEEPER_YES`):
+ *   returns `true` without prompting. The subsequent `setup()` records the
+ *   caller's hash via TOFU, exactly as an interactive `y` would.
+ * - **Never approved**, non-TTY stdin, no `autoApprove`: throws with
+ *   remediation guidance (pre-approve via `vaultkeeper approve`, or re-run with
+ *   `--yes`) — there is no way to prompt.
+ * - **Never approved**, interactive TTY: shows an approval prompt and returns
+ *   its result (`false` if the user declines).
  *
  * @returns `true` if access is authorized, `false` if the user declined.
  * @throws {IdentityMismatchError} When the caller's hash changed from a
  *   previously approved value.
- * @throws When interactive approval is required but stdin is not a TTY, or when
- *   the caller path cannot be read for hashing.
+ * @throws When approval is required but cannot be obtained (non-TTY stdin
+ *   without `--yes`), or when the caller path cannot be read for hashing.
  */
 async function enforceTrustGate(
   vault: VaultKeeper,
   callerPath: string,
   secret: string,
   reason: string | undefined,
+  autoApprove: boolean,
 ): Promise<boolean> {
   const trust = await vault.checkExecutableTrust(callerPath)
   if (trust.trusted) {
@@ -78,6 +91,27 @@ async function enforceTrustGate(
     )
   }
 
+  // Never-approved caller. --yes / VAULTKEEPER_YES approves this invocation
+  // without prompting; setup() then records the hash via TOFU just as an
+  // interactive "y" would.
+  if (autoApprove) {
+    process.stderr.write('Trust: approved via --yes (recording caller in trust manifest)\n')
+    return true
+  }
+
+  // No non-interactive approval and no TTY to prompt on: fail with actionable
+  // guidance instead of the raw "requires interactive approval" error.
+  // isTTY is `true` only on a real terminal; `undefined`/`false` means non-TTY.
+  if (!process.stdin.isTTY) {
+    throw new Error(
+      `Secret access for ${callerPath} requires approval, but stdin is not a TTY, ` +
+        `so no interactive prompt can be shown.\n` +
+        `To approve non-interactively, either:\n` +
+        `  - pre-approve the caller once:  vaultkeeper approve --script ${callerPath}\n` +
+        `  - or approve just this run:      re-run with --yes (or set VAULTKEEPER_YES=1)`,
+    )
+  }
+
   return promptApproval({
     caller: callerPath,
     trustInfo: 'Pending verification',
@@ -94,11 +128,22 @@ function printExecHelp(): void {
       '  --env <VAR>        Environment variable name to inject the secret into\n' +
       '  --caller <path>    Path to the calling executable (used for TOFU verification)\n' +
       '  --reason <text>    Human-readable reason for access (optional)\n' +
+      '  --yes              Approve an untrusted caller for this invocation without\n' +
+      '                     an interactive prompt, recording it in the trust manifest\n' +
+      '                     (for CI/non-interactive use; never the default)\n' +
       '  --cache            Cache the JWE token for subsequent invocations\n' +
       '  --no-redact        Do not redact the secret from output\n' +
       '  --skip-doctor      Skip doctor preflight checks\n' +
       '  -h, --help         Show this help message\n\n' +
+      'Approval and TTY requirement:\n' +
+      '  A caller that is not yet trusted requires approval. On an interactive\n' +
+      '  terminal you are prompted [y/N]. With non-TTY stdin (CI, pipes) there is\n' +
+      '  no prompt, so you must either pre-approve the caller with\n' +
+      '  `vaultkeeper approve --script <caller>` or pass --yes (or VAULTKEEPER_YES=1)\n' +
+      '  to approve this invocation. Once trusted, exec never prompts again.\n\n' +
       'Environment variables:\n' +
+      '  VAULTKEEPER_YES=1           Approve an untrusted caller non-interactively\n' +
+      '                              (same as --yes)\n' +
       '  VAULTKEEPER_SKIP_DOCTOR=1   Skip doctor preflight checks\n',
   )
 }
@@ -137,6 +182,7 @@ export async function execCommand(args: string[]): Promise<number> {
       env: { type: 'string' },
       caller: { type: 'string' },
       reason: { type: 'string' },
+      yes: { type: 'boolean', default: false },
       cache: { type: 'boolean', default: false },
       'no-redact': { type: 'boolean', default: false },
       'skip-doctor': { type: 'boolean', default: false },
@@ -159,6 +205,7 @@ export async function execCommand(args: string[]): Promise<number> {
   const useCache: boolean = values.cache
   const noRedact: boolean = values['no-redact']
   const skipDoctor = shouldSkipDoctor(values['skip-doctor'])
+  const autoApprove = shouldAutoApprove(values.yes)
 
   try {
     const vault = await VaultKeeper.init({ skipDoctor })
@@ -168,7 +215,7 @@ export async function execCommand(args: string[]): Promise<number> {
     // previously cached JWE can never let a modified or never-approved caller
     // inherit trust it no longer (or never) held. A modified caller surfaces an
     // identity-mismatch error here rather than silently reusing a cached token.
-    const approved = await enforceTrustGate(vault, callerPath, secret, values.reason)
+    const approved = await enforceTrustGate(vault, callerPath, secret, values.reason, autoApprove)
     if (!approved) {
       process.stderr.write('Access denied by user.\n')
       return 1
