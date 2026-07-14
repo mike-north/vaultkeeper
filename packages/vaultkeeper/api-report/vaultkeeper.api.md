@@ -4,6 +4,10 @@
 
 ```ts
 
+/// <reference types="node" />
+
+import { Buffer as Buffer_2 } from 'node:buffer';
+
 // @public
 export class AccessorConsumedError extends VaultError {
     constructor(message: string);
@@ -201,7 +205,7 @@ export interface RunDoctorOptions {
 
 // @public
 export interface SecretAccessor {
-    read(callback: (buf: Buffer) => void): void;
+    read(callback: (buf: Buffer_2) => void): void;
 }
 
 // @public
@@ -259,7 +263,7 @@ export interface SetupResult {
 // @public
 export interface SignRequest {
     algorithm?: string | undefined;
-    data: string | Buffer;
+    data: string | Buffer_2;
 }
 
 // @public
@@ -354,7 +358,7 @@ export interface VaultResponse {
 // @public
 export interface VerifyRequest {
     algorithm?: string | undefined;
-    data: string | Buffer;
+    data: string | Buffer_2;
     publicKey: string;
     signature: string;
 }

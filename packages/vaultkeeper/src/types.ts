@@ -2,6 +2,8 @@
  * Shared types and interfaces for vaultkeeper.
  */
 
+import type { Buffer } from 'node:buffer'
+
 /** Trust tier for executable identity verification. */
 export type TrustTier = 1 | 2 | 3
 
