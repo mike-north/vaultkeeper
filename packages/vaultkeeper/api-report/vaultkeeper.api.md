@@ -68,8 +68,16 @@ export class CapabilityToken {
 }
 
 // @public
+export class ConfigParseError extends VaultError {
+    constructor(message: string, path: string, location: string | undefined);
+    readonly location: string | undefined;
+    readonly path: string;
+}
+
+// @public
 export class ConfigValidationError extends VaultError {
-    constructor(message: string, field: string);
+    constructor(message: string, field: string, configFilePath?: string);
+    readonly configFilePath: string | undefined;
     readonly field: string;
 }
 
@@ -203,7 +211,7 @@ export interface PreflightCheck {
 }
 
 // @public
-export type PreflightCheckStatus = 'ok' | 'missing' | 'version-unsupported';
+export type PreflightCheckStatus = 'ok' | 'missing' | 'version-unsupported' | 'invalid';
 
 // @public
 export interface PreflightResult {
@@ -224,6 +232,7 @@ export function runDoctor(options?: RunDoctorOptions): Promise<PreflightResult>;
 // @public
 export interface RunDoctorOptions {
     backends?: BackendConfig[];
+    configDir?: string;
     platform?: Platform;
 }
 

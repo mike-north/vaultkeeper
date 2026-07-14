@@ -33,6 +33,7 @@ vi.mock('vaultkeeper', () => ({
     init: mockInit,
   },
   IdentityMismatchError,
+  platformDefaultBackendType: vi.fn().mockReturnValue('file'),
 }))
 
 // Prevent any real approval prompts from blocking tests

@@ -31,6 +31,7 @@ export {
   FilesystemError,
   RotationInProgressError,
   ConfigValidationError,
+  ConfigParseError,
 } from './errors.js'
 
 export type {

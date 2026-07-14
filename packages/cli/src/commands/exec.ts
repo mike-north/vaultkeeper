@@ -29,7 +29,7 @@
 import { parseArgs } from 'node:util'
 import { spawn } from 'node:child_process'
 import * as path from 'node:path'
-import { VaultKeeper, IdentityMismatchError } from 'vaultkeeper'
+import { VaultKeeper, IdentityMismatchError, platformDefaultBackendType } from 'vaultkeeper'
 import { promptApproval } from '../approval.js'
 import { readCachedToken, writeCachedToken, invalidateCache } from '../cache.js'
 import { RedactingStream } from '../redact.js'
@@ -38,6 +38,7 @@ import { shouldAutoApprove } from '../auto-approve.js'
 import { shellQuote } from '../shell-quote.js'
 import { formatError } from '../output.js'
 import { CONFIG_DIR_HELP_OPTION, CONFIG_DIR_HELP_ENV } from '../config-dir.js'
+import { configFileExists, noConfigMessage } from '../config-status.js'
 
 /**
  * Outcome of the TOFU trust gate.
@@ -246,6 +247,13 @@ export async function execCommand(args: string[], configDir: string): Promise<nu
   const autoApprove = shouldAutoApprove(values.yes)
 
   try {
+    // No-config story is uniform across store/delete/exec/config show/doctor
+    // (issue #68): fall back to platform defaults and say so, rather than
+    // silently defaulting.
+    if (!(await configFileExists(configDir))) {
+      process.stderr.write(noConfigMessage(platformDefaultBackendType()))
+    }
+
     const vault = await VaultKeeper.init({ configDir, skipDoctor })
 
     // Enforce the trust gate BEFORE touching the cache or retrieving the

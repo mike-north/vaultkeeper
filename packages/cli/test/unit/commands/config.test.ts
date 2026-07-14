@@ -90,22 +90,65 @@ describe('configCommand', () => {
       expect(parsed).toMatchObject({ version: 1 })
     })
 
-    it('should return 1 when config does not exist', async () => {
+    // No-config story (issue #68): commands that need config fall back to
+    // platform defaults and say so — never an error, and never exit non-zero
+    // — uniformly across store/delete/exec/config show/doctor. `config show`
+    // previously erred with "No config file found" and exit 1; it now prints
+    // the resolved default config and exits 0, matching the other commands.
+    it('should return 0 and print platform defaults when config does not exist (regression: issue #68 uniform no-config story)', async () => {
       const { configCommand } = await import('../../../src/commands/config.js')
       const code = await configCommand(['show'], configDir)
-      expect(code).toBe(1)
+      expect(code).toBe(0)
     })
 
-    it('should write error to stderr when config does not exist', async () => {
+    it('should write default config JSON to stdout when no config file exists', async () => {
       const { configCommand } = await import('../../../src/commands/config.js')
       await configCommand(['show'], configDir)
-      expect(stderrOutput.length).toBeGreaterThan(0)
+      const parsed: unknown = JSON.parse(stdoutOutput)
+      expect(parsed).toMatchObject({ version: 1 })
     })
 
-    it('should show a user-friendly message when no config file exists', async () => {
+    it('should show a user-friendly "using platform defaults" message when no config file exists', async () => {
       const { configCommand } = await import('../../../src/commands/config.js')
       await configCommand(['show'], configDir)
       expect(stderrOutput).toContain('No config file found')
+      expect(stderrOutput).toContain('using platform defaults')
+      expect(stderrOutput).toContain('vaultkeeper config init')
+    })
+
+    it('should exit non-zero with a parse error, path, location, and remediation hint on invalid JSON (issue #68)', async () => {
+      await fs.mkdir(configDir, { recursive: true })
+      await fs.writeFile(path.join(configDir, 'config.json'), '{ bad json', 'utf8')
+      const { configCommand } = await import('../../../src/commands/config.js')
+      const code = await configCommand(['show'], configDir)
+      expect(code).toBe(1)
+      expect(stdoutOutput).toBe('')
+      expect(stderrOutput).toContain(path.join(configDir, 'config.json'))
+      expect(stderrOutput).toMatch(/line \d+, column \d+/)
+      expect(stderrOutput).toContain('vaultkeeper config init')
+    })
+
+    it('never dumps invalid JSON with exit 0 (regression: issue #68 repro)', async () => {
+      await fs.mkdir(configDir, { recursive: true })
+      await fs.writeFile(path.join(configDir, 'config.json'), '{ bad json', 'utf8')
+      const { configCommand } = await import('../../../src/commands/config.js')
+      const code = await configCommand(['show'], configDir)
+      expect(code).not.toBe(0)
+      expect(stdoutOutput).not.toContain('bad json')
+    })
+
+    it('exits non-zero with a schema validation error, path, and remediation hint on structurally invalid config', async () => {
+      await fs.mkdir(configDir, { recursive: true })
+      await fs.writeFile(
+        path.join(configDir, 'config.json'),
+        JSON.stringify({ version: 99 }),
+        'utf8',
+      )
+      const { configCommand } = await import('../../../src/commands/config.js')
+      const code = await configCommand(['show'], configDir)
+      expect(code).toBe(1)
+      expect(stderrOutput).toContain(path.join(configDir, 'config.json'))
+      expect(stderrOutput).toContain('version must be 1')
       expect(stderrOutput).toContain('vaultkeeper config init')
     })
   })

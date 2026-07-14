@@ -76,4 +76,35 @@ describe('store and delete lifecycle', () => {
       await fs.rm(fakeHome, { recursive: true, force: true })
     }
   })
+
+  // Repro from issue #68: store previously failed on a corrupt config with
+  // "Failed to parse config file at <path>" and no location or remediation.
+  // The error must now include the file path, a parse location, and a
+  // remediation hint naming `vaultkeeper config init`.
+  it('store should exit non-zero with path, parse location, and remediation hint for corrupt config.json (issue #68 repro)', async () => {
+    env = await createCliTestEnv()
+    await fs.writeFile(path.join(env.configDir, 'config.json'), '{ bad json', 'utf8')
+    const result = await env.runWithStdin(
+      ['store', '--name', 'test-secret', '--skip-doctor'],
+      'sk-live-abc123',
+    )
+    expect(result.exitCode).not.toBe(0)
+    expect(result.stderr).toContain(path.join(env.configDir, 'config.json'))
+    expect(result.stderr).toMatch(/line \d+, column \d+/)
+    expect(result.stderr).toContain('vaultkeeper config init')
+  })
+
+  // No-config story (issue #68): store falls back to platform defaults and
+  // says so, the same as config show/doctor/delete/exec.
+  it('store should report a "using platform defaults" message when no config file exists', async () => {
+    env = await createCliTestEnv()
+    await fs.rm(path.join(env.configDir, 'config.json'))
+    const result = await env.runWithStdin(
+      ['store', '--name', 'test-secret', '--skip-doctor'],
+      'sk-live-abc123',
+    )
+    expect(result.stderr).toContain('No config file found')
+    expect(result.stderr).toContain('using platform defaults')
+    expect(result.stderr).toContain('vaultkeeper config init')
+  })
 })

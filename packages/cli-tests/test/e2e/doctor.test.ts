@@ -5,6 +5,8 @@
  * These tests verify the command runs and produces structured check output.
  */
 import { describe, it, expect, afterEach } from 'vitest'
+import * as fs from 'node:fs/promises'
+import * as path from 'node:path'
 import { createCliTestEnv } from '@vaultkeeper/cli-test-helpers'
 import type { CliTestEnv } from '@vaultkeeper/cli-test-helpers'
 
@@ -27,5 +29,47 @@ describe('doctor command', () => {
     // Output should contain check markers (✓ or ✗)
     const hasChecks = result.stdout.includes('✓') || result.stdout.includes('✗')
     expect(hasChecks).toBe(true)
+  })
+
+  // Repro from issue #68: with a corrupt config.json, doctor previously
+  // never touched the config and reported "System ready." with exit 0. It
+  // must now report a failing "config" check with the parse error and file
+  // path, and exit non-zero.
+  it('should report a failing config check and exit non-zero for corrupt config.json (issue #68 repro)', async () => {
+    env = await createCliTestEnv()
+    await fs.writeFile(path.join(env.configDir, 'config.json'), '{ bad json', 'utf8')
+    const result = await env.run(['doctor'])
+    expect(result.exitCode).not.toBe(0)
+    expect(result.stdout).toContain('✗')
+    expect(result.stdout).toContain('config')
+    expect(result.stdout).toContain(path.join(env.configDir, 'config.json'))
+    expect(result.stdout).toMatch(/line \d+, column \d+/)
+    expect(result.stdout).toContain('vaultkeeper config init')
+    expect(result.stdout).not.toContain('System ready.')
+  })
+
+  it('should report a failing config check for a structurally invalid config.json', async () => {
+    env = await createCliTestEnv()
+    await fs.writeFile(
+      path.join(env.configDir, 'config.json'),
+      JSON.stringify({ version: 99 }),
+      'utf8',
+    )
+    const result = await env.run(['doctor'])
+    expect(result.exitCode).not.toBe(0)
+    expect(result.stdout).toContain('config')
+    expect(result.stdout).toContain('version must be 1')
+  })
+
+  // No-config story (issue #68): doctor falls back to platform defaults and
+  // says so, uniformly with store/delete/exec/config show, rather than
+  // silently defaulting or erroring.
+  it('should report a "using platform defaults" message when no config file exists', async () => {
+    env = await createCliTestEnv()
+    await fs.rm(path.join(env.configDir, 'config.json'))
+    const result = await env.run(['doctor'])
+    expect(result.stderr).toContain('No config file found')
+    expect(result.stderr).toContain('using platform defaults')
+    expect(result.stderr).toContain('vaultkeeper config init')
   })
 })

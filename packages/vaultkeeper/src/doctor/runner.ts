@@ -2,6 +2,7 @@
  * Doctor runner: orchestrates platform-appropriate checks and aggregates results.
  */
 
+import * as path from 'node:path'
 import {
   checkOpenssl,
   checkBash,
@@ -12,6 +13,7 @@ import {
   checkYkman,
 } from './checks.js'
 import { currentPlatform } from '../util/platform.js'
+import { loadConfig } from '../config.js'
 import type { BackendConfig, PreflightCheck, PreflightResult } from '../types.js'
 import type { Platform } from '../util/platform.js'
 
@@ -34,6 +36,18 @@ export interface RunDoctorOptions {
    * (backward-compatible behavior).
    */
   backends?: BackendConfig[]
+  /**
+   * When provided (and `backends` is not explicitly given), doctor loads and
+   * validates the config file under this directory, adding a `config`
+   * preflight check to the result. A present-but-invalid config file (parse
+   * or schema failure) becomes a failing, required check — with the
+   * underlying error's message (file path, parse location, remediation hint)
+   * as `reason` — so an invalid config is visible in `doctor`'s output and
+   * fails the overall `ready` result (issue #68). A missing config file is
+   * not an error: `loadConfig` resolves platform defaults and the check
+   * reports `ok`.
+   */
+  configDir?: string
 }
 
 /** A doctor check entry pairing the check function with whether it is required. */
@@ -65,7 +79,30 @@ export async function runDoctor(options?: RunDoctorOptions): Promise<PreflightRe
     }
   }
 
-  const enabledTypes = enabledBackendTypes(options?.backends)
+  // Resolve the config check and backend list together: an explicit
+  // `backends` option always wins (backward-compatible, and used by callers
+  // that already loaded/validated the config themselves, e.g. VaultKeeper.init
+  // after a successful loadConfig). Otherwise, when `configDir` is given,
+  // doctor loads and validates the config itself so an invalid config file
+  // surfaces as a failing check instead of being invisible to doctor.
+  let backends = options?.backends
+  let configCheck: PreflightCheck | undefined
+  if (backends === undefined && options?.configDir !== undefined) {
+    const configPath = path.join(options.configDir, 'config.json')
+    try {
+      const config = await loadConfig(options.configDir)
+      backends = config.backends
+      configCheck = { name: 'config', status: 'ok', version: configPath }
+    } catch (err) {
+      configCheck = {
+        name: 'config',
+        status: 'invalid',
+        reason: err instanceof Error ? err.message : String(err),
+      }
+    }
+  }
+
+  const enabledTypes = enabledBackendTypes(backends)
   const entries: CheckEntry[] = buildCheckList(platform, enabledTypes)
 
   const resolved: ResolvedEntry[] = await Promise.all(
@@ -75,13 +112,23 @@ export async function runDoctor(options?: RunDoctorOptions): Promise<PreflightRe
     }),
   )
 
-  const ready = resolved.every(({ required, result }) => {
-    if (!required) return true
-    return result.status === 'ok'
-  })
+  const configReady = configCheck === undefined || configCheck.status === 'ok'
+  const ready =
+    configReady &&
+    resolved.every(({ required, result }) => {
+      if (!required) return true
+      return result.status === 'ok'
+    })
 
   const warnings: string[] = []
   const nextSteps: string[] = []
+
+  if (configCheck !== undefined && configCheck.status !== 'ok') {
+    // The config check is always required — an invalid config means the
+    // vault cannot operate, so it always contributes a nextStep, never a
+    // mere warning.
+    nextSteps.push(configCheck.reason ?? 'Config file is invalid.')
+  }
 
   for (const { required, result } of resolved) {
     const reasonSuffix = result.reason !== undefined ? ` — ${result.reason}` : ''
@@ -102,7 +149,10 @@ export async function runDoctor(options?: RunDoctorOptions): Promise<PreflightRe
     }
   }
 
-  const checks = resolved.map(({ result }) => result)
+  const checks = [
+    ...(configCheck !== undefined ? [configCheck] : []),
+    ...resolved.map(({ result }) => result),
+  ]
 
   return { checks, ready, warnings, nextSteps }
 }
@@ -112,9 +162,7 @@ export async function runDoctor(options?: RunDoctorOptions): Promise<PreflightRe
  * Returns `null` when no backend list was provided, signalling that the
  * caller should fall back to platform defaults (backward-compatible).
  */
-function enabledBackendTypes(
-  backends: BackendConfig[] | undefined,
-): Set<string> | null {
+function enabledBackendTypes(backends: BackendConfig[] | undefined): Set<string> | null {
   if (backends === undefined) return null
   const types = new Set<string>()
   for (const b of backends) {
@@ -123,10 +171,7 @@ function enabledBackendTypes(
   return types
 }
 
-function buildCheckList(
-  platform: Platform,
-  enabledTypes: Set<string> | null,
-): CheckEntry[] {
+function buildCheckList(platform: Platform, enabledTypes: Set<string> | null): CheckEntry[] {
   // Core checks are always required regardless of backends.
   const entries: CheckEntry[] = [{ check: checkOpenssl, required: true }]
 

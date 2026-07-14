@@ -338,10 +338,47 @@ export class ConfigValidationError extends VaultError {
    */
   readonly field: string
 
-  constructor(message: string, field: string) {
+  /**
+   * The absolute path of the config file that failed validation, when the
+   * error originated from loading a file on disk (via `loadConfig`) rather
+   * than from validating an in-memory value directly.
+   */
+  readonly configFilePath: string | undefined
+
+  constructor(message: string, field: string, configFilePath?: string) {
     super(message)
     this.name = 'ConfigValidationError'
     this.field = field
+    this.configFilePath = configFilePath
+  }
+}
+
+/**
+ * Thrown when a config file's contents cannot be parsed as JSON.
+ *
+ * The `message` already embeds the file path, the parse location (when the
+ * underlying `SyntaxError` exposes one), and a remediation hint pointing at
+ * `vaultkeeper config init` — see issue #68. `path` and `location` are also
+ * exposed individually for callers (e.g. `doctor`) that want to report them
+ * as structured fields rather than re-parsing the message.
+ */
+export class ConfigParseError extends VaultError {
+  /**
+   * The absolute path of the config file that failed to parse.
+   */
+  readonly path: string
+
+  /**
+   * A human-readable parse location (e.g. `'line 3, column 12'`), when one
+   * could be derived from the underlying `SyntaxError`.
+   */
+  readonly location: string | undefined
+
+  constructor(message: string, path: string, location: string | undefined) {
+    super(message)
+    this.name = 'ConfigParseError'
+    this.path = path
+    this.location = location
   }
 }
 

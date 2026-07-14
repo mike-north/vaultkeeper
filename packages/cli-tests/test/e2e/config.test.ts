@@ -151,11 +151,48 @@ describe('config command', () => {
     expect(showResult.stderr).toContain('Active backend: file')
   })
 
-  it('should exit 1 for config show when no config exists', async () => {
+  // No-config story (issue #68): commands that need config fall back to
+  // platform defaults and say so, rather than erroring. `config show`
+  // previously exited 1 with "No config file found"; it now exits 0,
+  // prints the resolved defaults, and reports the fallback on stderr — the
+  // same story store/delete/exec/doctor use.
+  it('should exit 0 and print platform defaults for config show when no config exists (regression: issue #68 uniform no-config story)', async () => {
     env = await freshEnv()
     const result = await env.run(['config', 'show'])
-    expect(result.exitCode).toBe(1)
+    expect(result.exitCode).toBe(0)
+    const parsed: unknown = JSON.parse(result.stdout)
+    expect(parsed).toHaveProperty('version', 1)
+    expect(parsed).toHaveProperty('backends[0].type', platformDefaultBackend)
     expect(result.stderr).toContain('No config file found')
+    expect(result.stderr).toContain('using platform defaults')
+    expect(result.stderr).toContain('vaultkeeper config init')
+  })
+
+  // Repro from issue #68: a syntactically invalid config.json must never be
+  // dumped verbatim with exit 0 — it must fail with the parse error, the
+  // file path, a parse location, and a remediation hint.
+  it('should exit non-zero with path, parse location, and remediation hint for corrupt config.json (issue #68 repro)', async () => {
+    env = await createCliTestEnv()
+    await fs.writeFile(path.join(env.configDir, 'config.json'), '{ bad json', 'utf8')
+    const result = await env.run(['config', 'show'])
+    expect(result.exitCode).not.toBe(0)
+    expect(result.stdout).toBe('')
+    expect(result.stderr).toContain(path.join(env.configDir, 'config.json'))
+    expect(result.stderr).toMatch(/line \d+, column \d+/)
+    expect(result.stderr).toContain('vaultkeeper config init')
+  })
+
+  it('should exit non-zero with path and remediation hint for a structurally invalid config.json', async () => {
+    env = await createCliTestEnv()
+    await fs.writeFile(
+      path.join(env.configDir, 'config.json'),
+      JSON.stringify({ version: 99 }),
+      'utf8',
+    )
+    const result = await env.run(['config', 'show'])
+    expect(result.exitCode).not.toBe(0)
+    expect(result.stderr).toContain(path.join(env.configDir, 'config.json'))
+    expect(result.stderr).toContain('version must be 1')
     expect(result.stderr).toContain('vaultkeeper config init')
   })
 

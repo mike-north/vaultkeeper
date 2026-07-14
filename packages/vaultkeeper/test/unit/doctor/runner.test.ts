@@ -16,6 +16,12 @@ vi.mock('../../../src/doctor/checks.js', () => ({
   checkYkman: vi.fn(),
 }))
 
+vi.mock('../../../src/config.js', () => ({
+  loadConfig: vi.fn(),
+}))
+
+import { loadConfig } from '../../../src/config.js'
+import { ConfigParseError } from '../../../src/errors.js'
 import {
   checkOpenssl,
   checkBash,
@@ -35,6 +41,7 @@ const mockCheckSecretTool = vi.mocked(checkSecretTool)
 const mockCheckOp = vi.mocked(checkOp)
 const mockCheckYkman = vi.mocked(checkYkman)
 const mockCurrentPlatform = vi.mocked(currentPlatform)
+const mockLoadConfig = vi.mocked(loadConfig)
 
 beforeEach(() => {
   vi.resetAllMocks()
@@ -584,5 +591,75 @@ describe('backend-aware checks ignore disabled backends', () => {
 
     expect(result.ready).toBe(true)
     expect(result.warnings.some((w) => w.includes('security'))).toBe(true)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// configDir option — doctor loads and validates the config itself, adding a
+// "config" check. An invalid config is a failing, required check (issue #68).
+// ---------------------------------------------------------------------------
+
+describe('runDoctor with configDir', () => {
+  it('adds an ok "config" check and scopes backend checks when the config loads successfully', async () => {
+    mockCheckOpenssl.mockReturnValue(mockOk('openssl'))
+    mockCheckBash.mockReturnValue(mockOk('bash'))
+    mockCheckSecretTool.mockReturnValue(mockMissing('secret-tool', 'not found'))
+    mockCheckOp.mockReturnValue(mockMissing('op'))
+    mockCheckYkman.mockReturnValue(mockMissing('ykman'))
+    mockLoadConfig.mockResolvedValue({
+      version: 1,
+      backends: [{ type: 'file', enabled: true }],
+      keyRotation: { gracePeriodDays: 7 },
+      defaults: { ttlMinutes: 60, trustTier: 3 },
+    })
+
+    const result = await runDoctor({ platform: 'linux', configDir: '/fake' })
+
+    const configCheck = result.checks.find((c) => c.name === 'config')
+    expect(configCheck?.status).toBe('ok')
+    // file backend does not require secret-tool -> demoted to optional, ready stays true
+    expect(result.ready).toBe(true)
+    expect(mockLoadConfig).toHaveBeenCalledWith('/fake')
+  })
+
+  it('reports a failing required "config" check with the underlying error message when the config is invalid', async () => {
+    mockCheckOpenssl.mockReturnValue(mockOk('openssl'))
+    mockCheckBash.mockReturnValue(mockOk('bash'))
+    mockCheckSecretTool.mockReturnValue(mockOk('secret-tool'))
+    mockCheckOp.mockReturnValue(mockMissing('op'))
+    mockCheckYkman.mockReturnValue(mockMissing('ykman'))
+    mockLoadConfig.mockRejectedValue(
+      new ConfigParseError(
+        "Failed to parse config file at /fake/config.json at line 1, column 3: Unexpected token. Run 'vaultkeeper config init' to create a valid config.",
+        '/fake/config.json',
+        'line 1, column 3',
+      ),
+    )
+
+    const result = await runDoctor({ platform: 'linux', configDir: '/fake' })
+
+    const configCheck = result.checks.find((c) => c.name === 'config')
+    expect(configCheck?.status).toBe('invalid')
+    expect(configCheck?.reason).toContain('/fake/config.json')
+    expect(configCheck?.reason).toContain('line 1, column 3')
+    expect(result.ready).toBe(false)
+    expect(result.nextSteps.some((s) => s.includes('/fake/config.json'))).toBe(true)
+  })
+
+  it('does not load config when an explicit backends option is also provided', async () => {
+    mockCheckOpenssl.mockReturnValue(mockOk('openssl'))
+    mockCheckBash.mockReturnValue(mockOk('bash'))
+    mockCheckSecretTool.mockReturnValue(mockOk('secret-tool'))
+    mockCheckOp.mockReturnValue(mockOk('op'))
+    mockCheckYkman.mockReturnValue(mockOk('ykman'))
+
+    const result = await runDoctor({
+      platform: 'linux',
+      configDir: '/fake',
+      backends: [{ type: 'file', enabled: true }],
+    })
+
+    expect(mockLoadConfig).not.toHaveBeenCalled()
+    expect(result.checks.find((c) => c.name === 'config')).toBeUndefined()
   })
 })

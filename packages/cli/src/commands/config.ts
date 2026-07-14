@@ -1,9 +1,10 @@
 import { parseArgs } from 'node:util'
 import * as fs from 'node:fs/promises'
 import * as path from 'node:path'
-import { BackendRegistry, platformDefaultBackendType } from 'vaultkeeper'
+import { BackendRegistry, platformDefaultBackendType, loadConfig } from 'vaultkeeper'
 import { formatError } from '../output.js'
 import { CONFIG_DIR_HELP_OPTION, CONFIG_DIR_HELP_ENV } from '../config-dir.js'
+import { configFileExists, noConfigMessage } from '../config-status.js'
 
 /** Human-readable name for the current platform, for user-facing messages. */
 function platformLabel(): string {
@@ -99,11 +100,6 @@ function printConfigHelp(): void {
   )
 }
 
-/** Return true if err is a Node.js ENOENT error (file not found). */
-function isEnoent(err: unknown): boolean {
-  return err instanceof Error && 'code' in err && err.code === 'ENOENT'
-}
-
 async function configInit(rest: string[], configDir: string): Promise<number> {
   const unknownFlag = findUnknownFlag(rest, new Set(['backend']))
   if (unknownFlag !== undefined) {
@@ -187,8 +183,31 @@ async function configShow(rest: string[], configDir: string): Promise<number> {
     return 2
   }
 
+  const configPath = path.join(configDir, 'config.json')
   try {
-    const configPath = path.join(configDir, 'config.json')
+    const exists = await configFileExists(configDir)
+
+    // loadConfig is the single source of truth for "is this config valid":
+    // it throws a typed, path-and-remediation-bearing error (ConfigParseError
+    // / ConfigValidationError / FilesystemError) on anything but a missing
+    // file, and never returns from a present-but-broken config. This makes
+    // an invalid config a hard failure (never a raw dump with exit 0), per
+    // issue #68.
+    const config = await loadConfig(configDir)
+
+    if (!exists) {
+      // No config file: fall back to platform defaults and say so, the same
+      // story store/delete/exec/doctor use (issue #68) — never error here.
+      const activeType =
+        config.backends.find((b) => b.enabled)?.type ?? platformDefaultBackendType()
+      process.stderr.write(noConfigMessage(activeType))
+      process.stdout.write(`${JSON.stringify(config, null, 2)}\n`)
+      process.stderr.write(`Active backend: ${activeType} (platform default)\n`)
+      return 0
+    }
+
+    // File exists and is valid — dump the raw file content (preserving its
+    // exact formatting) rather than the re-serialized, normalized config.
     const content = await fs.readFile(configPath, 'utf8')
     // The loaded path is a diagnostic, so it goes to stderr — stdout
     // stays pure JSON for consumers that pipe/parse `config show`.
@@ -206,13 +225,6 @@ async function configShow(rest: string[], configDir: string): Promise<number> {
     }
     return 0
   } catch (err) {
-    // Show a user-friendly message when the config file is missing.
-    if (isEnoent(err)) {
-      process.stderr.write(
-        "Error: No config file found. Run 'vaultkeeper config init' to create one.\n",
-      )
-      return 1
-    }
     process.stderr.write(`${formatError(err)}\n`)
     return 1
   }

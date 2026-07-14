@@ -5,7 +5,7 @@ import {
   getDefaultConfigDir,
   platformDefaultBackendType,
 } from '../../src/config.js'
-import { ConfigValidationError } from '../../src/errors.js'
+import { ConfigValidationError, ConfigParseError, FilesystemError } from '../../src/errors.js'
 
 vi.mock('node:fs/promises', () => ({
   readFile: vi.fn(),
@@ -13,6 +13,11 @@ vi.mock('node:fs/promises', () => ({
 
 // Must import after mock declaration
 const { readFile } = await import('node:fs/promises')
+
+/** Build a Node.js-shaped filesystem error with a `code` (e.g. 'ENOENT'). */
+function fsError(code: string, message: string): NodeJS.ErrnoException {
+  return Object.assign(new Error(message), { code })
+}
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -302,8 +307,8 @@ describe('loadConfig', () => {
     vi.mocked(readFile).mockReset()
   })
 
-  it('should return default config when file does not exist', async () => {
-    vi.mocked(readFile).mockRejectedValue(new Error('ENOENT'))
+  it('should return default config when file does not exist (ENOENT)', async () => {
+    vi.mocked(readFile).mockRejectedValue(fsError('ENOENT', 'no such file or directory'))
     const config = await loadConfig('/nonexistent')
     expect(config.version).toBe(1)
     expect(config.backends).toHaveLength(1)
@@ -321,16 +326,78 @@ describe('loadConfig', () => {
     await expect(loadConfig('/fake')).rejects.toThrow('Failed to parse config file')
   })
 
+  it('should throw a ConfigParseError with the file path, a parse location, and a remediation hint on invalid JSON (issue #68)', async () => {
+    vi.mocked(readFile).mockResolvedValue('{ bad json')
+    try {
+      await loadConfig('/fake')
+      expect.unreachable('loadConfig should have thrown')
+    } catch (err) {
+      if (!(err instanceof ConfigParseError)) {
+        throw err
+      }
+      expect(err.path).toBe('/fake/config.json')
+      expect(err.location).toMatch(/line \d+, column \d+/)
+      expect(err.message).toContain('/fake/config.json')
+      const location = err.location
+      if (location === undefined) {
+        expect.unreachable('location should be defined')
+      }
+      expect(err.message).toContain(location)
+      expect(err.message).toContain('vaultkeeper config init')
+    }
+  })
+
   it('should throw on invalid config structure', async () => {
     vi.mocked(readFile).mockResolvedValue(JSON.stringify({ version: 99 }))
     await expect(loadConfig('/fake')).rejects.toThrow('version must be 1')
   })
 
+  it('should throw a ConfigValidationError with the file path and a remediation hint on invalid config structure (issue #68)', async () => {
+    vi.mocked(readFile).mockResolvedValue(JSON.stringify({ version: 99 }))
+    try {
+      await loadConfig('/fake')
+      expect.unreachable('loadConfig should have thrown')
+    } catch (err) {
+      if (!(err instanceof ConfigValidationError)) {
+        throw err
+      }
+      expect(err.message).toContain('/fake/config.json')
+      expect(err.message).toContain('vaultkeeper config init')
+      expect(err.field).toBe('version')
+    }
+  })
+
   it('should resolve the platform-default backend when no config file exists', async () => {
-    vi.mocked(readFile).mockRejectedValue(new Error('ENOENT'))
+    vi.mocked(readFile).mockRejectedValue(fsError('ENOENT', 'no such file or directory'))
     const config = await loadConfig('/nonexistent')
     const firstBackend = config.backends[0]
     expect(firstBackend?.type).toBe(platformDefaultBackendType())
+  })
+
+  // Regression test for issue #68's loadConfig hardening (folded in from #92's
+  // review): before this fix, loadConfig fell back to defaultConfig() on ANY
+  // read error, not just ENOENT — so a genuinely broken/unreadable config
+  // (e.g. a permissions error) silently returned defaults instead of
+  // surfacing the problem.
+  it('should rethrow a non-ENOENT read error as a typed FilesystemError instead of silently defaulting (regression: issue #68 / #92 review)', async () => {
+    vi.mocked(readFile).mockRejectedValue(fsError('EACCES', 'permission denied'))
+    try {
+      await loadConfig('/fake')
+      expect.unreachable('loadConfig should have thrown, not silently defaulted')
+    } catch (err) {
+      if (!(err instanceof FilesystemError)) {
+        throw err
+      }
+      expect(err.path).toBe('/fake/config.json')
+      expect(err.permission).toBe('read')
+      expect(err.message).toContain('/fake/config.json')
+      expect(err.message).toContain('vaultkeeper config init')
+    }
+  })
+
+  it('should rethrow an EISDIR read error as a typed FilesystemError instead of silently defaulting', async () => {
+    vi.mocked(readFile).mockRejectedValue(fsError('EISDIR', 'illegal operation on a directory'))
+    await expect(loadConfig('/fake')).rejects.toBeInstanceOf(FilesystemError)
   })
 })
 

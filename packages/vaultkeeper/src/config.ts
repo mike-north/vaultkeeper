@@ -6,7 +6,54 @@ import * as fs from 'node:fs/promises'
 import * as path from 'node:path'
 import * as os from 'node:os'
 import type { VaultConfig, BackendConfig, TrustTier } from './types.js'
-import { ConfigValidationError } from './errors.js'
+import { ConfigValidationError, ConfigParseError, FilesystemError } from './errors.js'
+
+/**
+ * Remediation hint appended to every config-loading error message so a user
+ * always has a concrete next step, regardless of whether the failure was a
+ * read error, a JSON syntax error, or a schema validation error (issue #68).
+ */
+const CONFIG_REMEDIATION_HINT = "Run 'vaultkeeper config init' to create a valid config."
+
+/** `true` if `err` is a Node.js filesystem error with the given `code`. */
+function hasErrorCode(err: unknown, code: string): boolean {
+  return err instanceof Error && 'code' in err && err.code === code
+}
+
+/** Extract a readable message from an unknown thrown value. */
+function describeError(err: unknown): string {
+  return err instanceof Error ? err.message : String(err)
+}
+
+/**
+ * Best-effort human-readable location (`'line X, column Y'`) derived from a
+ * JSON `SyntaxError`. Modern V8 (Node 20+) already includes `line N column N`
+ * in the message; older engines only report a character offset (`position
+ * N`), which this falls back to converting by counting newlines in `raw`.
+ * Returns `undefined` when no location can be determined.
+ */
+function describeJsonSyntaxLocation(err: unknown, raw: string): string | undefined {
+  const message = describeError(err)
+
+  const lineColMatch = /line (\d+) column (\d+)/.exec(message)
+  if (lineColMatch) {
+    return `line ${lineColMatch[1] ?? ''}, column ${lineColMatch[2] ?? ''}`
+  }
+
+  const positionMatch = /position (\d+)/.exec(message)
+  if (positionMatch) {
+    const posStr = positionMatch[1]
+    const pos = posStr !== undefined ? Number(posStr) : NaN
+    if (!Number.isNaN(pos) && pos >= 0 && pos <= raw.length) {
+      const upToPos = raw.slice(0, pos)
+      const line = upToPos.split('\n').length
+      const column = pos - upToPos.lastIndexOf('\n')
+      return `line ${String(line)}, column ${String(column)}`
+    }
+  }
+
+  return undefined
+}
 
 /**
  * Return the platform-appropriate default config directory.
@@ -246,12 +293,17 @@ export function validateConfig(config: unknown): VaultConfig {
 }
 
 /**
- * Load the vaultkeeper config from disk, falling back to defaults if the
- * file cannot be read — this currently includes both a missing file and any
- * other read failure (e.g. a permissions error), not only "file does not
- * exist". Narrowing the fallback to ENOENT specifically, and surfacing other
- * read errors instead of silently defaulting, is tracked in issue #68
- * (config validation) and not yet implemented.
+ * Load the vaultkeeper config from disk, falling back to platform defaults
+ * only when the config file is missing (`ENOENT`).
+ *
+ * Any other read failure (e.g. `EACCES`, `EISDIR`) is a genuinely broken or
+ * unreadable config and is rethrown as a {@link FilesystemError} rather than
+ * silently defaulted — silently defaulting on a permissions error would hide
+ * the problem from `doctor` and `config show` (issue #68). A present file
+ * that fails to parse as JSON throws {@link ConfigParseError}; a present file
+ * that parses but fails schema validation throws {@link ConfigValidationError}.
+ * All three error messages include the config file path and a remediation
+ * hint naming `vaultkeeper config init`.
  *
  * @param configDir - Directory containing config.json. Defaults to
  * `getDefaultConfigDir()`, which itself honors `VAULTKEEPER_CONFIG_DIR`
@@ -265,16 +317,41 @@ export async function loadConfig(configDir?: string): Promise<VaultConfig> {
   let raw: string
   try {
     raw = await fs.readFile(configPath, 'utf-8')
-  } catch {
-    return defaultConfig()
+  } catch (err) {
+    if (hasErrorCode(err, 'ENOENT')) {
+      return defaultConfig()
+    }
+    throw new FilesystemError(
+      `Cannot read config file at ${configPath}: ${describeError(err)}. ${CONFIG_REMEDIATION_HINT}`,
+      configPath,
+      'read',
+    )
   }
 
   let parsed: unknown
   try {
     parsed = JSON.parse(raw)
-  } catch {
-    throw new Error(`Failed to parse config file at ${configPath}`)
+  } catch (err) {
+    const location = describeJsonSyntaxLocation(err, raw)
+    const locationSuffix = location !== undefined ? ` at ${location}` : ''
+    throw new ConfigParseError(
+      `Failed to parse config file at ${configPath}${locationSuffix}: ${describeError(err)}. ` +
+        CONFIG_REMEDIATION_HINT,
+      configPath,
+      location,
+    )
   }
 
-  return validateConfig(parsed)
+  try {
+    return validateConfig(parsed)
+  } catch (err) {
+    if (err instanceof ConfigValidationError) {
+      throw new ConfigValidationError(
+        `Invalid config at ${configPath}: ${err.message} ${CONFIG_REMEDIATION_HINT}`,
+        err.field,
+        configPath,
+      )
+    }
+    throw err
+  }
 }
