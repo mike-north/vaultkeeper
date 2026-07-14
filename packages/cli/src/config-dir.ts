@@ -47,7 +47,7 @@ export function extractConfigDirFlag(argv: string[]): ExtractedConfigDir {
 
     if (arg === '--config-dir') {
       const value = argv[i + 1]
-      if (value === undefined) {
+      if (value === undefined || value.trim() === '') {
         throw new ConfigDirFlagError('--config-dir requires a value')
       }
       configDir = value
@@ -56,7 +56,11 @@ export function extractConfigDirFlag(argv: string[]): ExtractedConfigDir {
     }
 
     if (arg.startsWith('--config-dir=')) {
-      configDir = arg.slice('--config-dir='.length)
+      const value = arg.slice('--config-dir='.length)
+      if (value.trim() === '') {
+        throw new ConfigDirFlagError('--config-dir requires a value')
+      }
+      configDir = value
       continue
     }
 
@@ -69,9 +73,13 @@ export function extractConfigDirFlag(argv: string[]): ExtractedConfigDir {
 /**
  * Resolve the effective config directory: the flag value if given,
  * otherwise the library's env-var-or-platform-default resolution.
+ *
+ * `flagValue` is assumed non-empty — `extractConfigDirFlag` rejects an
+ * empty/whitespace-only `--config-dir` value as a usage error before this
+ * function is ever called.
  */
 export function resolveConfigDir(flagValue: string | undefined): string {
-  if (flagValue !== undefined && flagValue !== '') {
+  if (flagValue !== undefined) {
     return flagValue
   }
   return getDefaultConfigDir()

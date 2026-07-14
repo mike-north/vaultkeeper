@@ -246,10 +246,16 @@ export function validateConfig(config: unknown): VaultConfig {
 }
 
 /**
- * Load the vaultkeeper config from disk, falling back to defaults if the file
- * does not exist.
+ * Load the vaultkeeper config from disk, falling back to defaults if the
+ * file cannot be read — this currently includes both a missing file and any
+ * other read failure (e.g. a permissions error), not only "file does not
+ * exist". Narrowing the fallback to ENOENT specifically, and surfacing other
+ * read errors instead of silently defaulting, is tracked in issue #68
+ * (config validation) and not yet implemented.
  *
- * @param configDir - Directory containing config.json. Defaults to platform-appropriate path.
+ * @param configDir - Directory containing config.json. Defaults to
+ * `getDefaultConfigDir()`, which itself honors `VAULTKEEPER_CONFIG_DIR`
+ * before falling back to the platform-appropriate path.
  * @public
  */
 export async function loadConfig(configDir?: string): Promise<VaultConfig> {

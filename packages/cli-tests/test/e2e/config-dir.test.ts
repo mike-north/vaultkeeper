@@ -179,6 +179,24 @@ describe('CLI config-dir override', () => {
     expect(result.stderr).toContain('--config-dir requires a value')
   })
 
+  // Negative: an empty --config-dir value must not be silently treated as
+  // "no override" — that would mask a malformed invocation by falling back
+  // to env/default resolution instead of failing loudly.
+  it('exits 2 when --config-dir is given an empty value via a separate arg', async () => {
+    env = await createCliTestEnv({ configDirMode: 'flag' })
+    const result = await env.run(['--config-dir', '', 'config', 'show'])
+    expect(result.exitCode).toBe(2)
+    expect(result.stderr).toContain('--config-dir requires a value')
+  })
+
+  // Negative: same as above, but for the --config-dir=<value> form.
+  it('exits 2 when --config-dir= is given an empty value', async () => {
+    env = await createCliTestEnv({ configDirMode: 'flag' })
+    const result = await env.run(['--config-dir=', 'config', 'show'])
+    expect(result.exitCode).toBe(2)
+    expect(result.stderr).toContain('--config-dir requires a value')
+  })
+
   // Negative: --config-dir after exec's `--` separator belongs to the
   // wrapped command, not to vaultkeeper itself, and must pass through untouched.
   it('does not consume --config-dir after the exec -- separator', async () => {
