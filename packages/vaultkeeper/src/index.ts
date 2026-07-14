@@ -63,7 +63,12 @@ export { BackendRegistry, isListableBackend } from './backend/index.js'
 export { CapabilityToken } from './identity/index.js'
 
 export { VaultKeeper } from './vault.js'
-export type { VaultKeeperOptions, SetupOptions, SecretTokenMap } from './vault.js'
+export type {
+  VaultKeeperOptions,
+  SetupOptions,
+  SecretTokenMap,
+  ExecutableTrustStatus,
+} from './vault.js'
 
 export { runDoctor } from './doctor/runner.js'
 export type { RunDoctorOptions } from './doctor/runner.js'

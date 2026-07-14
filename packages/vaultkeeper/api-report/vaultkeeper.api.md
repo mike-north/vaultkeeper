@@ -101,9 +101,11 @@ export interface ExecResult {
 }
 
 // @public
-export class FetchError extends VaultError {
-    constructor(message: string, url: string);
-    readonly url: string;
+export interface ExecutableTrustStatus {
+    hash: string;
+    hashMismatch: boolean;
+    reason: string;
+    trusted: boolean;
 }
 
 // @public
@@ -133,11 +135,6 @@ export class InvalidAlgorithmError extends VaultError {
     constructor(message: string, algorithm: string, allowed: string[]);
     readonly algorithm: string;
     readonly allowed: string[];
-}
-
-// @public
-export class InvalidKeyMaterialError extends VaultError {
-    constructor(message: string);
 }
 
 // @public
@@ -320,10 +317,12 @@ export class VaultError extends Error {
 
 // @public
 export class VaultKeeper {
+    approveExecutable(executablePath: string): Promise<ExecutableTrustStatus>;
     authorize(jwe: string): Promise<{
         token: CapabilityToken;
         vaultResponse: VaultResponse;
     }>;
+    checkExecutableTrust(executablePath: string): Promise<ExecutableTrustStatus>;
     delete(name: string): Promise<void>;
     static doctor(options?: RunDoctorOptions): Promise<PreflightResult>;
     exec(token: CapabilityToken | SecretTokenMap, request: ExecRequest): Promise<{

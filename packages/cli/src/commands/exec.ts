@@ -30,6 +30,37 @@ import { RedactingStream } from '../redact.js'
 import { shouldSkipDoctor } from '../skip-doctor.js'
 import { formatError } from '../output.js'
 
+/**
+ * Ensure the caller is authorized to access `secret`, consulting the TOFU
+ * trust manifest first.
+ *
+ * When the caller's current hash is already approved in the manifest, the
+ * caller is trusted and no interactive prompt is shown (so trusted callers
+ * work on non-TTY stdin). Otherwise an interactive approval prompt is shown;
+ * a hash that changed from a previously approved value is surfaced as such.
+ *
+ * @returns `true` if access is authorized, `false` if the user declined.
+ */
+async function ensureApproved(
+  vault: VaultKeeper,
+  callerPath: string,
+  secret: string,
+  reason: string | undefined,
+): Promise<boolean> {
+  const trust = await vault.checkExecutableTrust(callerPath)
+  if (trust.trusted) {
+    process.stderr.write('Trust: verified (hash matches trust manifest)\n')
+    return true
+  }
+
+  return promptApproval({
+    caller: callerPath,
+    trustInfo: trust.hashMismatch ? 'Hash changed — re-approval required' : 'Pending verification',
+    secret,
+    reason,
+  })
+}
+
 function printExecHelp(): void {
   process.stdout.write(
     'Usage: vaultkeeper exec --secret <name> --env <VAR> --caller <path> [options] -- <command...>\n\n' +
@@ -114,15 +145,10 @@ export async function execCommand(args: string[]): Promise<number> {
     }
 
     if (jwe === undefined) {
-      // [C1 fix] Prompt for approval BEFORE retrieving the secret.
-      // vault.setup() retrieves the secret from the backend and embeds it
-      // in a JWE, so we must get user consent first.
-      const approved = await promptApproval({
-        caller: callerPath,
-        trustInfo: 'Pending verification',
-        secret,
-        reason: values.reason,
-      })
+      // [C1 fix] Gate access BEFORE retrieving the secret. vault.setup()
+      // retrieves the secret from the backend and embeds it in a JWE, so we
+      // must confirm trust (manifest match) or user consent first.
+      const approved = await ensureApproved(vault, callerPath, secret, values.reason)
 
       if (!approved) {
         process.stderr.write('Access denied by user.\n')
@@ -153,12 +179,7 @@ export async function execCommand(args: string[]): Promise<number> {
         // [C2 fix] Retry by toggling the useCache flag off internally
         // rather than filtering args (which could corrupt the wrapped command).
         jwe = undefined
-        const approved = await promptApproval({
-          caller: callerPath,
-          trustInfo: 'Pending verification',
-          secret,
-          reason: values.reason,
-        })
+        const approved = await ensureApproved(vault, callerPath, secret, values.reason)
         if (!approved) {
           process.stderr.write('Access denied by user.\n')
           return 1
