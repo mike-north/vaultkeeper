@@ -117,6 +117,14 @@ export interface ExecutableTrustStatus {
    * conflicting executable is never trusted; callers must re-approve or deny.
    */
   hashMismatch: boolean
+  /**
+   * Hashes recorded as approved for this executable in the trust manifest, in
+   * approval order (empty when the executable has never been approved). When
+   * {@link ExecutableTrustStatus.hashMismatch} is `true`, these are the prior
+   * approved values that {@link ExecutableTrustStatus.hash} no longer matches;
+   * the last element is the most recently approved hash.
+   */
+  approvedHashes: readonly string[]
   /** Human-readable description of how trust was (or was not) established. */
   reason: string
 }
@@ -249,9 +257,12 @@ export class VaultKeeper {
         configDir: this.#configDir,
       })
       if (trustResult.tofuConflict) {
+        // On a conflict the manifest holds at least one prior approved hash;
+        // report the most recently approved one as the previous hash.
+        const previousHash = trustResult.approvedHashes.at(-1) ?? trustResult.identity.hash
         throw new IdentityMismatchError(
           'Executable hash changed — re-approval required',
-          'previously-approved',
+          previousHash,
           trustResult.identity.hash,
         )
       }
@@ -557,6 +568,7 @@ export class VaultKeeper {
       trusted: true,
       hash,
       hashMismatch: false,
+      approvedHashes: updated.get(resolved)?.hashes ?? [hash],
       reason: 'Hash recorded in trust manifest',
     }
   }
@@ -580,22 +592,24 @@ export class VaultKeeper {
     const resolved = path.resolve(executablePath)
     const hash = await VaultKeeper.#hashExecutableOrThrow(resolved)
     const manifest = await loadManifest(this.#configDir)
+    const approvedHashes = manifest.get(resolved)?.hashes ?? []
 
     if (isTrusted(manifest, resolved, hash)) {
       return {
         trusted: true,
         hash,
         hashMismatch: false,
+        approvedHashes,
         reason: 'Hash found in trust manifest',
       }
     }
 
-    const existing = manifest.get(resolved)
-    const hashMismatch = existing !== undefined && existing.hashes.length > 0
+    const hashMismatch = approvedHashes.length > 0
     return {
       trusted: false,
       hash,
       hashMismatch,
+      approvedHashes,
       reason: hashMismatch
         ? 'Executable hash changed from a previously approved value — re-approval required'
         : 'Executable not yet approved',

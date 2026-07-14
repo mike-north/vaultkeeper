@@ -52,7 +52,11 @@ describe('verifyTrust — Tier 3 (first encounter / TOFU)', () => {
     await withTempDir(async (dir) => {
       const execPath = await createTempBinary(dir, 'my-tool', 'binary-content-v1')
       const configDir = path.join(dir, 'config')
-      const result = await verifyTrust(execPath, { configDir, namespace: 'my-tool', skipSigstore: true })
+      const result = await verifyTrust(execPath, {
+        configDir,
+        namespace: 'my-tool',
+        skipSigstore: true,
+      })
 
       expect(result.identity.trustTier).toBe(3)
       expect(result.identity.verified).toBe(false)
@@ -75,7 +79,11 @@ describe('verifyTrust — Tier 2 (registry / manifest)', () => {
       await verifyTrust(execPath, { configDir, namespace: 'trusted-tool', skipSigstore: true })
 
       // Second call: hash is now known
-      const result = await verifyTrust(execPath, { configDir, namespace: 'trusted-tool', skipSigstore: true })
+      const result = await verifyTrust(execPath, {
+        configDir,
+        namespace: 'trusted-tool',
+        skipSigstore: true,
+      })
       expect(result.identity.trustTier).toBe(2)
       expect(result.identity.verified).toBe(true)
       expect(result.tofuConflict).toBe(false)
@@ -91,16 +99,28 @@ describe('verifyTrust — TOFU conflict', () => {
       const configDir = path.join(dir, 'config')
 
       // Record v1 hash
-      await verifyTrust(execPath, { configDir, namespace: 'changing-tool', skipSigstore: true })
+      const first = await verifyTrust(execPath, {
+        configDir,
+        namespace: 'changing-tool',
+        skipSigstore: true,
+      })
+      const v1Hash = first.identity.hash
 
       // Overwrite with different content (simulating a binary update or tampering)
       await fs.writeFile(execPath, 'version-2', 'utf8')
 
-      const result = await verifyTrust(execPath, { configDir, namespace: 'changing-tool', skipSigstore: true })
+      const result = await verifyTrust(execPath, {
+        configDir,
+        namespace: 'changing-tool',
+        skipSigstore: true,
+      })
       expect(result.tofuConflict).toBe(true)
       expect(result.identity.trustTier).toBe(3)
       expect(result.identity.verified).toBe(false)
       expect(result.reason).toContain('re-approval')
+      // The conflict surfaces the previously approved hash(es), not a placeholder.
+      expect(result.approvedHashes).toEqual([v1Hash])
+      expect(result.identity.hash).not.toBe(v1Hash)
     })
   })
 
@@ -110,7 +130,11 @@ describe('verifyTrust — TOFU conflict', () => {
       const configDir = path.join(dir, 'config')
 
       // Record original
-      const first = await verifyTrust(execPath, { configDir, namespace: 'tampered', skipSigstore: true })
+      const first = await verifyTrust(execPath, {
+        configDir,
+        namespace: 'tampered',
+        skipSigstore: true,
+      })
       const originalHash = first.identity.hash
 
       // Change binary
@@ -159,7 +183,11 @@ describe('verifyTrust — Sigstore skipping', () => {
       const configDir = path.join(dir, 'config')
 
       // Should not throw even if sigstore is unavailable
-      const result = await verifyTrust(execPath, { configDir, namespace: 'sig-skip', skipSigstore: true })
+      const result = await verifyTrust(execPath, {
+        configDir,
+        namespace: 'sig-skip',
+        skipSigstore: true,
+      })
       // Result should be tier 3 (TOFU first use) since we skipped Sigstore
       expect(result.identity.trustTier).toBe(3)
     })

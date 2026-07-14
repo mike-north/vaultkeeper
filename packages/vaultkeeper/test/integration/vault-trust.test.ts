@@ -94,9 +94,10 @@ describe('VaultKeeper.approveExecutable', () => {
 
     expect(status.trusted).toBe(true)
     expect(status.hash).toBe(expectedHash)
+    expect(status.approvedHashes).toEqual([expectedHash])
 
-    const entries = readManifestEntries()
-    const entry = (await entries)[path.resolve(exe)]
+    const entries = await readManifestEntries()
+    const entry = entries[path.resolve(exe)]
     expect(entry).toEqual({ hashes: [expectedHash], trustTier: 3 })
   })
 
@@ -134,6 +135,7 @@ describe('VaultKeeper.checkExecutableTrust', () => {
     const status = await vault.checkExecutableTrust(exe)
     expect(status.trusted).toBe(true)
     expect(status.hashMismatch).toBe(false)
+    expect(status.approvedHashes).toEqual([sha256Hex('binary-bytes\n')])
   })
 
   it('reports untrusted for an executable that was never approved', async () => {
@@ -143,6 +145,7 @@ describe('VaultKeeper.checkExecutableTrust', () => {
     const status = await vault.checkExecutableTrust(exe)
     expect(status.trusted).toBe(false)
     expect(status.hashMismatch).toBe(false)
+    expect(status.approvedHashes).toEqual([])
   })
 
   // Criterion 5: a changed hash is untrusted and flagged as a mismatch —
@@ -158,6 +161,8 @@ describe('VaultKeeper.checkExecutableTrust', () => {
     expect(status.trusted).toBe(false)
     expect(status.hashMismatch).toBe(true)
     expect(status.hash).toBe(sha256Hex('tampered\n'))
+    // The prior approved hash is surfaced so callers can report it accurately.
+    expect(status.approvedHashes).toEqual([sha256Hex('original\n')])
   })
 
   it('does not modify the manifest (read-only probe)', async () => {
@@ -201,6 +206,33 @@ describe('exec approval recording (setup) → subsequent trust', () => {
     await expect(vault.setup('API_KEY', { executablePath: caller })).rejects.toBeInstanceOf(
       IdentityMismatchError,
     )
+  })
+
+  // Regression for review threads 3582262153 / 3582262187: the thrown error must
+  // carry the REAL hashes — previousHash = the manifest-recorded approved hash,
+  // currentHash = the on-disk hash — not a placeholder string.
+  it('setup populates IdentityMismatchError with the real previous and current hashes', async () => {
+    await backend.store('API_KEY', 's3cr3t')
+    const caller = await writeExecutable('caller', 'v1\n')
+    const approvedHash = sha256Hex('v1\n')
+    const vault = await createVault()
+
+    await vault.setup('API_KEY', { executablePath: caller })
+    await fs.writeFile(caller, 'v2\n', { mode: 0o755 })
+    const changedHash = sha256Hex('v2\n')
+
+    const err = await vault.setup('API_KEY', { executablePath: caller }).then(
+      () => {
+        throw new Error('expected setup to reject')
+      },
+      (e: unknown) => e,
+    )
+
+    expect(err).toBeInstanceOf(IdentityMismatchError)
+    if (!(err instanceof IdentityMismatchError)) throw new Error('unreachable')
+    expect(err.previousHash).toBe(approvedHash)
+    expect(err.currentHash).toBe(changedHash)
+    expect(err.previousHash).not.toBe('previously-approved')
   })
 
   // Regression for review thread 3582165425: setup() must resolve its

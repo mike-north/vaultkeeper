@@ -66,10 +66,14 @@ async function enforceTrustGate(
   }
 
   if (trust.hashMismatch) {
+    // On a mismatch the manifest holds at least one prior approved hash; report
+    // the most recently approved one as previousHash and the on-disk hash as
+    // currentHash so the error payload is accurate for diagnosis.
+    const previousHash = trust.approvedHashes.at(-1) ?? trust.hash
     throw new IdentityMismatchError(
       `Executable at ${callerPath} has changed since it was approved. ` +
         `If this change is expected, re-approve it with: vaultkeeper approve --script ${callerPath}`,
-      'previously-approved',
+      previousHash,
       trust.hash,
     )
   }

@@ -63,6 +63,7 @@ export default tseslint.config(
       '**/tsup.config.ts',
       '**/vitest.config.ts',
       'packages/vaultkeeper/scripts/**',
+      'scripts/**',
       'vitest.workspace.ts',
       'eslint.config.ts',
       'prettier.config.js',

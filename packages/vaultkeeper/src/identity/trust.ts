@@ -59,6 +59,7 @@ export async function verifyTrust(
     return {
       identity: { hash: 'dev', trustTier: 3, verified: false },
       tofuConflict: false,
+      approvedHashes: [],
       reason: 'Dev mode — hash verification skipped',
     }
   }
@@ -72,6 +73,9 @@ export async function verifyTrust(
   // Load the manifest for TOFU and registry checks.
   const manifest = await loadManifest(configDir)
 
+  // Hashes already approved for this namespace (empty on a first encounter).
+  const approvedHashes = manifest.get(namespace)?.hashes ?? []
+
   // --- Tier 1: Sigstore ---
   if (options?.skipSigstore !== true) {
     const sigstoreVerified = await trySigstore(execPath)
@@ -81,6 +85,7 @@ export async function verifyTrust(
       return {
         identity: { hash: currentHash, trustTier: 1, verified: true },
         tofuConflict: false,
+        approvedHashes,
         reason: 'Sigstore bundle verified',
       }
     }
@@ -91,6 +96,7 @@ export async function verifyTrust(
     return {
       identity: { hash: currentHash, trustTier: 2, verified: true },
       tofuConflict: false,
+      approvedHashes,
       reason: 'Hash found in trust manifest',
     }
   }
@@ -102,6 +108,7 @@ export async function verifyTrust(
     return {
       identity: { hash: currentHash, trustTier: 3, verified: false },
       tofuConflict: true,
+      approvedHashes,
       reason: `Hash changed from a previously approved value — re-approval required`,
     }
   }
@@ -112,6 +119,7 @@ export async function verifyTrust(
   return {
     identity: { hash: currentHash, trustTier: 3, verified: false },
     tofuConflict: false,
+    approvedHashes,
     reason: 'First encounter — hash recorded via TOFU',
   }
 }

@@ -102,6 +102,7 @@ export interface ExecResult {
 
 // @public
 export interface ExecutableTrustStatus {
+    approvedHashes: readonly string[];
     hash: string;
     hashMismatch: boolean;
     reason: string;

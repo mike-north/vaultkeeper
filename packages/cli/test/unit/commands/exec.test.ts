@@ -8,9 +8,12 @@ const mockInit = vi.hoisted(() => vi.fn())
 // A real IdentityMismatchError subclass so `.name`/`.message` format exactly as
 // the CLI expects when it constructs and formats the mismatch error. Defined
 // via vi.hoisted so it is initialized before the hoisted vi.mock factory runs.
+// Each constructed instance is recorded so tests can assert the CLI populated
+// previousHash/currentHash with the real hashes (not a placeholder).
 const IdentityMismatchError = vi.hoisted(
   () =>
     class IdentityMismatchError extends Error {
+      static readonly instances: IdentityMismatchError[] = []
       readonly previousHash: string
       readonly currentHash: string
       constructor(message: string, previousHash: string, currentHash: string) {
@@ -18,6 +21,7 @@ const IdentityMismatchError = vi.hoisted(
         this.name = 'IdentityMismatchError'
         this.previousHash = previousHash
         this.currentHash = currentHash
+        IdentityMismatchError.instances.push(this)
       }
     },
 )
@@ -47,6 +51,7 @@ describe('execCommand', () => {
   beforeEach(() => {
     stderrOutput = ''
     stdoutOutput = ''
+    IdentityMismatchError.instances.length = 0
     vi.spyOn(process.stderr, 'write').mockImplementation((chunk) => {
       stderrOutput += String(chunk)
       return true
@@ -303,6 +308,7 @@ describe('execCommand', () => {
         trusted: false,
         hashMismatch: true,
         hash: 'newhash',
+        approvedHashes: ['oldhash'],
         reason: 'changed',
       })
       mockInit.mockResolvedValue({ checkExecutableTrust, setup, authorize, getSecret })
@@ -315,6 +321,14 @@ describe('execCommand', () => {
       expect(authorize).not.toHaveBeenCalled()
       expect(stderrOutput).toContain('has changed since it was approved')
       expect(stderrOutput).toContain('vaultkeeper approve --script /path/to/script.sh')
+
+      // Regression for review threads 3582262153 / 3582262187: the constructed
+      // error carries the REAL hashes — the manifest-recorded approved hash and
+      // the on-disk hash — never the old 'previously-approved' placeholder.
+      const err = IdentityMismatchError.instances.at(-1)
+      expect(err?.previousHash).toBe('oldhash')
+      expect(err?.currentHash).toBe('newhash')
+      expect(err?.previousHash).not.toBe('previously-approved')
     })
 
     // Regression for review thread 3582165347: a `--cache` hit must NOT bypass
@@ -328,6 +342,7 @@ describe('execCommand', () => {
         trusted: false,
         hashMismatch: true,
         hash: 'newhash',
+        approvedHashes: ['oldhash'],
         reason: 'changed',
       })
       mockInit.mockResolvedValue({ checkExecutableTrust, setup, authorize, getSecret })
@@ -357,6 +372,7 @@ describe('execCommand', () => {
         trusted: true,
         hashMismatch: false,
         hash: 'goodhash',
+        approvedHashes: ['goodhash'],
         reason: 'trusted',
       })
       mockInit.mockResolvedValue({ checkExecutableTrust, setup, authorize, getSecret })
