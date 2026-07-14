@@ -2,6 +2,13 @@
   "name": "vaultkeeper",
   "version": "0.6.0",
   "description": "Unified, policy-enforced secret storage across OS backends",
+  "homepage": "https://github.com/mike-north/vaultkeeper#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mike-north/vaultkeeper.git",
+    "directory": "packages/vaultkeeper"
+  },
+  "bugs": "https://github.com/mike-north/vaultkeeper/issues",
   "type": "module",
   "main": "./dist/index.cjs",
   "module": "./dist/index.js",

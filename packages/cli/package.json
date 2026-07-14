@@ -2,6 +2,13 @@
   "name": "@vaultkeeper/cli",
   "version": "0.1.9",
   "description": "Command-line interface for vaultkeeper — store, retrieve, and inject secrets with policy-enforced access control",
+  "homepage": "https://github.com/mike-north/vaultkeeper#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mike-north/vaultkeeper.git",
+    "directory": "packages/cli"
+  },
+  "bugs": "https://github.com/mike-north/vaultkeeper/issues",
   "type": "module",
   "exports": {
     ".": {
