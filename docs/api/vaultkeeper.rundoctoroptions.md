@@ -58,6 +58,25 @@ When omitted, all platform-default checks are treated as required (backward-comp
 </td></tr>
 <tr><td>
 
+[configDir?](./vaultkeeper.rundoctoroptions.configdir.md)
+
+
+</td><td>
+
+
+</td><td>
+
+string
+
+
+</td><td>
+
+_(Optional)_ When provided (and `backends` is not explicitly given), doctor loads and validates the config file under this directory, adding a `config` preflight check to the result. A present-but-invalid config file (parse or schema failure) becomes a failing, required check — with the underlying error's message (file path, parse location, remediation hint) as `reason` — so an invalid config is visible in `doctor`<!-- -->'s output and fails the overall `ready` result (issue \#68). A missing config file is not an error: `loadConfig` resolves platform defaults and the check reports `ok`<!-- -->.
+
+
+</td></tr>
+<tr><td>
+
 [platform?](./vaultkeeper.rundoctoroptions.platform.md)
 
 

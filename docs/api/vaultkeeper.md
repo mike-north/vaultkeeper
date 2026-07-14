@@ -79,7 +79,35 @@ Thrown when no configured backend is available or reachable. Inspect `reason` fo
 
 </td><td>
 
-Opaque capability token. Claims are inaccessible without `validateCapabilityToken`<!-- -->.
+An opaque handle to authorized secret claims.
+
+A `CapabilityToken` is produced by [VaultKeeper.authorize()](./vaultkeeper.vaultkeeper.authorize.md) and deliberately exposes no readable data. The underlying claims — including the secret value — are held in a module-private `WeakMap` that this class does not reference, and its private fields keep any property from leaking them (`toString()` returns only a debug identifier). There is intentionally no public API for reading the claims directly.
+
+To use the secret, pass the token to a [VaultKeeper](./vaultkeeper.vaultkeeper.md) access method — [VaultKeeper.getSecret()](./vaultkeeper.vaultkeeper.getsecret.md)<!-- -->, [VaultKeeper.fetch()](./vaultkeeper.vaultkeeper.fetch.md)<!-- -->, [VaultKeeper.exec()](./vaultkeeper.vaultkeeper.exec.md)<!-- -->, or [VaultKeeper.sign()](./vaultkeeper.vaultkeeper.sign.md) — which resolve the claims internally.
+
+
+</td></tr>
+<tr><td>
+
+[ConfigParseError](./vaultkeeper.configparseerror.md)
+
+
+</td><td>
+
+Thrown when a config file's contents cannot be parsed as JSON.
+
+The `message` already embeds the file path, the parse location (when the underlying `SyntaxError` exposes one), and a remediation hint pointing at `vaultkeeper config init` — see issue \#68. `path` and `location` are also exposed individually for callers (e.g. `doctor`<!-- -->) that want to report them as structured fields rather than re-parsing the message.
+
+
+</td></tr>
+<tr><td>
+
+[ConfigValidationError](./vaultkeeper.configvalidationerror.md)
+
+
+</td><td>
+
+Thrown when a config value fails structural or semantic validation (e.g. a whitespace-only `BackendConfig.path`<!-- -->).
 
 
 </td></tr>
@@ -101,7 +129,18 @@ Thrown when a hardware device (e.g. YubiKey or smart card) required for authenti
 
 </td><td>
 
-Thrown when a delegated `exec()` call fails due to a process-level error (e.g. the command binary is not found or cannot be spawned).
+Thrown when a delegated `exec()` call fails due to an invalid request (e.g. a `{{secret}}` placeholder in the `command` field) or a process-level error (e.g. the command binary is not found or cannot be spawned).
+
+
+</td></tr>
+<tr><td>
+
+[FetchError](./vaultkeeper.fetcherror.md)
+
+
+</td><td>
+
+Thrown when a delegated `fetch()` call fails before a `Response` can be produced — for example the URL is malformed or the underlying network request fails (DNS failure, connection refused, TLS error).
 
 
 </td></tr>
@@ -142,12 +181,23 @@ Thrown when a caller requests a signing/verification algorithm that is not in th
 </td></tr>
 <tr><td>
 
+[InvalidKeyMaterialError](./vaultkeeper.invalidkeymaterialerror.md)
+
+
+</td><td>
+
+Thrown when a stored secret is used as signing key material but is not valid PEM or DER private key data (e.g. `crypto.createPrivateKey()` rejects it). Signing raises this error; verification instead returns `false` for invalid key material. The message never echoes any part of the secret.
+
+
+</td></tr>
+<tr><td>
+
 [InvalidTokenError](./vaultkeeper.invalidtokenerror.md)
 
 
 </td><td>
 
-Thrown when a JWE string cannot be parsed because it is structurally malformed (e.g. wrong number of segments, invalid Base64URL header, or unparseable JSON header).
+Thrown when a JWE string is invalid or cannot be processed — for example, it is structurally malformed (wrong number of segments, invalid Base64URL), decryption fails (wrong key, tampered ciphertext), or the decrypted payload does not match the expected claims schema.
 
 
 </td></tr>
@@ -289,12 +339,49 @@ Description
 </th></tr></thead>
 <tbody><tr><td>
 
+[getDefaultConfigDir()](./vaultkeeper.getdefaultconfigdir.md)
+
+
+</td><td>
+
+Return the platform-appropriate default config directory.
+
+Resolution order: the `VAULTKEEPER_CONFIG_DIR` environment variable, then the platform default (`%APPDATA%/vaultkeeper` on Windows, `~/.config/vaultkeeper` elsewhere). Consumers that also support a higher-precedence override (e.g. a CLI flag) should check that first and only fall back to this function when no override was supplied.
+
+
+</td></tr>
+<tr><td>
+
 [isListableBackend(backend)](./vaultkeeper.islistablebackend.md)
 
 
 </td><td>
 
 Type guard for backends that support listing.
+
+
+</td></tr>
+<tr><td>
+
+[loadConfig(configDir)](./vaultkeeper.loadconfig.md)
+
+
+</td><td>
+
+Load the vaultkeeper config from disk, falling back to platform defaults only when the config file is missing (`ENOENT`<!-- -->).
+
+Any other read failure (e.g. `EACCES`<!-- -->, `EISDIR`<!-- -->) is a genuinely broken or unreadable config and is rethrown as a [FilesystemError](./vaultkeeper.filesystemerror.md) rather than silently defaulted — silently defaulting on a permissions error would hide the problem from `doctor` and `config show` (issue \#68). A present file that fails to parse as JSON throws [ConfigParseError](./vaultkeeper.configparseerror.md)<!-- -->; a present file that parses but fails schema validation throws [ConfigValidationError](./vaultkeeper.configvalidationerror.md)<!-- -->. All three error messages include the config file path and a remediation hint naming `vaultkeeper config init`<!-- -->.
+
+
+</td></tr>
+<tr><td>
+
+[platformDefaultBackendType()](./vaultkeeper.platformdefaultbackendtype.md)
+
+
+</td><td>
+
+Resolve the backend type that vaultkeeper uses by default on the current platform when no backend is explicitly configured.
 
 
 </td></tr>
@@ -344,7 +431,7 @@ Configuration for a single backend.
 
 Request for delegated command execution.
 
-String values in `args` and `env` may include the placeholder `{{secret}}`<!-- -->, which is replaced with the actual secret value immediately before the command is spawned.
+String values in `env` may include the placeholder `{{secret}}` (single-token mode) or `{{secret:name}}` (multi-token mode), which are replaced with actual secret values immediately before the command is spawned. Placeholders are \*\*not\*\* supported in `command` or `args` — `VaultKeeper.exec()` throws `ExecError` if one appears there.
 
 
 </td></tr>
@@ -361,6 +448,19 @@ Result from delegated command execution.
 </td></tr>
 <tr><td>
 
+[ExecutableTrustStatus](./vaultkeeper.executabletruststatus.md)
+
+
+</td><td>
+
+Trust status of an executable, as recorded in the trust-on-first-use (TOFU) trust manifest.
+
+Returned by [VaultKeeper.approveExecutable()](./vaultkeeper.vaultkeeper.approveexecutable.md) and [VaultKeeper.checkExecutableTrust()](./vaultkeeper.vaultkeeper.checkexecutabletrust.md)<!-- -->.
+
+
+</td></tr>
+<tr><td>
+
 [FetchRequest](./vaultkeeper.fetchrequest.md)
 
 
@@ -368,7 +468,7 @@ Result from delegated command execution.
 
 Request for delegated HTTP fetch.
 
-String values in `url`<!-- -->, `headers`<!-- -->, and `body` may include the placeholder `{{secret}}`<!-- -->, which is replaced with the actual secret value immediately before the request is sent.
+String values in `url`<!-- -->, `headers`<!-- -->, and `body` may include the placeholder `{{secret}}` (single-token mode) or `{{secret:name}}` (multi-token mode), which are replaced with actual secret values immediately before the request is sent.
 
 
 </td></tr>
@@ -621,6 +721,21 @@ The OS platform identifier used for platform-specific behavior.
 </td><td>
 
 Status of a preflight check.
+
+`'invalid'` applies specifically to the `config` check: the config file exists but fails to parse or fails schema validation (see issue \#68).
+
+
+</td></tr>
+<tr><td>
+
+[SecretTokenMap](./vaultkeeper.secrettokenmap.md)
+
+
+</td><td>
+
+Map of named secrets to their capability tokens.
+
+Use with `exec()` or `fetch()` to inject multiple secrets into a single request. Each key becomes the name referenced in `{{secret:name}}` placeholders.
 
 
 </td></tr>

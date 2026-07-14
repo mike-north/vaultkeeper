@@ -81,3 +81,5 @@ The base64-encoded signature and algorithm label, together with the vault metada
 
 {<!-- -->InvalidAlgorithmError<!-- -->} If `request.algorithm` is not in the allowed set (e.g. `'md5'`<!-- -->).
 
+{<!-- -->InvalidKeyMaterialError<!-- -->} If the stored secret is not valid PEM/DER private key material.
+

@@ -71,6 +71,8 @@ jobs:
 
       - run: pnpm check:api-report
 
+      - run: pnpm check:api-docs
+
       - name: Download Rust binary
         uses: actions/download-artifact@v4
         with:

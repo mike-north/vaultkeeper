@@ -12,6 +12,10 @@ Options for initializing VaultKeeper.
 interface VaultKeeperOptions 
 ```
 
+## Remarks
+
+When neither `config` nor a config file (at `configDir`<!-- -->) is present, and [VaultKeeperOptions.backend](./vaultkeeper.vaultkeeperoptions.backend.md) is not set, the active backend falls back to the platform default resolved by [platformDefaultBackendType()](./vaultkeeper.platformdefaultbackendtype.md) — `keychain` on macOS, `dpapi` on Windows, `file` elsewhere. Inspect [VaultKeeper.activeBackendType](./vaultkeeper.vaultkeeper.activebackendtype.md) after `init()` to confirm which backend a given instance resolved to. When `backend` is set instead, see that option's own JSDoc for the fallback config used in its place.
+
 ## Properties
 
 <table><thead><tr><th>
@@ -36,6 +40,29 @@ Description
 
 </th></tr></thead>
 <tbody><tr><td>
+
+[backend?](./vaultkeeper.vaultkeeperoptions.backend.md)
+
+
+</td><td>
+
+
+</td><td>
+
+[SecretBackend](./vaultkeeper.secretbackend.md) \| undefined
+
+
+</td><td>
+
+_(Optional)_ Inject a [SecretBackend](./vaultkeeper.secretbackend.md) instance directly, bypassing the global [BackendRegistry](./vaultkeeper.backendregistry.md) and `config.backends` resolution entirely.
+
+This is the primary hook for tests and embedders that want to store and retrieve secrets without registering a backend globally or hand assembling a full [VaultConfig](./vaultkeeper.vaultconfig.md)<!-- -->. When set, this backend instance is used for every `store()`<!-- -->/`retrieve()`<!-- -->/`setup()` call.
+
+\*\*Precedence with `config`<!-- -->/`configDir`<!-- -->:\*\* - `backend` always wins over the backend that `config.backends` (or the config loaded from `configDir`<!-- -->) would otherwise resolve — the `backends` array is never consulted when `backend` is set. - Other config fields (`keyRotation`<!-- -->, `defaults`<!-- -->, `developmentMode`<!-- -->) still come from `config`<!-- -->, or from the config loaded from `configDir`<!-- -->, when either is provided. - If `backend` is set and `config` is omitted, a minimal built-in default config is used instead of loading one from `configDir` — so a caller that only needs an injected backend never has to construct a [VaultConfig](./vaultkeeper.vaultconfig.md) or touch `configDir` at all.
+
+
+</td></tr>
+<tr><td>
 
 [config?](./vaultkeeper.vaultkeeperoptions.config.md)
 

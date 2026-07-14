@@ -4,14 +4,18 @@
 
 ## VaultKeeper.fetch() method
 
-Execute a delegated HTTP fetch, injecting the secret from the token.
+Execute a delegated HTTP fetch, injecting secrets from the token(s).
 
-The secret value is substituted for every `{{secret}}` placeholder found in `request.url`<!-- -->, `request.headers`<!-- -->, and `request.body` before the fetch is executed. The raw secret is never exposed in the return value.
+\*\*Single token:\*\* every `{{secret}}` placeholder in `request.url`<!-- -->, `request.headers`<!-- -->, and `request.body` is replaced with the secret value.
+
+\*\*Token map ([SecretTokenMap](./vaultkeeper.secrettokenmap.md)<!-- -->):\*\* every `{{secret:name}}` placeholder is replaced with the secret from the corresponding named token.
+
+The raw secret is never exposed in the return value.
 
 **Signature:**
 
 ```typescript
-fetch(token: CapabilityToken, request: FetchRequest): Promise<{
+fetch(token: CapabilityToken | SecretTokenMap, request: FetchRequest): Promise<{
         response: Response;
         vaultResponse: VaultResponse;
     }>;
@@ -42,12 +46,12 @@ token
 
 </td><td>
 
-[CapabilityToken](./vaultkeeper.capabilitytoken.md)
+[CapabilityToken](./vaultkeeper.capabilitytoken.md) \| [SecretTokenMap](./vaultkeeper.secrettokenmap.md)
 
 
 </td><td>
 
-A `CapabilityToken` obtained from `authorize()`<!-- -->.
+A single `CapabilityToken` or a `SecretTokenMap` mapping names to tokens obtained from `authorize()`<!-- -->.
 
 
 </td></tr>
@@ -63,7 +67,7 @@ request
 
 </td><td>
 
-The fetch request template. Use `{{secret}}` as a placeholder wherever the secret value should be injected.
+The fetch request template with placeholders.
 
 
 </td></tr>
@@ -77,5 +81,9 @@ The `Response` from the underlying `fetch()` call, together with the vault metad
 
 ## Exceptions
 
-{<!-- -->Error<!-- -->} If `token` is invalid or was not created by this vault instance.
+{<!-- -->AuthorizationDeniedError<!-- -->} If any token is invalid or was not created by this vault instance.
+
+{<!-- -->VaultError<!-- -->} If a named placeholder references an unknown secret name.
+
+{<!-- -->FetchError<!-- -->} If the URL is malformed or the underlying network request fails.
 

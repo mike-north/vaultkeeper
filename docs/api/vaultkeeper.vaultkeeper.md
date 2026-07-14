@@ -12,6 +12,52 @@ Main entry point for vaultkeeper. Orchestrates backends, keys, JWE tokens, ident
 declare class VaultKeeper 
 ```
 
+## Properties
+
+<table><thead><tr><th>
+
+Property
+
+
+</th><th>
+
+Modifiers
+
+
+</th><th>
+
+Type
+
+
+</th><th>
+
+Description
+
+
+</th></tr></thead>
+<tbody><tr><td>
+
+[activeBackendType](./vaultkeeper.vaultkeeper.activebackendtype.md)
+
+
+</td><td>
+
+`readonly`
+
+
+</td><td>
+
+string
+
+
+</td><td>
+
+The type identifier of the active backend — the first enabled backend in the resolved configuration (the one `store()`<!-- -->, `delete()`<!-- -->, and `setup()` operate on).
+
+
+</td></tr>
+</tbody></table>
+
 ## Methods
 
 <table><thead><tr><th>
@@ -32,6 +78,24 @@ Description
 </th></tr></thead>
 <tbody><tr><td>
 
+[approveExecutable(executablePath)](./vaultkeeper.vaultkeeper.approveexecutable.md)
+
+
+</td><td>
+
+
+</td><td>
+
+Approve an executable for trust-on-first-use by recording its current SHA-256 hash in the trust manifest.
+
+After approval, [VaultKeeper.setup()](./vaultkeeper.vaultkeeper.setup.md) and [VaultKeeper.checkExecutableTrust()](./vaultkeeper.vaultkeeper.checkexecutabletrust.md) recognize the executable (matched by its resolved absolute path and content hash) as trusted, so callers can skip an interactive approval prompt.
+
+The operation is idempotent: approving the same, unchanged executable more than once leaves a single manifest entry.
+
+
+</td></tr>
+<tr><td>
+
 [authorize(jwe)](./vaultkeeper.vaultkeeper.authorize.md)
 
 
@@ -41,6 +105,22 @@ Description
 </td><td>
 
 Decrypt a JWE, validate claims, verify executable identity, and return an opaque CapabilityToken.
+
+
+</td></tr>
+<tr><td>
+
+[checkExecutableTrust(executablePath)](./vaultkeeper.vaultkeeper.checkexecutabletrust.md)
+
+
+</td><td>
+
+
+</td><td>
+
+Check whether an executable is trusted according to the trust manifest, without modifying the manifest.
+
+This is a read-only probe. Unlike [VaultKeeper.setup()](./vaultkeeper.vaultkeeper.setup.md)<!-- -->, it never records a hash, so it can be used to decide whether an interactive approval prompt is required before proceeding.
 
 
 </td></tr>
@@ -88,9 +168,15 @@ When called without arguments, uses conservative platform defaults — all platf
 
 </td><td>
 
-Execute a delegated command, injecting the secret from the token.
+Execute a delegated command, injecting secrets from the token(s).
 
-The secret value is substituted for every `{{secret}}` placeholder found in `request.args` and `request.env` values before the process is spawned. The raw secret is never exposed in the return value.
+\*\*Single token:\*\* every `{{secret}}` placeholder in `request.env` values is replaced with the secret value.
+
+\*\*Token map ([SecretTokenMap](./vaultkeeper.secrettokenmap.md)<!-- -->):\*\* every `{{secret:name}}` placeholder is replaced with the secret from the corresponding named token.
+
+Secret placeholders are not supported in `request.command` or `request.args` — process arguments are visible to other processes via `ps` and often collected in logs and telemetry.
+
+The raw secret is never exposed in the return value.
 
 
 </td></tr>
@@ -104,9 +190,13 @@ The secret value is substituted for every `{{secret}}` placeholder found in `req
 
 </td><td>
 
-Execute a delegated HTTP fetch, injecting the secret from the token.
+Execute a delegated HTTP fetch, injecting secrets from the token(s).
 
-The secret value is substituted for every `{{secret}}` placeholder found in `request.url`<!-- -->, `request.headers`<!-- -->, and `request.body` before the fetch is executed. The raw secret is never exposed in the return value.
+\*\*Single token:\*\* every `{{secret}}` placeholder in `request.url`<!-- -->, `request.headers`<!-- -->, and `request.body` is replaced with the secret value.
+
+\*\*Token map ([SecretTokenMap](./vaultkeeper.secrettokenmap.md)<!-- -->):\*\* every `{{secret:name}}` placeholder is replaced with the secret from the corresponding named token.
+
+The raw secret is never exposed in the return value.
 
 
 </td></tr>
@@ -140,6 +230,8 @@ The accessor wraps the secret in a single-use, auto-zeroing `Buffer`<!-- -->. Th
 
 Initialize a new VaultKeeper instance. Runs doctor checks (unless skipped), loads config, and sets up the key manager.
 
+The configured secret backend is resolved lazily on first use, not during `init()`<!-- -->. Trust-only operations (e.g. [VaultKeeper.approveExecutable()](./vaultkeeper.vaultkeeper.approveexecutable.md)<!-- -->, [VaultKeeper.checkExecutableTrust()](./vaultkeeper.vaultkeeper.checkexecutabletrust.md)<!-- -->) therefore succeed even when the configured backend or plugin is unavailable or unregistered; a misconfigured backend surfaces only when a secret operation is invoked.
+
 
 </td></tr>
 <tr><td>
@@ -171,6 +263,20 @@ After revocation, any JWE that was encrypted with the revoked key will be perman
 Rotate the current encryption key.
 
 The previous key remains valid for decryption during the grace period configured in `keyRotation.gracePeriodDays`<!-- -->. JWEs presented during the grace period return a `rotatedJwt` in the `VaultResponse` so callers can persist the updated token.
+
+
+</td></tr>
+<tr><td>
+
+[secretExists(name)](./vaultkeeper.vaultkeeper.secretexists.md)
+
+
+</td><td>
+
+
+</td><td>
+
+Check whether a secret exists in the active backend, without retrieving its value, minting a token, or touching the TOFU trust manifest.
 
 
 </td></tr>
