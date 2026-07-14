@@ -16,10 +16,10 @@ describe('delegatedExec', () => {
         env: {},
       }
 
-      await expect(delegatedExec('hello', request)).rejects.toThrow(ExecError)
-      await expect(delegatedExec('hello', request)).rejects.toThrow(
-        /placeholders are not supported in the args field/,
-      )
+      const promise = delegatedExec('hello', request)
+
+      await expect(promise).rejects.toThrow(ExecError)
+      await expect(promise).rejects.toThrow(/placeholders are not supported in the args field/)
     })
 
     it('rejects with ExecError when {{secret}} appears alongside static text in an arg', async () => {
@@ -46,10 +46,10 @@ describe('delegatedExec', () => {
         args: ['-c', 'echo {{secret:greeting}}'],
       }
 
-      await expect(delegatedExec({ greeting: 'hello' }, request)).rejects.toThrow(ExecError)
-      await expect(delegatedExec({ greeting: 'hello' }, request)).rejects.toThrow(
-        /placeholders are not supported in the args field/,
-      )
+      const promise = delegatedExec({ greeting: 'hello' }, request)
+
+      await expect(promise).rejects.toThrow(ExecError)
+      await expect(promise).rejects.toThrow(/placeholders are not supported in the args field/)
     })
 
     it('handles empty args array', async () => {
