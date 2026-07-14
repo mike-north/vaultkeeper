@@ -25,7 +25,7 @@
     "node": ">=20.0.0"
   },
   "scripts": {
-    "build": "tsup",
+    "build": "tsup && node scripts/inject-node-types-reference.mjs",
     "clean": "node -e \"import('node:fs').then(fs=>fs.rmSync('dist',{recursive:true,force:true}))\"",
     "test": "vitest run",
     "test:watch": "vitest",
@@ -44,6 +44,14 @@
   "dependencies": {
     "@1password/sdk": "^0.4.0",
     "jose": "^6.0.0"
+  },
+  "peerDependencies": {
+    "@types/node": ">=18"
+  },
+  "peerDependenciesMeta": {
+    "@types/node": {
+      "optional": true
+    }
   },
   "devDependencies": {
     "@microsoft/api-documenter": "^7.0.0",

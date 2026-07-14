@@ -40,6 +40,12 @@ vaultkeeper --help
 pnpm add vaultkeeper
 ```
 
+`vaultkeeper`'s public API references Node's `Buffer` type (e.g. `SecretAccessor.read()`, `SignRequest`, `VerifyRequest`). Consuming projects need `@types/node` installed to typecheck against it — `@types/node` is declared as an optional peer dependency, so most setups already have it as a transitive `devDependency`. If your tsconfig scopes `compilerOptions.types` explicitly (e.g. `"types": []`), add it yourself:
+
+```sh
+pnpm add -D @types/node
+```
+
 ### WASM SDK
 
 The WASM SDK wraps the Rust core compiled to WebAssembly. It offers a similar high-level feature set to the TypeScript library, but the public API is not a drop-in replacement — some function signatures differ (e.g., `setup(secretName, secretValue, ...)` vs the TS library's `setup(secretName, options?)`).

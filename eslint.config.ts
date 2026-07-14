@@ -62,6 +62,7 @@ export default tseslint.config(
       '**/coverage/**',
       '**/tsup.config.ts',
       '**/vitest.config.ts',
+      '**/scripts/**',
       'vitest.workspace.ts',
       'eslint.config.ts',
       'prettier.config.js',
