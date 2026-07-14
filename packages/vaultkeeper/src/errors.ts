@@ -290,9 +290,11 @@ export class InvalidAlgorithmError extends VaultError {
 }
 
 /**
- * Thrown when a stored secret is used as signing/verification key material
- * but is not valid PEM or DER key data (e.g. `crypto.createPrivateKey()`
- * rejects it). The message never echoes any part of the secret.
+ * Thrown when a stored secret is used as signing key material but is not
+ * valid PEM or DER private key data (e.g. `crypto.createPrivateKey()`
+ * rejects it). Signing raises this error; verification instead returns
+ * `false` for invalid key material. The message never echoes any part of
+ * the secret.
  *
  * @public
  */
@@ -312,7 +314,9 @@ export class InvalidKeyMaterialError extends VaultError {
  */
 export class FetchError extends VaultError {
   /**
-   * The (placeholder-resolved) URL that fetch failed to request.
+   * The unresolved URL template that fetch failed to request, with
+   * `{{secret}}` placeholders left intact. The placeholder-resolved URL is
+   * deliberately never stored here, so an injected secret is never exposed.
    */
   readonly url: string
 

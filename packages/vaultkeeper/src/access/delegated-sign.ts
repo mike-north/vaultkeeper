@@ -33,8 +33,8 @@ export function delegatedSign(secretPem: string, request: SignRequest): SignResu
     // Never include `secretPem` (or the underlying OpenSSL error, which can
     // echo fragments of the input) in the thrown message.
     throw new InvalidKeyMaterialError(
-      'The stored secret is not valid PEM/DER private key material. ' +
-        'delegatedSign() requires a secret that was stored as a private key.',
+      'The stored secret is not valid PEM or DER private key material. ' +
+        'Signing requires a secret that was stored as a private key.',
     )
   }
   const { signAlg, label } = resolveAlgorithmForKey(key, request.algorithm)

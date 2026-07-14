@@ -254,20 +254,48 @@ describe('delegatedFetch', () => {
       expect(caught).toBeInstanceOf(VaultError)
     })
 
-    it('does not echo an injected secret from the URL into the FetchError message', async () => {
-      mockFetch.mockRejectedValue(new Error('network error'))
+    it('does not echo an injected secret from the URL into the FetchError message or url field', async () => {
+      // Underlying network errors routinely embed the resolved URL (with the
+      // injected secret) in their own message — e.g. DNS failures produce
+      // `getaddrinfo ENOTFOUND <host>`. The thrown FetchError must not carry
+      // that secret in its message or its `url` field.
+      const secret = 'super-secret-value'
+      mockFetch.mockRejectedValue(new Error(`getaddrinfo ENOTFOUND example.com/token/${secret}`))
       const request: FetchRequest = { url: 'https://example.com/token/{{secret}}' }
 
       let caught: unknown
       try {
-        await delegatedFetch('super-secret-value', request)
+        await delegatedFetch(secret, request)
       } catch (error) {
         caught = error
       }
 
       expect(caught).toBeInstanceOf(FetchError)
       const message = caught instanceof Error ? caught.message : ''
-      expect(message).not.toContain('super-secret-value')
+      expect(message).not.toContain(secret)
+      // Diagnostic detail (the error class/code) is preserved after redaction.
+      expect(message).toContain('ENOTFOUND')
+      const url = caught instanceof FetchError ? caught.url : ''
+      expect(url).not.toContain(secret)
+      expect(url).toBe('https://example.com/token/{{secret}}')
+    })
+
+    it('redacts a named injected secret from the FetchError message', async () => {
+      const secret = 'named-secret-value'
+      mockFetch.mockRejectedValue(new Error(`ECONNREFUSED https://example.com/${secret}/resource`))
+      const request: FetchRequest = { url: 'https://example.com/{{secret:token}}/resource' }
+
+      let caught: unknown
+      try {
+        await delegatedFetch({ token: secret }, request)
+      } catch (error) {
+        caught = error
+      }
+
+      expect(caught).toBeInstanceOf(FetchError)
+      const message = caught instanceof Error ? caught.message : ''
+      expect(message).not.toContain(secret)
+      expect(message).toContain('ECONNREFUSED')
     })
   })
 })
