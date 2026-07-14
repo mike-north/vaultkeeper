@@ -98,9 +98,11 @@ export async function createCliTestEnv(options?: CliTestEnvOptions): Promise<Cli
   }
   if (configDirMode === 'env') {
     baseEnv.VAULTKEEPER_CONFIG_DIR = configDir
-  } else {
-    // 'flag' mode: never let an inherited VAULTKEEPER_CONFIG_DIR leak in —
-    // tests exercising --config-dir must pass it explicitly via run() args.
+  } else if (!('VAULTKEEPER_CONFIG_DIR' in extraEnv)) {
+    // 'flag' mode: strip only an *inherited* VAULTKEEPER_CONFIG_DIR (from
+    // process.env) so it doesn't leak in unexpectedly. A caller-supplied
+    // extraEnv.VAULTKEEPER_CONFIG_DIR is left intact so flag-vs-env
+    // precedence tests can set a competing env var alongside --config-dir.
     delete baseEnv.VAULTKEEPER_CONFIG_DIR
   }
 

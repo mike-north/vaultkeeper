@@ -74,6 +74,34 @@ describe('CLI config-dir override', () => {
     expect(parsed).toHaveProperty('defaults.ttlMinutes', 444)
   })
 
+  // Acceptance criterion 1: flag wins over env var even when the test harness
+  // itself is asked to set a *competing* VAULTKEEPER_CONFIG_DIR via
+  // configDirMode: 'flag' + options.env — regression for a bug where
+  // createCliTestEnv() unconditionally stripped VAULTKEEPER_CONFIG_DIR in
+  // 'flag' mode, making it impossible to exercise this precedence case.
+  it('prefers --config-dir over a caller-supplied VAULTKEEPER_CONFIG_DIR in flag mode', async () => {
+    const envConfigDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), 'vaultkeeper-config-dir-competing-env-'),
+    )
+    extraDirs.push(envConfigDir)
+    await fs.writeFile(
+      path.join(envConfigDir, 'config.json'),
+      JSON.stringify(configWithMarker(555), null, 2) + '\n',
+      { encoding: 'utf8', mode: 0o600 },
+    )
+
+    env = await createCliTestEnv({
+      config: configWithMarker(666),
+      configDirMode: 'flag',
+      env: { VAULTKEEPER_CONFIG_DIR: envConfigDir },
+    })
+
+    const result = await env.run(['--config-dir', env.configDir, 'config', 'show'])
+    expect(result.exitCode).toBe(0)
+    const parsed: unknown = JSON.parse(result.stdout)
+    expect(parsed).toHaveProperty('defaults.ttlMinutes', 666)
+  })
+
   // Acceptance criterion 2: config show reports the path it loaded from.
   it('reports the loaded config path on config show', async () => {
     env = await createCliTestEnv()
