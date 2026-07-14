@@ -72,9 +72,17 @@ export function decryptGcm(key: Buffer, encoded: string): string {
 
 /**
  * Read the 32-byte wrapping key at `keyPath`, generating and persisting a fresh
- * random one (mode `0o600`) if the file does not yet exist.
+ * random one (mode `0o600`) when the file does not yet exist **or** holds a
+ * value that is not exactly 32 bytes.
  *
  * @remarks
+ * Regenerating on a wrong-length key is safe, not data loss: a wrapping key of
+ * the wrong length cannot decrypt anything it previously encrypted (the AES-256
+ * cipher requires a 32-byte key), so any ciphertext under a corrupt key is
+ * already unrecoverable. Without this guard, a truncated/corrupt key file would
+ * make {@link encryptGcm} throw "Invalid key length" on every write, wedging the
+ * consumer instead of degrading to a fresh key.
+ *
  * The caller is responsible for ensuring the parent directory exists. The
  * returned {@link Buffer} holds key material; zero it after use where practical.
  *
@@ -82,14 +90,21 @@ export function decryptGcm(key: Buffer, encoded: string): string {
  * @internal
  */
 export async function getOrCreateWrapKey(keyPath: string): Promise<Buffer> {
+  let existing: Buffer | undefined
   try {
-    return await fs.readFile(keyPath)
+    existing = await fs.readFile(keyPath)
   } catch (err) {
-    if (err instanceof Error && 'code' in err && err.code === 'ENOENT') {
-      const key = crypto.randomBytes(GCM_KEY_BYTES)
-      await fs.writeFile(keyPath, key, { mode: 0o600 })
-      return key
+    if (!(err instanceof Error && 'code' in err && err.code === 'ENOENT')) {
+      throw err
     }
-    throw err
   }
+
+  if (existing?.byteLength === GCM_KEY_BYTES) {
+    return existing
+  }
+
+  // Missing or corrupt (wrong length): (re)generate a fresh key in place.
+  const key = crypto.randomBytes(GCM_KEY_BYTES)
+  await fs.writeFile(keyPath, key, { mode: 0o600 })
+  return key
 }

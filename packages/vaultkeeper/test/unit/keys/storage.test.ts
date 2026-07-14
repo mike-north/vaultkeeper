@@ -133,4 +133,26 @@ describe('corrupt / tampered state degrades safely', () => {
     await fs.writeFile(statePath, `${iv ?? ''}:${tag ?? ''}:${tampered.toString('base64')}`, 'utf8')
     expect(await loadKeyState(dir)).toBeUndefined()
   })
+
+  it('recovers from a corrupt (wrong-length) wrapping key by regenerating it', async () => {
+    // First save establishes both keys.enc and a valid .keys.wrap.
+    await saveKeyState(dir, { current: makeKey('k-old-aaaa', 0x11) })
+
+    // Truncate the wrapping key to a non-32-byte length, as a partial write or
+    // disk corruption would. The old state is now unrecoverable (load degrades
+    // to "no state") — but a subsequent save must not throw "Invalid key
+    // length"; it regenerates the wrap key and persists fresh state.
+    const wrapPath = path.join(dir, '.keys.wrap')
+    await fs.writeFile(wrapPath, Buffer.alloc(7, 0xab), { mode: 0o600 })
+
+    // Load degrades gracefully rather than crashing.
+    expect(await loadKeyState(dir)).toBeUndefined()
+
+    // Save succeeds (no throw) and the freshly wrapped state round-trips.
+    const fresh = makeKey('k-new-bbbb', 0x22)
+    await saveKeyState(dir, { current: fresh })
+    expect((await fs.stat(wrapPath)).size).toBe(32)
+    const loaded = await loadKeyState(dir)
+    expect(loaded?.current.id).toBe('k-new-bbbb')
+  })
 })
