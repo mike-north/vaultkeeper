@@ -105,7 +105,7 @@ describe('storeCommand', () => {
   describe('when store succeeds', () => {
     it('should return 0', async () => {
       mockStdinWith('my-secret-value')
-      mockInit.mockResolvedValue(undefined)
+      mockInit.mockResolvedValue({ store: mockStore })
       const { storeCommand } = await import('../../../src/commands/store.js')
       const code = await storeCommand(['--name', 'my-secret'])
       expect(code).toBe(0)
@@ -113,7 +113,7 @@ describe('storeCommand', () => {
 
     it('should write success message to stdout', async () => {
       mockStdinWith('my-secret-value')
-      mockInit.mockResolvedValue(undefined)
+      mockInit.mockResolvedValue({ store: mockStore })
       const { storeCommand } = await import('../../../src/commands/store.js')
       await storeCommand(['--name', 'my-secret'])
       expect(stdoutOutput).toContain('stored successfully')
@@ -123,7 +123,7 @@ describe('storeCommand', () => {
   describe('--skip-doctor flag', () => {
     it('should pass skipDoctor: false to VaultKeeper.init by default', async () => {
       mockStdinWith('my-secret-value')
-      mockInit.mockResolvedValue(undefined)
+      mockInit.mockResolvedValue({ store: mockStore })
       const { storeCommand } = await import('../../../src/commands/store.js')
       await storeCommand(['--name', 'my-secret'])
       expect(mockInit).toHaveBeenCalledWith({ skipDoctor: false })
@@ -131,7 +131,7 @@ describe('storeCommand', () => {
 
     it('should pass skipDoctor: true to VaultKeeper.init when --skip-doctor is set', async () => {
       mockStdinWith('my-secret-value')
-      mockInit.mockResolvedValue(undefined)
+      mockInit.mockResolvedValue({ store: mockStore })
       const { storeCommand } = await import('../../../src/commands/store.js')
       await storeCommand(['--name', 'my-secret', '--skip-doctor'])
       expect(mockInit).toHaveBeenCalledWith({ skipDoctor: true })
@@ -140,7 +140,7 @@ describe('storeCommand', () => {
     it('should pass skipDoctor: true when VAULTKEEPER_SKIP_DOCTOR=1 env var is set', async () => {
       process.env.VAULTKEEPER_SKIP_DOCTOR = '1'
       mockStdinWith('my-secret-value')
-      mockInit.mockResolvedValue(undefined)
+      mockInit.mockResolvedValue({ store: mockStore })
       const { storeCommand } = await import('../../../src/commands/store.js')
       await storeCommand(['--name', 'my-secret'])
       expect(mockInit).toHaveBeenCalledWith({ skipDoctor: true })
@@ -149,7 +149,7 @@ describe('storeCommand', () => {
     it('should not skip doctor when VAULTKEEPER_SKIP_DOCTOR=0', async () => {
       process.env.VAULTKEEPER_SKIP_DOCTOR = '0'
       mockStdinWith('my-secret-value')
-      mockInit.mockResolvedValue(undefined)
+      mockInit.mockResolvedValue({ store: mockStore })
       const { storeCommand } = await import('../../../src/commands/store.js')
       await storeCommand(['--name', 'my-secret'])
       expect(mockInit).toHaveBeenCalledWith({ skipDoctor: false })
@@ -158,7 +158,7 @@ describe('storeCommand', () => {
     it('should not skip doctor when VAULTKEEPER_SKIP_DOCTOR=true (non-numeric)', async () => {
       process.env.VAULTKEEPER_SKIP_DOCTOR = 'true'
       mockStdinWith('my-secret-value')
-      mockInit.mockResolvedValue(undefined)
+      mockInit.mockResolvedValue({ store: mockStore })
       const { storeCommand } = await import('../../../src/commands/store.js')
       await storeCommand(['--name', 'my-secret'])
       expect(mockInit).toHaveBeenCalledWith({ skipDoctor: false })
@@ -167,7 +167,7 @@ describe('storeCommand', () => {
     it('should not skip doctor when VAULTKEEPER_SKIP_DOCTOR is empty string', async () => {
       process.env.VAULTKEEPER_SKIP_DOCTOR = ''
       mockStdinWith('my-secret-value')
-      mockInit.mockResolvedValue(undefined)
+      mockInit.mockResolvedValue({ store: mockStore })
       const { storeCommand } = await import('../../../src/commands/store.js')
       await storeCommand(['--name', 'my-secret'])
       expect(mockInit).toHaveBeenCalledWith({ skipDoctor: false })

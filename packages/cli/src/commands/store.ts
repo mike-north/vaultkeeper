@@ -1,5 +1,5 @@
 import { parseArgs } from 'node:util'
-import { BackendRegistry, VaultKeeper } from 'vaultkeeper'
+import { VaultKeeper } from 'vaultkeeper'
 import { shouldSkipDoctor } from '../skip-doctor.js'
 import { formatError } from '../output.js'
 
@@ -59,21 +59,10 @@ export async function storeCommand(args: string[]): Promise<number> {
       return 1
     }
 
-    // Initialize vault to run doctor checks and register backends.
-    // The return value is not used — init() is called for its side effects
-    // (doctor checks and backend registration). TODO: VaultKeeper should expose
-    // a public store() method; until then we use BackendRegistry.create() with
-    // the config-resolved type.
-    await VaultKeeper.init({ skipDoctor })
-    const types = BackendRegistry.getTypes()
-    const firstType = types[0]
-    if (firstType === undefined) {
-      process.stderr.write('Error: No backends available\n')
-      return 1
-    }
-
-    const backend = BackendRegistry.create(firstType)
-    await backend.store(values.name, secret)
+    // Store via VaultKeeper, which resolves the first enabled backend from the
+    // loaded config and forwards that backend's config (including `path`).
+    const vault = await VaultKeeper.init({ skipDoctor })
+    await vault.store(values.name, secret)
     process.stdout.write(`Secret "${values.name}" stored successfully.\n`)
     return 0
   } catch (err) {
