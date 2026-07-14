@@ -55,8 +55,10 @@ import type {
   PreflightResult,
   SecretAccessor,
   SetupOptions,
+  VaultClaims,
   VaultConfig,
   VaultKeeperOptions,
+  VaultResponse,
 } from './types.js';
 
 import { createNodeHost } from './node-host.js';
@@ -163,11 +165,16 @@ export class VaultKeeper {
    */
   authorize(jwe: string): AuthorizeResult {
     const auth = callSync(() => this.#inner.authorize(jwe));
+    // The claims/response getters deserialize on the WASM side and can throw,
+    // so route them through callSync too — every throw from authorize() must
+    // surface as a typed VaultError.
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-return -- WASM boundary: wasm-bindgen getter returns untyped JsValue
+    const claims = callSync<VaultClaims>(() => auth.claims);
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-return -- WASM boundary: wasm-bindgen getter returns untyped JsValue
+    const response = callSync<VaultResponse>(() => auth.response);
     return {
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- WASM boundary: wasm-bindgen returns untyped JsValue
-      claims: auth.claims,
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- WASM boundary: wasm-bindgen returns untyped JsValue
-      response: auth.response,
+      claims,
+      response,
       secret: new WasmSecretAccessor(auth),
     };
   }

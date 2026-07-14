@@ -80,9 +80,11 @@ fn js_err(msg: &str) -> VaultError {
 /// Stable machine-readable code for a [`VaultError`], used by the TypeScript
 /// bridge to reconstruct a typed error instance from the thrown value.
 ///
-/// JWE/token failures are modeled in the core as `VaultError::Other(..)`, so
-/// they are classified here by message shape — this mapping is deliberately
-/// confined to the WASM boundary.
+/// Typed variants map one-to-one to a code. `VaultError::Other(..)` — which the
+/// core uses for malformed/decryption/validation failures — maps to the generic
+/// `vault-error`; `authorize()` reclassifies its own `Other` errors to
+/// `invalid-token`, since any non-typed failure there means the token is
+/// unprocessable. This mapping is deliberately confined to the WASM boundary.
 fn vault_error_code(e: &VaultError) -> &'static str {
     match e {
         VaultError::SecretNotFound { .. } => "secret-not-found",
@@ -406,7 +408,7 @@ impl WasmVaultKeeper {
     ///
     /// The returned object's `claims` **never** contains the raw secret value
     /// (`val` is redacted). The secret is held internally and can be read
-    /// exactly once via [`WasmAuthorization::read_secret`], mirroring the TS
+    /// exactly once via the exported `readSecret()` method, mirroring the TS
     /// library's one-time accessor pattern.
     pub fn authorize(&mut self, jwe: &str) -> Result<WasmAuthorization, JsValue> {
         // Any non-typed (`Other`) failure while decrypting or validating a
@@ -489,8 +491,8 @@ impl WasmVaultKeeper {
 ///
 /// Holds the validated claims (with the raw secret redacted) and the raw
 /// secret behind a one-time read. The secret is deliberately not part of the
-/// `claims` shape — callers must opt in explicitly via [`Self::read_secret`],
-/// which yields the value exactly once.
+/// `claims` shape — callers must opt in explicitly via the exported
+/// `readSecret()` method, which yields the value exactly once.
 #[wasm_bindgen]
 pub struct WasmAuthorization {
     claims_json: String,
@@ -518,7 +520,7 @@ impl WasmAuthorization {
             .map_err(|e| JsError::new(&format!("JSON parse error: {e:?}")))
     }
 
-    /// Whether the secret is still available to read (i.e. `read_secret` has
+    /// Whether the secret is still available to read (i.e. `readSecret()` has
     /// not yet been called).
     #[wasm_bindgen(getter, js_name = "secretAvailable")]
     pub fn secret_available(&self) -> bool {

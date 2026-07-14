@@ -5,8 +5,8 @@
  *
  * Holds the validated claims (with the raw secret redacted) and the raw
  * secret behind a one-time read. The secret is deliberately not part of the
- * `claims` shape — callers must opt in explicitly via [`Self::read_secret`],
- * which yields the value exactly once.
+ * `claims` shape — callers must opt in explicitly via the exported
+ * `readSecret()` method, which yields the value exactly once.
  */
 class WasmAuthorization {
     static __wrap(ptr) {
@@ -73,7 +73,7 @@ class WasmAuthorization {
         return takeFromExternrefTable0(ret[0]);
     }
     /**
-     * Whether the secret is still available to read (i.e. `read_secret` has
+     * Whether the secret is still available to read (i.e. `readSecret()` has
      * not yet been called).
      * @returns {boolean}
      */
@@ -112,7 +112,7 @@ class WasmVaultKeeper {
      *
      * The returned object's `claims` **never** contains the raw secret value
      * (`val` is redacted). The secret is held internally and can be read
-     * exactly once via [`WasmAuthorization::read_secret`], mirroring the TS
+     * exactly once via the exported `readSecret()` method, mirroring the TS
      * library's one-time accessor pattern.
      * @param {string} jwe
      * @returns {WasmAuthorization}
