@@ -234,17 +234,31 @@ describe.each(publishablePackageDirs)('packaging: packages/%s', (packageDir) => 
   })
 })
 
+/**
+ * npm's `bin` field has two shapes: an object mapping command name -> script
+ * (`{ "vaultkeeper": "./dist/bin.js" }`), or a string shorthand
+ * (`"./dist/bin.js"`) which declares a single command named after the
+ * package itself — the unscoped portion for scoped packages, e.g.
+ * `@vaultkeeper/cli` -> `cli`. See
+ * https://docs.npmjs.com/cli/v10/configuring-npm/package-json#bin.
+ */
+function declaredBinCommandNames(pkg: PackageJson): string[] {
+  if (pkg.bin === undefined) {
+    return []
+  }
+  if (typeof pkg.bin === 'string') {
+    const slashIndex = pkg.name.lastIndexOf('/')
+    return [slashIndex === -1 ? pkg.name : pkg.name.slice(slashIndex + 1)]
+  }
+  return Object.keys(pkg.bin)
+}
+
 describe('bin ownership', () => {
   it('declares the vaultkeeper bin in exactly one publishable package, @vaultkeeper/cli', async () => {
     const packages = await Promise.all(publishablePackageDirs.map((dir) => readPackageJson(dir)))
 
     const ownersOfVaultkeeperBin = packages
-      .filter((pkg) => {
-        if (typeof pkg.bin === 'string') {
-          return false
-        }
-        return pkg.bin !== undefined && 'vaultkeeper' in pkg.bin
-      })
+      .filter((pkg) => declaredBinCommandNames(pkg).includes('vaultkeeper'))
       .map((pkg) => pkg.name)
 
     expect(ownersOfVaultkeeperBin).toEqual(['@vaultkeeper/cli'])

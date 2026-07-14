@@ -153,11 +153,18 @@ describe('packed-install smoke test', () => {
     })
     expect(versionResult.stdout.trim()).toBe(expectedCliVersion)
 
+    // Asserts only that module resolution succeeds — not on any specific
+    // export name — so this doesn't couple a packaging test to the library's
+    // runtime API surface. execFileAsync rejects (and fails the test) on a
+    // non-zero exit, which `.catch` triggers on import rejection.
     const importResult = await execFileAsync(
       'node',
-      ['-e', "import('vaultkeeper').then(m => console.log(typeof m.VaultKeeper))"],
+      [
+        '-e',
+        "import('vaultkeeper').then(() => console.log('import-ok')).catch((err) => { console.error(err); process.exit(1) })",
+      ],
       { cwd: projectDir },
     )
-    expect(importResult.stdout.trim()).toBe('function')
+    expect(importResult.stdout.trim()).toBe('import-ok')
   }, 120_000)
 })
