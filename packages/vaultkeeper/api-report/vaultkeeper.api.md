@@ -365,6 +365,7 @@ export class VaultKeeper {
 
 // @public
 export interface VaultKeeperOptions {
+    backend?: SecretBackend | undefined;
     config?: VaultConfig | undefined;
     configDir?: string | undefined;
     skipDoctor?: boolean | undefined;

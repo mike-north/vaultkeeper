@@ -394,6 +394,94 @@ const { result } = await keeper.exec(token, {
 
 `TestVault` uses an in-memory backend — no OS keychain, no file system, no doctor checks.
 
+### Testing your own code
+
+Application code that calls `VaultKeeper.init()` internally can't be swapped onto a test backend. Structure your code to accept a `VaultKeeper` instance instead — production passes the real one, tests pass `TestVault.keeper`.
+
+**Before** — the function constructs its own `VaultKeeper`, so a test can only exercise it against a real backend:
+
+```ts
+// src/build-auth-header.ts
+import { VaultKeeper } from 'vaultkeeper'
+
+export async function buildAuthHeader(secretName: string): Promise<string> {
+  const vault = await VaultKeeper.init() // always the real backend + doctor checks
+  const jwe = await vault.setup(secretName)
+  const { token } = await vault.authorize(jwe)
+  const accessor = vault.getSecret(token)
+  let header = ''
+  accessor.read((buf) => {
+    header = `Bearer ${buf.toString('utf8')}`
+  })
+  return header
+}
+```
+
+**After** — the `VaultKeeper` instance is a parameter, so the caller decides which vault to use:
+
+```ts
+// src/build-auth-header.ts
+import type { VaultKeeper } from 'vaultkeeper'
+
+export async function buildAuthHeader(vault: VaultKeeper, secretName: string): Promise<string> {
+  const jwe = await vault.setup(secretName)
+  const { token } = await vault.authorize(jwe)
+  const accessor = vault.getSecret(token)
+  let header = ''
+  accessor.read((buf) => {
+    header = `Bearer ${buf.toString('utf8')}`
+  })
+  return header
+}
+```
+
+Production call site is unchanged apart from passing the vault along:
+
+```ts
+import { VaultKeeper } from 'vaultkeeper'
+import { buildAuthHeader } from './build-auth-header.js'
+
+const vault = await VaultKeeper.init()
+const header = await buildAuthHeader(vault, 'MY_API_KEY')
+```
+
+Test with `TestVault.keeper` in place of the real vault:
+
+```ts
+// test/build-auth-header.test.ts
+import { describe, expect, it } from 'vitest'
+import { TestVault } from '@vaultkeeper/test-helpers'
+import { buildAuthHeader } from '../src/build-auth-header.js'
+
+describe('buildAuthHeader', () => {
+  it('formats the stored secret as a Bearer token', async () => {
+    const { keeper, backend } = await TestVault.create()
+    await backend.store('MY_API_KEY', 'test-key-123')
+
+    const header = await buildAuthHeader(keeper, 'MY_API_KEY')
+
+    expect(header).toBe('Bearer test-key-123')
+  })
+})
+```
+
+### Injecting a backend directly
+
+For cases where `TestVault` doesn't fit — e.g. an embedder that already has a `SecretBackend` instance — pass it via `VaultKeeperOptions.backend`. This skips both the global `BackendRegistry` and hand-assembling a full `VaultConfig`:
+
+```ts
+import { VaultKeeper } from 'vaultkeeper'
+import { InMemoryBackend } from '@vaultkeeper/test-helpers'
+
+const backend = new InMemoryBackend()
+const vault = await VaultKeeper.init({ backend, skipDoctor: true })
+
+await vault.store('MY_SECRET', 'hunter2')
+const jwe = await vault.setup('MY_SECRET')
+```
+
+See the `backend` option's JSDoc for how it interacts with `config`/`configDir`.
+
 ## Configuration
 
 Config is loaded from `~/.config/vaultkeeper/config.json` by default. Override with `configDir` in init options or supply `config` directly.

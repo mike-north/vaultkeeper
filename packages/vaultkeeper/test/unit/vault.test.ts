@@ -122,6 +122,94 @@ describe('VaultKeeper', () => {
     })
   })
 
+  describe('init with backend option', () => {
+    it('initializes without registering a backend in BackendRegistry', async () => {
+      // No BackendRegistry.register() call anywhere in this test — the
+      // injected backend must be usable without global registration.
+      const backend = createMockBackend({ 'my-secret': 'hunter2' })
+
+      const vault = await VaultKeeper.init({ skipDoctor: true, backend })
+
+      expect(vault).toBeInstanceOf(VaultKeeper)
+    })
+
+    it('round-trips a store/retrieve through the injected backend', async () => {
+      const storeSpy = vi.fn(() => Promise.resolve())
+      const backend = createMockBackend({ 'my-secret': 'hunter2' })
+      backend.store = storeSpy
+      const vault = await VaultKeeper.init({ skipDoctor: true, backend })
+
+      await vault.store('injected-secret', 'injected-value')
+      expect(storeSpy).toHaveBeenCalledWith('injected-secret', 'injected-value')
+
+      const jwe = await vault.setup('my-secret', { executablePath: 'dev' })
+      const { token } = await vault.authorize(jwe)
+      const accessor = vault.getSecret(token)
+      let captured = ''
+      accessor.read((buf) => {
+        captured = buf.toString('utf-8')
+      })
+      expect(captured).toBe('hunter2')
+    })
+
+    it('uses a minimal built-in default config when config is omitted', async () => {
+      const backend = createMockBackend({ 'my-secret': 'hunter2' })
+      // No `config` or `configDir`-loadable file is supplied — this only
+      // works because init() falls back to a built-in default config when
+      // `backend` is set, instead of calling loadConfig().
+      const vault = await VaultKeeper.init({ skipDoctor: true, backend })
+
+      const jwe = await vault.setup('my-secret', { executablePath: 'dev' })
+      expect(typeof jwe).toBe('string')
+    })
+
+    it('precedence: backend option wins over config.backends resolution', async () => {
+      // A different backend is registered under the type named in
+      // testConfig() ('test'), but it must never be consulted because
+      // `backend` takes precedence over BackendRegistry/config.backends.
+      const registryRetrieveSpy = vi.fn((id: string) => Promise.resolve(`from-registry:${id}`))
+      const registryBackend = createMockBackend({ 'my-secret': 'from-registry' })
+      registryBackend.retrieve = registryRetrieveSpy
+      BackendRegistry.register('test', () => registryBackend)
+
+      const injectedBackend = createMockBackend({ 'my-secret': 'from-injected' })
+      const vault = await VaultKeeper.init({
+        skipDoctor: true,
+        config: testConfig(),
+        configDir: '/tmp/vaultkeeper-test',
+        backend: injectedBackend,
+      })
+
+      const jwe = await vault.setup('my-secret', { executablePath: 'dev' })
+      const { token } = await vault.authorize(jwe)
+      const accessor = vault.getSecret(token)
+      let captured = ''
+      accessor.read((buf) => {
+        captured = buf.toString('utf-8')
+      })
+
+      expect(captured).toBe('from-injected')
+      expect(registryRetrieveSpy).not.toHaveBeenCalled()
+    })
+
+    it('precedence: other config fields (e.g. defaults.ttlMinutes) still apply with backend set', async () => {
+      const backend = createMockBackend({ 'my-secret': 'hunter2' })
+      const config = testConfig()
+      config.defaults.ttlMinutes = 5
+
+      const vault = await VaultKeeper.init({
+        skipDoctor: true,
+        config,
+        backend,
+      })
+
+      // ttlMinutes from the supplied config is used even though the backend
+      // resolution itself is overridden by the `backend` option.
+      const jwe = await vault.setup('my-secret', { executablePath: 'dev' })
+      expect(typeof jwe).toBe('string')
+    })
+  })
+
   describe('doctor', () => {
     it('should return a preflight result', async () => {
       const result = await VaultKeeper.doctor()
