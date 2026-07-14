@@ -376,11 +376,15 @@ export class VaultKeeper {
   /**
    * Execute a delegated command, injecting secrets from the token(s).
    *
-   * **Single token:** every `{{secret}}` placeholder in `request.args` and
-   * `request.env` values is replaced with the secret value.
+   * **Single token:** every `{{secret}}` placeholder in `request.env` values
+   * is replaced with the secret value.
    *
    * **Token map ({@link SecretTokenMap}):** every `{{secret:name}}` placeholder
    * is replaced with the secret from the corresponding named token.
+   *
+   * Secret placeholders are not supported in `request.command` or
+   * `request.args` — process arguments are visible to other processes via
+   * `ps` and often collected in logs and telemetry.
    *
    * The raw secret is never exposed in the return value.
    *
@@ -393,7 +397,7 @@ export class VaultKeeper {
    *   created by this vault instance.
    * @throws {ExecError} If the command cannot be started (e.g. ENOENT),
    *   a placeholder references an unknown secret name, or a secret
-   *   placeholder appears in the `command` field.
+   *   placeholder appears in the `command` or `args` field.
    */
   async exec(
     token: CapabilityToken | SecretTokenMap,

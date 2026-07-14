@@ -4,7 +4,7 @@
 
 ## ExecRequest.env property
 
-Additional environment variables to merge into the child process environment. Any value may contain `{{secret}}`<!-- -->, which is replaced with the secret value before the command is spawned.
+Additional environment variables to merge into the child process environment. Any value may contain `{{secret}}` or `{{secret:name}}`<!-- -->, which is replaced with the secret value before the command is spawned.
 
 **Signature:**
 

@@ -104,17 +104,21 @@ export interface FetchRequest {
 /**
  * Request for delegated command execution.
  *
- * String values in `args` and `env` may include the placeholder `{{secret}}`
+ * String values in `env` may include the placeholder `{{secret}}`
  * (single-token mode) or `{{secret:name}}` (multi-token mode), which are
- * replaced with actual secret values immediately before the command is spawned.
+ * replaced with actual secret values immediately before the command is
+ * spawned. Placeholders are **not** supported in `command` or `args` —
+ * `VaultKeeper.exec()` throws `ExecError` if one appears there.
  */
 export interface ExecRequest {
   /** The command (binary) to execute. */
   command: string
   /**
-   * Command-line arguments. Any argument may contain `{{secret}}` or
-   * `{{secret:name}}`, which is replaced with the secret value before the
-   * command is spawned.
+   * Command-line arguments. Secret placeholders (`{{secret}}` or
+   * `{{secret:name}}`) are **not** supported here — process arguments are
+   * visible to other processes via `ps` and often collected in logs and
+   * telemetry. `VaultKeeper.exec()` throws `ExecError` if a placeholder
+   * appears in any argument. Use `env` to inject secrets instead.
    */
   args?: string[] | undefined
   /**
@@ -237,10 +241,12 @@ export interface VaultConfig {
     trustTier: TrustTier
   }
   /** Development mode configuration. When present, identity checks are relaxed for listed executables. */
-  developmentMode?: {
-    /** Paths of executables that bypass identity verification in development mode. */
-    executables: string[]
-  } | undefined
+  developmentMode?:
+    | {
+        /** Paths of executables that bypass identity verification in development mode. */
+        executables: string[]
+      }
+    | undefined
 }
 
 /** Configuration for a single backend. */

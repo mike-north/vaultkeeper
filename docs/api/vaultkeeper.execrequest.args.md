@@ -4,7 +4,7 @@
 
 ## ExecRequest.args property
 
-Command-line arguments. Any argument may contain `{{secret}}`<!-- -->, which is replaced with the secret value before the command is spawned.
+Command-line arguments. Secret placeholders (`{{secret}}` or `{{secret:name}}`<!-- -->) are \*\*not\*\* supported here — process arguments are visible to other processes via `ps` and often collected in logs and telemetry. `VaultKeeper.exec()` throws `ExecError` if a placeholder appears in any argument. Use `env` to inject secrets instead.
 
 **Signature:**
 
