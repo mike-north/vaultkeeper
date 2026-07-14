@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest'
+import * as publicApi from '../../../src/index.js'
 import {
   CapabilityToken,
   createCapabilityToken,
@@ -50,6 +51,29 @@ describe('CapabilityToken', () => {
   })
 })
 
+// Regression guard for issue #74: the CapabilityToken doc promises there is no
+// public API for reading claims, so both token helpers must stay internal — for
+// different reasons. Exporting validateCapabilityToken would directly leak the
+// secret, since it reads the claims (including the secret value) back out.
+// Exporting createCapabilityToken would not read claims, but it mints a token
+// around caller-supplied claims, letting callers forge tokens outside the
+// authorize() flow and bypass its validation and usage tracking. Neither is
+// exported.
+describe('CapabilityToken public surface (issue #74)', () => {
+  it('exports the CapabilityToken class', () => {
+    expect('CapabilityToken' in publicApi).toBe(true)
+  })
+
+  it('does not export the internal token helpers', () => {
+    // Asserts the source entrypoint's (src/index.ts) export surface. The issue
+    // repro checks the built package at runtime
+    // (`'validateCapabilityToken' in await import('vaultkeeper')`); both resolve
+    // to the same export set, so this is the fast unit-level equivalent.
+    expect('validateCapabilityToken' in publicApi).toBe(false)
+    expect('createCapabilityToken' in publicApi).toBe(false)
+  })
+})
+
 describe('createCapabilityToken', () => {
   it('creates a distinct token for each call', () => {
     const claims = makeClaims()
@@ -79,7 +103,9 @@ describe('validateCapabilityToken', () => {
   it('throws AuthorizationDeniedError for a token not created by createCapabilityToken', () => {
     const forgery = new CapabilityToken()
     expect(() => validateCapabilityToken(forgery)).toThrow(AuthorizationDeniedError)
-    expect(() => validateCapabilityToken(forgery)).toThrow('Invalid or unrecognized capability token')
+    expect(() => validateCapabilityToken(forgery)).toThrow(
+      'Invalid or unrecognized capability token',
+    )
   })
 
   it('throws AuthorizationDeniedError for a plain object cast-free forgery attempt', () => {

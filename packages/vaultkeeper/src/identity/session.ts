@@ -9,7 +9,23 @@
 import type { VaultClaims } from './types.js'
 import { AuthorizationDeniedError } from '../errors.js'
 
-/** Opaque capability token. Claims are inaccessible without `validateCapabilityToken`. */
+/**
+ * An opaque handle to authorized secret claims.
+ *
+ * A `CapabilityToken` is produced by {@link VaultKeeper.authorize} and
+ * deliberately exposes no readable data. The underlying claims — including the
+ * secret value — are held in a module-private `WeakMap` that this class does
+ * not reference, and its private fields keep any property from leaking them
+ * (`toString()` returns only a debug identifier). There is intentionally no
+ * public API for reading the claims directly.
+ *
+ * To use the secret, pass the token to a {@link VaultKeeper} access method —
+ * {@link VaultKeeper.getSecret}, {@link VaultKeeper.fetch},
+ * {@link VaultKeeper.exec}, or {@link VaultKeeper.sign} — which resolve the
+ * claims internally.
+ *
+ * @public
+ */
 export class CapabilityToken {
   // Private field ensures no public surface leaks claims.
   readonly #brand: symbol
