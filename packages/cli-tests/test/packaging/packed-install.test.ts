@@ -34,7 +34,13 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const repoRoot = path.resolve(__dirname, '..', '..', '..', '..')
 
 interface PnpmPackResult {
-  filename: string
+  // pnpm's `pack --json` output has varied across versions: some emit
+  // `filename` (observed as a full path under --pack-destination on the
+  // pnpm version pinned in this repo's packageManager field), others emit
+  // `tarball` (documented as a basename). Accept either and resolve
+  // whichever we get against destDir so this doesn't drift silently.
+  filename?: string
+  tarball?: string
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -48,7 +54,16 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 }
 
 function isPnpmPackResult(value: unknown): value is PnpmPackResult {
-  return isPlainObject(value) && typeof value.filename === 'string'
+  if (!isPlainObject(value)) {
+    return false
+  }
+  if (value.filename !== undefined && typeof value.filename !== 'string') {
+    return false
+  }
+  if (value.tarball !== undefined && typeof value.tarball !== 'string') {
+    return false
+  }
+  return typeof value.filename === 'string' || typeof value.tarball === 'string'
 }
 
 interface PackageJsonVersion {
@@ -70,8 +85,15 @@ async function pnpmPack(packageDir: string, destDir: string): Promise<string> {
   if (!isPnpmPackResult(parsed)) {
     throw new Error(`Unexpected pnpm pack output for ${packageDir}: ${stdout}`)
   }
-  // pnpm pack --json's `filename` is already the full path under --pack-destination.
-  return parsed.filename
+  const tarballPath = parsed.filename ?? parsed.tarball
+  if (tarballPath === undefined) {
+    throw new Error(
+      `pnpm pack output for ${packageDir} had neither filename nor tarball: ${stdout}`,
+    )
+  }
+  // Resolve against destDir in case this pnpm version returned a basename
+  // (`tarball`) rather than the full path (`filename`).
+  return path.isAbsolute(tarballPath) ? tarballPath : path.join(destDir, tarballPath)
 }
 
 const tempDirs: string[] = []
@@ -122,7 +144,11 @@ describe('packed-install smoke test', () => {
       },
     )
 
-    const versionResult = await execFileAsync('npx', ['vaultkeeper', '--version'], {
+    // --no-install keeps this hermetic: if the local bin link is missing —
+    // the exact regression this test guards against — npx must fail rather
+    // than silently falling back to fetching `vaultkeeper` from the
+    // registry, which would mask the bug (and introduce network flakiness).
+    const versionResult = await execFileAsync('npx', ['--no-install', 'vaultkeeper', '--version'], {
       cwd: projectDir,
     })
     expect(versionResult.stdout.trim()).toBe(expectedCliVersion)
