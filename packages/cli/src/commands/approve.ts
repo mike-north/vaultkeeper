@@ -26,13 +26,25 @@ export async function approveCommand(args: string[], configDir: string): Promise
     return 0
   }
 
-  const { values } = parseArgs({
-    args,
-    options: {
-      script: { type: 'string' },
-    },
-    strict: true,
-  })
+  let values: { script?: string }
+  try {
+    ;({ values } = parseArgs({
+      args,
+      options: {
+        script: { type: 'string' },
+      },
+      strict: true,
+    }))
+  } catch (err) {
+    // Regression: issue #69 — an unrecognized flag previously propagated
+    // uncaught and exited 1 via bin.ts's fatal-error handler instead of the
+    // usage-error exit code 2.
+    if (err instanceof Error) {
+      process.stderr.write(`Error: ${err.message}\n`)
+    }
+    process.stderr.write('Usage: vaultkeeper approve --script <path>\n')
+    return 2
+  }
 
   if (values.script === undefined) {
     process.stderr.write('Error: --script is required\n')

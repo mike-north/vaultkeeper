@@ -368,6 +368,7 @@ export class VaultKeeper {
     static init(options?: VaultKeeperOptions): Promise<VaultKeeper>;
     revokeKey(): Promise<void>;
     rotateKey(): Promise<void>;
+    secretExists(name: string): Promise<boolean>;
     setDevelopmentMode(executablePath: string, enabled: boolean): Promise<void>;
     setup(secretName: string, options?: SetupOptions): Promise<string>;
     sign(token: CapabilityToken, request: SignRequest): Promise<{

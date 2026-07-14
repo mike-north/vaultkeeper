@@ -277,4 +277,46 @@ describe('exec trust gate', () => {
     expect(result.stdout).toContain('non-TTY')
     expect(result.stdout).toContain('vaultkeeper approve --script')
   })
+
+  // Issue #69, criterion 3: exec validates secret existence BEFORE the
+  // interactivity/TTY gate. Repro: a nonexistent secret with a NEVER-approved
+  // caller on non-TTY stdin previously hit the trust gate first and reported
+  // the generic "requires approval, but stdin is not a TTY" error, masking
+  // the real problem. It must now report SecretNotFoundError-style messaging
+  // regardless of TTY, and the caller must never be prompted or recorded.
+  it('reports secret-not-found before the TTY/approval gate for a never-approved caller (issue #69 repro)', async () => {
+    if (env === undefined) throw new Error('env not initialized')
+    // A caller that has never been approved and is NOT pre-approved here —
+    // if the trust gate ran first, this would fail with the TTY/approval
+    // message instead of a secret-not-found error.
+    const caller = await writeCaller('#!/bin/sh\necho hi\n')
+
+    const result = await env.run(
+      execArgs(caller).map((a) => (a === SECRET_NAME ? 'no-such-secret' : a)),
+    )
+
+    expect(result.exitCode).not.toBe(0)
+    expect(result.stderr).toContain('SecretNotFoundError')
+    expect(result.stderr).toContain('no-such-secret')
+    expect(result.stderr).not.toContain('requires approval')
+    expect(result.stderr).not.toContain('is not a TTY')
+    expect(result.stderr).not.toMatch(/Allow\?|\[y\/N\]/)
+  })
+
+  // Complement: the same precondition check must not bypass or weaken the
+  // trust gate for a caller that IS approved but the secret is missing.
+  it('reports secret-not-found for an already-trusted caller too, without touching the wrapped command', async () => {
+    if (env === undefined) throw new Error('env not initialized')
+    const caller = await writeCaller('#!/bin/sh\necho hi\n')
+    const approved = await env.run(['approve', '--script', caller])
+    expect(approved.exitCode).toBe(0)
+
+    const result = await env.run(
+      execArgs(caller).map((a) => (a === SECRET_NAME ? 'no-such-secret' : a)),
+    )
+
+    expect(result.exitCode).not.toBe(0)
+    expect(result.stderr).toContain('SecretNotFoundError')
+    expect(result.stdout).not.toContain('ready=')
+  })
 })

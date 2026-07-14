@@ -352,6 +352,26 @@ export class VaultKeeper {
   }
 
   /**
+   * Check whether a secret exists in the active backend, without retrieving
+   * its value, minting a token, or touching the TOFU trust manifest.
+   *
+   * @remarks
+   * This is a lightweight precondition check intended to run before any
+   * interactive or trust-gating logic (e.g. `exec`'s caller-approval prompt),
+   * so a nonexistent secret is reported immediately and unambiguously instead
+   * of being masked by an unrelated approval failure — see issue #69.
+   *
+   * @param name - Identifier for the secret.
+   * @returns `true` if the secret exists, `false` otherwise.
+   * @public
+   */
+  async secretExists(name: string): Promise<boolean> {
+    VaultKeeper.#validateSecretName(name)
+    const backend = this.#requireBackend()
+    return backend.exists(name)
+  }
+
+  /**
    * Read a stored secret from the backend and mint a JWE token that encapsulates it.
    *
    * @param secretName - Identifier for the secret
