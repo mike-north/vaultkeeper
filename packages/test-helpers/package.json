@@ -2,6 +2,13 @@
   "name": "@vaultkeeper/test-helpers",
   "version": "0.2.7",
   "description": "Test utilities for vaultkeeper consumers",
+  "homepage": "https://github.com/mike-north/vaultkeeper#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mike-north/vaultkeeper.git",
+    "directory": "packages/test-helpers"
+  },
+  "bugs": "https://github.com/mike-north/vaultkeeper/issues",
   "type": "module",
   "main": "./dist/index.cjs",
   "module": "./dist/index.js",

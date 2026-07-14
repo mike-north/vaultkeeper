@@ -2,6 +2,13 @@
   "name": "@vaultkeeper/cli-test-helpers",
   "version": "0.2.0",
   "description": "CLI test utilities for vaultkeeper",
+  "homepage": "https://github.com/mike-north/vaultkeeper#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mike-north/vaultkeeper.git",
+    "directory": "packages/cli-test-helpers"
+  },
+  "bugs": "https://github.com/mike-north/vaultkeeper/issues",
   "type": "module",
   "main": "./dist/index.cjs",
   "module": "./dist/index.js",
