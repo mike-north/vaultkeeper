@@ -101,6 +101,15 @@ export interface ExecResult {
 }
 
 // @public
+export interface ExecutableTrustStatus {
+    approvedHashes: readonly string[];
+    hash: string;
+    hashMismatch: boolean;
+    reason: string;
+    trusted: boolean;
+}
+
+// @public
 export class FetchError extends VaultError {
     constructor(message: string, url: string);
     readonly url: string;
@@ -320,10 +329,12 @@ export class VaultError extends Error {
 
 // @public
 export class VaultKeeper {
+    approveExecutable(executablePath: string): Promise<ExecutableTrustStatus>;
     authorize(jwe: string): Promise<{
         token: CapabilityToken;
         vaultResponse: VaultResponse;
     }>;
+    checkExecutableTrust(executablePath: string): Promise<ExecutableTrustStatus>;
     delete(name: string): Promise<void>;
     static doctor(options?: RunDoctorOptions): Promise<PreflightResult>;
     exec(token: CapabilityToken | SecretTokenMap, request: ExecRequest): Promise<{

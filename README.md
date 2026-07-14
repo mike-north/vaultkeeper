@@ -76,8 +76,8 @@ echo "my-secret-value" | vaultkeeper store --name MY_API_KEY
 # Delete a secret
 vaultkeeper delete --name MY_API_KEY
 
-# Pre-approve an executable (TOFU)
-vaultkeeper approve --path /usr/local/bin/my-tool
+# Pre-approve an executable (TOFU): records its SHA-256 in the trust manifest
+vaultkeeper approve --script /usr/local/bin/my-tool
 
 # Toggle development mode for a script
 vaultkeeper dev-mode --path /path/to/script --enable
@@ -191,23 +191,23 @@ vault.dispose()
 
 The first enabled backend in the configuration is used.
 
-| Type | Platform | Notes |
-|------|----------|-------|
-| `keychain` | macOS | macOS Keychain (built-in) |
-| `dpapi` | Windows | Windows DPAPI (built-in) |
-| `secret-tool` | Linux | `libsecret` / `secret-tool` (built-in) |
-| `file` | All | AES-256-GCM encrypted file fallback (built-in) |
-| `1password` | All | 1Password `op` CLI (plugin) |
-| `yubikey` | All | YubiKey `ykman` (plugin) |
+| Type          | Platform | Notes                                          |
+| ------------- | -------- | ---------------------------------------------- |
+| `keychain`    | macOS    | macOS Keychain (built-in)                      |
+| `dpapi`       | Windows  | Windows DPAPI (built-in)                       |
+| `secret-tool` | Linux    | `libsecret` / `secret-tool` (built-in)         |
+| `file`        | All      | AES-256-GCM encrypted file fallback (built-in) |
+| `1password`   | All      | 1Password `op` CLI (plugin)                    |
+| `yubikey`     | All      | YubiKey `ykman` (plugin)                       |
 
 ## Platforms
 
-| Platform | Default backend | Required dependencies |
-|----------|----------------|----------------------|
-| macOS | `keychain` | `security` (built-in) |
-| Linux | `file` | None (AES-256-GCM encrypted file, no OS credential store needed) |
-| Windows | `dpapi` | PowerShell (built-in) |
-| Any | `file` | None (AES-256-GCM encrypted file, no OS credential store needed) |
+| Platform | Default backend | Required dependencies                                            |
+| -------- | --------------- | ---------------------------------------------------------------- |
+| macOS    | `keychain`      | `security` (built-in)                                            |
+| Linux    | `file`          | None (AES-256-GCM encrypted file, no OS credential store needed) |
+| Windows  | `dpapi`         | PowerShell (built-in)                                            |
+| Any      | `file`          | None (AES-256-GCM encrypted file, no OS credential store needed) |
 
 The `file` backend works on all platforms and requires no system dependencies. Use it as a fallback or in environments without a native credential store (CI, Docker, etc.).
 
@@ -267,10 +267,10 @@ const result = await VaultKeeper.doctor()
 // Or standalone
 const result = await runDoctor()
 
-console.log(result.ready)      // boolean
-console.log(result.checks)     // PreflightCheck[]
-console.log(result.warnings)   // string[]
-console.log(result.nextSteps)  // string[]
+console.log(result.ready) // boolean
+console.log(result.checks) // PreflightCheck[]
+console.log(result.warnings) // string[]
+console.log(result.nextSteps) // string[]
 ```
 
 Pass `skipDoctor: true` to bypass preflight on init:
@@ -303,11 +303,11 @@ Executable identity is verified during `setup()`. A `trustTier` value can be att
 
 > **Note:** In the current implementation, `trustTier` is recorded in the token claims but does not change which verification mechanism is used. Future versions may introduce tier-specific verification behavior.
 
-| Tier | Intended method |
-|------|-----------------|
-| `1` | Sigstore transparency log |
-| `2` | Registry signature |
-| `3` | TOFU (Trust On First Use) — hash stored in trust manifest |
+| Tier | Intended method                                           |
+| ---- | --------------------------------------------------------- |
+| `1`  | Sigstore transparency log                                 |
+| `2`  | Registry signature                                        |
+| `3`  | TOFU (Trust On First Use) — hash stored in trust manifest |
 
 Pass `trustTier` in setup options to override the configured default:
 
@@ -382,8 +382,8 @@ Config is loaded from `~/.config/vaultkeeper/config.json` by default. Override w
 
 ```ts
 const jwe = await vault.setup('SECRET_NAME', {
-  ttlMinutes: 30,          // token TTL (default: from config)
-  useLimit: 1,             // null for unlimited
+  ttlMinutes: 30, // token TTL (default: from config)
+  useLimit: 1, // null for unlimited
   executablePath: '/path/to/caller', // or 'dev' to skip identity check
   trustTier: 3,
   backendType: 'keychain',
@@ -394,41 +394,41 @@ const jwe = await vault.setup('SECRET_NAME', {
 
 All errors extend `VaultError`.
 
-| Class | When thrown |
-|-------|-------------|
-| `BackendLockedError` | Keychain or credential store is locked |
-| `DeviceNotPresentError` | Required hardware device not connected |
-| `AuthorizationDeniedError` | User denied an OS permission dialog |
-| `BackendUnavailableError` | No configured backend is reachable |
-| `PluginNotFoundError` | A required plugin binary is not installed |
-| `SecretNotFoundError` | Secret does not exist in the backend |
-| `TokenExpiredError` | JWE has passed its `exp` claim |
-| `KeyRotatedError` | Key exited grace period; JWE is permanently unreadable |
-| `KeyRevokedError` | Key was explicitly revoked |
-| `TokenRevokedError` | Token has been blocked (e.g. single-use token already consumed) |
-| `UsageLimitExceededError` | Token presented more times than its `use` limit allows |
-| `IdentityMismatchError` | Executable hash changed since TOFU approval |
-| `ExecError` | `exec()` request was invalid (e.g. `{{secret}}` in the command field) or the command could not be started (not found or failed to spawn) |
-| `InvalidTokenError` | JWE could not be decrypted or validated (e.g. structurally malformed, tampered, or failed decryption) |
-| `AccessorConsumedError` | `SecretAccessor.read()` called after already consumed |
-| `InvalidAlgorithmError` | Signing/verifying with a disallowed algorithm (e.g. `md5`) |
-| `SetupError` | Required system dependency missing or incompatible at init |
-| `FilesystemError` | Config directory not readable or writable |
-| `RotationInProgressError` | `rotateKey()` called while previous key is still in grace period |
+| Class                      | When thrown                                                                                                                              |
+| -------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| `BackendLockedError`       | Keychain or credential store is locked                                                                                                   |
+| `DeviceNotPresentError`    | Required hardware device not connected                                                                                                   |
+| `AuthorizationDeniedError` | User denied an OS permission dialog                                                                                                      |
+| `BackendUnavailableError`  | No configured backend is reachable                                                                                                       |
+| `PluginNotFoundError`      | A required plugin binary is not installed                                                                                                |
+| `SecretNotFoundError`      | Secret does not exist in the backend                                                                                                     |
+| `TokenExpiredError`        | JWE has passed its `exp` claim                                                                                                           |
+| `KeyRotatedError`          | Key exited grace period; JWE is permanently unreadable                                                                                   |
+| `KeyRevokedError`          | Key was explicitly revoked                                                                                                               |
+| `TokenRevokedError`        | Token has been blocked (e.g. single-use token already consumed)                                                                          |
+| `UsageLimitExceededError`  | Token presented more times than its `use` limit allows                                                                                   |
+| `IdentityMismatchError`    | Executable hash changed since TOFU approval                                                                                              |
+| `ExecError`                | `exec()` request was invalid (e.g. `{{secret}}` in the command field) or the command could not be started (not found or failed to spawn) |
+| `InvalidTokenError`        | JWE could not be decrypted or validated (e.g. structurally malformed, tampered, or failed decryption)                                    |
+| `AccessorConsumedError`    | `SecretAccessor.read()` called after already consumed                                                                                    |
+| `InvalidAlgorithmError`    | Signing/verifying with a disallowed algorithm (e.g. `md5`)                                                                               |
+| `SetupError`               | Required system dependency missing or incompatible at init                                                                               |
+| `FilesystemError`          | Config directory not readable or writable                                                                                                |
+| `RotationInProgressError`  | `rotateKey()` called while previous key is still in grace period                                                                         |
 
 ## Architecture
 
 vaultkeeper is a polyglot monorepo with TypeScript and Rust implementations sharing the same crypto primitives and wire format:
 
-| Component | Package | Description |
-|-----------|---------|-------------|
-| Rust core | `vaultkeeper-core` (crate) | All business logic, crypto (JWE, AES-256-GCM), backends, key management |
-| Native CLI | `vaultkeeper-cli` (crate) | Standalone binary using clap |
-| WASM bindings | `vaultkeeper-wasm` (crate) | wasm-bindgen wrapper over core |
-| TypeScript library | `vaultkeeper` (npm) | Pure TypeScript implementation |
-| WASM SDK | `@vaultkeeper/wasm` (npm) | Node.js wrapper around the WASM binary |
-| Node.js CLI | `@vaultkeeper/cli` (npm) | CLI using the TypeScript library |
-| Conformance tests | `vaultkeeper-conformance` (crate) | Data-driven tests ensuring both CLIs match |
+| Component          | Package                           | Description                                                             |
+| ------------------ | --------------------------------- | ----------------------------------------------------------------------- |
+| Rust core          | `vaultkeeper-core` (crate)        | All business logic, crypto (JWE, AES-256-GCM), backends, key management |
+| Native CLI         | `vaultkeeper-cli` (crate)         | Standalone binary using clap                                            |
+| WASM bindings      | `vaultkeeper-wasm` (crate)        | wasm-bindgen wrapper over core                                          |
+| TypeScript library | `vaultkeeper` (npm)               | Pure TypeScript implementation                                          |
+| WASM SDK           | `@vaultkeeper/wasm` (npm)         | Node.js wrapper around the WASM binary                                  |
+| Node.js CLI        | `@vaultkeeper/cli` (npm)          | CLI using the TypeScript library                                        |
+| Conformance tests  | `vaultkeeper-conformance` (crate) | Data-driven tests ensuring both CLIs match                              |
 
 JWE tokens created by the Rust core and the TypeScript library are wire-compatible — a token minted by one can be decrypted by the other.
 

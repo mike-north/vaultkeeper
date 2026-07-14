@@ -3,8 +3,10 @@
  *
  * Flow:
  * 1. Parse flags and the command after `--`
- * 2. If `--cache`, check for a cached JWE token
- * 3. If no cached token: prompt for approval, THEN retrieve and setup the secret
+ * 2. Enforce the TOFU trust gate for the caller (runs on every invocation,
+ *    including `--cache` hits, so a cached token never bypasses trust)
+ * 3. If `--cache`, check for a cached JWE token; otherwise retrieve and setup
+ *    the secret into a fresh JWE
  * 4. Authorize the JWE → obtain a CapabilityToken
  * 5. Read the secret value via the accessor
  * 6. Spawn the child process with the secret injected as an env var
@@ -23,12 +25,66 @@
 import { parseArgs } from 'node:util'
 import { spawn } from 'node:child_process'
 import * as path from 'node:path'
-import { VaultKeeper } from 'vaultkeeper'
+import { VaultKeeper, IdentityMismatchError } from 'vaultkeeper'
 import { promptApproval } from '../approval.js'
 import { readCachedToken, writeCachedToken, invalidateCache } from '../cache.js'
 import { RedactingStream } from '../redact.js'
 import { shouldSkipDoctor } from '../skip-doctor.js'
 import { formatError } from '../output.js'
+
+/**
+ * Enforce the TOFU trust gate for `callerPath` before any secret is retrieved
+ * or any cached token is used.
+ *
+ * Behavior depends on the caller's current trust status:
+ *
+ * - **Trusted** (current hash approved in the manifest): returns `true` without
+ *   an interactive prompt, so trusted callers work on non-TTY stdin.
+ * - **Hash mismatch** (caller is known to the manifest but its hash changed
+ *   since approval): throws {@link IdentityMismatchError} with re-approval
+ *   guidance. It does not prompt — `VaultKeeper.setup()` rejects the same hash
+ *   conflict regardless of the user's answer, so prompting would waste it.
+ * - **Never approved**: shows an interactive approval prompt and returns its
+ *   result (`false` if the user declines).
+ *
+ * @returns `true` if access is authorized, `false` if the user declined.
+ * @throws {IdentityMismatchError} When the caller's hash changed from a
+ *   previously approved value.
+ * @throws When interactive approval is required but stdin is not a TTY, or when
+ *   the caller path cannot be read for hashing.
+ */
+async function enforceTrustGate(
+  vault: VaultKeeper,
+  callerPath: string,
+  secret: string,
+  reason: string | undefined,
+): Promise<boolean> {
+  const trust = await vault.checkExecutableTrust(callerPath)
+  if (trust.trusted) {
+    process.stderr.write('Trust: verified (hash matches trust manifest)\n')
+    return true
+  }
+
+  if (trust.hashMismatch) {
+    // On a mismatch the manifest holds at least one prior approved hash; report
+    // the most recently approved one as previousHash and the on-disk hash as
+    // currentHash so the error payload is accurate for diagnosis.
+    const previousHash = trust.approvedHashes.at(-1) ?? trust.hash
+    throw new IdentityMismatchError(
+      `Executable at ${callerPath} has changed since it was approved. ` +
+        `If this change is expected, re-approve it with: vaultkeeper approve --script ${callerPath}`,
+      previousHash,
+      trust.hash,
+    )
+  }
+
+  return promptApproval({
+    caller: callerPath,
+    trustInfo: 'Pending verification',
+    secret,
+    reason,
+  })
+}
 
 function printExecHelp(): void {
   process.stdout.write(
@@ -107,28 +163,24 @@ export async function execCommand(args: string[]): Promise<number> {
   try {
     const vault = await VaultKeeper.init({ skipDoctor })
 
-    // Check cache first if --cache
+    // Enforce the trust gate BEFORE touching the cache or retrieving the
+    // secret. This runs on every invocation — including a `--cache` hit — so a
+    // previously cached JWE can never let a modified or never-approved caller
+    // inherit trust it no longer (or never) held. A modified caller surfaces an
+    // identity-mismatch error here rather than silently reusing a cached token.
+    const approved = await enforceTrustGate(vault, callerPath, secret, values.reason)
+    if (!approved) {
+      process.stderr.write('Access denied by user.\n')
+      return 1
+    }
+
+    // Check cache only after the caller has cleared the trust gate.
     let jwe: string | undefined
     if (useCache) {
       jwe = await readCachedToken(callerPath, secret)
     }
 
     if (jwe === undefined) {
-      // [C1 fix] Prompt for approval BEFORE retrieving the secret.
-      // vault.setup() retrieves the secret from the backend and embeds it
-      // in a JWE, so we must get user consent first.
-      const approved = await promptApproval({
-        caller: callerPath,
-        trustInfo: 'Pending verification',
-        secret,
-        reason: values.reason,
-      })
-
-      if (!approved) {
-        process.stderr.write('Access denied by user.\n')
-        return 1
-      }
-
       jwe = await vault.setup(secret, { executablePath: callerPath })
 
       // Cache if requested
@@ -146,23 +198,11 @@ export async function execCommand(args: string[]): Promise<number> {
         secretValue = buf.toString('utf8')
       })
     } catch (err) {
-      // If cached token failed, invalidate and retry without cache
+      // If the cached token failed (e.g. expired), invalidate and mint a fresh
+      // one. Trust was already enforced above, so no re-prompt is needed.
       if (useCache) {
         await invalidateCache(callerPath, secret)
         process.stderr.write('Cached token expired, re-authenticating...\n')
-        // [C2 fix] Retry by toggling the useCache flag off internally
-        // rather than filtering args (which could corrupt the wrapped command).
-        jwe = undefined
-        const approved = await promptApproval({
-          caller: callerPath,
-          trustInfo: 'Pending verification',
-          secret,
-          reason: values.reason,
-        })
-        if (!approved) {
-          process.stderr.write('Access denied by user.\n')
-          return 1
-        }
         jwe = await vault.setup(secret, { executablePath: callerPath })
         // Write the new token back to cache so subsequent invocations benefit
         await writeCachedToken(callerPath, secret, jwe)

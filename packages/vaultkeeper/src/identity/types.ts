@@ -31,6 +31,13 @@ export interface TrustVerificationResult {
    * When true, the caller must prompt for re-approval before proceeding.
    */
   tofuConflict: boolean
+  /**
+   * Hashes already recorded in the trust manifest for this namespace at the
+   * time of verification, in approval order (empty on a first encounter). On a
+   * {@link TrustVerificationResult.tofuConflict}, these are the previously
+   * approved values that the current on-disk hash no longer matches.
+   */
+  approvedHashes: string[]
   /** Human-readable description of how trust was established. */
   reason: string
 }

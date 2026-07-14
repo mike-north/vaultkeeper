@@ -3,6 +3,7 @@
  */
 
 import * as crypto from 'node:crypto'
+import * as path from 'node:path'
 import type {
   VaultConfig,
   VaultClaims,
@@ -23,6 +24,8 @@ import { BackendRegistry } from './backend/registry.js'
 import type { SecretBackend } from './backend/types.js'
 import { createToken, decryptToken, extractKid, validateClaims, blockToken } from './jwe/index.js'
 import { verifyTrust } from './identity/trust.js'
+import { hashExecutable } from './identity/hash.js'
+import { loadManifest, saveManifest, addTrustedHash, isTrusted } from './identity/manifest.js'
 import {
   CapabilityToken,
   createCapabilityToken,
@@ -41,6 +44,7 @@ import {
   BackendUnavailableError,
   VaultError,
   KeyRevokedError,
+  FilesystemError,
 } from './errors.js'
 
 /**
@@ -89,6 +93,42 @@ export interface SetupOptions {
   backendType?: string | undefined
 }
 
+/**
+ * Trust status of an executable, as recorded in the trust-on-first-use (TOFU)
+ * trust manifest.
+ *
+ * Returned by {@link VaultKeeper.approveExecutable} and
+ * {@link VaultKeeper.checkExecutableTrust}.
+ *
+ * @public
+ */
+export interface ExecutableTrustStatus {
+  /**
+   * Whether the executable's current hash is approved in the trust manifest.
+   * When `false`, callers must obtain approval (e.g. an interactive prompt)
+   * before granting secret access.
+   */
+  trusted: boolean
+  /** SHA-256 hex digest of the executable's current contents. */
+  hash: string
+  /**
+   * `true` when the executable is already known to the manifest but its
+   * current hash does not match any approved value — a TOFU conflict. A
+   * conflicting executable is never trusted; callers must re-approve or deny.
+   */
+  hashMismatch: boolean
+  /**
+   * Hashes recorded as approved for this executable in the trust manifest, in
+   * approval order (empty when the executable has never been approved). When
+   * {@link ExecutableTrustStatus.hashMismatch} is `true`, these are the prior
+   * approved values that {@link ExecutableTrustStatus.hash} no longer matches;
+   * the last element is the most recently approved hash.
+   */
+  approvedHashes: readonly string[]
+  /** Human-readable description of how trust was (or was not) established. */
+  reason: string
+}
+
 /** Usage tracking for tokens with use limits. */
 const usageCounts = new Map<string, number>()
 
@@ -118,6 +158,12 @@ export class VaultKeeper {
   /**
    * Initialize a new VaultKeeper instance.
    * Runs doctor checks (unless skipped), loads config, and sets up the key manager.
+   *
+   * The configured secret backend is resolved lazily on first use, not during
+   * `init()`. Trust-only operations (e.g. {@link VaultKeeper.approveExecutable},
+   * {@link VaultKeeper.checkExecutableTrust}) therefore succeed even when the
+   * configured backend or plugin is unavailable or unregistered; a
+   * misconfigured backend surfaces only when a secret operation is invoked.
    */
   static async init(options?: VaultKeeperOptions): Promise<VaultKeeper> {
     const configDir = options?.configDir ?? getDefaultConfigDir()
@@ -133,10 +179,7 @@ export class VaultKeeper {
     const keyManager = new KeyManager()
     await keyManager.init()
 
-    const vault = new VaultKeeper(config, keyManager, configDir)
-    vault.#backend = vault.#resolveBackend()
-
-    return vault
+    return new VaultKeeper(config, keyManager, configDir)
   }
 
   /**
@@ -206,13 +249,20 @@ export class VaultKeeper {
     if (executablePath === 'dev' || this.#isDevModeExecutable(executablePath)) {
       exeIdentity = 'dev'
     } else {
-      const trustResult = await verifyTrust(executablePath, {
+      // Resolve to an absolute path before verification so the manifest is
+      // keyed consistently with approveExecutable() and checkExecutableTrust(),
+      // both of which resolve. A relative path approved earlier (stored under
+      // its absolute key) therefore matches here too.
+      const trustResult = await verifyTrust(path.resolve(executablePath), {
         configDir: this.#configDir,
       })
       if (trustResult.tofuConflict) {
+        // On a conflict the manifest holds at least one prior approved hash;
+        // report the most recently approved one as the previous hash.
+        const previousHash = trustResult.approvedHashes.at(-1) ?? trustResult.identity.hash
         throw new IdentityMismatchError(
           'Executable hash changed — re-approval required',
-          'previously-approved',
+          previousHash,
           trustResult.identity.hash,
         )
       }
@@ -490,9 +540,102 @@ export class VaultKeeper {
     await Promise.resolve()
   }
 
+  /**
+   * Approve an executable for trust-on-first-use by recording its current
+   * SHA-256 hash in the trust manifest.
+   *
+   * After approval, {@link VaultKeeper.setup} and
+   * {@link VaultKeeper.checkExecutableTrust} recognize the executable (matched
+   * by its resolved absolute path and content hash) as trusted, so callers can
+   * skip an interactive approval prompt.
+   *
+   * The operation is idempotent: approving the same, unchanged executable more
+   * than once leaves a single manifest entry.
+   *
+   * @param executablePath - Path to the executable to approve. Resolved to an
+   *   absolute path before hashing and recording.
+   * @returns The recorded trust status (always `trusted: true`).
+   * @throws {FilesystemError} If the executable does not exist or cannot be read.
+   * @public
+   */
+  async approveExecutable(executablePath: string): Promise<ExecutableTrustStatus> {
+    const resolved = path.resolve(executablePath)
+    const hash = await VaultKeeper.#hashExecutableOrThrow(resolved)
+    const manifest = await loadManifest(this.#configDir)
+    const updated = addTrustedHash(manifest, resolved, hash)
+    await saveManifest(this.#configDir, updated)
+    return {
+      trusted: true,
+      hash,
+      hashMismatch: false,
+      approvedHashes: updated.get(resolved)?.hashes ?? [hash],
+      reason: 'Hash recorded in trust manifest',
+    }
+  }
+
+  /**
+   * Check whether an executable is trusted according to the trust manifest,
+   * without modifying the manifest.
+   *
+   * This is a read-only probe. Unlike {@link VaultKeeper.setup}, it never
+   * records a hash, so it can be used to decide whether an interactive approval
+   * prompt is required before proceeding.
+   *
+   * @param executablePath - Path to the executable to check. Resolved to an
+   *   absolute path before hashing and lookup.
+   * @returns The current trust status. `trusted` is `true` only when the
+   *   executable's current hash matches an approved manifest entry.
+   * @throws {FilesystemError} If the executable does not exist or cannot be read.
+   * @public
+   */
+  async checkExecutableTrust(executablePath: string): Promise<ExecutableTrustStatus> {
+    const resolved = path.resolve(executablePath)
+    const hash = await VaultKeeper.#hashExecutableOrThrow(resolved)
+    const manifest = await loadManifest(this.#configDir)
+    const approvedHashes = manifest.get(resolved)?.hashes ?? []
+
+    if (isTrusted(manifest, resolved, hash)) {
+      return {
+        trusted: true,
+        hash,
+        hashMismatch: false,
+        approvedHashes,
+        reason: 'Hash found in trust manifest',
+      }
+    }
+
+    const hashMismatch = approvedHashes.length > 0
+    return {
+      trusted: false,
+      hash,
+      hashMismatch,
+      approvedHashes,
+      reason: hashMismatch
+        ? 'Executable hash changed from a previously approved value — re-approval required'
+        : 'Executable not yet approved',
+    }
+  }
+
   // ---------------------------------------------------------------------------
   // Private helpers
   // ---------------------------------------------------------------------------
+
+  /**
+   * Hash the file at `resolvedPath`, converting any read failure (e.g. a
+   * missing file) into a typed {@link FilesystemError} that names the path.
+   */
+  static async #hashExecutableOrThrow(resolvedPath: string): Promise<string> {
+    try {
+      return await hashExecutable(resolvedPath)
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : String(err)
+      throw new FilesystemError(
+        `Cannot read executable at ${resolvedPath}: ${detail}`,
+        resolvedPath,
+        'read',
+      )
+    }
+  }
 
   static #resolveSecrets(token: CapabilityToken | SecretTokenMap): string | Record<string, string> {
     if (token instanceof CapabilityToken) {
@@ -535,9 +678,10 @@ export class VaultKeeper {
   }
 
   #requireBackend(): SecretBackend {
-    if (this.#backend === undefined) {
-      throw new VaultError('VaultKeeper backend not initialized')
-    }
+    // Resolve the configured backend lazily on first use so that trust-only
+    // operations never require a healthy/registered backend. #resolveBackend()
+    // throws BackendUnavailableError if none is enabled or it cannot be built.
+    this.#backend ??= this.#resolveBackend()
     return this.#backend
   }
 

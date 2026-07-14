@@ -1,18 +1,21 @@
 import { parseArgs } from 'node:util'
 import * as path from 'node:path'
+import { VaultKeeper } from 'vaultkeeper'
+import { formatError } from '../output.js'
 
 function printApproveHelp(): void {
   process.stdout.write(
     'Usage: vaultkeeper approve --script <path>\n\n' +
-      'Pre-record a script hash in the TOFU manifest so the first\n' +
-      'invocation via vaultkeeper exec does not prompt for trust.\n\n' +
+      'Record a script hash in the TOFU trust manifest so that invoking it via\n' +
+      'vaultkeeper exec does not prompt for trust. Running this on an already\n' +
+      'approved, unchanged script is idempotent.\n\n' +
       'Options:\n' +
       '  --script <path>   Path to the script to approve\n' +
       '  -h, --help        Show this help message\n',
   )
 }
 
-export function approveCommand(args: string[]): number {
+export async function approveCommand(args: string[]): Promise<number> {
   // Handle --help / -h before strict parseArgs.
   if (args.includes('--help') || args.includes('-h')) {
     printApproveHelp()
@@ -36,13 +39,18 @@ export function approveCommand(args: string[]): number {
 
   const scriptPath = path.resolve(values.script)
 
-  // The TOFU manifest records the executable hash on first use via setup().
-  // Direct manifest manipulation is not part of the public vaultkeeper API.
-  // The hash will be recorded automatically the first time this script
-  // runs `vaultkeeper exec`.
-  process.stdout.write(`Script approved: ${scriptPath}\n`)
-  process.stdout.write(
-    'The script hash will be recorded on first use with vaultkeeper exec.\n',
-  )
-  return 0
+  try {
+    // Approving a hash is a trust-only operation: it touches the config dir and
+    // trust manifest, never the secret backend. Skip the doctor preflight, and
+    // VaultKeeper.init() itself resolves the backend lazily, so approve works
+    // even when the configured backend or plugin is unavailable.
+    const vault = await VaultKeeper.init({ skipDoctor: true })
+    const status = await vault.approveExecutable(scriptPath)
+    process.stdout.write(`Approved ${scriptPath} (hash: ${status.hash})\n`)
+    return 0
+  } catch (err) {
+    process.stderr.write(`${formatError(err)}\n`)
+    // Exit code 1: runtime error (e.g. missing script, unwritable manifest)
+    return 1
+  }
 }

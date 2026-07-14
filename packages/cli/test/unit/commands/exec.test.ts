@@ -1,12 +1,36 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { execCommand } from '../../../src/commands/exec.js'
+import { promptApproval } from '../../../src/approval.js'
+import { readCachedToken } from '../../../src/cache.js'
 
 const mockInit = vi.hoisted(() => vi.fn())
+
+// A real IdentityMismatchError subclass so `.name`/`.message` format exactly as
+// the CLI expects when it constructs and formats the mismatch error. Defined
+// via vi.hoisted so it is initialized before the hoisted vi.mock factory runs.
+// Each constructed instance is recorded so tests can assert the CLI populated
+// previousHash/currentHash with the real hashes (not a placeholder).
+const IdentityMismatchError = vi.hoisted(
+  () =>
+    class IdentityMismatchError extends Error {
+      static readonly instances: IdentityMismatchError[] = []
+      readonly previousHash: string
+      readonly currentHash: string
+      constructor(message: string, previousHash: string, currentHash: string) {
+        super(message)
+        this.name = 'IdentityMismatchError'
+        this.previousHash = previousHash
+        this.currentHash = currentHash
+        IdentityMismatchError.instances.push(this)
+      }
+    },
+)
 
 vi.mock('vaultkeeper', () => ({
   VaultKeeper: {
     init: mockInit,
   },
+  IdentityMismatchError,
 }))
 
 // Prevent any real approval prompts from blocking tests
@@ -20,6 +44,34 @@ vi.mock('../../../src/cache.js', () => ({
   invalidateCache: vi.fn().mockResolvedValue(undefined),
 }))
 
+/**
+ * Default VaultKeeper mock for tests that drive execCommand end-to-end. It
+ * includes checkExecutableTrust() — which execCommand now calls first, before
+ * any prompt/cache/secret flow — returning a "pending" (never-approved, no
+ * mismatch) status. With promptApproval mocked to decline, this deterministically
+ * exercises the trust gate's "prompt → declined → Access denied" path rather than
+ * short-circuiting on a missing-method TypeError.
+ */
+function pendingVaultMock(): {
+  checkExecutableTrust: ReturnType<typeof vi.fn>
+  setup: ReturnType<typeof vi.fn>
+  authorize: ReturnType<typeof vi.fn>
+  getSecret: ReturnType<typeof vi.fn>
+} {
+  return {
+    checkExecutableTrust: vi.fn().mockResolvedValue({
+      trusted: false,
+      hashMismatch: false,
+      hash: 'pending-hash',
+      approvedHashes: [],
+      reason: 'Executable not yet approved',
+    }),
+    setup: vi.fn(),
+    authorize: vi.fn(),
+    getSecret: vi.fn(),
+  }
+}
+
 describe('execCommand', () => {
   let stderrOutput: string
   let stdoutOutput: string
@@ -27,6 +79,7 @@ describe('execCommand', () => {
   beforeEach(() => {
     stderrOutput = ''
     stdoutOutput = ''
+    IdentityMismatchError.instances.length = 0
     vi.spyOn(process.stderr, 'write').mockImplementation((chunk) => {
       stderrOutput += String(chunk)
       return true
@@ -45,7 +98,14 @@ describe('execCommand', () => {
 
   describe('-- separator validation', () => {
     it('should return 2 when -- separator is missing', async () => {
-      const code = await execCommand(['--secret', 'my-key', '--env', 'MY_VAR', '--caller', '/path/to/script.sh'])
+      const code = await execCommand([
+        '--secret',
+        'my-key',
+        '--env',
+        'MY_VAR',
+        '--caller',
+        '/path/to/script.sh',
+      ])
       expect(code).toBe(2)
     })
 
@@ -62,29 +122,69 @@ describe('execCommand', () => {
 
   describe('command after -- validation', () => {
     it('should return 2 when command after -- is empty', async () => {
-      const code = await execCommand(['--secret', 'my-key', '--env', 'MY_VAR', '--caller', '/path/to/script.sh', '--'])
+      const code = await execCommand([
+        '--secret',
+        'my-key',
+        '--env',
+        'MY_VAR',
+        '--caller',
+        '/path/to/script.sh',
+        '--',
+      ])
       expect(code).toBe(2)
     })
 
     it('should write error message when command after -- is empty', async () => {
-      await execCommand(['--secret', 'my-key', '--env', 'MY_VAR', '--caller', '/path/to/script.sh', '--'])
+      await execCommand([
+        '--secret',
+        'my-key',
+        '--env',
+        'MY_VAR',
+        '--caller',
+        '/path/to/script.sh',
+        '--',
+      ])
       expect(stderrOutput).toContain('No command provided after --')
     })
   })
 
   describe('required flag validation', () => {
     it('should return 2 when --secret is missing', async () => {
-      const code = await execCommand(['--env', 'MY_VAR', '--caller', '/path/to/script.sh', '--', 'echo', 'hello'])
+      const code = await execCommand([
+        '--env',
+        'MY_VAR',
+        '--caller',
+        '/path/to/script.sh',
+        '--',
+        'echo',
+        'hello',
+      ])
       expect(code).toBe(2)
     })
 
     it('should return 2 when --env is missing', async () => {
-      const code = await execCommand(['--secret', 'my-key', '--caller', '/path/to/script.sh', '--', 'echo', 'hello'])
+      const code = await execCommand([
+        '--secret',
+        'my-key',
+        '--caller',
+        '/path/to/script.sh',
+        '--',
+        'echo',
+        'hello',
+      ])
       expect(code).toBe(2)
     })
 
     it('should return 2 when --caller is missing', async () => {
-      const code = await execCommand(['--secret', 'my-key', '--env', 'MY_VAR', '--', 'echo', 'hello'])
+      const code = await execCommand([
+        '--secret',
+        'my-key',
+        '--env',
+        'MY_VAR',
+        '--',
+        'echo',
+        'hello',
+      ])
       expect(code).toBe(2)
     })
 
@@ -94,88 +194,237 @@ describe('execCommand', () => {
     })
 
     it('should write error message when required flags are missing', async () => {
-      await execCommand(['--env', 'MY_VAR', '--caller', '/path/to/script.sh', '--', 'echo', 'hello'])
+      await execCommand([
+        '--env',
+        'MY_VAR',
+        '--caller',
+        '/path/to/script.sh',
+        '--',
+        'echo',
+        'hello',
+      ])
       expect(stderrOutput).toContain('--secret, --env, and --caller are required')
     })
   })
 
   describe('--skip-doctor flag', () => {
+    // These drive the full command with a never-approved (pending) caller, so
+    // the trust gate reaches promptApproval (mocked to decline) and the command
+    // exits at "Access denied". Asserting the gate was reached keeps these tests
+    // genuinely exercising the trust path — if the default mock stopped providing
+    // checkExecutableTrust, execCommand would throw before promptApproval and
+    // these assertions would fail.
     it('should pass skipDoctor: false to VaultKeeper.init by default', async () => {
-      // promptApproval returns false, so init will be called but the command exits at denial
-      mockInit.mockResolvedValue({ setup: vi.fn(), authorize: vi.fn(), getSecret: vi.fn() })
+      mockInit.mockResolvedValue(pendingVaultMock())
       await execCommand([
-        '--secret', 'my-key',
-        '--env', 'MY_VAR',
-        '--caller', '/path/to/script.sh',
+        '--secret',
+        'my-key',
+        '--env',
+        'MY_VAR',
+        '--caller',
+        '/path/to/script.sh',
         '--',
-        'echo', 'hello',
+        'echo',
+        'hello',
       ])
       expect(mockInit).toHaveBeenCalledWith({ skipDoctor: false })
+      expect(promptApproval).toHaveBeenCalled()
+      expect(stderrOutput).toContain('Access denied by user.')
     })
 
     it('should pass skipDoctor: true to VaultKeeper.init when --skip-doctor is set', async () => {
-      mockInit.mockResolvedValue({ setup: vi.fn(), authorize: vi.fn(), getSecret: vi.fn() })
+      mockInit.mockResolvedValue(pendingVaultMock())
       await execCommand([
         '--skip-doctor',
-        '--secret', 'my-key',
-        '--env', 'MY_VAR',
-        '--caller', '/path/to/script.sh',
+        '--secret',
+        'my-key',
+        '--env',
+        'MY_VAR',
+        '--caller',
+        '/path/to/script.sh',
         '--',
-        'echo', 'hello',
+        'echo',
+        'hello',
       ])
       expect(mockInit).toHaveBeenCalledWith({ skipDoctor: true })
+      expect(promptApproval).toHaveBeenCalled()
     })
 
     it('should pass skipDoctor: true when VAULTKEEPER_SKIP_DOCTOR=1 env var is set', async () => {
       process.env.VAULTKEEPER_SKIP_DOCTOR = '1'
-      mockInit.mockResolvedValue({ setup: vi.fn(), authorize: vi.fn(), getSecret: vi.fn() })
+      mockInit.mockResolvedValue(pendingVaultMock())
       await execCommand([
-        '--secret', 'my-key',
-        '--env', 'MY_VAR',
-        '--caller', '/path/to/script.sh',
+        '--secret',
+        'my-key',
+        '--env',
+        'MY_VAR',
+        '--caller',
+        '/path/to/script.sh',
         '--',
-        'echo', 'hello',
+        'echo',
+        'hello',
       ])
       expect(mockInit).toHaveBeenCalledWith({ skipDoctor: true })
+      expect(promptApproval).toHaveBeenCalled()
     })
 
     it('should not skip doctor when VAULTKEEPER_SKIP_DOCTOR=0', async () => {
       process.env.VAULTKEEPER_SKIP_DOCTOR = '0'
-      mockInit.mockResolvedValue({ setup: vi.fn(), authorize: vi.fn(), getSecret: vi.fn() })
+      mockInit.mockResolvedValue(pendingVaultMock())
       await execCommand([
-        '--secret', 'my-key',
-        '--env', 'MY_VAR',
-        '--caller', '/path/to/script.sh',
+        '--secret',
+        'my-key',
+        '--env',
+        'MY_VAR',
+        '--caller',
+        '/path/to/script.sh',
         '--',
-        'echo', 'hello',
+        'echo',
+        'hello',
       ])
       expect(mockInit).toHaveBeenCalledWith({ skipDoctor: false })
+      expect(promptApproval).toHaveBeenCalled()
     })
 
     it('should not skip doctor when VAULTKEEPER_SKIP_DOCTOR=true (non-numeric)', async () => {
       process.env.VAULTKEEPER_SKIP_DOCTOR = 'true'
-      mockInit.mockResolvedValue({ setup: vi.fn(), authorize: vi.fn(), getSecret: vi.fn() })
+      mockInit.mockResolvedValue(pendingVaultMock())
       await execCommand([
-        '--secret', 'my-key',
-        '--env', 'MY_VAR',
-        '--caller', '/path/to/script.sh',
+        '--secret',
+        'my-key',
+        '--env',
+        'MY_VAR',
+        '--caller',
+        '/path/to/script.sh',
         '--',
-        'echo', 'hello',
+        'echo',
+        'hello',
       ])
       expect(mockInit).toHaveBeenCalledWith({ skipDoctor: false })
+      expect(promptApproval).toHaveBeenCalled()
     })
 
     it('should not skip doctor when VAULTKEEPER_SKIP_DOCTOR is empty string', async () => {
       process.env.VAULTKEEPER_SKIP_DOCTOR = ''
-      mockInit.mockResolvedValue({ setup: vi.fn(), authorize: vi.fn(), getSecret: vi.fn() })
+      mockInit.mockResolvedValue(pendingVaultMock())
       await execCommand([
-        '--secret', 'my-key',
-        '--env', 'MY_VAR',
-        '--caller', '/path/to/script.sh',
+        '--secret',
+        'my-key',
+        '--env',
+        'MY_VAR',
+        '--caller',
+        '/path/to/script.sh',
         '--',
-        'echo', 'hello',
+        'echo',
+        'hello',
       ])
       expect(mockInit).toHaveBeenCalledWith({ skipDoctor: false })
+      expect(promptApproval).toHaveBeenCalled()
+    })
+  })
+
+  describe('trust gate', () => {
+    const EXEC_ARGS = [
+      '--secret',
+      'my-key',
+      '--env',
+      'MY_VAR',
+      '--caller',
+      '/path/to/script.sh',
+      '--',
+      'echo',
+      'hello',
+    ]
+
+    // Regression for review thread 3582165381: on a TOFU hash mismatch the CLI
+    // must fail directly with an identity-mismatch error and re-approval
+    // guidance, NOT prompt — setup() would reject the same hash conflict
+    // regardless of the user's answer, so a prompt just wastes it.
+    it('fails with an identity-mismatch error instead of prompting when the caller hash changed', async () => {
+      const setup = vi.fn()
+      const authorize = vi.fn()
+      const getSecret = vi.fn()
+      const checkExecutableTrust = vi.fn().mockResolvedValue({
+        trusted: false,
+        hashMismatch: true,
+        hash: 'newhash',
+        approvedHashes: ['oldhash'],
+        reason: 'changed',
+      })
+      mockInit.mockResolvedValue({ checkExecutableTrust, setup, authorize, getSecret })
+
+      const code = await execCommand(EXEC_ARGS)
+
+      expect(code).toBe(1)
+      expect(promptApproval).not.toHaveBeenCalled()
+      expect(setup).not.toHaveBeenCalled()
+      expect(authorize).not.toHaveBeenCalled()
+      expect(stderrOutput).toContain('has changed since it was approved')
+      expect(stderrOutput).toContain('vaultkeeper approve --script /path/to/script.sh')
+
+      // Regression for review threads 3582262153 / 3582262187: the constructed
+      // error carries the REAL hashes — the manifest-recorded approved hash and
+      // the on-disk hash — never the old 'previously-approved' placeholder.
+      const err = IdentityMismatchError.instances.at(-1)
+      expect(err?.previousHash).toBe('oldhash')
+      expect(err?.currentHash).toBe('newhash')
+      expect(err?.previousHash).not.toBe('previously-approved')
+    })
+
+    // Regression for review thread 3582165347: a `--cache` hit must NOT bypass
+    // the trust gate. A modified (hash-changed) caller with a previously cached
+    // token must be refused, never silently riding the cached JWE.
+    it('re-verifies caller trust on a --cache hit and refuses a modified caller', async () => {
+      const setup = vi.fn()
+      const authorize = vi.fn()
+      const getSecret = vi.fn()
+      const checkExecutableTrust = vi.fn().mockResolvedValue({
+        trusted: false,
+        hashMismatch: true,
+        hash: 'newhash',
+        approvedHashes: ['oldhash'],
+        reason: 'changed',
+      })
+      mockInit.mockResolvedValue({ checkExecutableTrust, setup, authorize, getSecret })
+      // A previously cached token exists — but the gate must run before it is used.
+      vi.mocked(readCachedToken).mockResolvedValueOnce('cached.jwe.token')
+
+      const code = await execCommand(['--cache', ...EXEC_ARGS])
+
+      expect(code).not.toBe(0)
+      // The cached token was never used to authorize or read the secret.
+      expect(authorize).not.toHaveBeenCalled()
+      expect(getSecret).not.toHaveBeenCalled()
+      expect(stderrOutput).toContain('has changed since it was approved')
+    })
+
+    // Complement to the above: a trusted caller with a cache hit reuses the
+    // cached token (no re-mint) and is not prompted.
+    it('uses a cached token for a trusted caller without prompting or re-minting', async () => {
+      const setup = vi.fn()
+      const authorize = vi.fn().mockResolvedValue({ token: {}, vaultResponse: {} })
+      const getSecret = vi.fn().mockReturnValue({
+        read: (cb: (buf: Buffer) => void) => {
+          cb(Buffer.from('s3cr3t'))
+        },
+      })
+      const checkExecutableTrust = vi.fn().mockResolvedValue({
+        trusted: true,
+        hashMismatch: false,
+        hash: 'goodhash',
+        approvedHashes: ['goodhash'],
+        reason: 'trusted',
+      })
+      mockInit.mockResolvedValue({ checkExecutableTrust, setup, authorize, getSecret })
+      vi.mocked(readCachedToken).mockResolvedValueOnce('cached.jwe.token')
+
+      const code = await execCommand(['--cache', ...EXEC_ARGS])
+
+      expect(code).toBe(0)
+      expect(promptApproval).not.toHaveBeenCalled()
+      expect(setup).not.toHaveBeenCalled()
+      expect(authorize).toHaveBeenCalledWith('cached.jwe.token')
+      expect(stderrOutput).toContain('Trust: verified')
     })
   })
 
