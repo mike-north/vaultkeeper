@@ -63,6 +63,15 @@ describe('validateConfig', () => {
     expect(() => validateConfig(input)).toThrow(ConfigValidationError)
   })
 
+  it('should reject a non-string backend path as ConfigValidationError (consistency: PR #78 review)', () => {
+    // The adjacent type check for `path` previously threw a plain Error while
+    // the whitespace check threw ConfigValidationError — both now agree.
+    const input = validConfigJson()
+    input.backends = [{ type: 'file', enabled: true, path: 42 }]
+    expect(() => validateConfig(input)).toThrow(ConfigValidationError)
+    expect(() => validateConfig(input)).toThrow('path must be a string')
+  })
+
   it('should accept backend with valid options object', () => {
     const input = validConfigJson()
     input.backends = [
@@ -93,12 +102,16 @@ describe('validateConfig', () => {
 
   // Negative tests
   it('should reject non-object', () => {
+    expect(() => validateConfig('string')).toThrow(ConfigValidationError)
     expect(() => validateConfig('string')).toThrow('Config must be an object')
     expect(() => validateConfig(null)).toThrow('Config must be an object')
     expect(() => validateConfig(42)).toThrow('Config must be an object')
   })
 
   it('should reject wrong version', () => {
+    expect(() => validateConfig({ ...validConfigJson(), version: 2 })).toThrow(
+      ConfigValidationError,
+    )
     expect(() => validateConfig({ ...validConfigJson(), version: 2 })).toThrow('version must be 1')
   })
 
@@ -109,6 +122,9 @@ describe('validateConfig', () => {
   })
 
   it('should reject backend with missing type', () => {
+    expect(() => validateConfig({ ...validConfigJson(), backends: [{ enabled: true }] })).toThrow(
+      ConfigValidationError,
+    )
     expect(() => validateConfig({ ...validConfigJson(), backends: [{ enabled: true }] })).toThrow(
       'type must be a non-empty string',
     )

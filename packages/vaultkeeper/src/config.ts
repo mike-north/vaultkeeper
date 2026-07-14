@@ -48,14 +48,16 @@ function isObject(value: unknown): value is Record<string, unknown> {
  * Validates a backend config entry.
  */
 function validateBackendEntry(entry: unknown, index: number): BackendConfig {
+  const base = `backends[${String(index)}]`
+
   if (!isObject(entry)) {
-    throw new Error(`backends[${String(index)}] must be an object`)
+    throw new ConfigValidationError(`${base} must be an object`, base)
   }
   if (typeof entry.type !== 'string' || entry.type.trim() === '') {
-    throw new Error(`backends[${String(index)}].type must be a non-empty string`)
+    throw new ConfigValidationError(`${base}.type must be a non-empty string`, `${base}.type`)
   }
   if (typeof entry.enabled !== 'boolean') {
-    throw new Error(`backends[${String(index)}].enabled must be a boolean`)
+    throw new ConfigValidationError(`${base}.enabled must be a boolean`, `${base}.enabled`)
   }
 
   const result: BackendConfig = {
@@ -65,19 +67,19 @@ function validateBackendEntry(entry: unknown, index: number): BackendConfig {
 
   if (entry.plugin !== undefined) {
     if (typeof entry.plugin !== 'boolean') {
-      throw new Error(`backends[${String(index)}].plugin must be a boolean`)
+      throw new ConfigValidationError(`${base}.plugin must be a boolean`, `${base}.plugin`)
     }
     result.plugin = entry.plugin
   }
 
   if (entry.path !== undefined) {
     if (typeof entry.path !== 'string') {
-      throw new Error(`backends[${String(index)}].path must be a string`)
+      throw new ConfigValidationError(`${base}.path must be a string`, `${base}.path`)
     }
     if (entry.path.trim() === '') {
       throw new ConfigValidationError(
-        `backends[${String(index)}].path must not be empty or whitespace-only`,
-        `backends[${String(index)}].path`,
+        `${base}.path must not be empty or whitespace-only`,
+        `${base}.path`,
       )
     }
     result.path = entry.path
@@ -85,12 +87,15 @@ function validateBackendEntry(entry: unknown, index: number): BackendConfig {
 
   if (entry.options !== undefined) {
     if (!isObject(entry.options)) {
-      throw new Error(`backends[${String(index)}].options must be an object`)
+      throw new ConfigValidationError(`${base}.options must be an object`, `${base}.options`)
     }
     const opts: Record<string, string> = {}
     for (const [k, v] of Object.entries(entry.options)) {
       if (typeof v !== 'string') {
-        throw new Error(`backends[${String(index)}].options["${k}"] must be a string`)
+        throw new ConfigValidationError(
+          `${base}.options["${k}"] must be a string`,
+          `${base}.options.${k}`,
+        )
       }
       opts[k] = v
     }
@@ -106,15 +111,15 @@ function validateBackendEntry(entry: unknown, index: number): BackendConfig {
  */
 export function validateConfig(config: unknown): VaultConfig {
   if (!isObject(config)) {
-    throw new Error('Config must be an object')
+    throw new ConfigValidationError('Config must be an object', 'config')
   }
 
   if (typeof config.version !== 'number' || config.version !== 1) {
-    throw new Error('Config version must be 1')
+    throw new ConfigValidationError('Config version must be 1', 'version')
   }
 
   if (!Array.isArray(config.backends) || config.backends.length === 0) {
-    throw new Error('Config must have at least one backend')
+    throw new ConfigValidationError('Config must have at least one backend', 'backends')
   }
 
   const backends: BackendConfig[] = config.backends.map((entry: unknown, i: number) =>
@@ -122,20 +127,26 @@ export function validateConfig(config: unknown): VaultConfig {
   )
 
   if (!isObject(config.keyRotation)) {
-    throw new Error('Config keyRotation must be an object')
+    throw new ConfigValidationError('Config keyRotation must be an object', 'keyRotation')
   }
   if (
     typeof config.keyRotation.gracePeriodDays !== 'number' ||
     config.keyRotation.gracePeriodDays <= 0
   ) {
-    throw new Error('Config keyRotation.gracePeriodDays must be a positive number')
+    throw new ConfigValidationError(
+      'Config keyRotation.gracePeriodDays must be a positive number',
+      'keyRotation.gracePeriodDays',
+    )
   }
 
   if (!isObject(config.defaults)) {
-    throw new Error('Config defaults must be an object')
+    throw new ConfigValidationError('Config defaults must be an object', 'defaults')
   }
   if (typeof config.defaults.ttlMinutes !== 'number' || config.defaults.ttlMinutes <= 0) {
-    throw new Error('Config defaults.ttlMinutes must be a positive number')
+    throw new ConfigValidationError(
+      'Config defaults.ttlMinutes must be a positive number',
+      'defaults.ttlMinutes',
+    )
   }
   // Coerce string trust tier values from Rust CLI config (which serializes as "1"/"2"/"3")
   let tier: unknown = config.defaults.trustTier
@@ -146,7 +157,10 @@ export function validateConfig(config: unknown): VaultConfig {
     }
   }
   if (tier !== 1 && tier !== 2 && tier !== 3) {
-    throw new Error('Config defaults.trustTier must be 1, 2, or 3')
+    throw new ConfigValidationError(
+      'Config defaults.trustTier must be 1, 2, or 3',
+      'defaults.trustTier',
+    )
   }
 
   const result: VaultConfig = {
@@ -163,15 +177,21 @@ export function validateConfig(config: unknown): VaultConfig {
 
   if (config.developmentMode !== undefined) {
     if (!isObject(config.developmentMode)) {
-      throw new Error('Config developmentMode must be an object')
+      throw new ConfigValidationError('Config developmentMode must be an object', 'developmentMode')
     }
     if (!Array.isArray(config.developmentMode.executables)) {
-      throw new Error('Config developmentMode.executables must be an array')
+      throw new ConfigValidationError(
+        'Config developmentMode.executables must be an array',
+        'developmentMode.executables',
+      )
     }
     const executables: string[] = []
     for (const [i, exe] of Array.from(config.developmentMode.executables).entries()) {
       if (typeof exe !== 'string') {
-        throw new Error(`Config developmentMode.executables[${String(i)}] must be a string`)
+        throw new ConfigValidationError(
+          `Config developmentMode.executables[${String(i)}] must be a string`,
+          `developmentMode.executables[${String(i)}]`,
+        )
       }
       executables.push(exe)
     }
