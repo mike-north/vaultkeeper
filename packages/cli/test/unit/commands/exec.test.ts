@@ -44,6 +44,34 @@ vi.mock('../../../src/cache.js', () => ({
   invalidateCache: vi.fn().mockResolvedValue(undefined),
 }))
 
+/**
+ * Default VaultKeeper mock for tests that drive execCommand end-to-end. It
+ * includes checkExecutableTrust() — which execCommand now calls first, before
+ * any prompt/cache/secret flow — returning a "pending" (never-approved, no
+ * mismatch) status. With promptApproval mocked to decline, this deterministically
+ * exercises the trust gate's "prompt → declined → Access denied" path rather than
+ * short-circuiting on a missing-method TypeError.
+ */
+function pendingVaultMock(): {
+  checkExecutableTrust: ReturnType<typeof vi.fn>
+  setup: ReturnType<typeof vi.fn>
+  authorize: ReturnType<typeof vi.fn>
+  getSecret: ReturnType<typeof vi.fn>
+} {
+  return {
+    checkExecutableTrust: vi.fn().mockResolvedValue({
+      trusted: false,
+      hashMismatch: false,
+      hash: 'pending-hash',
+      approvedHashes: [],
+      reason: 'Executable not yet approved',
+    }),
+    setup: vi.fn(),
+    authorize: vi.fn(),
+    getSecret: vi.fn(),
+  }
+}
+
 describe('execCommand', () => {
   let stderrOutput: string
   let stdoutOutput: string
@@ -180,9 +208,14 @@ describe('execCommand', () => {
   })
 
   describe('--skip-doctor flag', () => {
+    // These drive the full command with a never-approved (pending) caller, so
+    // the trust gate reaches promptApproval (mocked to decline) and the command
+    // exits at "Access denied". Asserting the gate was reached keeps these tests
+    // genuinely exercising the trust path — if the default mock stopped providing
+    // checkExecutableTrust, execCommand would throw before promptApproval and
+    // these assertions would fail.
     it('should pass skipDoctor: false to VaultKeeper.init by default', async () => {
-      // promptApproval returns false, so init will be called but the command exits at denial
-      mockInit.mockResolvedValue({ setup: vi.fn(), authorize: vi.fn(), getSecret: vi.fn() })
+      mockInit.mockResolvedValue(pendingVaultMock())
       await execCommand([
         '--secret',
         'my-key',
@@ -195,10 +228,12 @@ describe('execCommand', () => {
         'hello',
       ])
       expect(mockInit).toHaveBeenCalledWith({ skipDoctor: false })
+      expect(promptApproval).toHaveBeenCalled()
+      expect(stderrOutput).toContain('Access denied by user.')
     })
 
     it('should pass skipDoctor: true to VaultKeeper.init when --skip-doctor is set', async () => {
-      mockInit.mockResolvedValue({ setup: vi.fn(), authorize: vi.fn(), getSecret: vi.fn() })
+      mockInit.mockResolvedValue(pendingVaultMock())
       await execCommand([
         '--skip-doctor',
         '--secret',
@@ -212,11 +247,12 @@ describe('execCommand', () => {
         'hello',
       ])
       expect(mockInit).toHaveBeenCalledWith({ skipDoctor: true })
+      expect(promptApproval).toHaveBeenCalled()
     })
 
     it('should pass skipDoctor: true when VAULTKEEPER_SKIP_DOCTOR=1 env var is set', async () => {
       process.env.VAULTKEEPER_SKIP_DOCTOR = '1'
-      mockInit.mockResolvedValue({ setup: vi.fn(), authorize: vi.fn(), getSecret: vi.fn() })
+      mockInit.mockResolvedValue(pendingVaultMock())
       await execCommand([
         '--secret',
         'my-key',
@@ -229,11 +265,12 @@ describe('execCommand', () => {
         'hello',
       ])
       expect(mockInit).toHaveBeenCalledWith({ skipDoctor: true })
+      expect(promptApproval).toHaveBeenCalled()
     })
 
     it('should not skip doctor when VAULTKEEPER_SKIP_DOCTOR=0', async () => {
       process.env.VAULTKEEPER_SKIP_DOCTOR = '0'
-      mockInit.mockResolvedValue({ setup: vi.fn(), authorize: vi.fn(), getSecret: vi.fn() })
+      mockInit.mockResolvedValue(pendingVaultMock())
       await execCommand([
         '--secret',
         'my-key',
@@ -246,11 +283,12 @@ describe('execCommand', () => {
         'hello',
       ])
       expect(mockInit).toHaveBeenCalledWith({ skipDoctor: false })
+      expect(promptApproval).toHaveBeenCalled()
     })
 
     it('should not skip doctor when VAULTKEEPER_SKIP_DOCTOR=true (non-numeric)', async () => {
       process.env.VAULTKEEPER_SKIP_DOCTOR = 'true'
-      mockInit.mockResolvedValue({ setup: vi.fn(), authorize: vi.fn(), getSecret: vi.fn() })
+      mockInit.mockResolvedValue(pendingVaultMock())
       await execCommand([
         '--secret',
         'my-key',
@@ -263,11 +301,12 @@ describe('execCommand', () => {
         'hello',
       ])
       expect(mockInit).toHaveBeenCalledWith({ skipDoctor: false })
+      expect(promptApproval).toHaveBeenCalled()
     })
 
     it('should not skip doctor when VAULTKEEPER_SKIP_DOCTOR is empty string', async () => {
       process.env.VAULTKEEPER_SKIP_DOCTOR = ''
-      mockInit.mockResolvedValue({ setup: vi.fn(), authorize: vi.fn(), getSecret: vi.fn() })
+      mockInit.mockResolvedValue(pendingVaultMock())
       await execCommand([
         '--secret',
         'my-key',
@@ -280,6 +319,7 @@ describe('execCommand', () => {
         'hello',
       ])
       expect(mockInit).toHaveBeenCalledWith({ skipDoctor: false })
+      expect(promptApproval).toHaveBeenCalled()
     })
   })
 
