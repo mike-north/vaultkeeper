@@ -69,7 +69,16 @@ import {
  */
 export type SecretTokenMap = Record<string, CapabilityToken>
 
-/** Options for initializing VaultKeeper. */
+/**
+ * Options for initializing VaultKeeper.
+ *
+ * @remarks
+ * When neither `config` nor a config file (at `configDir`) is present, the
+ * active backend falls back to the platform default resolved by
+ * {@link platformDefaultBackendType} — `keychain` on macOS, `dpapi` on
+ * Windows, `file` elsewhere. Inspect {@link VaultKeeper.activeBackendType}
+ * after `init()` to confirm which backend a given instance resolved to.
+ */
 export interface VaultKeeperOptions {
   /** Override the config directory. */
   configDir?: string | undefined
@@ -193,6 +202,40 @@ export class VaultKeeper {
    */
   static async doctor(options?: RunDoctorOptions): Promise<PreflightResult> {
     return runDoctor(options)
+  }
+
+  /**
+   * The type identifier of the active backend — the first enabled backend in
+   * the resolved configuration (the one `store()`, `delete()`, and `setup()`
+   * operate on).
+   *
+   * @remarks
+   * This is a pure, side-effect-free view of the resolved configuration: it
+   * reads the type of the first enabled backend without instantiating the
+   * backend or requiring it to be registered or healthy. Reading it therefore
+   * never throws for an unavailable or unregistered backend — unlike a secret
+   * operation — so it is safe to call purely to introspect an instance.
+   *
+   * Use it to confirm which backend an instance resolved to, especially when
+   * no config file exists and the platform default applies (see
+   * {@link platformDefaultBackendType}). On macOS this reads `keychain` by
+   * default, meaning secret operations target the real OS Keychain.
+   *
+   * @throws A {@link BackendUnavailableError} only when the configuration has
+   * no enabled backend at all (a configuration error, not a backend fault).
+   *
+   * @public
+   */
+  get activeBackendType(): string {
+    const firstEnabled = this.#config.backends.find((b) => b.enabled)
+    if (firstEnabled === undefined) {
+      throw new BackendUnavailableError(
+        'No enabled backends configured',
+        'none-enabled',
+        this.#config.backends.map((b) => b.type),
+      )
+    }
+    return firstEnabled.type
   }
 
   /**

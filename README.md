@@ -117,11 +117,28 @@ must re-approve it with `vaultkeeper approve --script <caller>`.
 
 ## TypeScript quick start
 
+> [!WARNING]
+> With no config file present, a bare `VaultKeeper.init()` — and `vaultkeeper config init` with no `--backend` — targets your **real OS credential store**: the macOS Keychain on macOS, Windows DPAPI on Windows. On those platforms, secrets you store land in the live system store. To use a portable, CI-friendly encrypted file instead, choose the `file` backend explicitly (shown below). Inspect `vault.activeBackendType` to confirm which backend an instance resolved to.
+
 ```ts
 import { VaultKeeper } from 'vaultkeeper'
 
 // 1. Initialize (runs doctor preflight checks)
+//    With no config file, the backend defaults to the platform's OS credential
+//    store (keychain on macOS, dpapi on Windows, file elsewhere).
 const vault = await VaultKeeper.init()
+console.log(vault.activeBackendType) // e.g. "keychain" on macOS
+
+// Prefer a portable, CI-friendly encrypted file? Pass an explicit config:
+// const vault = await VaultKeeper.init({
+//   config: {
+//     version: 1,
+//     backends: [{ type: 'file', enabled: true }],
+//     keyRotation: { gracePeriodDays: 7 },
+//     defaults: { ttlMinutes: 60, trustTier: 3 },
+//   },
+// })
+// From the CLI, the equivalent is: vaultkeeper config init --backend file
 
 // 2. Store a secret in the configured backend
 await vault.store('MY_API_KEY', 'my-secret-value')

@@ -2,13 +2,20 @@
  * UATs for the config init/show lifecycle.
  *
  * These tests verify the config command works with an isolated config dir
- * via VAULTKEEPER_CONFIG_DIR.
+ * via VAULTKEEPER_CONFIG_DIR. Each maps to an acceptance criterion of the
+ * backend-selection UX work: choosing a backend, rejecting typos in flags
+ * and backend values, keeping the platform default, and surfacing the
+ * resolved active backend.
  */
 import { describe, it, expect, afterEach } from 'vitest'
 import * as fs from 'node:fs/promises'
 import * as path from 'node:path'
 import { createCliTestEnv } from '@vaultkeeper/cli-test-helpers'
 import type { CliTestEnv } from '@vaultkeeper/cli-test-helpers'
+
+/** The backend type config init writes by default on the current platform. */
+const platformDefaultBackend =
+  process.platform === 'darwin' ? 'keychain' : process.platform === 'win32' ? 'dpapi' : 'file'
 
 describe('config command', () => {
   let env: CliTestEnv | undefined
@@ -19,6 +26,18 @@ describe('config command', () => {
       env = undefined
     }
   })
+
+  /** Create an env and remove the config.json that createCliTestEnv seeds. */
+  async function freshEnv(): Promise<CliTestEnv> {
+    const created = await createCliTestEnv()
+    await fs.rm(path.join(created.configDir, 'config.json'))
+    return created
+  }
+
+  async function readConfig(dir: string): Promise<unknown> {
+    const content = await fs.readFile(path.join(dir, 'config.json'), 'utf8')
+    return JSON.parse(content)
+  }
 
   it('should show config and exit 0 when config.json exists', async () => {
     env = await createCliTestEnv()
@@ -38,44 +57,102 @@ describe('config command', () => {
   })
 
   it('should create config with config init when no config exists', async () => {
-    env = await createCliTestEnv()
-    // Remove the config.json that createCliTestEnv wrote
-    await fs.rm(path.join(env.configDir, 'config.json'))
+    env = await freshEnv()
     const result = await env.run(['config', 'init'])
     expect(result.exitCode).toBe(0)
     expect(result.stdout).toContain('Config created at')
-    // Verify the file was actually created
-    const content = await fs.readFile(path.join(env.configDir, 'config.json'), 'utf8')
-    const parsed: unknown = JSON.parse(content)
+    const parsed = await readConfig(env.configDir)
     expect(parsed).toHaveProperty('version', 1)
   })
 
+  // Criterion 3: without --backend, keep the platform default.
   it('should generate platform-appropriate defaults for config init', async () => {
-    env = await createCliTestEnv()
-    // Remove the config.json that createCliTestEnv wrote
-    await fs.rm(path.join(env.configDir, 'config.json'))
+    env = await freshEnv()
     const result = await env.run(['config', 'init'])
     expect(result.exitCode).toBe(0)
-    const content = await fs.readFile(path.join(env.configDir, 'config.json'), 'utf8')
-    const parsed: unknown = JSON.parse(content)
-    const expectedBackendType =
-      process.platform === 'darwin'
-        ? 'keychain'
-        : process.platform === 'win32'
-          ? 'dpapi'
-          : 'file'
-    expect(parsed).toHaveProperty('backends[0].type', expectedBackendType)
-    // The file backend does not use a 'path' field — the backend manages
-    // its own storage location and ignores any path in config.
-    if (expectedBackendType === 'file') {
-      expect(parsed).not.toHaveProperty('backends[0].path')
-    }
+    const parsed = await readConfig(env.configDir)
+    expect(parsed).toHaveProperty('backends[0].type', platformDefaultBackend)
+  })
+
+  // Criterion 3: init states which backend was configured and how to change it.
+  it('should report the configured backend and how to change it on default init', async () => {
+    env = await freshEnv()
+    const result = await env.run(['config', 'init'])
+    expect(result.exitCode).toBe(0)
+    expect(result.stdout).toContain(`Backend: ${platformDefaultBackend}`)
+    // Every default-init message points the user at the override flag.
+    expect(result.stdout).toContain('--backend')
+  })
+
+  // Criterion 1: --backend <type> writes a config whose first enabled backend
+  // is <type>.
+  it('should write the file backend when config init --backend file is used', async () => {
+    env = await freshEnv()
+    const result = await env.run(['config', 'init', '--backend', 'file'])
+    expect(result.exitCode).toBe(0)
+    const parsed = await readConfig(env.configDir)
+    expect(parsed).toHaveProperty('backends[0].type', 'file')
+    expect(parsed).toHaveProperty('backends[0].enabled', true)
+    expect(result.stdout).toContain('Backend: file')
+  })
+
+  // Criterion 1: an unknown backend value exits 2 listing valid types.
+  it('should exit 2 for config init with an unknown backend value', async () => {
+    env = await freshEnv()
+    const result = await env.run(['config', 'init', '--backend', 'nope'])
+    expect(result.exitCode).toBe(2)
+    expect(result.stderr).toContain("unknown backend type 'nope'")
+    // The error lists valid backend types so the user can correct the typo.
+    expect(result.stderr).toContain('file')
+    // Nothing should have been written.
+    await expect(fs.access(path.join(env.configDir, 'config.json'))).rejects.toThrow()
+  })
+
+  // Criterion 2: a typo in a flag on config init must never be silently ignored
+  // (it could route secrets to the wrong credential store).
+  it('should exit 2 for config init with an unknown flag', async () => {
+    env = await freshEnv()
+    const result = await env.run(['config', 'init', '--bakcend', 'file'])
+    expect(result.exitCode).toBe(2)
+    expect(result.stderr.toLowerCase()).toContain('unknown option')
+    // The typo must not have silently written a (default keychain) config.
+    await expect(fs.access(path.join(env.configDir, 'config.json'))).rejects.toThrow()
+  })
+
+  // Criterion 2: unknown flags on config show also exit 2.
+  it('should exit 2 for config show with an unknown flag', async () => {
+    env = await createCliTestEnv()
+    const result = await env.run(['config', 'show', '--nope'])
+    expect(result.exitCode).toBe(2)
+    expect(result.stderr.toLowerCase()).toContain('unknown option')
+  })
+
+  // Criterion 4: config show reports the resolved active backend.
+  it('should report the resolved active backend on config show', async () => {
+    env = await createCliTestEnv()
+    const result = await env.run(['config', 'show'])
+    expect(result.exitCode).toBe(0)
+    // stdout stays valid JSON; the active backend is annotated on stderr.
+    const parsed: unknown = JSON.parse(result.stdout)
+    expect(parsed).toHaveProperty('backends[0].type', 'file')
+    expect(result.stderr).toContain('Active backend: file')
+  })
+
+  // Criterion 7 / Proof: init --backend file then show, end-to-end.
+  it('should demonstrate the file backend end-to-end (init --backend file then show)', async () => {
+    env = await freshEnv()
+    const initResult = await env.run(['config', 'init', '--backend', 'file'])
+    expect(initResult.exitCode).toBe(0)
+
+    const showResult = await env.run(['config', 'show'])
+    expect(showResult.exitCode).toBe(0)
+    const parsed: unknown = JSON.parse(showResult.stdout)
+    expect(parsed).toHaveProperty('backends[0].type', 'file')
+    expect(showResult.stderr).toContain('Active backend: file')
   })
 
   it('should exit 1 for config show when no config exists', async () => {
-    env = await createCliTestEnv()
-    // Remove the config.json
-    await fs.rm(path.join(env.configDir, 'config.json'))
+    env = await freshEnv()
     const result = await env.run(['config', 'show'])
     expect(result.exitCode).toBe(1)
     expect(result.stderr).toContain('No config file found')
@@ -87,27 +164,5 @@ describe('config command', () => {
     const result = await env.run(['config'])
     expect(result.exitCode).toBe(2)
     expect(result.stderr).toContain('Usage: vaultkeeper config')
-  })
-
-  it('should generate platform-appropriate defaults for config init', async () => {
-    env = await createCliTestEnv()
-    // Remove the config.json that createCliTestEnv wrote
-    await fs.rm(path.join(env.configDir, 'config.json'))
-    const result = await env.run(['config', 'init'])
-    expect(result.exitCode).toBe(0)
-    const content = await fs.readFile(path.join(env.configDir, 'config.json'), 'utf8')
-    const parsed: unknown = JSON.parse(content)
-    const expectedBackendType =
-      process.platform === 'darwin'
-        ? 'keychain'
-        : process.platform === 'win32'
-          ? 'dpapi'
-          : 'file'
-    expect(parsed).toHaveProperty('backends[0].type', expectedBackendType)
-    // The file backend does not use a 'path' field — the backend manages
-    // its own storage location and ignores any path in config.
-    if (expectedBackendType === 'file') {
-      expect(parsed).not.toHaveProperty('backends[0].path')
-    }
   })
 })

@@ -70,6 +70,8 @@ export type {
   ExecutableTrustStatus,
 } from './vault.js'
 
+export { platformDefaultBackendType } from './config.js'
+
 export { runDoctor } from './doctor/runner.js'
 export type { RunDoctorOptions } from './doctor/runner.js'
 export type { Platform } from './util/platform.js'
