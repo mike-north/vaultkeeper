@@ -100,6 +100,26 @@ describe('VaultKeeper', () => {
       })
       expect(vault.activeBackendType).toBe('test')
     })
+
+    // Introspection must not instantiate the backend: reading the type of an
+    // unregistered/unavailable backend returns its configured type instead of
+    // throwing (thread 3582762757 — a getter that called #requireBackend()
+    // would have thrown here).
+    it('should return the configured type without instantiating an unregistered backend', async () => {
+      // No BackendRegistry.register('unregistered-backend', ...) — the type is
+      // not registered, so instantiating it would throw.
+      const vault = await VaultKeeper.init({
+        skipDoctor: true,
+        configDir: '/tmp/vaultkeeper-test',
+        config: {
+          version: 1,
+          backends: [{ type: 'unregistered-backend', enabled: true }],
+          keyRotation: { gracePeriodDays: 7 },
+          defaults: { ttlMinutes: 60, trustTier: 3 },
+        },
+      })
+      expect(vault.activeBackendType).toBe('unregistered-backend')
+    })
   })
 
   describe('doctor', () => {

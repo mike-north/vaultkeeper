@@ -210,15 +210,32 @@ export class VaultKeeper {
    * operate on).
    *
    * @remarks
-   * Use this to confirm which backend an instance resolved to, especially when
+   * This is a pure, side-effect-free view of the resolved configuration: it
+   * reads the type of the first enabled backend without instantiating the
+   * backend or requiring it to be registered or healthy. Reading it therefore
+   * never throws for an unavailable or unregistered backend — unlike a secret
+   * operation — so it is safe to call purely to introspect an instance.
+   *
+   * Use it to confirm which backend an instance resolved to, especially when
    * no config file exists and the platform default applies (see
    * {@link platformDefaultBackendType}). On macOS this reads `keychain` by
-   * default, meaning operations target the real OS Keychain.
+   * default, meaning secret operations target the real OS Keychain.
+   *
+   * @throws A {@link BackendUnavailableError} only when the configuration has
+   * no enabled backend at all (a configuration error, not a backend fault).
    *
    * @public
    */
   get activeBackendType(): string {
-    return this.#requireBackend().type
+    const firstEnabled = this.#config.backends.find((b) => b.enabled)
+    if (firstEnabled === undefined) {
+      throw new BackendUnavailableError(
+        'No enabled backends configured',
+        'none-enabled',
+        this.#config.backends.map((b) => b.type),
+      )
+    }
+    return firstEnabled.type
   }
 
   /**

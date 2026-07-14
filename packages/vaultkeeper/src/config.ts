@@ -39,7 +39,7 @@ export function getDefaultConfigDir(): string {
  * - **Windows** → `dpapi` (Windows DPAPI)
  * - **all other platforms** (Linux, etc.) → `file` (AES-256-GCM encrypted file)
  *
- * On macOS and Windows this means a bare {@link VaultKeeper.(init:1)} — or a
+ * On macOS and Windows this means a bare {@link VaultKeeper.init} — or a
  * `vaultkeeper config init` with no `--backend` flag — writes to the real OS
  * credential store. Choose `file` explicitly for a portable, CI-friendly store
  * that requires no system credential service.
