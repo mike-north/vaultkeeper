@@ -33,7 +33,15 @@ try {
     stdio: 'inherit',
   })
 
-  const committedFiles = new Set(readdirSync(committedDir))
+  let committedFiles
+  try {
+    committedFiles = new Set(readdirSync(committedDir))
+  } catch (err) {
+    const reason = err instanceof Error ? err.message : String(err)
+    throw new Error(
+      `Cannot read ${committedDir} (${reason}). Run "pnpm generate:api-docs" and commit the result.`,
+    )
+  }
   const generatedFiles = new Set(readdirSync(tempDir))
   const allFiles = new Set([...committedFiles, ...generatedFiles])
 
