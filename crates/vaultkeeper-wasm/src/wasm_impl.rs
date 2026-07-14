@@ -77,6 +77,84 @@ fn js_err(msg: &str) -> VaultError {
     VaultError::Other(msg.to_string())
 }
 
+/// Stable machine-readable code for a [`VaultError`], used by the TypeScript
+/// bridge to reconstruct a typed error instance from the thrown value.
+///
+/// Typed variants map one-to-one to a code. `VaultError::Other(..)` — which the
+/// core uses for malformed/decryption/validation failures — maps to the generic
+/// `vault-error`; `authorize()` reclassifies its own `Other` errors to
+/// `invalid-token`, since any non-typed failure there means the token is
+/// unprocessable. This mapping is deliberately confined to the WASM boundary.
+fn vault_error_code(e: &VaultError) -> &'static str {
+    match e {
+        VaultError::SecretNotFound { .. } => "secret-not-found",
+        VaultError::TokenExpired { .. } => "token-expired",
+        VaultError::KeyRotated { .. } => "key-rotated",
+        VaultError::KeyRevoked { .. } => "key-revoked",
+        VaultError::TokenRevoked { .. } => "token-revoked",
+        VaultError::UsageLimitExceeded { .. } => "usage-limit-exceeded",
+        VaultError::RotationInProgress { .. } => "rotation-in-progress",
+        VaultError::BackendLocked { .. } => "backend-locked",
+        VaultError::DeviceNotPresent { .. } => "device-not-present",
+        VaultError::AuthorizationDenied { .. } => "authorization-denied",
+        VaultError::BackendUnavailable { .. } => "backend-unavailable",
+        VaultError::PluginNotFound { .. } => "plugin-not-found",
+        VaultError::IdentityMismatch { .. } => "identity-mismatch",
+        VaultError::InvalidAlgorithm { .. } => "invalid-algorithm",
+        VaultError::Setup { .. } => "setup",
+        VaultError::Filesystem { .. } => "filesystem",
+        VaultError::Other(_) => "vault-error",
+    }
+}
+
+/// Convert a [`VaultError`] into a thrown JS value carrying a stable
+/// `vaultErrorCode`, its `message`, and any structured context fields. The
+/// TypeScript bridge maps `vaultErrorCode` back to a `VaultError` subclass so
+/// callers receive a real typed error instance.
+fn vault_error_to_js(e: &VaultError) -> JsValue {
+    let obj = js_sys::Object::new();
+    let set = |k: &str, v: &JsValue| {
+        // Reflect::set on a fresh Object cannot fail; ignore the Result.
+        let _ = Reflect::set(&obj, &JsValue::from_str(k), v);
+    };
+    set("vaultErrorCode", &JsValue::from_str(vault_error_code(e)));
+    set("message", &JsValue::from_str(&e.to_string()));
+    match e {
+        VaultError::TokenExpired { can_refresh, .. } => {
+            set("canRefresh", &JsValue::from_bool(*can_refresh));
+        }
+        VaultError::BackendUnavailable {
+            reason, attempted, ..
+        } => {
+            set("reason", &JsValue::from_str(reason));
+            let arr = js_sys::Array::new();
+            for a in attempted {
+                arr.push(&JsValue::from_str(a));
+            }
+            set("attempted", &arr);
+        }
+        _ => {}
+    }
+    obj.into()
+}
+
+/// Build a thrown JS value for an error originating at the WASM boundary
+/// itself (not from a `VaultError`), e.g. a consumed one-time accessor.
+fn coded_js_error(code: &str, message: &str) -> JsValue {
+    let obj = js_sys::Object::new();
+    let _ = Reflect::set(
+        &obj,
+        &JsValue::from_str("vaultErrorCode"),
+        &JsValue::from_str(code),
+    );
+    let _ = Reflect::set(
+        &obj,
+        &JsValue::from_str("message"),
+        &JsValue::from_str(message),
+    );
+    obj.into()
+}
+
 #[async_trait::async_trait(?Send)]
 impl HostPlatform for JsHostPlatform {
     async fn exec(
@@ -252,7 +330,7 @@ unsafe impl Sync for WasmVaultKeeper {}
 pub async fn create_vault_keeper(
     host: JsValue,
     options: JsValue,
-) -> Result<WasmVaultKeeper, JsError> {
+) -> Result<WasmVaultKeeper, JsValue> {
     let js_host = JsHostPlatform::new(host)?;
     let host = Arc::new(js_host);
 
@@ -273,7 +351,7 @@ pub async fn create_vault_keeper(
         }),
     )
     .await
-    .map_err(|e| JsError::new(&e.to_string()))?;
+    .map_err(|e| vault_error_to_js(&e))?;
 
     Ok(WasmVaultKeeper { vault, host })
 }
@@ -292,7 +370,7 @@ impl WasmVaultKeeper {
         secret_name: &str,
         secret_value: &str,
         options: JsValue,
-    ) -> Result<String, JsError> {
+    ) -> Result<String, JsValue> {
         let setup_opts = if options.is_object() {
             let ttl = Reflect::get(&options, &JsValue::from_str("ttlMinutes"))
                 .ok()
@@ -322,37 +400,58 @@ impl WasmVaultKeeper {
 
         self.vault
             .setup(secret_name, secret_value, setup_opts.as_ref())
-            .map_err(|e| JsError::new(&e.to_string()))
+            .map_err(|e| vault_error_to_js(&e))
     }
 
-    /// Decrypt a JWE token, validate its claims, and return { claims, response }.
-    pub fn authorize(&mut self, jwe: &str) -> Result<JsValue, JsError> {
-        let (claims, response) = self
-            .vault
-            .authorize(jwe)
-            .map_err(|e| JsError::new(&e.to_string()))?;
+    /// Decrypt a JWE token, validate its claims, and return a
+    /// [`WasmAuthorization`].
+    ///
+    /// The returned object's `claims` **never** contains the raw secret value
+    /// (`val` is redacted). The secret is held internally and can be read
+    /// exactly once via the exported `readSecret()` method, mirroring the TS
+    /// library's one-time accessor pattern.
+    pub fn authorize(&mut self, jwe: &str) -> Result<WasmAuthorization, JsValue> {
+        // Any non-typed (`Other`) failure while decrypting or validating a
+        // token means the token itself is invalid or unprocessable, so it maps
+        // to `invalid-token`. Typed variants (expiry, revocation, usage limit,
+        // unknown key) keep their own codes.
+        let (mut claims, response) = self.vault.authorize(jwe).map_err(|e| match &e {
+            VaultError::Other(msg) => coded_js_error("invalid-token", msg),
+            _ => vault_error_to_js(&e),
+        })?;
 
-        let result = serde_json::json!({
-            "claims": claims,
-            "response": response,
-        });
-        to_js_value(&result)
+        // Move the raw secret out of the claims before anything is serialized,
+        // so it can never appear in the returned `claims` object.
+        let secret = std::mem::take(&mut claims.val);
+
+        let mut claims_value =
+            serde_json::to_value(&claims).map_err(|e| JsError::new(&e.to_string()))?;
+        if let Some(obj) = claims_value.as_object_mut() {
+            obj.remove("val");
+        }
+
+        let claims_json =
+            serde_json::to_string(&claims_value).map_err(|e| JsError::new(&e.to_string()))?;
+        let response_json =
+            serde_json::to_string(&response).map_err(|e| JsError::new(&e.to_string()))?;
+
+        Ok(WasmAuthorization {
+            claims_json,
+            response_json,
+            secret: Some(secret),
+        })
     }
 
     /// Rotate the encryption key.
     #[wasm_bindgen(js_name = "rotateKey")]
-    pub fn rotate_key(&mut self) -> Result<(), JsError> {
-        self.vault
-            .rotate_key()
-            .map_err(|e| JsError::new(&e.to_string()))
+    pub fn rotate_key(&mut self) -> Result<(), JsValue> {
+        self.vault.rotate_key().map_err(|e| vault_error_to_js(&e))
     }
 
     /// Emergency key revocation — removes previous key and generates a new current key.
     #[wasm_bindgen(js_name = "revokeKey")]
-    pub fn revoke_key(&mut self) -> Result<(), JsError> {
-        self.vault
-            .revoke_key()
-            .map_err(|e| JsError::new(&e.to_string()))
+    pub fn revoke_key(&mut self) -> Result<(), JsValue> {
+        self.vault.revoke_key().map_err(|e| vault_error_to_js(&e))
     }
 
     /// Get the current configuration as JSON.
@@ -364,30 +463,81 @@ impl WasmVaultKeeper {
     ///
     /// FileBackend is stateless (holds only a host reference), so creating it
     /// per-call avoids lifetime complexity without performance cost.
-    pub async fn store(&self, id: &str, secret: &str) -> Result<(), JsError> {
+    pub async fn store(&self, id: &str, secret: &str) -> Result<(), JsValue> {
         let backend = FileBackend::new(self.host.clone());
         backend
             .store(id, secret)
             .await
-            .map_err(|e| JsError::new(&e.to_string()))
+            .map_err(|e| vault_error_to_js(&e))
     }
 
     /// Retrieve a secret via the file backend.
-    pub async fn retrieve(&self, id: &str) -> Result<String, JsError> {
+    pub async fn retrieve(&self, id: &str) -> Result<String, JsValue> {
         let backend = FileBackend::new(self.host.clone());
         backend
             .retrieve(id)
             .await
-            .map_err(|e| JsError::new(&e.to_string()))
+            .map_err(|e| vault_error_to_js(&e))
     }
 
     /// Delete a secret via the file backend.
-    pub async fn delete(&self, id: &str) -> Result<(), JsError> {
+    pub async fn delete(&self, id: &str) -> Result<(), JsValue> {
         let backend = FileBackend::new(self.host.clone());
-        backend
-            .delete(id)
-            .await
-            .map_err(|e| JsError::new(&e.to_string()))
+        backend.delete(id).await.map_err(|e| vault_error_to_js(&e))
+    }
+}
+
+/// Result of a successful [`WasmVaultKeeper::authorize`] call.
+///
+/// Holds the validated claims (with the raw secret redacted) and the raw
+/// secret behind a one-time read. The secret is deliberately not part of the
+/// `claims` shape — callers must opt in explicitly via the exported
+/// `readSecret()` method, which yields the value exactly once.
+#[wasm_bindgen]
+pub struct WasmAuthorization {
+    claims_json: String,
+    response_json: String,
+    secret: Option<String>,
+}
+
+// SAFETY: Single-threaded WASM — no concurrent access.
+unsafe impl Send for WasmAuthorization {}
+unsafe impl Sync for WasmAuthorization {}
+
+#[wasm_bindgen]
+impl WasmAuthorization {
+    /// The validated token claims, with the raw secret (`val`) redacted.
+    #[wasm_bindgen(getter)]
+    pub fn claims(&self) -> Result<JsValue, JsError> {
+        js_sys::JSON::parse(&self.claims_json)
+            .map_err(|e| JsError::new(&format!("JSON parse error: {e:?}")))
+    }
+
+    /// The authorization response (key status, optional rotated token).
+    #[wasm_bindgen(getter)]
+    pub fn response(&self) -> Result<JsValue, JsError> {
+        js_sys::JSON::parse(&self.response_json)
+            .map_err(|e| JsError::new(&format!("JSON parse error: {e:?}")))
+    }
+
+    /// Whether the secret is still available to read (i.e. `readSecret()` has
+    /// not yet been called).
+    #[wasm_bindgen(getter, js_name = "secretAvailable")]
+    pub fn secret_available(&self) -> bool {
+        self.secret.is_some()
+    }
+
+    /// Read the raw secret value exactly once. Subsequent calls throw an
+    /// `accessor-consumed` error. This is the explicit, deliberately-named
+    /// escape hatch for flows that must touch the plaintext secret.
+    #[wasm_bindgen(js_name = "readSecret")]
+    pub fn read_secret(&mut self) -> Result<String, JsValue> {
+        self.secret.take().ok_or_else(|| {
+            coded_js_error(
+                "accessor-consumed",
+                "Secret has already been read; the one-time accessor is consumed",
+            )
+        })
     }
 }
 

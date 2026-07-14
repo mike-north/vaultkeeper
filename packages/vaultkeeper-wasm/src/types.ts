@@ -38,7 +38,13 @@ export type TrustTier = '1' | '2' | '3';
 /** Key status in the vault response. */
 export type KeyStatus = 'current' | 'previous' | 'deprecated';
 
-/** Claims embedded in a JWE token. */
+/**
+ * Claims embedded in a JWE token, as returned by {@link AuthorizeResult}.
+ *
+ * The raw secret value (`val`) is deliberately **absent** — it is never part
+ * of `authorize()`'s return shape. Read the secret through
+ * {@link SecretAccessor} instead.
+ */
 export interface VaultClaims {
   jti: string;
   exp: number;
@@ -48,7 +54,6 @@ export interface VaultClaims {
   use?: number | null;
   tid: TrustTier;
   bkd: string;
-  val: string;
   ref: string;
 }
 
@@ -58,10 +63,36 @@ export interface VaultResponse {
   rotatedJwt?: string | null;
 }
 
-/** Authorization result combining claims and response. */
+/**
+ * A one-time accessor for the raw secret produced by `authorize()`.
+ *
+ * Mirrors the `createSecretAccessor` pattern in the TypeScript library: the
+ * plaintext secret is exposed only through a single `read()` callback and
+ * cannot be read a second time. This keeps the secret out of the default
+ * return shape and confines its lifetime to the callback.
+ */
+export interface SecretAccessor {
+  /**
+   * Invoke `fn` with the raw secret exactly once and return its result. The
+   * secret must not be retained beyond `fn`'s execution.
+   *
+   * @throws AccessorConsumedError if called after the secret has been read.
+   */
+  read<T>(fn: (secret: string) => T): T;
+
+  /** Whether the secret is still available (i.e. `read()` has not run). */
+  readonly available: boolean;
+}
+
+/**
+ * Authorization result. Combines the validated claims (secret redacted), the
+ * response metadata, and a one-time {@link SecretAccessor} for the plaintext
+ * secret.
+ */
 export interface AuthorizeResult {
   claims: VaultClaims;
   response: VaultResponse;
+  secret: SecretAccessor;
 }
 
 /** Preflight check status (Rust kebab-case serialization). */

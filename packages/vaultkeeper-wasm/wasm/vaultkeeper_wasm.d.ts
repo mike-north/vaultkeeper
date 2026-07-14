@@ -2,6 +2,39 @@
 /* eslint-disable */
 
 /**
+ * Result of a successful [`WasmVaultKeeper::authorize`] call.
+ *
+ * Holds the validated claims (with the raw secret redacted) and the raw
+ * secret behind a one-time read. The secret is deliberately not part of the
+ * `claims` shape — callers must opt in explicitly via the exported
+ * `readSecret()` method, which yields the value exactly once.
+ */
+export class WasmAuthorization {
+    private constructor();
+    free(): void;
+    [Symbol.dispose](): void;
+    /**
+     * Read the raw secret value exactly once. Subsequent calls throw an
+     * `accessor-consumed` error. This is the explicit, deliberately-named
+     * escape hatch for flows that must touch the plaintext secret.
+     */
+    readSecret(): string;
+    /**
+     * The validated token claims, with the raw secret (`val`) redacted.
+     */
+    readonly claims: any;
+    /**
+     * The authorization response (key status, optional rotated token).
+     */
+    readonly response: any;
+    /**
+     * Whether the secret is still available to read (i.e. `readSecret()` has
+     * not yet been called).
+     */
+    readonly secretAvailable: boolean;
+}
+
+/**
  * WASM-exposed VaultKeeper wrapper.
  */
 export class WasmVaultKeeper {
@@ -9,9 +42,15 @@ export class WasmVaultKeeper {
     free(): void;
     [Symbol.dispose](): void;
     /**
-     * Decrypt a JWE token, validate its claims, and return { claims, response }.
+     * Decrypt a JWE token, validate its claims, and return a
+     * [`WasmAuthorization`].
+     *
+     * The returned object's `claims` **never** contains the raw secret value
+     * (`val` is redacted). The secret is held internally and can be read
+     * exactly once via the exported `readSecret()` method, mirroring the TS
+     * library's one-time accessor pattern.
      */
-    authorize(jwe: string): any;
+    authorize(jwe: string): WasmAuthorization;
     /**
      * Get the current configuration as JSON.
      */

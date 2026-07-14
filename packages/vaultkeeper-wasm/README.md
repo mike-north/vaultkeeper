@@ -29,8 +29,10 @@ await vault.store('MY_API_KEY', 'my-secret-value')
 // Mint a JWE token
 const jwe = vault.setup('MY_API_KEY', 'my-secret-value')
 
-// Authorize: decrypt and validate
+// Authorize: decrypt and validate. The result's `claims` never contain the
+// raw secret — read it exactly once through the one-time accessor.
 const result = vault.authorize(jwe)
+const apiKey = result.secret.read((value) => value)
 
 // Rotate or revoke keys
 vault.rotateKey()
