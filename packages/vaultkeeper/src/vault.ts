@@ -70,20 +70,64 @@ import {
 export type SecretTokenMap = Record<string, CapabilityToken>
 
 /**
+ * Builds a minimal built-in config used when {@link VaultKeeperOptions.backend}
+ * is supplied without {@link VaultKeeperOptions.config}. Mirrors the defaults a
+ * hand-assembled test config would use (short-lived tokens, dev-mode trust),
+ * so an injected backend never requires a config file on disk or a
+ * hand-assembled {@link VaultConfig}.
+ *
+ * Returns a fresh object on every call — `VaultKeeper` mutates `#config` in
+ * place (e.g. `setDevelopmentMode()`), so a shared constant would let
+ * separate `init()` calls corrupt each other's state.
+ */
+function createDefaultInjectedBackendConfig(): VaultConfig {
+  return {
+    version: 1,
+    backends: [],
+    keyRotation: { gracePeriodDays: 7 },
+    defaults: { ttlMinutes: 60, trustTier: 3 },
+  }
+}
+
+/**
  * Options for initializing VaultKeeper.
  *
  * @remarks
- * When neither `config` nor a config file (at `configDir`) is present, the
- * active backend falls back to the platform default resolved by
- * {@link platformDefaultBackendType} — `keychain` on macOS, `dpapi` on
- * Windows, `file` elsewhere. Inspect {@link VaultKeeper.activeBackendType}
- * after `init()` to confirm which backend a given instance resolved to.
+ * When neither `config` nor a config file (at `configDir`) is present, and
+ * {@link VaultKeeperOptions.backend} is not set, the active backend falls
+ * back to the platform default resolved by {@link platformDefaultBackendType}
+ * — `keychain` on macOS, `dpapi` on Windows, `file` elsewhere. Inspect
+ * {@link VaultKeeper.activeBackendType} after `init()` to confirm which
+ * backend a given instance resolved to. When `backend` is set instead, see
+ * that option's own JSDoc for the fallback config used in its place.
  */
 export interface VaultKeeperOptions {
   /** Override the config directory. */
   configDir?: string | undefined
   /** Supply config directly, skipping file load. */
   config?: VaultConfig | undefined
+  /**
+   * Inject a {@link SecretBackend} instance directly, bypassing the global
+   * {@link BackendRegistry} and `config.backends` resolution entirely.
+   *
+   * This is the primary hook for tests and embedders that want to store and
+   * retrieve secrets without registering a backend globally or hand
+   * assembling a full {@link VaultConfig}. When set, this backend instance is
+   * used for every `store()`/`retrieve()`/`setup()` call.
+   *
+   * **Precedence with `config`/`configDir`:**
+   * - `backend` always wins over the backend that `config.backends` (or the
+   *   config loaded from `configDir`) would otherwise resolve — the
+   *   `backends` array is never consulted when `backend` is set.
+   * - Other config fields (`keyRotation`, `defaults`, `developmentMode`)
+   *   still come from `config`, or from the config loaded from `configDir`,
+   *   when either is provided.
+   * - If `backend` is set and `config` is omitted, a minimal built-in
+   *   default config is used instead of loading one from `configDir` — so a
+   *   caller that only needs an injected backend never has to construct a
+   *   {@link VaultConfig} or touch `configDir` at all.
+   */
+  backend?: SecretBackend | undefined
   /** Skip the doctor preflight check. */
   skipDoctor?: boolean | undefined
 }
@@ -158,10 +202,16 @@ export class VaultKeeper {
   readonly #configDir: string
   #backend: SecretBackend | undefined
 
-  private constructor(config: VaultConfig, keyManager: KeyManager, configDir: string) {
+  private constructor(
+    config: VaultConfig,
+    keyManager: KeyManager,
+    configDir: string,
+    backend?: SecretBackend,
+  ) {
     this.#config = config
     this.#keyManager = keyManager
     this.#configDir = configDir
+    this.#backend = backend
   }
 
   /**
@@ -176,7 +226,11 @@ export class VaultKeeper {
    */
   static async init(options?: VaultKeeperOptions): Promise<VaultKeeper> {
     const configDir = options?.configDir ?? getDefaultConfigDir()
-    const config = options?.config ?? (await loadConfig(configDir))
+    const config =
+      options?.config ??
+      (options?.backend !== undefined
+        ? createDefaultInjectedBackendConfig()
+        : await loadConfig(configDir))
 
     if (options?.skipDoctor !== true) {
       const doctorResult = await runDoctor({ backends: config.backends })
@@ -188,7 +242,7 @@ export class VaultKeeper {
     const keyManager = new KeyManager()
     await keyManager.init()
 
-    return new VaultKeeper(config, keyManager, configDir)
+    return new VaultKeeper(config, keyManager, configDir, options?.backend)
   }
 
   /**
