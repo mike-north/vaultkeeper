@@ -59,8 +59,10 @@ describe('published .d.ts typechecks Buffer-typed API in strict consumers (issue
           skipLibCheck: false,
           noEmit: true,
           // Deliberately scopes ambient globals to none, as many strict
-          // monorepo tsconfigs do. This is the exact reproduction from
-          // issue #72: `@types/node` is installed (linked below) but not
+          // monorepo tsconfigs do. This is the reliably reproducible
+          // trigger verified for issue #72 (the issue's literal "no types
+          // array" setup doesn't reproduce on TS 5.9; explicit types: []
+          // does): `@types/node` is installed (linked below) but not
           // auto-included, so the published `.d.ts` must resolve `Buffer`
           // via a real import rather than relying on the ambient global.
           types: [],
