@@ -126,9 +126,7 @@ export class VaultKeeper {
     if (options?.skipDoctor !== true) {
       const doctorResult = await runDoctor({ backends: config.backends })
       if (!doctorResult.ready) {
-        throw new VaultError(
-          `System not ready: ${doctorResult.nextSteps.join('; ')}`,
-        )
+        throw new VaultError(`System not ready: ${doctorResult.nextSteps.join('; ')}`)
       }
     }
 
@@ -310,6 +308,8 @@ export class VaultKeeper {
    *   created by this vault instance.
    * @throws {VaultError} If a named placeholder references an unknown
    *   secret name.
+   * @throws {FetchError} If the URL is malformed or the underlying network
+   *   request fails.
    */
   async fetch(
     token: CapabilityToken | SecretTokenMap,
@@ -390,6 +390,8 @@ export class VaultKeeper {
    *   vault instance.
    * @throws {InvalidAlgorithmError} If `request.algorithm` is not in the
    *   allowed set (e.g. `'md5'`).
+   * @throws {InvalidKeyMaterialError} If the stored secret is not valid
+   *   PEM/DER private key material.
    */
   async sign(
     token: CapabilityToken,
@@ -492,9 +494,7 @@ export class VaultKeeper {
   // Private helpers
   // ---------------------------------------------------------------------------
 
-  static #resolveSecrets(
-    token: CapabilityToken | SecretTokenMap,
-  ): string | Record<string, string> {
+  static #resolveSecrets(token: CapabilityToken | SecretTokenMap): string | Record<string, string> {
     if (token instanceof CapabilityToken) {
       return validateCapabilityToken(token).val
     }
@@ -528,11 +528,7 @@ export class VaultKeeper {
 
     const firstEnabled = enabledBackends[0]
     if (firstEnabled === undefined) {
-      throw new BackendUnavailableError(
-        'No enabled backends configured',
-        'none-enabled',
-        [],
-      )
+      throw new BackendUnavailableError('No enabled backends configured', 'none-enabled', [])
     }
 
     return BackendRegistry.create(firstEnabled.type, firstEnabled)
