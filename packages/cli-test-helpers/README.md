@@ -15,19 +15,22 @@ pnpm add -D @vaultkeeper/cli-test-helpers
 ## Quick start
 
 ```ts
+import { expect, it } from 'vitest'
 import { createCliTestEnv } from '@vaultkeeper/cli-test-helpers'
 
-const env = await createCliTestEnv()
+it('stores a secret and passes doctor checks', async () => {
+  const env = await createCliTestEnv()
 
-try {
-  const stored = await env.runWithStdin(['store', '--name', 'MY_SECRET'], 'hunter2')
-  expect(stored.exitCode).toBe(0)
+  try {
+    const stored = await env.runWithStdin(['store', '--name', 'MY_SECRET'], 'hunter2')
+    expect(stored.exitCode).toBe(0)
 
-  const result = await env.run(['doctor'])
-  expect(result.exitCode).toBe(0)
-} finally {
-  await env.cleanup()
-}
+    const result = await env.run(['doctor'])
+    expect(result.exitCode).toBe(0)
+  } finally {
+    await env.cleanup()
+  }
+})
 ```
 
 Each `createCliTestEnv()` call produces its own isolated `configDir` — tests can run in parallel

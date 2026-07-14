@@ -37,7 +37,7 @@ interface RepositoryField {
 interface PackageJson {
   name: string
   homepage?: string
-  bugs?: unknown
+  bugs?: string
   repository?: RepositoryField | string
 }
 
@@ -76,6 +76,9 @@ function isPackageJson(value: unknown): value is PackageJson {
     return false
   }
   if (value.homepage !== undefined && typeof value.homepage !== 'string') {
+    return false
+  }
+  if (value.bugs !== undefined && typeof value.bugs !== 'string') {
     return false
   }
   if (
@@ -126,16 +129,16 @@ describe.each(publishablePackageDirs)('packaging: packages/%s', (packageDir) => 
   it('sets repository (with directory), homepage, and bugs in package.json', async () => {
     const pkg = await readPackageJson(packageDir)
 
-    expect(pkg.homepage).toBeDefined()
-    expect(pkg.homepage).toMatch(/^https:\/\/github\.com\/mike-north\/vaultkeeper/)
-
-    expect(pkg.bugs).toBeDefined()
+    expect(pkg.homepage).toBe('https://github.com/mike-north/vaultkeeper#readme')
+    expect(pkg.bugs).toBe('https://github.com/mike-north/vaultkeeper/issues')
 
     if (typeof pkg.repository !== 'object') {
       throw new Error(
         `Expected repository to be an object with a directory field for ${packageDir}`,
       )
     }
+    expect(pkg.repository.type).toBe('git')
+    expect(pkg.repository.url).toBe('git+https://github.com/mike-north/vaultkeeper.git')
     expect(pkg.repository.directory).toBe(`packages/${packageDir}`)
   })
 })
