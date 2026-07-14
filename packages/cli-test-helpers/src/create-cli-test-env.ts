@@ -99,11 +99,18 @@ export async function createCliTestEnv(
   const binPath = resolveCliBinPath()
   const timeout = options?.timeout ?? 15_000
   const extraEnv = options?.env ?? {}
+  const configDirMode = options?.configDirMode ?? 'env'
 
   const baseEnv: Record<string, string | undefined> = {
     ...process.env,
     ...extraEnv,
-    VAULTKEEPER_CONFIG_DIR: configDir,
+  }
+  if (configDirMode === 'env') {
+    baseEnv.VAULTKEEPER_CONFIG_DIR = configDir
+  } else {
+    // 'flag' mode: never let an inherited VAULTKEEPER_CONFIG_DIR leak in —
+    // tests exercising --config-dir must pass it explicitly via run() args.
+    delete baseEnv.VAULTKEEPER_CONFIG_DIR
   }
 
   return {

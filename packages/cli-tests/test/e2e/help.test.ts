@@ -19,21 +19,21 @@ describe('help and usage', () => {
     env = await createCliTestEnv()
     const result = await env.run([])
     expect(result.exitCode).toBe(0)
-    expect(result.stdout).toContain('Usage: vaultkeeper <command>')
+    expect(result.stdout).toContain('Usage: vaultkeeper [--config-dir <path>] <command>')
   })
 
   it('should print help and exit 0 for --help', async () => {
     env = await createCliTestEnv()
     const result = await env.run(['--help'])
     expect(result.exitCode).toBe(0)
-    expect(result.stdout).toContain('Usage: vaultkeeper <command>')
+    expect(result.stdout).toContain('Usage: vaultkeeper [--config-dir <path>] <command>')
   })
 
   it('should print help and exit 0 for -h', async () => {
     env = await createCliTestEnv()
     const result = await env.run(['-h'])
     expect(result.exitCode).toBe(0)
-    expect(result.stdout).toContain('Usage: vaultkeeper <command>')
+    expect(result.stdout).toContain('Usage: vaultkeeper [--config-dir <path>] <command>')
   })
 
   it('should exit 2 and show error for unknown command', async () => {
@@ -41,7 +41,7 @@ describe('help and usage', () => {
     const result = await env.run(['not-a-real-command'])
     expect(result.exitCode).toBe(2)
     expect(result.stderr).toContain('Unknown command: not-a-real-command')
-    expect(result.stdout).toContain('Usage: vaultkeeper <command>')
+    expect(result.stdout).toContain('Usage: vaultkeeper [--config-dir <path>] <command>')
   })
 
   it('should print version and exit 0 for --version', async () => {
