@@ -60,6 +60,8 @@ function pendingVaultMock(): {
   setup: ReturnType<typeof vi.fn>
   authorize: ReturnType<typeof vi.fn>
   getSecret: ReturnType<typeof vi.fn>
+  secretExists: ReturnType<typeof vi.fn>
+  activeBackendType: string
 } {
   return {
     checkExecutableTrust: vi.fn().mockResolvedValue({
@@ -72,6 +74,11 @@ function pendingVaultMock(): {
     setup: vi.fn(),
     authorize: vi.fn(),
     getSecret: vi.fn(),
+    // issue #69: execCommand now checks secret existence before the trust
+    // gate. Defaulting to true keeps every existing trust-gate test
+    // exercising the gate itself, not this precondition.
+    secretExists: vi.fn().mockResolvedValue(true),
+    activeBackendType: 'file',
   }
 }
 
@@ -194,6 +201,70 @@ describe('execCommand', () => {
         configDir,
       )
       expect(stderrOutput).toContain('--secret, --env, and --caller are required')
+    })
+  })
+
+  // Regression (PR #95 review): an empty/whitespace-only value for --secret,
+  // --env, or --caller previously exited inconsistently — --secret hit
+  // vault.secretExists()'s VaultError (exit 1), --caller hit a FilesystemError
+  // resolving to cwd (exit 1), and --env silently succeeded (exit 0, secret
+  // injected into an unusable '' env key). All three must now exit 2 with a
+  // usage-style message, matching store/delete's --name validation, and must
+  // never reach VaultKeeper.init() (an empty flag value is caught before any
+  // backend/vault interaction).
+  describe('empty/whitespace flag value validation', () => {
+    it('should return 2 for an empty --secret', async () => {
+      const code = await execCommand(
+        ['--secret', '', '--env', 'MY_VAR', '--caller', '/path/to/script.sh', '--', 'echo', 'hi'],
+        configDir,
+      )
+      expect(code).toBe(2)
+      expect(stderrOutput).toContain('must not be empty or whitespace-only')
+      expect(mockInit).not.toHaveBeenCalled()
+    })
+
+    it('should return 2 for a whitespace-only --secret', async () => {
+      const code = await execCommand(
+        [
+          '--secret',
+          '   ',
+          '--env',
+          'MY_VAR',
+          '--caller',
+          '/path/to/script.sh',
+          '--',
+          'echo',
+          'hi',
+        ],
+        configDir,
+      )
+      expect(code).toBe(2)
+    })
+
+    it('should return 2 for an empty --env', async () => {
+      const code = await execCommand(
+        ['--secret', 'my-key', '--env', '', '--caller', '/path/to/script.sh', '--', 'echo', 'hi'],
+        configDir,
+      )
+      expect(code).toBe(2)
+      expect(mockInit).not.toHaveBeenCalled()
+    })
+
+    it('should return 2 for an empty --caller', async () => {
+      const code = await execCommand(
+        ['--secret', 'my-key', '--env', 'MY_VAR', '--caller', '', '--', 'echo', 'hi'],
+        configDir,
+      )
+      expect(code).toBe(2)
+      expect(mockInit).not.toHaveBeenCalled()
+    })
+
+    it('should return 2 for a whitespace-only --caller', async () => {
+      const code = await execCommand(
+        ['--secret', 'my-key', '--env', 'MY_VAR', '--caller', '   ', '--', 'echo', 'hi'],
+        configDir,
+      )
+      expect(code).toBe(2)
     })
   })
 
@@ -371,7 +442,15 @@ describe('execCommand', () => {
         approvedHashes: ['oldhash'],
         reason: 'changed',
       })
-      mockInit.mockResolvedValue({ checkExecutableTrust, setup, authorize, getSecret })
+      mockInit.mockResolvedValue({
+        checkExecutableTrust,
+        setup,
+        authorize,
+        getSecret,
+        // issue #69: execCommand checks secret existence before the trust gate.
+        secretExists: vi.fn().mockResolvedValue(true),
+        activeBackendType: 'file',
+      })
 
       const code = await execCommand(EXEC_ARGS, configDir)
 
@@ -406,7 +485,15 @@ describe('execCommand', () => {
         approvedHashes: ['oldhash'],
         reason: 'changed',
       })
-      mockInit.mockResolvedValue({ checkExecutableTrust, setup, authorize, getSecret })
+      mockInit.mockResolvedValue({
+        checkExecutableTrust,
+        setup,
+        authorize,
+        getSecret,
+        // issue #69: execCommand checks secret existence before the trust gate.
+        secretExists: vi.fn().mockResolvedValue(true),
+        activeBackendType: 'file',
+      })
       // A previously cached token exists — but the gate must run before it is used.
       vi.mocked(readCachedToken).mockResolvedValueOnce('cached.jwe.token')
 
@@ -436,7 +523,15 @@ describe('execCommand', () => {
         approvedHashes: ['goodhash'],
         reason: 'trusted',
       })
-      mockInit.mockResolvedValue({ checkExecutableTrust, setup, authorize, getSecret })
+      mockInit.mockResolvedValue({
+        checkExecutableTrust,
+        setup,
+        authorize,
+        getSecret,
+        // issue #69: execCommand checks secret existence before the trust gate.
+        secretExists: vi.fn().mockResolvedValue(true),
+        activeBackendType: 'file',
+      })
       vi.mocked(readCachedToken).mockResolvedValueOnce('cached.jwe.token')
 
       const code = await execCommand(['--cache', ...EXEC_ARGS], configDir)
@@ -466,7 +561,15 @@ describe('execCommand', () => {
         approvedHashes: [],
         reason: 'Executable not yet approved',
       })
-      mockInit.mockResolvedValue({ checkExecutableTrust, setup, authorize, getSecret })
+      mockInit.mockResolvedValue({
+        checkExecutableTrust,
+        setup,
+        authorize,
+        getSecret,
+        // issue #69: execCommand checks secret existence before the trust gate.
+        secretExists: vi.fn().mockResolvedValue(true),
+        activeBackendType: 'file',
+      })
 
       const code = await execCommand(['--yes', ...EXEC_ARGS], configDir)
 
@@ -495,7 +598,15 @@ describe('execCommand', () => {
         approvedHashes: [],
         reason: 'Executable not yet approved',
       })
-      mockInit.mockResolvedValue({ checkExecutableTrust, setup, authorize, getSecret })
+      mockInit.mockResolvedValue({
+        checkExecutableTrust,
+        setup,
+        authorize,
+        getSecret,
+        // issue #69: execCommand checks secret existence before the trust gate.
+        secretExists: vi.fn().mockResolvedValue(true),
+        activeBackendType: 'file',
+      })
 
       const code = await execCommand(EXEC_ARGS, configDir)
 
@@ -524,7 +635,15 @@ describe('execCommand', () => {
         approvedHashes: [],
         reason: 'Executable not yet approved',
       })
-      mockInit.mockResolvedValue({ checkExecutableTrust, setup, authorize, getSecret })
+      mockInit.mockResolvedValue({
+        checkExecutableTrust,
+        setup,
+        authorize,
+        getSecret,
+        // issue #69: execCommand checks secret existence before the trust gate.
+        secretExists: vi.fn().mockResolvedValue(true),
+        activeBackendType: 'file',
+      })
       // A stale cached token exists — it must NOT be read or used for a caller
       // that is only being approved this run.
       vi.mocked(readCachedToken).mockResolvedValueOnce('cached.jwe.token')

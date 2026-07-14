@@ -25,6 +25,34 @@ describe('argument validation', () => {
     expect(result.stderr).toContain('--name is required')
   })
 
+  // Issue #69, criterion 2: an empty/whitespace-only --name must exit 2 with
+  // the same usage-error style as a missing flag, and must never persist a
+  // secret. Repro: `store --name ""` previously reached VaultKeeper.store(),
+  // which threw a generic VaultError with exit 1 instead of a usage error,
+  // and the near-unreachable secret would still have been written for any
+  // charset that passed the (nonexistent) validation.
+  it('store should exit 2 for an empty --name and not persist a secret (regression: issue #69)', async () => {
+    env = await createCliTestEnv()
+    const result = await env.runWithStdin(['store', '--name', ''], 'some-secret')
+    expect(result.exitCode).toBe(2)
+    expect(result.stderr).toContain('--name must be non-empty')
+    expect(result.stdout).not.toContain('stored successfully')
+  })
+
+  it('store should exit 2 for a whitespace-only --name', async () => {
+    env = await createCliTestEnv()
+    const result = await env.runWithStdin(['store', '--name', '   '], 'some-secret')
+    expect(result.exitCode).toBe(2)
+    expect(result.stderr).toContain('--name must be non-empty')
+  })
+
+  it('delete should exit 2 for an empty --name, consistent with store', async () => {
+    env = await createCliTestEnv()
+    const result = await env.run(['delete', '--name', ''])
+    expect(result.exitCode).toBe(2)
+    expect(result.stderr).toContain('--name must be non-empty')
+  })
+
   it('delete should exit 2 when --name is missing', async () => {
     env = await createCliTestEnv()
     const result = await env.run(['delete'])

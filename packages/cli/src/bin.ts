@@ -117,8 +117,27 @@ async function main(): Promise<number> {
     return 0
   }
 
-  // Handle --help / -h and no-argument invocations at the top level.
-  if (firstArg === '--help' || firstArg === '-h' || subcommand === undefined) {
+  // A bare invocation (no arguments at all) or --help/-h prints help and
+  // exits 0 — this is the "getting started" case.
+  if (filteredArgv.length === 0 || firstArg === '--help' || firstArg === '-h') {
+    printHelp()
+    return 0
+  }
+
+  // A first token that looks like a flag (starts with '-') but isn't a
+  // recognized top-level flag is a typo, not "no command given" — it must
+  // exit 2, never silently print help with exit 0 (regression: issue #69,
+  // `vaultkeeper --bogus` previously exited 0).
+  if (firstArg?.startsWith('-') === true) {
+    process.stderr.write(`Error: unknown option '${firstArg}'\n`)
+    // Exit code 2: usage error (unknown top-level flag)
+    return 2
+  }
+
+  // Defensive fallback: parseArgs with allowPositionals should always set
+  // subcommand to firstArg when firstArg doesn't start with '-', but if it
+  // somehow didn't, treat it the same as a bare invocation.
+  if (subcommand === undefined) {
     printHelp()
     return 0
   }

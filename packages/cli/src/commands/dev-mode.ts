@@ -30,15 +30,28 @@ export async function devModeCommand(args: string[], configDir: string): Promise
     return 0
   }
 
-  const { positionals, values } = parseArgs({
-    args,
-    allowPositionals: true,
-    options: {
-      script: { type: 'string' },
-      'skip-doctor': { type: 'boolean', default: false },
-    },
-    strict: true,
-  })
+  let positionals: string[]
+  let values: { script?: string; 'skip-doctor': boolean }
+  try {
+    ;({ positionals, values } = parseArgs({
+      args,
+      allowPositionals: true,
+      options: {
+        script: { type: 'string' },
+        'skip-doctor': { type: 'boolean', default: false },
+      },
+      strict: true,
+    }))
+  } catch (err) {
+    // Regression: issue #69 — an unrecognized flag previously propagated
+    // uncaught and exited 1 via bin.ts's fatal-error handler instead of the
+    // usage-error exit code 2.
+    if (err instanceof Error) {
+      process.stderr.write(`Error: ${err.message}\n`)
+    }
+    process.stderr.write('Usage: vaultkeeper dev-mode <enable|disable> --script <path>\n')
+    return 2
+  }
 
   const action = positionals[0]
 

@@ -5,11 +5,21 @@ import { formatError } from '../output.js'
 import { CONFIG_DIR_HELP_OPTION, CONFIG_DIR_HELP_ENV } from '../config-dir.js'
 import { configFileExists, noConfigMessage } from '../config-status.js'
 
+/**
+ * Allowed characters for a secret `--name`: letters, digits, `.`, `_`, `-`,
+ * and `/` (for path-like names such as `env/prod/db-password`). This mirrors
+ * `printStoreHelp`'s documented character set (issue #69) — keep both in
+ * sync if it changes. Non-empty is enforced separately by the regex's `+`
+ * quantifier: it never matches an empty string.
+ */
+const SECRET_NAME_PATTERN = /^[A-Za-z0-9._/-]+$/
+
 function printStoreHelp(): void {
   process.stdout.write(
     'Usage: echo "secret" | vaultkeeper store --name <name>\n\n' +
       'Options:\n' +
-      '  --name <name>      Name to store the secret under\n' +
+      '  --name <name>      Name to store the secret under. Must be non-empty\n' +
+      '                     and contain only letters, digits, and . _ - /\n' +
       '  --skip-doctor      Skip doctor preflight checks\n' +
       CONFIG_DIR_HELP_OPTION +
       '  -h, --help         Show this help message\n\n' +
@@ -26,19 +36,45 @@ export async function storeCommand(args: string[], configDir: string): Promise<n
     return 0
   }
 
-  const { values } = parseArgs({
-    args,
-    options: {
-      name: { type: 'string' },
-      'skip-doctor': { type: 'boolean', default: false },
-    },
-    strict: true,
-  })
+  let values: { name?: string; 'skip-doctor': boolean }
+  try {
+    ;({ values } = parseArgs({
+      args,
+      options: {
+        name: { type: 'string' },
+        'skip-doctor': { type: 'boolean', default: false },
+      },
+      strict: true,
+    }))
+  } catch (err) {
+    // An unrecognized flag throws synchronously from parseArgs — convert it
+    // to the same usage-error exit code as a missing/invalid flag value
+    // (regression: issue #69, this previously propagated uncaught and
+    // exited 1 via bin.ts's fatal-error handler instead of 2).
+    if (err instanceof Error) {
+      process.stderr.write(`Error: ${err.message}\n`)
+    }
+    process.stderr.write('Usage: echo "secret" | vaultkeeper store --name <name>\n')
+    return 2
+  }
 
   if (values.name === undefined) {
     process.stderr.write('Error: --name is required\n')
     process.stderr.write('Usage: echo "secret" | vaultkeeper store --name <name>\n')
     // Exit code 2: usage error (missing required flag)
+    return 2
+  }
+
+  // Reject empty/whitespace-only (and otherwise invalid-character) names
+  // with the same exit code and error style as a missing flag — previously
+  // `store --name ""` reached VaultKeeper.store(), which threw a generic
+  // VaultError with exit 1 instead of a usage error (issue #69).
+  if (!SECRET_NAME_PATTERN.test(values.name)) {
+    process.stderr.write(
+      'Error: --name must be non-empty and contain only letters, digits, and . _ - /\n',
+    )
+    process.stderr.write('Usage: echo "secret" | vaultkeeper store --name <name>\n')
+    // Exit code 2: usage error (invalid flag value)
     return 2
   }
 

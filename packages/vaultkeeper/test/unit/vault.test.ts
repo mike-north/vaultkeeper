@@ -511,6 +511,44 @@ describe('VaultKeeper', () => {
     })
   })
 
+  // secretExists() backs the CLI's issue #69 fix: exec validates secret
+  // existence BEFORE the interactivity/TTY gate, so it needs a way to check
+  // existence without minting a token or touching the TOFU trust manifest.
+  describe('secretExists', () => {
+    it('should return true when the secret exists', async () => {
+      const vault = await initVault({ 'my-secret': 'hunter2' })
+      await expect(vault.secretExists('my-secret')).resolves.toBe(true)
+    })
+
+    it('should return false when the secret does not exist', async () => {
+      const vault = await initVault({ 'my-secret': 'hunter2' })
+      await expect(vault.secretExists('nonexistent')).resolves.toBe(false)
+    })
+
+    it('should delegate to the active backend without retrieving the value', async () => {
+      const existsSpy = vi.fn(() => Promise.resolve(true))
+      const retrieveSpy = vi.fn(() => Promise.reject(new Error('should not be called')))
+      const backend = createMockBackend({ 'my-secret': 'hunter2' })
+      backend.exists = existsSpy
+      backend.retrieve = retrieveSpy
+      BackendRegistry.register('test', () => backend)
+
+      const vault = await VaultKeeper.init({
+        skipDoctor: true,
+        config: testConfig(),
+        configDir: '/tmp/vaultkeeper-test',
+      })
+      await vault.secretExists('my-secret')
+      expect(existsSpy).toHaveBeenCalledWith('my-secret')
+      expect(retrieveSpy).not.toHaveBeenCalled()
+    })
+
+    it('should reject an empty name, same as store/delete', async () => {
+      const vault = await initVault()
+      await expect(vault.secretExists('')).rejects.toThrow('Secret name must not be empty')
+    })
+  })
+
   describe('negative cases', () => {
     it('should reject authorize with corrupted JWE', async () => {
       const vault = await initVault()

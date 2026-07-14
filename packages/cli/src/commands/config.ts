@@ -95,12 +95,47 @@ function printConfigHelp(): void {
       'Options:\n' +
       CONFIG_DIR_HELP_OPTION +
       '  -h, --help   Show this help message\n\n' +
+      'Run "vaultkeeper config <subcommand> --help" for subcommand-specific help.\n\n' +
+      'Environment variables:\n' +
+      CONFIG_DIR_HELP_ENV,
+  )
+}
+
+function printConfigInitHelp(): void {
+  process.stdout.write(
+    'Usage: vaultkeeper config init [--backend <type>]\n\n' +
+      'Create a default config file.\n\n' +
+      'Options:\n' +
+      '  --backend <type>   Backend to configure as the active store\n' +
+      `                     (valid: ${BackendRegistry.getTypes().join(', ')})\n` +
+      CONFIG_DIR_HELP_OPTION +
+      '  -h, --help         Show this help message\n\n' +
+      'Environment variables:\n' +
+      CONFIG_DIR_HELP_ENV,
+  )
+}
+
+function printConfigShowHelp(): void {
+  process.stdout.write(
+    'Usage: vaultkeeper config show\n\n' +
+      'Print the current config file (or platform defaults, with a notice on\n' +
+      'stderr, when no config file exists).\n\n' +
+      'Options:\n' +
+      CONFIG_DIR_HELP_OPTION +
+      '  -h, --help   Show this help message\n\n' +
       'Environment variables:\n' +
       CONFIG_DIR_HELP_ENV,
   )
 }
 
 async function configInit(rest: string[], configDir: string): Promise<number> {
+  // Handle --help / -h before findUnknownFlag so it isn't rejected as an
+  // unrecognized flag for 'config init'.
+  if (rest.includes('--help') || rest.includes('-h')) {
+    printConfigInitHelp()
+    return 0
+  }
+
   const unknownFlag = findUnknownFlag(rest, new Set(['backend']))
   if (unknownFlag !== undefined) {
     process.stderr.write(`Error: unknown option '${unknownFlag}' for 'config init'\n`)
@@ -177,6 +212,13 @@ async function configInit(rest: string[], configDir: string): Promise<number> {
 }
 
 async function configShow(rest: string[], configDir: string): Promise<number> {
+  // Handle --help / -h before findUnknownFlag so it isn't rejected as an
+  // unrecognized flag for 'config show'.
+  if (rest.includes('--help') || rest.includes('-h')) {
+    printConfigShowHelp()
+    return 0
+  }
+
   const unknownFlag = findUnknownFlag(rest, new Set())
   if (unknownFlag !== undefined) {
     process.stderr.write(`Error: unknown option '${unknownFlag}' for 'config show'\n`)
@@ -231,21 +273,26 @@ async function configShow(rest: string[], configDir: string): Promise<number> {
 }
 
 export async function configCommand(args: string[], configDir: string): Promise<number> {
-  // Handle --help / -h before subcommand dispatch.
-  if (args.includes('--help') || args.includes('-h')) {
-    printConfigHelp()
-    return 0
-  }
-
   const subcommand = args[0]
   const rest = args.slice(1)
 
   switch (subcommand) {
     case 'init':
+      // --help / -h is handled inside configInit so it prints init-specific
+      // help, not the parent 'config' help (regression: issue #69).
       return configInit(rest, configDir)
 
     case 'show':
+      // --help / -h is handled inside configShow so it prints show-specific
+      // help, not the parent 'config' help (regression: issue #69).
       return configShow(rest, configDir)
+
+    // Only a bare 'config --help'/'config -h' (no subcommand) shows the
+    // parent help — a subcommand's own --help is handled above instead.
+    case '--help':
+    case '-h':
+      printConfigHelp()
+      return 0
 
     default:
       process.stderr.write('Error: missing or unknown config subcommand\n')

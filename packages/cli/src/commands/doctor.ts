@@ -1,3 +1,4 @@
+import { parseArgs } from 'node:util'
 import { VaultKeeper, platformDefaultBackendType } from 'vaultkeeper'
 import { formatError } from '../output.js'
 import { CONFIG_DIR_HELP_OPTION, CONFIG_DIR_HELP_ENV } from '../config-dir.js'
@@ -20,6 +21,20 @@ export async function doctorCommand(args: string[], configDir: string): Promise<
   if (args.includes('--help') || args.includes('-h')) {
     printDoctorHelp()
     return 0
+  }
+
+  // doctor takes no flags of its own (--config-dir is stripped by bin.ts
+  // before dispatch). Previously any unrecognized flag was silently
+  // ignored — `doctor --bogus` ran the real checks and could exit 0
+  // (regression: issue #69) instead of failing as a usage error.
+  try {
+    parseArgs({ args, strict: true })
+  } catch (err) {
+    if (err instanceof Error) {
+      process.stderr.write(`Error: ${err.message}\n`)
+    }
+    process.stderr.write('Usage: vaultkeeper doctor\n')
+    return 2
   }
 
   try {

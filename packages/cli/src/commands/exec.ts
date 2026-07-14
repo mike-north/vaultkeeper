@@ -29,7 +29,12 @@
 import { parseArgs } from 'node:util'
 import { spawn } from 'node:child_process'
 import * as path from 'node:path'
-import { VaultKeeper, IdentityMismatchError, platformDefaultBackendType } from 'vaultkeeper'
+import {
+  VaultKeeper,
+  IdentityMismatchError,
+  SecretNotFoundError,
+  platformDefaultBackendType,
+} from 'vaultkeeper'
 import { promptApproval } from '../approval.js'
 import { readCachedToken, writeCachedToken, invalidateCache } from '../cache.js'
 import { RedactingStream } from '../redact.js'
@@ -179,6 +184,12 @@ function printExecHelp(): void {
       '  no prompt, so you must either pre-approve the caller with\n' +
       '  "vaultkeeper approve --script <caller>" or pass --yes (or VAULTKEEPER_YES=1)\n' +
       '  to approve this invocation. Once trusted, exec never prompts again.\n\n' +
+      'Example (--caller identifies the invoking script or binary, not the\n' +
+      'wrapped command after --):\n' +
+      '  vaultkeeper exec --secret db-password --env DB_PASSWORD \\\n' +
+      '    --caller ./deploy.sh -- psql -U admin\n' +
+      '  # deploy.sh is the trusted caller; psql is the command that receives\n' +
+      '  # DB_PASSWORD in its environment.\n\n' +
       'Environment variables:\n' +
       '  VAULTKEEPER_YES=1           Approve an untrusted caller non-interactively\n' +
       '                              (same as --yes)\n' +
@@ -214,20 +225,43 @@ export async function execCommand(args: string[], configDir: string): Promise<nu
     return 2
   }
 
-  const { values } = parseArgs({
-    args: flagArgs,
-    options: {
-      secret: { type: 'string' },
-      env: { type: 'string' },
-      caller: { type: 'string' },
-      reason: { type: 'string' },
-      yes: { type: 'boolean', default: false },
-      cache: { type: 'boolean', default: false },
-      'no-redact': { type: 'boolean', default: false },
-      'skip-doctor': { type: 'boolean', default: false },
-    },
-    strict: true,
-  })
+  let values: {
+    secret?: string
+    env?: string
+    caller?: string
+    reason?: string
+    yes: boolean
+    cache: boolean
+    'no-redact': boolean
+    'skip-doctor': boolean
+  }
+  try {
+    ;({ values } = parseArgs({
+      args: flagArgs,
+      options: {
+        secret: { type: 'string' },
+        env: { type: 'string' },
+        caller: { type: 'string' },
+        reason: { type: 'string' },
+        yes: { type: 'boolean', default: false },
+        cache: { type: 'boolean', default: false },
+        'no-redact': { type: 'boolean', default: false },
+        'skip-doctor': { type: 'boolean', default: false },
+      },
+      strict: true,
+    }))
+  } catch (err) {
+    // Regression: issue #69 — an unrecognized flag previously propagated
+    // uncaught and exited 1 via bin.ts's fatal-error handler instead of the
+    // usage-error exit code 2.
+    if (err instanceof Error) {
+      process.stderr.write(`Error: ${err.message}\n`)
+    }
+    process.stderr.write(
+      'Usage: vaultkeeper exec --secret <name> --env <VAR> --caller <path> [options] -- <command...>\n',
+    )
+    return 2
+  }
 
   const secret = values.secret
   const envVar = values.env
@@ -236,6 +270,27 @@ export async function execCommand(args: string[], configDir: string): Promise<nu
   if (secret === undefined || envVar === undefined || caller === undefined) {
     process.stderr.write('Error: --secret, --env, and --caller are required\n')
     // Exit code 2: usage error (missing required flags)
+    return 2
+  }
+
+  // Reject empty/whitespace-only values with the same exit code and error
+  // style as a missing flag (consistent with store/delete's --name check).
+  // Before this fix each had its own gap:
+  //   --secret ""  -> vault.secretExists() threw VaultError, exit 1
+  //   --caller ""  -> path.resolve('') resolves to cwd, a directory; hashing
+  //                   it threw FilesystemError (EISDIR), exit 1
+  //   --env ""     -> silently succeeded (exit 0): '' is a syntactically
+  //                   valid env var key, so the secret was injected into an
+  //                   unusable key and the wrapped command ran normally —
+  //                   the worst of the three, since it failed silently.
+  if (secret.trim() === '' || envVar.trim() === '' || caller.trim() === '') {
+    process.stderr.write(
+      'Error: --secret, --env, and --caller must not be empty or whitespace-only\n',
+    )
+    process.stderr.write(
+      'Usage: vaultkeeper exec --secret <name> --env <VAR> --caller <path> [options] -- <command...>\n',
+    )
+    // Exit code 2: usage error (invalid flag value)
     return 2
   }
 
@@ -255,6 +310,19 @@ export async function execCommand(args: string[], configDir: string): Promise<nu
     }
 
     const vault = await VaultKeeper.init({ configDir, skipDoctor })
+
+    // Validate input preconditions (secret existence) BEFORE the trust gate.
+    // The trust gate's non-TTY path fails fast with an approval-required
+    // error, which previously masked a simple "secret not found" — a
+    // nonexistent secret now reports SecretNotFoundError-style messaging
+    // regardless of TTY (issue #69). This check is side-effect-free (unlike
+    // `setup()`, it never touches the TOFU trust manifest), so it cannot be
+    // used to bypass caller approval.
+    if (!(await vault.secretExists(secret))) {
+      throw new SecretNotFoundError(
+        `Secret "${secret}" not found in ${vault.activeBackendType} backend`,
+      )
+    }
 
     // Enforce the trust gate BEFORE touching the cache or retrieving the
     // secret. This runs on every invocation — including a `--cache` hit — so a
