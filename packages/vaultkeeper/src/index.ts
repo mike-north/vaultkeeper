@@ -25,6 +25,8 @@ export {
   InvalidTokenError,
   AccessorConsumedError,
   InvalidAlgorithmError,
+  InvalidKeyMaterialError,
+  FetchError,
   SetupError,
   FilesystemError,
   RotationInProgressError,

@@ -290,6 +290,40 @@ export class InvalidAlgorithmError extends VaultError {
 }
 
 /**
+ * Thrown when a stored secret is used as signing/verification key material
+ * but is not valid PEM or DER key data (e.g. `crypto.createPrivateKey()`
+ * rejects it). The message never echoes any part of the secret.
+ *
+ * @public
+ */
+export class InvalidKeyMaterialError extends VaultError {
+  constructor(message: string) {
+    super(message)
+    this.name = 'InvalidKeyMaterialError'
+  }
+}
+
+/**
+ * Thrown when a delegated `fetch()` call fails before a `Response` can be
+ * produced — for example the URL is malformed or the underlying network
+ * request fails (DNS failure, connection refused, TLS error).
+ *
+ * @public
+ */
+export class FetchError extends VaultError {
+  /**
+   * The (placeholder-resolved) URL that fetch failed to request.
+   */
+  readonly url: string
+
+  constructor(message: string, url: string) {
+    super(message)
+    this.name = 'FetchError'
+    this.url = url
+  }
+}
+
+/**
  * Thrown during initialization when a required system dependency (e.g. OpenSSL
  * or a native credential helper) is missing or incompatible.
  */

@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { delegatedFetch } from '../../../src/access/delegated-fetch.js'
 import type { FetchRequest } from '../../../src/access/types.js'
+import { FetchError, VaultError } from '../../../src/errors.js'
 
 // Mock the global fetch
 const mockFetch = vi.fn<typeof fetch>()
@@ -34,10 +35,7 @@ describe('delegatedFetch', () => {
 
       await delegatedFetch('abc', request)
 
-      expect(mockFetch).toHaveBeenCalledWith(
-        'https://example.com/abc/abc',
-        expect.any(Object),
-      )
+      expect(mockFetch).toHaveBeenCalledWith('https://example.com/abc/abc', expect.any(Object))
     })
 
     it('leaves URL unchanged when no placeholder present', async () => {
@@ -164,10 +162,7 @@ describe('delegatedFetch', () => {
 
       await delegatedFetch({ apiKey: 'key123' }, request)
 
-      expect(mockFetch).toHaveBeenCalledWith(
-        'https://example.com/key123/data',
-        expect.any(Object),
-      )
+      expect(mockFetch).toHaveBeenCalledWith('https://example.com/key123/data', expect.any(Object))
     })
 
     it('replaces multiple named secrets in headers', async () => {
@@ -220,10 +215,7 @@ describe('delegatedFetch', () => {
         body: '{"key":"{{secret:apiKey}}"}',
       }
 
-      await delegatedFetch(
-        { host: 'secure.example.com', token: 'jwt', apiKey: 'k' },
-        request,
-      )
+      await delegatedFetch({ host: 'secure.example.com', token: 'jwt', apiKey: 'k' }, request)
 
       expect(mockFetch).toHaveBeenCalledWith(
         'https://secure.example.com/api',
@@ -236,11 +228,46 @@ describe('delegatedFetch', () => {
   })
 
   describe('negative cases', () => {
-    it('propagates fetch rejection', async () => {
+    // Regression test for the audit in
+    // https://github.com/mike-north/vaultkeeper/issues/71: delegatedFetch()
+    // previously let a raw fetch() rejection escape untyped, the same
+    // "raw error from node:crypto/fetch/spawn reaches the caller" pattern
+    // fixed for sign(). It must now surface a typed FetchError.
+    it('wraps a fetch rejection in a typed FetchError', async () => {
+      mockFetch.mockRejectedValue(new Error('network error'))
+      const request: FetchRequest = { url: 'https://example.com' }
+
+      await expect(delegatedFetch('s', request)).rejects.toThrow(FetchError)
+      await expect(delegatedFetch('s', request)).rejects.toThrow('network error')
+    })
+
+    it('FetchError is an instance of VaultError', async () => {
       mockFetch.mockRejectedValueOnce(new Error('network error'))
       const request: FetchRequest = { url: 'https://example.com' }
 
-      await expect(delegatedFetch('s', request)).rejects.toThrow('network error')
+      let caught: unknown
+      try {
+        await delegatedFetch('s', request)
+      } catch (error) {
+        caught = error
+      }
+      expect(caught).toBeInstanceOf(VaultError)
+    })
+
+    it('does not echo an injected secret from the URL into the FetchError message', async () => {
+      mockFetch.mockRejectedValue(new Error('network error'))
+      const request: FetchRequest = { url: 'https://example.com/token/{{secret}}' }
+
+      let caught: unknown
+      try {
+        await delegatedFetch('super-secret-value', request)
+      } catch (error) {
+        caught = error
+      }
+
+      expect(caught).toBeInstanceOf(FetchError)
+      const message = caught instanceof Error ? caught.message : ''
+      expect(message).not.toContain('super-secret-value')
     })
   })
 })

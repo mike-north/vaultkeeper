@@ -7,7 +7,7 @@
 import * as crypto from 'node:crypto'
 import { describe, it, expect, beforeAll } from 'vitest'
 import { delegatedSign } from '../../../src/access/delegated-sign.js'
-import { InvalidAlgorithmError } from '../../../src/errors.js'
+import { InvalidAlgorithmError, InvalidKeyMaterialError, VaultError } from '../../../src/errors.js'
 
 // Hoist key generation to avoid regenerating on every test (RSA is slow).
 let ed25519Private: string
@@ -116,15 +116,34 @@ describe('delegatedSign', () => {
 
   describe('negative cases', () => {
     it('throws on invalid PEM', () => {
-      expect(() =>
-        delegatedSign('not-a-pem', { data: 'test' }),
-      ).toThrow()
+      expect(() => delegatedSign('not-a-pem', { data: 'test' })).toThrow(InvalidKeyMaterialError)
     })
 
     it('throws when given a public key PEM instead of private', () => {
-      expect(() =>
-        delegatedSign(ed25519Public, { data: 'test' }),
-      ).toThrow()
+      expect(() => delegatedSign(ed25519Public, { data: 'test' })).toThrow(InvalidKeyMaterialError)
+    })
+
+    // Regression test for https://github.com/mike-north/vaultkeeper/issues/71:
+    // sign() previously let the raw OpenSSL decoder error (bare `Error`,
+    // `ERR_OSSL_UNSUPPORTED`) escape from `crypto.createPrivateKey()` when the
+    // stored secret was not key material — violating sign()'s own
+    // `@throws {VaultError}` contract. It must now throw a typed
+    // InvalidKeyMaterialError, and the message must never echo the secret.
+    it('throws InvalidKeyMaterialError (not a raw OpenSSL error) when the stored secret is not key material', () => {
+      const notKeyMaterial = 'test-secret-123'
+
+      let caught: unknown
+      try {
+        delegatedSign(notKeyMaterial, { data: 'hello' })
+      } catch (error) {
+        caught = error
+      }
+
+      expect(caught).toBeInstanceOf(InvalidKeyMaterialError)
+      expect(caught).toBeInstanceOf(VaultError)
+      const message = caught instanceof Error ? caught.message : ''
+      expect(message).toMatch(/PEM|DER|key material/i)
+      expect(message).not.toContain(notKeyMaterial)
     })
 
     it('produces different signatures for different data', () => {
@@ -134,15 +153,15 @@ describe('delegatedSign', () => {
     })
 
     it('throws InvalidAlgorithmError for weak algorithm (md5)', () => {
-      expect(() =>
-        delegatedSign(rsaPrivate, { data: 'test', algorithm: 'md5' }),
-      ).toThrow(InvalidAlgorithmError)
+      expect(() => delegatedSign(rsaPrivate, { data: 'test', algorithm: 'md5' })).toThrow(
+        InvalidAlgorithmError,
+      )
     })
 
     it('throws InvalidAlgorithmError for weak algorithm (sha1)', () => {
-      expect(() =>
-        delegatedSign(rsaPrivate, { data: 'test', algorithm: 'sha1' }),
-      ).toThrow(InvalidAlgorithmError)
+      expect(() => delegatedSign(rsaPrivate, { data: 'test', algorithm: 'sha1' })).toThrow(
+        InvalidAlgorithmError,
+      )
     })
   })
 
