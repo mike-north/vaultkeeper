@@ -14,7 +14,6 @@ describe('approveCommand', () => {
   let stderrOutput: string
   let stdoutOutput: string
   let configDir: string
-  const originalConfigDir = process.env.VAULTKEEPER_CONFIG_DIR
 
   beforeEach(async () => {
     stderrOutput = ''
@@ -28,36 +27,31 @@ describe('approveCommand', () => {
       return true
     })
     // Isolate the trust manifest to a temp dir; never touch the real config dir.
+    // Passed explicitly as approveCommand's configDir param — no env var needed.
     configDir = await fs.mkdtemp(path.join(os.tmpdir(), 'vk-approve-unit-'))
-    process.env.VAULTKEEPER_CONFIG_DIR = configDir
   })
 
   afterEach(async () => {
     vi.restoreAllMocks()
-    if (originalConfigDir === undefined) {
-      delete process.env.VAULTKEEPER_CONFIG_DIR
-    } else {
-      process.env.VAULTKEEPER_CONFIG_DIR = originalConfigDir
-    }
     await fs.rm(configDir, { recursive: true, force: true })
   })
 
   describe('--help / -h', () => {
     it('should print usage and return 0 for --help', async () => {
-      const code = await approveCommand(['--help'])
+      const code = await approveCommand(['--help'], configDir)
       expect(code).toBe(0)
       expect(stdoutOutput).toContain('Usage: vaultkeeper approve')
     })
 
     it('should print usage and return 0 for -h', async () => {
-      const code = await approveCommand(['-h'])
+      const code = await approveCommand(['-h'], configDir)
       expect(code).toBe(0)
       expect(stdoutOutput).toContain('Usage: vaultkeeper approve')
     })
 
     // Criterion 6: help describes the real (idempotent, manifest-writing) behavior.
     it('describes the TOFU manifest behavior accurately', async () => {
-      await approveCommand(['--help'])
+      await approveCommand(['--help'], configDir)
       expect(stdoutOutput).toContain('TOFU trust manifest')
       expect(stdoutOutput).toContain('idempotent')
     })
@@ -65,17 +59,17 @@ describe('approveCommand', () => {
 
   describe('--script flag validation', () => {
     it('should return 2 when --script is missing', async () => {
-      const code = await approveCommand([])
+      const code = await approveCommand([], configDir)
       expect(code).toBe(2)
     })
 
     it('should write error to stderr when --script is missing', async () => {
-      await approveCommand([])
+      await approveCommand([], configDir)
       expect(stderrOutput).toContain('--script is required')
     })
 
     it('should include usage hint when --script is missing', async () => {
-      await approveCommand([])
+      await approveCommand([], configDir)
       expect(stderrOutput).toContain('Usage: vaultkeeper approve')
     })
   })
@@ -87,7 +81,7 @@ describe('approveCommand', () => {
       const script = path.join(configDir, 'my-script.sh')
       await fs.writeFile(script, contents, { mode: 0o755 })
 
-      const code = await approveCommand(['--script', script])
+      const code = await approveCommand(['--script', script], configDir)
       expect(code).toBe(0)
       expect(stdoutOutput).toContain('Approved')
       expect(stdoutOutput).toContain(sha256Hex(contents))
@@ -98,7 +92,7 @@ describe('approveCommand', () => {
       const script = path.join(configDir, 'script.sh')
       await fs.writeFile(script, contents, { mode: 0o755 })
 
-      const code = await approveCommand(['--script', script])
+      const code = await approveCommand(['--script', script], configDir)
       expect(code).toBe(0)
       const match = /Approved (.+) \(hash:/.exec(stdoutOutput)
       const printedPath = match?.[1]
@@ -111,7 +105,7 @@ describe('approveCommand', () => {
     // Criterion 2: a nonexistent path exits non-zero, naming the missing path.
     it('exits 1 and names the missing path', async () => {
       const missing = path.join(configDir, 'does-not-exist.sh')
-      const code = await approveCommand(['--script', missing])
+      const code = await approveCommand(['--script', missing], configDir)
       expect(code).toBe(1)
       expect(stderrOutput).toContain(path.resolve(missing))
     })

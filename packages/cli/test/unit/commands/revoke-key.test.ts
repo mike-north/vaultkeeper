@@ -1,5 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
+const configDir = '/tmp/vaultkeeper-test-config-dir'
+
 // vi.hoisted ensures the mock factory can reference mockInit before imports are resolved.
 const mockInit = vi.hoisted(() => vi.fn())
 
@@ -35,19 +37,19 @@ describe('revokeKeyCommand', () => {
   describe('unknown flag handling', () => {
     it('should return 2 for unknown flags', async () => {
       const { revokeKeyCommand } = await import('../../../src/commands/revoke-key.js')
-      const code = await revokeKeyCommand(['--bogus'])
+      const code = await revokeKeyCommand(['--bogus'], configDir)
       expect(code).toBe(2)
     })
 
     it('should write error message for unknown flags', async () => {
       const { revokeKeyCommand } = await import('../../../src/commands/revoke-key.js')
-      await revokeKeyCommand(['--bogus'])
+      await revokeKeyCommand(['--bogus'], configDir)
       expect(stderrOutput).toContain('Error:')
     })
 
     it('should print help after unknown flag error', async () => {
       const { revokeKeyCommand } = await import('../../../src/commands/revoke-key.js')
-      await revokeKeyCommand(['--bogus'])
+      await revokeKeyCommand(['--bogus'], configDir)
       expect(stdoutOutput).toContain('Usage: vaultkeeper revoke-key')
     })
   })
@@ -56,14 +58,14 @@ describe('revokeKeyCommand', () => {
     it('should return 1', async () => {
       mockInit.mockRejectedValue(new Error('backend unavailable'))
       const { revokeKeyCommand } = await import('../../../src/commands/revoke-key.js')
-      const code = await revokeKeyCommand([])
+      const code = await revokeKeyCommand([], configDir)
       expect(code).toBe(1)
     })
 
     it('should write formatted error to stderr', async () => {
       mockInit.mockRejectedValue(new Error('backend unavailable'))
       const { revokeKeyCommand } = await import('../../../src/commands/revoke-key.js')
-      await revokeKeyCommand([])
+      await revokeKeyCommand([], configDir)
       expect(stderrOutput).toContain('backend unavailable')
     })
   })
@@ -73,7 +75,7 @@ describe('revokeKeyCommand', () => {
       const mockVault = { revokeKey: vi.fn().mockRejectedValue(new Error('revocation failed')) }
       mockInit.mockResolvedValue(mockVault)
       const { revokeKeyCommand } = await import('../../../src/commands/revoke-key.js')
-      const code = await revokeKeyCommand([])
+      const code = await revokeKeyCommand([], configDir)
       expect(code).toBe(1)
     })
 
@@ -81,7 +83,7 @@ describe('revokeKeyCommand', () => {
       const mockVault = { revokeKey: vi.fn().mockRejectedValue(new Error('revocation failed')) }
       mockInit.mockResolvedValue(mockVault)
       const { revokeKeyCommand } = await import('../../../src/commands/revoke-key.js')
-      await revokeKeyCommand([])
+      await revokeKeyCommand([], configDir)
       expect(stderrOutput).toContain('revocation failed')
     })
   })
@@ -91,7 +93,7 @@ describe('revokeKeyCommand', () => {
       const mockVault = { revokeKey: vi.fn().mockResolvedValue(undefined) }
       mockInit.mockResolvedValue(mockVault)
       const { revokeKeyCommand } = await import('../../../src/commands/revoke-key.js')
-      const code = await revokeKeyCommand([])
+      const code = await revokeKeyCommand([], configDir)
       expect(code).toBe(0)
     })
 
@@ -99,7 +101,7 @@ describe('revokeKeyCommand', () => {
       const mockVault = { revokeKey: vi.fn().mockResolvedValue(undefined) }
       mockInit.mockResolvedValue(mockVault)
       const { revokeKeyCommand } = await import('../../../src/commands/revoke-key.js')
-      await revokeKeyCommand([])
+      await revokeKeyCommand([], configDir)
       expect(stdoutOutput).toContain('Key revoked successfully')
     })
   })
@@ -109,16 +111,16 @@ describe('revokeKeyCommand', () => {
       const mockVault = { revokeKey: vi.fn().mockResolvedValue(undefined) }
       mockInit.mockResolvedValue(mockVault)
       const { revokeKeyCommand } = await import('../../../src/commands/revoke-key.js')
-      await revokeKeyCommand([])
-      expect(mockInit).toHaveBeenCalledWith({ skipDoctor: false })
+      await revokeKeyCommand([], configDir)
+      expect(mockInit).toHaveBeenCalledWith({ configDir, skipDoctor: false })
     })
 
     it('should pass skipDoctor: true to VaultKeeper.init when --skip-doctor is set', async () => {
       const mockVault = { revokeKey: vi.fn().mockResolvedValue(undefined) }
       mockInit.mockResolvedValue(mockVault)
       const { revokeKeyCommand } = await import('../../../src/commands/revoke-key.js')
-      await revokeKeyCommand(['--skip-doctor'])
-      expect(mockInit).toHaveBeenCalledWith({ skipDoctor: true })
+      await revokeKeyCommand(['--skip-doctor'], configDir)
+      expect(mockInit).toHaveBeenCalledWith({ configDir, skipDoctor: true })
     })
 
     it('should pass skipDoctor: true when VAULTKEEPER_SKIP_DOCTOR=1 env var is set', async () => {
@@ -126,8 +128,8 @@ describe('revokeKeyCommand', () => {
       const mockVault = { revokeKey: vi.fn().mockResolvedValue(undefined) }
       mockInit.mockResolvedValue(mockVault)
       const { revokeKeyCommand } = await import('../../../src/commands/revoke-key.js')
-      await revokeKeyCommand([])
-      expect(mockInit).toHaveBeenCalledWith({ skipDoctor: true })
+      await revokeKeyCommand([], configDir)
+      expect(mockInit).toHaveBeenCalledWith({ configDir, skipDoctor: true })
     })
 
     it('should not skip doctor when VAULTKEEPER_SKIP_DOCTOR=0', async () => {
@@ -135,21 +137,21 @@ describe('revokeKeyCommand', () => {
       const mockVault = { revokeKey: vi.fn().mockResolvedValue(undefined) }
       mockInit.mockResolvedValue(mockVault)
       const { revokeKeyCommand } = await import('../../../src/commands/revoke-key.js')
-      await revokeKeyCommand([])
-      expect(mockInit).toHaveBeenCalledWith({ skipDoctor: false })
+      await revokeKeyCommand([], configDir)
+      expect(mockInit).toHaveBeenCalledWith({ configDir, skipDoctor: false })
     })
   })
 
   describe('--help flag', () => {
     it('should include --skip-doctor in help output', async () => {
       const { revokeKeyCommand } = await import('../../../src/commands/revoke-key.js')
-      await revokeKeyCommand(['--help'])
+      await revokeKeyCommand(['--help'], configDir)
       expect(stdoutOutput).toContain('--skip-doctor')
     })
 
     it('should include VAULTKEEPER_SKIP_DOCTOR env var in help output', async () => {
       const { revokeKeyCommand } = await import('../../../src/commands/revoke-key.js')
-      await revokeKeyCommand(['--help'])
+      await revokeKeyCommand(['--help'], configDir)
       expect(stdoutOutput).toContain('VAULTKEEPER_SKIP_DOCTOR')
     })
   })

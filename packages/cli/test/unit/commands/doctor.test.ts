@@ -1,14 +1,18 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
+const configDir = '/tmp/vaultkeeper-test-config-dir'
+
 // Capture mock fn references in the factory closure to avoid
 // accessing class methods through vi.mocked(), which triggers
 // @typescript-eslint/unbound-method on static class method types.
 const mockDoctor = vi.fn()
+const mockLoadConfig = vi.fn()
 
 vi.mock('vaultkeeper', () => ({
   VaultKeeper: {
     doctor: mockDoctor,
   },
+  loadConfig: mockLoadConfig,
 }))
 
 describe('doctorCommand', () => {
@@ -26,6 +30,7 @@ describe('doctorCommand', () => {
       stdoutOutput += String(chunk)
       return true
     })
+    mockLoadConfig.mockResolvedValue({ backends: [] })
   })
 
   afterEach(() => {
@@ -42,7 +47,7 @@ describe('doctorCommand', () => {
         nextSteps: [],
       })
       const { doctorCommand } = await import('../../../src/commands/doctor.js')
-      const code = await doctorCommand([])
+      const code = await doctorCommand([], configDir)
       expect(code).toBe(0)
     })
 
@@ -54,7 +59,7 @@ describe('doctorCommand', () => {
         nextSteps: [],
       })
       const { doctorCommand } = await import('../../../src/commands/doctor.js')
-      await doctorCommand([])
+      await doctorCommand([], configDir)
       expect(stdoutOutput).toContain('System ready.')
     })
 
@@ -66,7 +71,7 @@ describe('doctorCommand', () => {
         nextSteps: [],
       })
       const { doctorCommand } = await import('../../../src/commands/doctor.js')
-      await doctorCommand([])
+      await doctorCommand([], configDir)
       expect(stdoutOutput).toContain('✓')
       expect(stdoutOutput).toContain('keychain')
       expect(stdoutOutput).toContain('1.2.3')
@@ -80,7 +85,7 @@ describe('doctorCommand', () => {
         nextSteps: [],
       })
       const { doctorCommand } = await import('../../../src/commands/doctor.js')
-      await doctorCommand([])
+      await doctorCommand([], configDir)
       expect(stdoutOutput).toContain('Warnings:')
       expect(stdoutOutput).toContain('Keychain is locked')
     })
@@ -95,7 +100,7 @@ describe('doctorCommand', () => {
         nextSteps: ['Install keychain'],
       })
       const { doctorCommand } = await import('../../../src/commands/doctor.js')
-      const code = await doctorCommand([])
+      const code = await doctorCommand([], configDir)
       expect(code).toBe(1)
     })
 
@@ -107,7 +112,7 @@ describe('doctorCommand', () => {
         nextSteps: ['Install keychain'],
       })
       const { doctorCommand } = await import('../../../src/commands/doctor.js')
-      await doctorCommand([])
+      await doctorCommand([], configDir)
       expect(stdoutOutput).toContain('Next steps:')
       expect(stdoutOutput).toContain('Install keychain')
     })
@@ -120,7 +125,7 @@ describe('doctorCommand', () => {
         nextSteps: [],
       })
       const { doctorCommand } = await import('../../../src/commands/doctor.js')
-      await doctorCommand([])
+      await doctorCommand([], configDir)
       expect(stdoutOutput).toContain('✗')
       expect(stdoutOutput).toContain('not available')
     })
@@ -130,14 +135,14 @@ describe('doctorCommand', () => {
     it('should return 1', async () => {
       mockDoctor.mockRejectedValue(new Error('doctor failed'))
       const { doctorCommand } = await import('../../../src/commands/doctor.js')
-      const code = await doctorCommand([])
+      const code = await doctorCommand([], configDir)
       expect(code).toBe(1)
     })
 
     it('should write formatted error to stderr', async () => {
       mockDoctor.mockRejectedValue(new Error('doctor failed'))
       const { doctorCommand } = await import('../../../src/commands/doctor.js')
-      await doctorCommand([])
+      await doctorCommand([], configDir)
       expect(stderrOutput).toContain('doctor failed')
     })
   })

@@ -1,24 +1,9 @@
 import { parseArgs } from 'node:util'
 import * as fs from 'node:fs/promises'
 import * as path from 'node:path'
-import * as os from 'node:os'
 import { BackendRegistry, platformDefaultBackendType } from 'vaultkeeper'
 import { formatError } from '../output.js'
-
-function getDefaultConfigDir(): string {
-  const envOverride = process.env.VAULTKEEPER_CONFIG_DIR
-  if (envOverride !== undefined && envOverride !== '') {
-    return envOverride
-  }
-  if (process.platform === 'win32') {
-    const appData = process.env.APPDATA
-    if (appData !== undefined) {
-      return path.join(appData, 'vaultkeeper')
-    }
-    return path.join(os.homedir(), 'AppData', 'Roaming', 'vaultkeeper')
-  }
-  return path.join(os.homedir(), '.config', 'vaultkeeper')
-}
+import { CONFIG_DIR_HELP_OPTION, CONFIG_DIR_HELP_ENV } from '../config-dir.js'
 
 /** Human-readable name for the current platform, for user-facing messages. */
 function platformLabel(): string {
@@ -107,7 +92,10 @@ function printConfigHelp(): void {
       '  --backend <type>   Backend to configure as the active store\n' +
       `                     (valid: ${BackendRegistry.getTypes().join(', ')})\n\n` +
       'Options:\n' +
-      '  -h, --help   Show this help message\n',
+      CONFIG_DIR_HELP_OPTION +
+      '  -h, --help   Show this help message\n\n' +
+      'Environment variables:\n' +
+      CONFIG_DIR_HELP_ENV,
   )
 }
 
@@ -116,7 +104,7 @@ function isEnoent(err: unknown): boolean {
   return err instanceof Error && 'code' in err && err.code === 'ENOENT'
 }
 
-async function configInit(rest: string[]): Promise<number> {
+async function configInit(rest: string[], configDir: string): Promise<number> {
   const unknownFlag = findUnknownFlag(rest, new Set(['backend']))
   if (unknownFlag !== undefined) {
     process.stderr.write(`Error: unknown option '${unknownFlag}' for 'config init'\n`)
@@ -149,7 +137,6 @@ async function configInit(rest: string[]): Promise<number> {
   const backendType = requestedBackend ?? platformDefaultBackendType()
 
   try {
-    const configDir = getDefaultConfigDir()
     const configPath = path.join(configDir, 'config.json')
     // Create config directory with restrictive permissions.
     await fs.mkdir(configDir, { recursive: true, mode: 0o700 })
@@ -193,7 +180,7 @@ async function configInit(rest: string[]): Promise<number> {
   }
 }
 
-async function configShow(rest: string[]): Promise<number> {
+async function configShow(rest: string[], configDir: string): Promise<number> {
   const unknownFlag = findUnknownFlag(rest, new Set())
   if (unknownFlag !== undefined) {
     process.stderr.write(`Error: unknown option '${unknownFlag}' for 'config show'\n`)
@@ -201,9 +188,11 @@ async function configShow(rest: string[]): Promise<number> {
   }
 
   try {
-    const configDir = getDefaultConfigDir()
     const configPath = path.join(configDir, 'config.json')
     const content = await fs.readFile(configPath, 'utf8')
+    // The loaded path is a diagnostic, so it goes to stderr — stdout
+    // stays pure JSON for consumers that pipe/parse `config show`.
+    process.stderr.write(`Loaded from: ${configPath}\n`)
     process.stdout.write(content)
     if (!content.endsWith('\n')) {
       process.stdout.write('\n')
@@ -229,7 +218,7 @@ async function configShow(rest: string[]): Promise<number> {
   }
 }
 
-export async function configCommand(args: string[]): Promise<number> {
+export async function configCommand(args: string[], configDir: string): Promise<number> {
   // Handle --help / -h before subcommand dispatch.
   if (args.includes('--help') || args.includes('-h')) {
     printConfigHelp()
@@ -241,10 +230,10 @@ export async function configCommand(args: string[]): Promise<number> {
 
   switch (subcommand) {
     case 'init':
-      return configInit(rest)
+      return configInit(rest, configDir)
 
     case 'show':
-      return configShow(rest)
+      return configShow(rest, configDir)
 
     default:
       process.stderr.write('Error: missing or unknown config subcommand\n')

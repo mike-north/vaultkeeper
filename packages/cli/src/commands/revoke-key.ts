@@ -2,6 +2,7 @@ import { parseArgs } from 'node:util'
 import { VaultKeeper } from 'vaultkeeper'
 import { shouldSkipDoctor } from '../skip-doctor.js'
 import { formatError } from '../output.js'
+import { CONFIG_DIR_HELP_OPTION, CONFIG_DIR_HELP_ENV } from '../config-dir.js'
 
 function printRevokeKeyHelp(): void {
   process.stdout.write(
@@ -10,13 +11,15 @@ function printRevokeKeyHelp(): void {
       'with the revoked key become immediately invalid.\n\n' +
       'Options:\n' +
       '  --skip-doctor          Skip doctor preflight checks\n' +
+      CONFIG_DIR_HELP_OPTION +
       '  -h, --help             Show this help message\n\n' +
       'Environment variables:\n' +
-      '  VAULTKEEPER_SKIP_DOCTOR=1   Skip doctor preflight checks\n',
+      '  VAULTKEEPER_SKIP_DOCTOR=1   Skip doctor preflight checks\n' +
+      CONFIG_DIR_HELP_ENV,
   )
 }
 
-export async function revokeKeyCommand(args: string[]): Promise<number> {
+export async function revokeKeyCommand(args: string[], configDir: string): Promise<number> {
   if (args.includes('--help') || args.includes('-h')) {
     printRevokeKeyHelp()
     return 0
@@ -41,7 +44,7 @@ export async function revokeKeyCommand(args: string[]): Promise<number> {
   const skipDoctor = shouldSkipDoctor(skipDoctorFlag)
 
   try {
-    const vault = await VaultKeeper.init({ skipDoctor })
+    const vault = await VaultKeeper.init({ configDir, skipDoctor })
     await vault.revokeKey()
     process.stdout.write('Key revoked successfully.\n')
     return 0

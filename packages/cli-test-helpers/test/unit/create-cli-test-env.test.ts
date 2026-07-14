@@ -36,7 +36,7 @@ describe('createCliTestEnv', () => {
     env = await createCliTestEnv()
     const result = await env.run(['--help'])
     expect(result.exitCode).toBe(0)
-    expect(result.stdout).toContain('Usage: vaultkeeper <command>')
+    expect(result.stdout).toContain('Usage: vaultkeeper [--config-dir <path>] <command>')
   })
 
   it('should set VAULTKEEPER_CONFIG_DIR in the subprocess', async () => {

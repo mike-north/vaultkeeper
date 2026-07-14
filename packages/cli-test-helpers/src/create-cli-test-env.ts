@@ -51,12 +51,7 @@ function runProcess(
       [binPath, ...args],
       { timeout, env },
       (error, stdout, stderr) => {
-        const exitCode =
-          error !== null
-            ? typeof error.code === 'number'
-              ? error.code
-              : 1
-            : 0
+        const exitCode = error !== null ? (typeof error.code === 'number' ? error.code : 1) : 0
         resolve({ stdout, stderr, exitCode })
       },
     )
@@ -78,12 +73,8 @@ function runProcess(
  * @returns A disposable test environment with `run()`, `runWithStdin()`, and `cleanup()`.
  * @public
  */
-export async function createCliTestEnv(
-  options?: CliTestEnvOptions,
-): Promise<CliTestEnv> {
-  const configDir = await fs.mkdtemp(
-    path.join(os.tmpdir(), 'vaultkeeper-cli-test-'),
-  )
+export async function createCliTestEnv(options?: CliTestEnvOptions): Promise<CliTestEnv> {
+  const configDir = await fs.mkdtemp(path.join(os.tmpdir(), 'vaultkeeper-cli-test-'))
 
   const secretsDir = path.join(configDir, 'secrets')
   await fs.mkdir(secretsDir, { recursive: true })
@@ -99,11 +90,20 @@ export async function createCliTestEnv(
   const binPath = resolveCliBinPath()
   const timeout = options?.timeout ?? 15_000
   const extraEnv = options?.env ?? {}
+  const configDirMode = options?.configDirMode ?? 'env'
 
   const baseEnv: Record<string, string | undefined> = {
     ...process.env,
     ...extraEnv,
-    VAULTKEEPER_CONFIG_DIR: configDir,
+  }
+  if (configDirMode === 'env') {
+    baseEnv.VAULTKEEPER_CONFIG_DIR = configDir
+  } else if (!('VAULTKEEPER_CONFIG_DIR' in extraEnv)) {
+    // 'flag' mode: strip only an *inherited* VAULTKEEPER_CONFIG_DIR (from
+    // process.env) so it doesn't leak in unexpectedly. A caller-supplied
+    // extraEnv.VAULTKEEPER_CONFIG_DIR is left intact so flag-vs-env
+    // precedence tests can set a competing env var alongside --config-dir.
+    delete baseEnv.VAULTKEEPER_CONFIG_DIR
   }
 
   return {

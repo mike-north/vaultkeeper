@@ -37,6 +37,7 @@ import { shouldSkipDoctor } from '../skip-doctor.js'
 import { shouldAutoApprove } from '../auto-approve.js'
 import { shellQuote } from '../shell-quote.js'
 import { formatError } from '../output.js'
+import { CONFIG_DIR_HELP_OPTION, CONFIG_DIR_HELP_ENV } from '../config-dir.js'
 
 /**
  * Outcome of the TOFU trust gate.
@@ -169,6 +170,7 @@ function printExecHelp(): void {
       '                     fresh one automatically\n' +
       '  --no-redact        Do not redact the secret from output\n' +
       '  --skip-doctor      Skip doctor preflight checks\n' +
+      CONFIG_DIR_HELP_OPTION +
       '  -h, --help         Show this help message\n\n' +
       'Approval and TTY requirement:\n' +
       '  A caller that is not yet trusted requires approval. On an interactive\n' +
@@ -179,11 +181,12 @@ function printExecHelp(): void {
       'Environment variables:\n' +
       '  VAULTKEEPER_YES=1           Approve an untrusted caller non-interactively\n' +
       '                              (same as --yes)\n' +
-      '  VAULTKEEPER_SKIP_DOCTOR=1   Skip doctor preflight checks\n',
+      '  VAULTKEEPER_SKIP_DOCTOR=1   Skip doctor preflight checks\n' +
+      CONFIG_DIR_HELP_ENV,
   )
 }
 
-export async function execCommand(args: string[]): Promise<number> {
+export async function execCommand(args: string[], configDir: string): Promise<number> {
   // Handle --help / -h before any other processing.
   if (args.includes('--help') || args.includes('-h')) {
     printExecHelp()
@@ -243,7 +246,7 @@ export async function execCommand(args: string[]): Promise<number> {
   const autoApprove = shouldAutoApprove(values.yes)
 
   try {
-    const vault = await VaultKeeper.init({ skipDoctor })
+    const vault = await VaultKeeper.init({ configDir, skipDoctor })
 
     // Enforce the trust gate BEFORE touching the cache or retrieving the
     // secret. This runs on every invocation — including a `--cache` hit — so a

@@ -1,5 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
+const configDir = '/tmp/vaultkeeper-test-config-dir'
+
 // vi.hoisted ensures the mock factory can reference mockInit before imports are resolved.
 const mockInit = vi.hoisted(() => vi.fn())
 const mockDeleteFn = vi.hoisted(() => vi.fn().mockResolvedValue(undefined))
@@ -45,19 +47,19 @@ describe('deleteCommand', () => {
   describe('--name flag validation', () => {
     it('should return 2 when --name is missing', async () => {
       const { deleteCommand } = await import('../../../src/commands/delete.js')
-      const code = await deleteCommand([])
+      const code = await deleteCommand([], configDir)
       expect(code).toBe(2)
     })
 
     it('should write error to stderr when --name is missing', async () => {
       const { deleteCommand } = await import('../../../src/commands/delete.js')
-      await deleteCommand([])
+      await deleteCommand([], configDir)
       expect(stderrOutput).toContain('--name is required')
     })
 
     it('should include usage hint when --name is missing', async () => {
       const { deleteCommand } = await import('../../../src/commands/delete.js')
-      await deleteCommand([])
+      await deleteCommand([], configDir)
       expect(stderrOutput).toContain('Usage:')
     })
   })
@@ -66,14 +68,14 @@ describe('deleteCommand', () => {
     it('should return 1', async () => {
       mockInit.mockRejectedValue(new Error('backend unavailable'))
       const { deleteCommand } = await import('../../../src/commands/delete.js')
-      const code = await deleteCommand(['--name', 'my-secret'])
+      const code = await deleteCommand(['--name', 'my-secret'], configDir)
       expect(code).toBe(1)
     })
 
     it('should write formatted error to stderr', async () => {
       mockInit.mockRejectedValue(new Error('backend unavailable'))
       const { deleteCommand } = await import('../../../src/commands/delete.js')
-      await deleteCommand(['--name', 'my-secret'])
+      await deleteCommand(['--name', 'my-secret'], configDir)
       expect(stderrOutput).toContain('backend unavailable')
     })
   })
@@ -82,14 +84,14 @@ describe('deleteCommand', () => {
     it('should return 0', async () => {
       mockInit.mockResolvedValue({ delete: mockDeleteFn })
       const { deleteCommand } = await import('../../../src/commands/delete.js')
-      const code = await deleteCommand(['--name', 'my-secret'])
+      const code = await deleteCommand(['--name', 'my-secret'], configDir)
       expect(code).toBe(0)
     })
 
     it('should write success message to stdout', async () => {
       mockInit.mockResolvedValue({ delete: mockDeleteFn })
       const { deleteCommand } = await import('../../../src/commands/delete.js')
-      await deleteCommand(['--name', 'my-secret'])
+      await deleteCommand(['--name', 'my-secret'], configDir)
       expect(stdoutOutput).toContain('deleted')
     })
   })
@@ -98,60 +100,60 @@ describe('deleteCommand', () => {
     it('should pass skipDoctor: false to VaultKeeper.init by default', async () => {
       mockInit.mockResolvedValue({ delete: mockDeleteFn })
       const { deleteCommand } = await import('../../../src/commands/delete.js')
-      await deleteCommand(['--name', 'my-secret'])
-      expect(mockInit).toHaveBeenCalledWith({ skipDoctor: false })
+      await deleteCommand(['--name', 'my-secret'], configDir)
+      expect(mockInit).toHaveBeenCalledWith({ configDir, skipDoctor: false })
     })
 
     it('should pass skipDoctor: true to VaultKeeper.init when --skip-doctor is set', async () => {
       mockInit.mockResolvedValue({ delete: mockDeleteFn })
       const { deleteCommand } = await import('../../../src/commands/delete.js')
-      await deleteCommand(['--name', 'my-secret', '--skip-doctor'])
-      expect(mockInit).toHaveBeenCalledWith({ skipDoctor: true })
+      await deleteCommand(['--name', 'my-secret', '--skip-doctor'], configDir)
+      expect(mockInit).toHaveBeenCalledWith({ configDir, skipDoctor: true })
     })
 
     it('should pass skipDoctor: true when VAULTKEEPER_SKIP_DOCTOR=1 env var is set', async () => {
       process.env.VAULTKEEPER_SKIP_DOCTOR = '1'
       mockInit.mockResolvedValue({ delete: mockDeleteFn })
       const { deleteCommand } = await import('../../../src/commands/delete.js')
-      await deleteCommand(['--name', 'my-secret'])
-      expect(mockInit).toHaveBeenCalledWith({ skipDoctor: true })
+      await deleteCommand(['--name', 'my-secret'], configDir)
+      expect(mockInit).toHaveBeenCalledWith({ configDir, skipDoctor: true })
     })
 
     it('should not skip doctor when VAULTKEEPER_SKIP_DOCTOR=0', async () => {
       process.env.VAULTKEEPER_SKIP_DOCTOR = '0'
       mockInit.mockResolvedValue({ delete: mockDeleteFn })
       const { deleteCommand } = await import('../../../src/commands/delete.js')
-      await deleteCommand(['--name', 'my-secret'])
-      expect(mockInit).toHaveBeenCalledWith({ skipDoctor: false })
+      await deleteCommand(['--name', 'my-secret'], configDir)
+      expect(mockInit).toHaveBeenCalledWith({ configDir, skipDoctor: false })
     })
 
     it('should not skip doctor when VAULTKEEPER_SKIP_DOCTOR=true (non-numeric)', async () => {
       process.env.VAULTKEEPER_SKIP_DOCTOR = 'true'
       mockInit.mockResolvedValue({ delete: mockDeleteFn })
       const { deleteCommand } = await import('../../../src/commands/delete.js')
-      await deleteCommand(['--name', 'my-secret'])
-      expect(mockInit).toHaveBeenCalledWith({ skipDoctor: false })
+      await deleteCommand(['--name', 'my-secret'], configDir)
+      expect(mockInit).toHaveBeenCalledWith({ configDir, skipDoctor: false })
     })
 
     it('should not skip doctor when VAULTKEEPER_SKIP_DOCTOR is empty string', async () => {
       process.env.VAULTKEEPER_SKIP_DOCTOR = ''
       mockInit.mockResolvedValue({ delete: mockDeleteFn })
       const { deleteCommand } = await import('../../../src/commands/delete.js')
-      await deleteCommand(['--name', 'my-secret'])
-      expect(mockInit).toHaveBeenCalledWith({ skipDoctor: false })
+      await deleteCommand(['--name', 'my-secret'], configDir)
+      expect(mockInit).toHaveBeenCalledWith({ configDir, skipDoctor: false })
     })
   })
 
   describe('--help flag', () => {
     it('should include --skip-doctor in help output', async () => {
       const { deleteCommand } = await import('../../../src/commands/delete.js')
-      await deleteCommand(['--help'])
+      await deleteCommand(['--help'], configDir)
       expect(stdoutOutput).toContain('--skip-doctor')
     })
 
     it('should include VAULTKEEPER_SKIP_DOCTOR env var in help output', async () => {
       const { deleteCommand } = await import('../../../src/commands/delete.js')
-      await deleteCommand(['--help'])
+      await deleteCommand(['--help'], configDir)
       expect(stdoutOutput).toContain('VAULTKEEPER_SKIP_DOCTOR')
     })
   })

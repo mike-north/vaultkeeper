@@ -22,6 +22,7 @@ export interface CliTestEnv {
 // @public
 export interface CliTestEnvOptions {
     config?: Record<string, unknown>;
+    configDirMode?: 'env' | 'flag';
     env?: Record<string, string>;
     timeout?: number;
 }

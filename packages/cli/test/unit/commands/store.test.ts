@@ -1,5 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
+const configDir = '/tmp/vaultkeeper-test-config-dir'
+
 // vi.hoisted ensures the mock factory can reference mockInit before imports are resolved.
 const mockInit = vi.hoisted(() => vi.fn())
 const mockStore = vi.hoisted(() => vi.fn().mockResolvedValue(undefined))
@@ -51,19 +53,19 @@ describe('storeCommand', () => {
   describe('--name flag validation', () => {
     it('should return 2 when --name is missing', async () => {
       const { storeCommand } = await import('../../../src/commands/store.js')
-      const code = await storeCommand([])
+      const code = await storeCommand([], configDir)
       expect(code).toBe(2)
     })
 
     it('should write error to stderr when --name is missing', async () => {
       const { storeCommand } = await import('../../../src/commands/store.js')
-      await storeCommand([])
+      await storeCommand([], configDir)
       expect(stderrOutput).toContain('--name is required')
     })
 
     it('should include usage hint when --name is missing', async () => {
       const { storeCommand } = await import('../../../src/commands/store.js')
-      await storeCommand([])
+      await storeCommand([], configDir)
       expect(stderrOutput).toContain('Usage:')
     })
   })
@@ -72,14 +74,14 @@ describe('storeCommand', () => {
     it('should return 1 when stdin is empty', async () => {
       mockStdinWith('')
       const { storeCommand } = await import('../../../src/commands/store.js')
-      const code = await storeCommand(['--name', 'my-secret'])
+      const code = await storeCommand(['--name', 'my-secret'], configDir)
       expect(code).toBe(1)
     })
 
     it('should write error when stdin is empty', async () => {
       mockStdinWith('')
       const { storeCommand } = await import('../../../src/commands/store.js')
-      await storeCommand(['--name', 'my-secret'])
+      await storeCommand(['--name', 'my-secret'], configDir)
       expect(stderrOutput).toContain('No secret provided on stdin')
     })
   })
@@ -89,7 +91,7 @@ describe('storeCommand', () => {
       mockStdinWith('my-secret-value')
       mockInit.mockRejectedValue(new Error('backend unavailable'))
       const { storeCommand } = await import('../../../src/commands/store.js')
-      const code = await storeCommand(['--name', 'my-secret'])
+      const code = await storeCommand(['--name', 'my-secret'], configDir)
       expect(code).toBe(1)
     })
 
@@ -97,7 +99,7 @@ describe('storeCommand', () => {
       mockStdinWith('my-secret-value')
       mockInit.mockRejectedValue(new Error('backend unavailable'))
       const { storeCommand } = await import('../../../src/commands/store.js')
-      await storeCommand(['--name', 'my-secret'])
+      await storeCommand(['--name', 'my-secret'], configDir)
       expect(stderrOutput).toContain('backend unavailable')
     })
   })
@@ -107,7 +109,7 @@ describe('storeCommand', () => {
       mockStdinWith('my-secret-value')
       mockInit.mockResolvedValue({ store: mockStore })
       const { storeCommand } = await import('../../../src/commands/store.js')
-      const code = await storeCommand(['--name', 'my-secret'])
+      const code = await storeCommand(['--name', 'my-secret'], configDir)
       expect(code).toBe(0)
     })
 
@@ -115,7 +117,7 @@ describe('storeCommand', () => {
       mockStdinWith('my-secret-value')
       mockInit.mockResolvedValue({ store: mockStore })
       const { storeCommand } = await import('../../../src/commands/store.js')
-      await storeCommand(['--name', 'my-secret'])
+      await storeCommand(['--name', 'my-secret'], configDir)
       expect(stdoutOutput).toContain('stored successfully')
     })
   })
@@ -125,16 +127,16 @@ describe('storeCommand', () => {
       mockStdinWith('my-secret-value')
       mockInit.mockResolvedValue({ store: mockStore })
       const { storeCommand } = await import('../../../src/commands/store.js')
-      await storeCommand(['--name', 'my-secret'])
-      expect(mockInit).toHaveBeenCalledWith({ skipDoctor: false })
+      await storeCommand(['--name', 'my-secret'], configDir)
+      expect(mockInit).toHaveBeenCalledWith({ configDir, skipDoctor: false })
     })
 
     it('should pass skipDoctor: true to VaultKeeper.init when --skip-doctor is set', async () => {
       mockStdinWith('my-secret-value')
       mockInit.mockResolvedValue({ store: mockStore })
       const { storeCommand } = await import('../../../src/commands/store.js')
-      await storeCommand(['--name', 'my-secret', '--skip-doctor'])
-      expect(mockInit).toHaveBeenCalledWith({ skipDoctor: true })
+      await storeCommand(['--name', 'my-secret', '--skip-doctor'], configDir)
+      expect(mockInit).toHaveBeenCalledWith({ configDir, skipDoctor: true })
     })
 
     it('should pass skipDoctor: true when VAULTKEEPER_SKIP_DOCTOR=1 env var is set', async () => {
@@ -142,8 +144,8 @@ describe('storeCommand', () => {
       mockStdinWith('my-secret-value')
       mockInit.mockResolvedValue({ store: mockStore })
       const { storeCommand } = await import('../../../src/commands/store.js')
-      await storeCommand(['--name', 'my-secret'])
-      expect(mockInit).toHaveBeenCalledWith({ skipDoctor: true })
+      await storeCommand(['--name', 'my-secret'], configDir)
+      expect(mockInit).toHaveBeenCalledWith({ configDir, skipDoctor: true })
     })
 
     it('should not skip doctor when VAULTKEEPER_SKIP_DOCTOR=0', async () => {
@@ -151,8 +153,8 @@ describe('storeCommand', () => {
       mockStdinWith('my-secret-value')
       mockInit.mockResolvedValue({ store: mockStore })
       const { storeCommand } = await import('../../../src/commands/store.js')
-      await storeCommand(['--name', 'my-secret'])
-      expect(mockInit).toHaveBeenCalledWith({ skipDoctor: false })
+      await storeCommand(['--name', 'my-secret'], configDir)
+      expect(mockInit).toHaveBeenCalledWith({ configDir, skipDoctor: false })
     })
 
     it('should not skip doctor when VAULTKEEPER_SKIP_DOCTOR=true (non-numeric)', async () => {
@@ -160,8 +162,8 @@ describe('storeCommand', () => {
       mockStdinWith('my-secret-value')
       mockInit.mockResolvedValue({ store: mockStore })
       const { storeCommand } = await import('../../../src/commands/store.js')
-      await storeCommand(['--name', 'my-secret'])
-      expect(mockInit).toHaveBeenCalledWith({ skipDoctor: false })
+      await storeCommand(['--name', 'my-secret'], configDir)
+      expect(mockInit).toHaveBeenCalledWith({ configDir, skipDoctor: false })
     })
 
     it('should not skip doctor when VAULTKEEPER_SKIP_DOCTOR is empty string', async () => {
@@ -169,21 +171,21 @@ describe('storeCommand', () => {
       mockStdinWith('my-secret-value')
       mockInit.mockResolvedValue({ store: mockStore })
       const { storeCommand } = await import('../../../src/commands/store.js')
-      await storeCommand(['--name', 'my-secret'])
-      expect(mockInit).toHaveBeenCalledWith({ skipDoctor: false })
+      await storeCommand(['--name', 'my-secret'], configDir)
+      expect(mockInit).toHaveBeenCalledWith({ configDir, skipDoctor: false })
     })
   })
 
   describe('--help flag', () => {
     it('should include --skip-doctor in help output', async () => {
       const { storeCommand } = await import('../../../src/commands/store.js')
-      await storeCommand(['--help'])
+      await storeCommand(['--help'], configDir)
       expect(stdoutOutput).toContain('--skip-doctor')
     })
 
     it('should include VAULTKEEPER_SKIP_DOCTOR env var in help output', async () => {
       const { storeCommand } = await import('../../../src/commands/store.js')
-      await storeCommand(['--help'])
+      await storeCommand(['--help'], configDir)
       expect(stdoutOutput).toContain('VAULTKEEPER_SKIP_DOCTOR')
     })
   })

@@ -1,5 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
+const configDir = '/tmp/vaultkeeper-test-config-dir'
+
 // vi.hoisted ensures the mock factory can reference mockInit before imports are resolved.
 const mockInit = vi.hoisted(() => vi.fn())
 
@@ -35,25 +37,25 @@ describe('devModeCommand', () => {
   describe('action validation', () => {
     it('should return 2 when no action is provided', async () => {
       const { devModeCommand } = await import('../../../src/commands/dev-mode.js')
-      const code = await devModeCommand(['--script', '/path/to/script.sh'])
+      const code = await devModeCommand(['--script', '/path/to/script.sh'], configDir)
       expect(code).toBe(2)
     })
 
     it('should return 2 for invalid action', async () => {
       const { devModeCommand } = await import('../../../src/commands/dev-mode.js')
-      const code = await devModeCommand(['invalid', '--script', '/path/to/script.sh'])
+      const code = await devModeCommand(['invalid', '--script', '/path/to/script.sh'], configDir)
       expect(code).toBe(2)
     })
 
     it('should return 2 for action that is neither enable nor disable', async () => {
       const { devModeCommand } = await import('../../../src/commands/dev-mode.js')
-      const code = await devModeCommand(['toggle', '--script', '/path/to/script.sh'])
+      const code = await devModeCommand(['toggle', '--script', '/path/to/script.sh'], configDir)
       expect(code).toBe(2)
     })
 
     it('should write usage to stderr for invalid action', async () => {
       const { devModeCommand } = await import('../../../src/commands/dev-mode.js')
-      await devModeCommand(['invalid', '--script', '/path/to/script.sh'])
+      await devModeCommand(['invalid', '--script', '/path/to/script.sh'], configDir)
       expect(stderrOutput).toContain('Usage: vaultkeeper dev-mode')
       expect(stderrOutput).toContain('<enable|disable>')
     })
@@ -62,19 +64,19 @@ describe('devModeCommand', () => {
   describe('--script flag validation', () => {
     it('should return 2 when --script is missing with valid action', async () => {
       const { devModeCommand } = await import('../../../src/commands/dev-mode.js')
-      const code = await devModeCommand(['enable'])
+      const code = await devModeCommand(['enable'], configDir)
       expect(code).toBe(2)
     })
 
     it('should return 2 when --script is missing with disable action', async () => {
       const { devModeCommand } = await import('../../../src/commands/dev-mode.js')
-      const code = await devModeCommand(['disable'])
+      const code = await devModeCommand(['disable'], configDir)
       expect(code).toBe(2)
     })
 
     it('should write usage to stderr when --script is missing', async () => {
       const { devModeCommand } = await import('../../../src/commands/dev-mode.js')
-      await devModeCommand(['enable'])
+      await devModeCommand(['enable'], configDir)
       expect(stderrOutput).toContain('--script')
     })
   })
@@ -82,13 +84,13 @@ describe('devModeCommand', () => {
   describe('when both action and --script are missing', () => {
     it('should return 2 with no args', async () => {
       const { devModeCommand } = await import('../../../src/commands/dev-mode.js')
-      const code = await devModeCommand([])
+      const code = await devModeCommand([], configDir)
       expect(code).toBe(2)
     })
 
     it('should write usage to stderr with no args', async () => {
       const { devModeCommand } = await import('../../../src/commands/dev-mode.js')
-      await devModeCommand([])
+      await devModeCommand([], configDir)
       expect(stderrOutput).toContain('Usage:')
     })
   })
@@ -98,16 +100,16 @@ describe('devModeCommand', () => {
       const mockVault = { setDevelopmentMode: vi.fn().mockResolvedValue(undefined) }
       mockInit.mockResolvedValue(mockVault)
       const { devModeCommand } = await import('../../../src/commands/dev-mode.js')
-      await devModeCommand(['enable', '--script', '/path/to/script.sh'])
-      expect(mockInit).toHaveBeenCalledWith({ skipDoctor: false })
+      await devModeCommand(['enable', '--script', '/path/to/script.sh'], configDir)
+      expect(mockInit).toHaveBeenCalledWith({ configDir, skipDoctor: false })
     })
 
     it('should pass skipDoctor: true to VaultKeeper.init when --skip-doctor is set', async () => {
       const mockVault = { setDevelopmentMode: vi.fn().mockResolvedValue(undefined) }
       mockInit.mockResolvedValue(mockVault)
       const { devModeCommand } = await import('../../../src/commands/dev-mode.js')
-      await devModeCommand(['enable', '--script', '/path/to/script.sh', '--skip-doctor'])
-      expect(mockInit).toHaveBeenCalledWith({ skipDoctor: true })
+      await devModeCommand(['enable', '--script', '/path/to/script.sh', '--skip-doctor'], configDir)
+      expect(mockInit).toHaveBeenCalledWith({ configDir, skipDoctor: true })
     })
 
     it('should pass skipDoctor: true when VAULTKEEPER_SKIP_DOCTOR=1 env var is set', async () => {
@@ -115,8 +117,8 @@ describe('devModeCommand', () => {
       const mockVault = { setDevelopmentMode: vi.fn().mockResolvedValue(undefined) }
       mockInit.mockResolvedValue(mockVault)
       const { devModeCommand } = await import('../../../src/commands/dev-mode.js')
-      await devModeCommand(['enable', '--script', '/path/to/script.sh'])
-      expect(mockInit).toHaveBeenCalledWith({ skipDoctor: true })
+      await devModeCommand(['enable', '--script', '/path/to/script.sh'], configDir)
+      expect(mockInit).toHaveBeenCalledWith({ configDir, skipDoctor: true })
     })
 
     it('should not skip doctor when VAULTKEEPER_SKIP_DOCTOR=0', async () => {
@@ -124,21 +126,21 @@ describe('devModeCommand', () => {
       const mockVault = { setDevelopmentMode: vi.fn().mockResolvedValue(undefined) }
       mockInit.mockResolvedValue(mockVault)
       const { devModeCommand } = await import('../../../src/commands/dev-mode.js')
-      await devModeCommand(['enable', '--script', '/path/to/script.sh'])
-      expect(mockInit).toHaveBeenCalledWith({ skipDoctor: false })
+      await devModeCommand(['enable', '--script', '/path/to/script.sh'], configDir)
+      expect(mockInit).toHaveBeenCalledWith({ configDir, skipDoctor: false })
     })
   })
 
   describe('--help flag', () => {
     it('should include --skip-doctor in help output', async () => {
       const { devModeCommand } = await import('../../../src/commands/dev-mode.js')
-      await devModeCommand(['--help'])
+      await devModeCommand(['--help'], configDir)
       expect(stdoutOutput).toContain('--skip-doctor')
     })
 
     it('should include VAULTKEEPER_SKIP_DOCTOR env var in help output', async () => {
       const { devModeCommand } = await import('../../../src/commands/dev-mode.js')
-      await devModeCommand(['--help'])
+      await devModeCommand(['--help'], configDir)
       expect(stdoutOutput).toContain('VAULTKEEPER_SKIP_DOCTOR')
     })
   })

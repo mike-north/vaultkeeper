@@ -3,6 +3,8 @@ import { execCommand } from '../../../src/commands/exec.js'
 import { promptApproval } from '../../../src/approval.js'
 import { readCachedToken } from '../../../src/cache.js'
 
+const configDir = '/tmp/vaultkeeper-test-config-dir'
+
 const mockInit = vi.hoisted(() => vi.fn())
 
 // A real IdentityMismatchError subclass so `.name`/`.message` format exactly as
@@ -116,111 +118,80 @@ describe('execCommand', () => {
 
   describe('-- separator validation', () => {
     it('should return 2 when -- separator is missing', async () => {
-      const code = await execCommand([
-        '--secret',
-        'my-key',
-        '--env',
-        'MY_VAR',
-        '--caller',
-        '/path/to/script.sh',
-      ])
+      const code = await execCommand(
+        ['--secret', 'my-key', '--env', 'MY_VAR', '--caller', '/path/to/script.sh'],
+        configDir,
+      )
       expect(code).toBe(2)
     })
 
     it('should write error message when -- separator is missing', async () => {
-      await execCommand(['--secret', 'my-key', '--env', 'MY_VAR', '--caller', '/path/to/script.sh'])
+      await execCommand(
+        ['--secret', 'my-key', '--env', 'MY_VAR', '--caller', '/path/to/script.sh'],
+        configDir,
+      )
       expect(stderrOutput).toContain('Must provide command after --')
     })
 
     it('should include usage hint when -- separator is missing', async () => {
-      await execCommand([])
+      await execCommand([], configDir)
       expect(stderrOutput).toContain('Usage: vaultkeeper exec')
     })
   })
 
   describe('command after -- validation', () => {
     it('should return 2 when command after -- is empty', async () => {
-      const code = await execCommand([
-        '--secret',
-        'my-key',
-        '--env',
-        'MY_VAR',
-        '--caller',
-        '/path/to/script.sh',
-        '--',
-      ])
+      const code = await execCommand(
+        ['--secret', 'my-key', '--env', 'MY_VAR', '--caller', '/path/to/script.sh', '--'],
+        configDir,
+      )
       expect(code).toBe(2)
     })
 
     it('should write error message when command after -- is empty', async () => {
-      await execCommand([
-        '--secret',
-        'my-key',
-        '--env',
-        'MY_VAR',
-        '--caller',
-        '/path/to/script.sh',
-        '--',
-      ])
+      await execCommand(
+        ['--secret', 'my-key', '--env', 'MY_VAR', '--caller', '/path/to/script.sh', '--'],
+        configDir,
+      )
       expect(stderrOutput).toContain('No command provided after --')
     })
   })
 
   describe('required flag validation', () => {
     it('should return 2 when --secret is missing', async () => {
-      const code = await execCommand([
-        '--env',
-        'MY_VAR',
-        '--caller',
-        '/path/to/script.sh',
-        '--',
-        'echo',
-        'hello',
-      ])
+      const code = await execCommand(
+        ['--env', 'MY_VAR', '--caller', '/path/to/script.sh', '--', 'echo', 'hello'],
+        configDir,
+      )
       expect(code).toBe(2)
     })
 
     it('should return 2 when --env is missing', async () => {
-      const code = await execCommand([
-        '--secret',
-        'my-key',
-        '--caller',
-        '/path/to/script.sh',
-        '--',
-        'echo',
-        'hello',
-      ])
+      const code = await execCommand(
+        ['--secret', 'my-key', '--caller', '/path/to/script.sh', '--', 'echo', 'hello'],
+        configDir,
+      )
       expect(code).toBe(2)
     })
 
     it('should return 2 when --caller is missing', async () => {
-      const code = await execCommand([
-        '--secret',
-        'my-key',
-        '--env',
-        'MY_VAR',
-        '--',
-        'echo',
-        'hello',
-      ])
+      const code = await execCommand(
+        ['--secret', 'my-key', '--env', 'MY_VAR', '--', 'echo', 'hello'],
+        configDir,
+      )
       expect(code).toBe(2)
     })
 
     it('should return 2 when all required flags are missing', async () => {
-      const code = await execCommand(['--', 'echo', 'hello'])
+      const code = await execCommand(['--', 'echo', 'hello'], configDir)
       expect(code).toBe(2)
     })
 
     it('should write error message when required flags are missing', async () => {
-      await execCommand([
-        '--env',
-        'MY_VAR',
-        '--caller',
-        '/path/to/script.sh',
-        '--',
-        'echo',
-        'hello',
-      ])
+      await execCommand(
+        ['--env', 'MY_VAR', '--caller', '/path/to/script.sh', '--', 'echo', 'hello'],
+        configDir,
+      )
       expect(stderrOutput).toContain('--secret, --env, and --caller are required')
     })
   })
@@ -246,109 +217,127 @@ describe('execCommand', () => {
 
     it('should pass skipDoctor: false to VaultKeeper.init by default', async () => {
       mockInit.mockResolvedValue(pendingVaultMock())
-      await execCommand([
-        '--secret',
-        'my-key',
-        '--env',
-        'MY_VAR',
-        '--caller',
-        '/path/to/script.sh',
-        '--',
-        'echo',
-        'hello',
-      ])
-      expect(mockInit).toHaveBeenCalledWith({ skipDoctor: false })
+      await execCommand(
+        [
+          '--secret',
+          'my-key',
+          '--env',
+          'MY_VAR',
+          '--caller',
+          '/path/to/script.sh',
+          '--',
+          'echo',
+          'hello',
+        ],
+        configDir,
+      )
+      expect(mockInit).toHaveBeenCalledWith({ configDir, skipDoctor: false })
       expect(promptApproval).toHaveBeenCalled()
       expect(stderrOutput).toContain('Access denied by user.')
     })
 
     it('should pass skipDoctor: true to VaultKeeper.init when --skip-doctor is set', async () => {
       mockInit.mockResolvedValue(pendingVaultMock())
-      await execCommand([
-        '--skip-doctor',
-        '--secret',
-        'my-key',
-        '--env',
-        'MY_VAR',
-        '--caller',
-        '/path/to/script.sh',
-        '--',
-        'echo',
-        'hello',
-      ])
-      expect(mockInit).toHaveBeenCalledWith({ skipDoctor: true })
+      await execCommand(
+        [
+          '--skip-doctor',
+          '--secret',
+          'my-key',
+          '--env',
+          'MY_VAR',
+          '--caller',
+          '/path/to/script.sh',
+          '--',
+          'echo',
+          'hello',
+        ],
+        configDir,
+      )
+      expect(mockInit).toHaveBeenCalledWith({ configDir, skipDoctor: true })
       expect(promptApproval).toHaveBeenCalled()
     })
 
     it('should pass skipDoctor: true when VAULTKEEPER_SKIP_DOCTOR=1 env var is set', async () => {
       process.env.VAULTKEEPER_SKIP_DOCTOR = '1'
       mockInit.mockResolvedValue(pendingVaultMock())
-      await execCommand([
-        '--secret',
-        'my-key',
-        '--env',
-        'MY_VAR',
-        '--caller',
-        '/path/to/script.sh',
-        '--',
-        'echo',
-        'hello',
-      ])
-      expect(mockInit).toHaveBeenCalledWith({ skipDoctor: true })
+      await execCommand(
+        [
+          '--secret',
+          'my-key',
+          '--env',
+          'MY_VAR',
+          '--caller',
+          '/path/to/script.sh',
+          '--',
+          'echo',
+          'hello',
+        ],
+        configDir,
+      )
+      expect(mockInit).toHaveBeenCalledWith({ configDir, skipDoctor: true })
       expect(promptApproval).toHaveBeenCalled()
     })
 
     it('should not skip doctor when VAULTKEEPER_SKIP_DOCTOR=0', async () => {
       process.env.VAULTKEEPER_SKIP_DOCTOR = '0'
       mockInit.mockResolvedValue(pendingVaultMock())
-      await execCommand([
-        '--secret',
-        'my-key',
-        '--env',
-        'MY_VAR',
-        '--caller',
-        '/path/to/script.sh',
-        '--',
-        'echo',
-        'hello',
-      ])
-      expect(mockInit).toHaveBeenCalledWith({ skipDoctor: false })
+      await execCommand(
+        [
+          '--secret',
+          'my-key',
+          '--env',
+          'MY_VAR',
+          '--caller',
+          '/path/to/script.sh',
+          '--',
+          'echo',
+          'hello',
+        ],
+        configDir,
+      )
+      expect(mockInit).toHaveBeenCalledWith({ configDir, skipDoctor: false })
       expect(promptApproval).toHaveBeenCalled()
     })
 
     it('should not skip doctor when VAULTKEEPER_SKIP_DOCTOR=true (non-numeric)', async () => {
       process.env.VAULTKEEPER_SKIP_DOCTOR = 'true'
       mockInit.mockResolvedValue(pendingVaultMock())
-      await execCommand([
-        '--secret',
-        'my-key',
-        '--env',
-        'MY_VAR',
-        '--caller',
-        '/path/to/script.sh',
-        '--',
-        'echo',
-        'hello',
-      ])
-      expect(mockInit).toHaveBeenCalledWith({ skipDoctor: false })
+      await execCommand(
+        [
+          '--secret',
+          'my-key',
+          '--env',
+          'MY_VAR',
+          '--caller',
+          '/path/to/script.sh',
+          '--',
+          'echo',
+          'hello',
+        ],
+        configDir,
+      )
+      expect(mockInit).toHaveBeenCalledWith({ configDir, skipDoctor: false })
       expect(promptApproval).toHaveBeenCalled()
     })
 
     it('should not skip doctor when VAULTKEEPER_SKIP_DOCTOR is empty string', async () => {
       process.env.VAULTKEEPER_SKIP_DOCTOR = ''
       mockInit.mockResolvedValue(pendingVaultMock())
-      await execCommand([
-        '--secret',
-        'my-key',
-        '--env',
-        'MY_VAR',
-        '--caller',
-        '/path/to/script.sh',
-        '--',
-        'echo',
-        'hello',
-      ])
-      expect(mockInit).toHaveBeenCalledWith({ skipDoctor: false })
+      await execCommand(
+        [
+          '--secret',
+          'my-key',
+          '--env',
+          'MY_VAR',
+          '--caller',
+          '/path/to/script.sh',
+          '--',
+          'echo',
+          'hello',
+        ],
+        configDir,
+      )
+      expect(mockInit).toHaveBeenCalledWith({ configDir, skipDoctor: false })
       expect(promptApproval).toHaveBeenCalled()
     })
   })
@@ -383,7 +372,7 @@ describe('execCommand', () => {
       })
       mockInit.mockResolvedValue({ checkExecutableTrust, setup, authorize, getSecret })
 
-      const code = await execCommand(EXEC_ARGS)
+      const code = await execCommand(EXEC_ARGS, configDir)
 
       expect(code).toBe(1)
       expect(promptApproval).not.toHaveBeenCalled()
@@ -420,7 +409,7 @@ describe('execCommand', () => {
       // A previously cached token exists — but the gate must run before it is used.
       vi.mocked(readCachedToken).mockResolvedValueOnce('cached.jwe.token')
 
-      const code = await execCommand(['--cache', ...EXEC_ARGS])
+      const code = await execCommand(['--cache', ...EXEC_ARGS], configDir)
 
       expect(code).not.toBe(0)
       // The cached token was never used to authorize or read the secret.
@@ -449,7 +438,7 @@ describe('execCommand', () => {
       mockInit.mockResolvedValue({ checkExecutableTrust, setup, authorize, getSecret })
       vi.mocked(readCachedToken).mockResolvedValueOnce('cached.jwe.token')
 
-      const code = await execCommand(['--cache', ...EXEC_ARGS])
+      const code = await execCommand(['--cache', ...EXEC_ARGS], configDir)
 
       expect(code).toBe(0)
       expect(promptApproval).not.toHaveBeenCalled()
@@ -478,7 +467,7 @@ describe('execCommand', () => {
       })
       mockInit.mockResolvedValue({ checkExecutableTrust, setup, authorize, getSecret })
 
-      const code = await execCommand(['--yes', ...EXEC_ARGS])
+      const code = await execCommand(['--yes', ...EXEC_ARGS], configDir)
 
       expect(code).toBe(0)
       expect(promptApproval).not.toHaveBeenCalled()
@@ -507,7 +496,7 @@ describe('execCommand', () => {
       })
       mockInit.mockResolvedValue({ checkExecutableTrust, setup, authorize, getSecret })
 
-      const code = await execCommand(EXEC_ARGS)
+      const code = await execCommand(EXEC_ARGS, configDir)
 
       expect(code).toBe(0)
       expect(promptApproval).not.toHaveBeenCalled()
@@ -539,7 +528,7 @@ describe('execCommand', () => {
       // that is only being approved this run.
       vi.mocked(readCachedToken).mockResolvedValueOnce('cached.jwe.token')
 
-      const code = await execCommand(['--cache', '--yes', ...EXEC_ARGS])
+      const code = await execCommand(['--cache', '--yes', ...EXEC_ARGS], configDir)
 
       expect(code).toBe(0)
       // The cache was not even consulted for a just-approved caller.
@@ -559,7 +548,7 @@ describe('execCommand', () => {
         const vault = pendingVaultMock()
         mockInit.mockResolvedValue(vault)
 
-        const code = await execCommand(EXEC_ARGS)
+        const code = await execCommand(EXEC_ARGS, configDir)
 
         expect(code).toBe(1)
         expect(promptApproval).not.toHaveBeenCalled()
@@ -576,25 +565,25 @@ describe('execCommand', () => {
 
   describe('--help flag', () => {
     it('should include --skip-doctor in help output', async () => {
-      await execCommand(['--help'])
+      await execCommand(['--help'], configDir)
       expect(stdoutOutput).toContain('--skip-doctor')
     })
 
     it('should include VAULTKEEPER_SKIP_DOCTOR env var in help output', async () => {
-      await execCommand(['--help'])
+      await execCommand(['--help'], configDir)
       expect(stdoutOutput).toContain('VAULTKEEPER_SKIP_DOCTOR')
     })
 
     // Issue #58, criterion 4: help documents the TTY requirement and both escape
     // hatches (--yes and VAULTKEEPER_YES), plus the approve alternative.
     it('documents the --yes flag and VAULTKEEPER_YES env var', async () => {
-      await execCommand(['--help'])
+      await execCommand(['--help'], configDir)
       expect(stdoutOutput).toContain('--yes')
       expect(stdoutOutput).toContain('VAULTKEEPER_YES')
     })
 
     it('documents the TTY requirement and how to approve non-interactively', async () => {
-      await execCommand(['--help'])
+      await execCommand(['--help'], configDir)
       expect(stdoutOutput).toContain('non-TTY')
       expect(stdoutOutput).toContain('vaultkeeper approve --script')
     })
