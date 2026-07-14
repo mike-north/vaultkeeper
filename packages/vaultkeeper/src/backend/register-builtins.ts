@@ -28,9 +28,9 @@ import { YubikeyBackend } from './yubikey-backend.js'
  * @internal
  */
 export function registerBuiltinBackends(): void {
-  BackendRegistry.register('file', () => new FileBackend())
+  BackendRegistry.register('file', (config?: BackendConfig) => new FileBackend(config?.path))
   BackendRegistry.register('keychain', () => new KeychainBackend())
-  BackendRegistry.register('dpapi', () => new DpapiBackend())
+  BackendRegistry.register('dpapi', (config?: BackendConfig) => new DpapiBackend(config?.path))
   BackendRegistry.register('secret-tool', () => new SecretToolBackend())
   BackendRegistry.register('1password', (config?: BackendConfig) => {
     const opts = config?.options
@@ -50,7 +50,7 @@ export function registerBuiltinBackends(): void {
     }
     return new OnePasswordBackend(opOptions)
   })
-  BackendRegistry.register('yubikey', () => new YubikeyBackend())
+  BackendRegistry.register('yubikey', (config?: BackendConfig) => new YubikeyBackend(config?.path))
 }
 
 registerBuiltinBackends()

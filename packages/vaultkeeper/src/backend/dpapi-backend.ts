@@ -13,7 +13,17 @@ import { execCommand, execCommandFull } from '../util/exec.js'
 import { SecretNotFoundError } from '../errors.js'
 import type { ListableBackend } from './types.js'
 
-function getStoragePath(): string {
+/**
+ * Resolve the storage directory for a DpapiBackend instance.
+ *
+ * When `configuredPath` is provided (from `BackendConfig.path`), encrypted
+ * blobs are stored directly under that directory. Otherwise the default
+ * `$HOME/.vaultkeeper/dpapi` location is used.
+ */
+function resolveStorageDir(configuredPath?: string): string {
+  if (configuredPath !== undefined && configuredPath !== '') {
+    return configuredPath
+  }
   return path.join(os.homedir(), '.vaultkeeper', 'dpapi')
 }
 
@@ -37,6 +47,16 @@ export class DpapiBackend implements ListableBackend {
   readonly type = 'dpapi'
   readonly displayName = 'Windows DPAPI'
 
+  readonly #storageDir: string
+
+  /**
+   * @param storageDir - Directory in which encrypted blobs are stored.
+   *   Sourced from `BackendConfig.path`. Defaults to `$HOME/.vaultkeeper/dpapi`.
+   */
+  constructor(storageDir?: string) {
+    this.#storageDir = resolveStorageDir(storageDir)
+  }
+
   async isAvailable(): Promise<boolean> {
     if (process.platform !== 'win32') {
       return false
@@ -54,7 +74,7 @@ export class DpapiBackend implements ListableBackend {
   }
 
   async store(id: string, secret: string): Promise<void> {
-    const storageDir = getStoragePath()
+    const storageDir = this.#storageDir
     await fs.mkdir(storageDir, { recursive: true })
     const entryPath = getEntryPath(storageDir, id)
 
@@ -71,7 +91,7 @@ export class DpapiBackend implements ListableBackend {
   }
 
   async retrieve(id: string): Promise<string> {
-    const storageDir = getStoragePath()
+    const storageDir = this.#storageDir
     const entryPath = getEntryPath(storageDir, id)
 
     try {
@@ -93,7 +113,7 @@ export class DpapiBackend implements ListableBackend {
   }
 
   async delete(id: string): Promise<void> {
-    const storageDir = getStoragePath()
+    const storageDir = this.#storageDir
     const entryPath = getEntryPath(storageDir, id)
 
     try {
@@ -107,7 +127,7 @@ export class DpapiBackend implements ListableBackend {
   }
 
   async exists(id: string): Promise<boolean> {
-    const storageDir = getStoragePath()
+    const storageDir = this.#storageDir
     const entryPath = getEntryPath(storageDir, id)
 
     try {
@@ -119,7 +139,7 @@ export class DpapiBackend implements ListableBackend {
   }
 
   async list(): Promise<string[]> {
-    const storageDir = getStoragePath()
+    const storageDir = this.#storageDir
     let entries: string[]
     try {
       entries = await fs.readdir(storageDir)

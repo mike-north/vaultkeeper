@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+import * as path from 'node:path'
 
 vi.mock('node:fs/promises', () => ({
   mkdir: vi.fn(),
@@ -61,7 +62,9 @@ describe('FileBackend', () => {
       const encryptedWriteCall = mockFs.writeFile.mock.calls[1]
       expect(encryptedWriteCall?.[0]).toEqual(expect.stringContaining('.enc'))
       // Stored value is a base64:base64:base64 string (iv:authTag:ciphertext)
-      expect(encryptedWriteCall?.[1]).toEqual(expect.stringMatching(/^[A-Za-z0-9+/=]+:[A-Za-z0-9+/=]+:[A-Za-z0-9+/=]*$/))
+      expect(encryptedWriteCall?.[1]).toEqual(
+        expect.stringMatching(/^[A-Za-z0-9+/=]+:[A-Za-z0-9+/=]+:[A-Za-z0-9+/=]*$/),
+      )
       void keyBytes
     })
 
@@ -75,6 +78,30 @@ describe('FileBackend', () => {
       await backend.store('my-secret', 'secret-value')
 
       expect(mockFs.writeFile).toHaveBeenCalledTimes(1)
+    })
+
+    // Regression: issue #60 — BackendConfig.path was silently ignored.
+    it('should store under a custom path from config, not the default location', async () => {
+      const customDir = path.join(path.sep, 'custom', 'file', 'dir')
+      const customBackend = new FileBackend(customDir)
+      mockFs.mkdir.mockResolvedValue(undefined)
+      const keyBuffer = Buffer.alloc(32, 0xcd)
+      mockFs.readFile.mockResolvedValueOnce(keyBuffer) // key exists
+      mockFs.writeFile.mockResolvedValueOnce(undefined) // write encrypted file
+
+      await customBackend.store('my-secret', 'secret-value')
+
+      expect(mockFs.mkdir).toHaveBeenCalledWith(
+        customDir,
+        expect.objectContaining({ recursive: true }),
+      )
+      const encryptedWriteCall = mockFs.writeFile.mock.calls[0]
+      expect(encryptedWriteCall?.[0]).toEqual(expect.stringContaining(customDir))
+      // Default $HOME/.vaultkeeper location must never be touched.
+      expect(mockFs.mkdir).not.toHaveBeenCalledWith(
+        expect.stringContaining('.vaultkeeper'),
+        expect.anything(),
+      )
     })
   })
 
