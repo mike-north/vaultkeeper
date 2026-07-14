@@ -41,6 +41,32 @@ function createMockBackend(secrets: Record<string, string> = {}): SecretBackend 
   }
 }
 
+/** A `SecretBackend` backed by a real `Map`, so store() output is visible to retrieve(). */
+function createStatefulMockBackend(): SecretBackend {
+  const store = new Map<string, string>()
+  return {
+    type: 'test',
+    displayName: 'Stateful Test Backend',
+    isAvailable: () => Promise.resolve(true),
+    store: (id: string, secret: string) => {
+      store.set(id, secret)
+      return Promise.resolve()
+    },
+    retrieve: (id: string) => {
+      const val = store.get(id)
+      if (val === undefined) {
+        return Promise.reject(new Error(`Secret not found: ${id}`))
+      }
+      return Promise.resolve(val)
+    },
+    delete: (id: string) => {
+      store.delete(id)
+      return Promise.resolve()
+    },
+    exists: (id: string) => Promise.resolve(store.has(id)),
+  }
+}
+
 async function initVault(
   secrets: Record<string, string> = { 'my-secret': 'hunter2' },
 ): Promise<VaultKeeper> {
@@ -134,22 +160,25 @@ describe('VaultKeeper', () => {
     })
 
     it('round-trips a store/retrieve through the injected backend', async () => {
-      const storeSpy = vi.fn(() => Promise.resolve())
-      const backend = createMockBackend({ 'my-secret': 'hunter2' })
-      backend.store = storeSpy
+      // A stateful backend (unlike createMockBackend's fixed secrets map) so
+      // the test proves store() output is actually visible to retrieve() —
+      // not just that store() was called.
+      const backend = createStatefulMockBackend()
       const vault = await VaultKeeper.init({ skipDoctor: true, backend })
 
       await vault.store('injected-secret', 'injected-value')
-      expect(storeSpy).toHaveBeenCalledWith('injected-secret', 'injected-value')
 
-      const jwe = await vault.setup('my-secret', { executablePath: 'dev' })
+      const retrieved = await backend.retrieve('injected-secret')
+      expect(retrieved).toBe('injected-value')
+
+      const jwe = await vault.setup('injected-secret', { executablePath: 'dev' })
       const { token } = await vault.authorize(jwe)
       const accessor = vault.getSecret(token)
       let captured = ''
       accessor.read((buf) => {
         captured = buf.toString('utf-8')
       })
-      expect(captured).toBe('hunter2')
+      expect(captured).toBe('injected-value')
     })
 
     it('uses a minimal built-in default config when config is omitted', async () => {
@@ -160,6 +189,38 @@ describe('VaultKeeper', () => {
       const vault = await VaultKeeper.init({ skipDoctor: true, backend })
 
       const jwe = await vault.setup('my-secret', { executablePath: 'dev' })
+      expect(typeof jwe).toBe('string')
+    })
+
+    it('does not share/mutate config between two instances created with the backend option', async () => {
+      // Regression: init() previously reused a single shared
+      // DEFAULT_INJECTED_BACKEND_CONFIG object whenever `backend` was set
+      // without `config`, so mutating one instance's config (e.g. via
+      // setDevelopmentMode()) leaked into every other instance created the
+      // same way.
+      const vault1 = await VaultKeeper.init({
+        skipDoctor: true,
+        backend: createMockBackend({ 'my-secret': 'hunter2' }),
+      })
+      const vault2 = await VaultKeeper.init({
+        skipDoctor: true,
+        backend: createMockBackend({ 'my-secret': 'hunter2' }),
+      })
+
+      // Add a nonexistent path to vault1's dev-mode allowlist only.
+      await vault1.setDevelopmentMode('/nonexistent/dev-only-tool', true)
+
+      // vault2 must not see vault1's dev-mode entry: since the path isn't
+      // 'dev' and isn't on vault2's own allowlist, setup() must attempt real
+      // identity verification and fail because the file doesn't exist.
+      await expect(
+        vault2.setup('my-secret', { executablePath: '/nonexistent/dev-only-tool' }),
+      ).rejects.toThrow()
+
+      // vault1, which explicitly enabled dev mode for that path, must still succeed.
+      const jwe = await vault1.setup('my-secret', {
+        executablePath: '/nonexistent/dev-only-tool',
+      })
       expect(typeof jwe).toBe('string')
     })
 

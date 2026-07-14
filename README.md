@@ -396,7 +396,7 @@ const { result } = await keeper.exec(token, {
 
 ### Testing your own code
 
-Application code that calls `VaultKeeper.init()` internally can't be swapped onto a test backend. Structure your code to accept a `VaultKeeper` instance instead — production passes the real one, tests pass `TestVault.keeper`.
+Application code that calls `VaultKeeper.init()` internally can't be swapped onto a test backend. Structure your code to accept a `VaultKeeper` instance instead — production passes the real one, tests pass the `keeper` from a `TestVault` instance (`const { keeper } = await TestVault.create()`).
 
 **Before** — the function constructs its own `VaultKeeper`, so a test can only exercise it against a real backend:
 
@@ -445,7 +445,7 @@ const vault = await VaultKeeper.init()
 const header = await buildAuthHeader(vault, 'MY_API_KEY')
 ```
 
-Test with `TestVault.keeper` in place of the real vault:
+Test with the `keeper` from a `TestVault` instance in place of the real vault:
 
 ```ts
 // test/build-auth-header.test.ts

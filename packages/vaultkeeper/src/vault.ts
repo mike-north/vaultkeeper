@@ -70,17 +70,23 @@ import {
 export type SecretTokenMap = Record<string, CapabilityToken>
 
 /**
- * Minimal built-in config used when {@link VaultKeeperOptions.backend} is
- * supplied without {@link VaultKeeperOptions.config}. Mirrors the defaults a
+ * Builds a minimal built-in config used when {@link VaultKeeperOptions.backend}
+ * is supplied without {@link VaultKeeperOptions.config}. Mirrors the defaults a
  * hand-assembled test config would use (short-lived tokens, dev-mode trust),
  * so an injected backend never requires a config file on disk or a
  * hand-assembled {@link VaultConfig}.
+ *
+ * Returns a fresh object on every call — `VaultKeeper` mutates `#config` in
+ * place (e.g. `setDevelopmentMode()`), so a shared constant would let
+ * separate `init()` calls corrupt each other's state.
  */
-const DEFAULT_INJECTED_BACKEND_CONFIG: VaultConfig = {
-  version: 1,
-  backends: [],
-  keyRotation: { gracePeriodDays: 7 },
-  defaults: { ttlMinutes: 60, trustTier: 3 },
+function createDefaultInjectedBackendConfig(): VaultConfig {
+  return {
+    version: 1,
+    backends: [],
+    keyRotation: { gracePeriodDays: 7 },
+    defaults: { ttlMinutes: 60, trustTier: 3 },
+  }
 }
 
 /**
@@ -223,7 +229,7 @@ export class VaultKeeper {
     const config =
       options?.config ??
       (options?.backend !== undefined
-        ? DEFAULT_INJECTED_BACKEND_CONFIG
+        ? createDefaultInjectedBackendConfig()
         : await loadConfig(configDir))
 
     if (options?.skipDoctor !== true) {
