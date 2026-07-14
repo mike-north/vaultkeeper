@@ -11,7 +11,13 @@
  * Secrets use the file backend under an isolated HOME so no OS credential
  * store is touched.
  *
+ * Issue #58 (non-interactive exec) adds coverage for the CI escape hatches:
+ * `--yes` and `VAULTKEEPER_YES` approve an untrusted caller without a prompt and
+ * record the approval, and an untrusted caller on non-TTY stdin fails with
+ * actionable remediation.
+ *
  * @see https://github.com/mike-north/vaultkeeper/issues/57
+ * @see https://github.com/mike-north/vaultkeeper/issues/58
  */
 import * as fs from 'node:fs/promises'
 import * as os from 'node:os'
@@ -50,7 +56,7 @@ async function writeCaller(contents: string): Promise<string> {
   return caller
 }
 
-function execArgs(caller: string): string[] {
+function execArgs(caller: string, extraFlags: string[] = []): string[] {
   return [
     'exec',
     '--secret',
@@ -59,6 +65,9 @@ function execArgs(caller: string): string[] {
     'INJECTED',
     '--caller',
     caller,
+    // Extra exec flags must go BEFORE the `--` separator, or they would be
+    // parsed as part of the wrapped command instead of as exec options.
+    ...extraFlags,
     '--',
     'sh',
     '-c',
@@ -67,8 +76,8 @@ function execArgs(caller: string): string[] {
 }
 
 describe('exec trust gate', () => {
-  // Criterion 3: after approve, exec with a matching caller does NOT prompt
-  // and reports a trusted state — proven on non-TTY stdin.
+  // Issue #57 criterion 3 / issue #58 criterion 1: after approve, a trusted
+  // caller runs exec with NO prompt on non-TTY stdin, reporting a trusted state.
   it('does not prompt for an approved caller and injects the secret', async () => {
     if (env === undefined) throw new Error('env not initialized')
     const caller = await writeCaller('#!/bin/sh\necho hi\n')
@@ -117,19 +126,100 @@ describe('exec trust gate', () => {
     // Fails on the hash mismatch, not the interactive prompt.
     expect(result.stderr).not.toContain('interactive approval')
     expect(result.stderr).toContain('has changed since it was approved')
-    expect(result.stderr).toContain(`vaultkeeper approve --script ${caller}`)
+    // The path is shell-quoted so the suggested command is copy-paste safe.
+    expect(result.stderr).toContain(`vaultkeeper approve --script '${caller}'`)
     expect(result.stdout).not.toContain('ready=yes')
   })
 
-  // Criterion 3/5 contrast: an unapproved caller is also untrusted and reaches
-  // the prompt gate (fails on non-TTY stdin).
-  it('treats a never-approved caller as untrusted', async () => {
+  // Issue #58, criterion 3: a never-approved caller on non-TTY stdin fails, but
+  // the error tells the user exactly how to proceed non-interactively — pre-approve
+  // with `approve --script`, or re-run with --yes / VAULTKEEPER_YES.
+  it('fails an untrusted caller on non-TTY stdin with actionable remediation', async () => {
     if (env === undefined) throw new Error('env not initialized')
     const caller = await writeCaller('#!/bin/sh\necho hi\n')
 
     const result = await env.run(execArgs(caller))
     expect(result.exitCode).not.toBe(0)
     expect(result.stderr).not.toContain('Trust: verified')
-    expect(result.stderr).toContain('interactive approval')
+    expect(result.stdout).not.toContain('ready=yes')
+    // The path is shell-quoted so the suggested command is copy-paste safe.
+    expect(result.stderr).toContain(`vaultkeeper approve --script '${caller}'`)
+    expect(result.stderr).toContain('--yes')
+    expect(result.stderr).toContain('VAULTKEEPER_YES=1')
+  })
+
+  // Issue #58, criterion 2: --yes approves an untrusted caller non-interactively
+  // (non-TTY stdin) AND records the approval, so a later exec without --yes is
+  // trusted and needs no prompt.
+  it('approves an untrusted caller with --yes and records trust for later runs', async () => {
+    if (env === undefined) throw new Error('env not initialized')
+    const caller = await writeCaller('#!/bin/sh\necho hi\n')
+
+    const first = await env.run(execArgs(caller, ['--yes']))
+    expect(first.exitCode).toBe(0)
+    expect(first.stdout).toContain('ready=yes')
+    expect(first.stderr).toContain('approved via --yes')
+    expect(first.stderr).not.toMatch(/Allow\?|\[y\/N\]/)
+
+    // The approval was recorded: a subsequent run WITHOUT --yes is trusted.
+    const second = await env.run(execArgs(caller))
+    expect(second.exitCode).toBe(0)
+    expect(second.stdout).toContain('ready=yes')
+    expect(second.stderr).toContain('Trust: verified')
+  })
+
+  // Issue #58, criterion 2: VAULTKEEPER_YES=1 is equivalent to --yes and records
+  // the approval in the trust manifest.
+  it('approves an untrusted caller via VAULTKEEPER_YES=1 and records it in the manifest', async () => {
+    const yesEnv = await createCliTestEnv({
+      env: { HOME: homeDir, VAULTKEEPER_SKIP_DOCTOR: '1', VAULTKEEPER_YES: '1' },
+    })
+    try {
+      const stored = await yesEnv.runWithStdin(
+        ['store', '--name', SECRET_NAME],
+        `${SECRET_VALUE}\n`,
+      )
+      expect(stored.exitCode).toBe(0)
+
+      const caller = path.join(homeDir, 'yes-env-caller.sh')
+      await fs.writeFile(caller, '#!/bin/sh\necho hi\n', { mode: 0o755 })
+
+      const result = await yesEnv.run(execArgs(caller))
+      expect(result.exitCode).toBe(0)
+      expect(result.stdout).toContain('ready=yes')
+      expect(result.stderr).toContain('approved via --yes')
+      expect(result.stderr).not.toMatch(/Allow\?|\[y\/N\]/)
+
+      // The approval was recorded in the trust manifest under the caller's path.
+      const manifestRaw = await fs.readFile(
+        path.join(yesEnv.configDir, 'trust-manifest.json'),
+        'utf8',
+      )
+      const manifest: unknown = JSON.parse(manifestRaw)
+      if (
+        typeof manifest !== 'object' ||
+        manifest === null ||
+        !('entries' in manifest) ||
+        typeof manifest.entries !== 'object' ||
+        manifest.entries === null
+      ) {
+        throw new Error('trust manifest missing entries object')
+      }
+      expect(Object.keys(manifest.entries)).toContain(path.resolve(caller))
+    } finally {
+      await yesEnv.cleanup()
+    }
+  })
+
+  // Issue #58, criterion 4: exec --help documents the TTY requirement and both
+  // escape hatches, proven against the real CLI subprocess.
+  it('documents the TTY requirement and escape hatches in exec --help', async () => {
+    if (env === undefined) throw new Error('env not initialized')
+    const result = await env.run(['exec', '--help'])
+    expect(result.exitCode).toBe(0)
+    expect(result.stdout).toContain('--yes')
+    expect(result.stdout).toContain('VAULTKEEPER_YES')
+    expect(result.stdout).toContain('non-TTY')
+    expect(result.stdout).toContain('vaultkeeper approve --script')
   })
 })

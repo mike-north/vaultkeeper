@@ -92,6 +92,28 @@ vaultkeeper rotate-key
 vaultkeeper revoke-key
 ```
 
+### Running in CI
+
+`vaultkeeper exec` requires approval the first time a caller requests a secret.
+On an interactive terminal you are prompted `[y/N]`; with non-TTY stdin (CI,
+Docker) there is no prompt, so approve the caller ahead of time — or approve a
+single invocation with `--yes` (or `VAULTKEEPER_YES=1`). The `file` backend needs
+no system credential store, which makes it a good fit for CI.
+
+```sh
+# Recommended: pre-approve the caller once, then exec runs unattended.
+vaultkeeper approve --script "$CI_SCRIPT"
+echo "$MY_SECRET" | vaultkeeper store --name MY_API_KEY
+vaultkeeper exec --secret MY_API_KEY --env API_KEY --caller "$CI_SCRIPT" -- ./deploy.sh
+
+# Or approve a single run non-interactively (records the caller for next time):
+vaultkeeper exec --yes --secret MY_API_KEY --env API_KEY --caller "$CI_SCRIPT" -- ./deploy.sh
+# equivalently: VAULTKEEPER_YES=1 vaultkeeper exec --secret MY_API_KEY ...
+```
+
+A caller whose contents changed since approval is never silently trusted — you
+must re-approve it with `vaultkeeper approve --script <caller>`.
+
 ## TypeScript quick start
 
 ```ts
