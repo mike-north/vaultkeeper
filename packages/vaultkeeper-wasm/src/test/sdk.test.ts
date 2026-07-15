@@ -641,6 +641,21 @@ describe('@vaultkeeper/wasm setup() explicit-trust contract (issue #147)', () =>
     });
   });
 
+  it('setup() with an empty/whitespace executablePath throws (missing-choice), not an unusable token', async () => {
+    await withTempDir(async (dir) => {
+      const vault = await createTestVault(dir);
+      for (const bad of ['', '   ', '\t']) {
+        assert.throws(
+          () => vault.setup('empty-path', 'value', { executablePath: bad }),
+          (err: unknown) =>
+            err instanceof ExecutableTrustRequiredError && err.reason === 'missing-choice',
+          `executablePath ${JSON.stringify(bad)} must be rejected`,
+        );
+      }
+      vault.dispose();
+    });
+  });
+
   it('setup() with skipTrust: true opts out and mints a token bound to the dev identity', async () => {
     await withTempDir(async (dir) => {
       const vault = await createTestVault(dir);

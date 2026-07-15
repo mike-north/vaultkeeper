@@ -15,10 +15,13 @@ Uses the Rust vaultkeeper-core compiled to WebAssembly, with Node.js providing t
 import { createVaultKeeper } from '@vaultkeeper/wasm';
 
 const vault = await createVaultKeeper({ skipDoctor: true });
-// setup() requires an explicit executable-trust choice: pass
-// `executablePath` to bind the token to the caller, or `skipTrust: true`
-// to deliberately skip verification (development only).
-const token = vault.setup('my-secret', 'secret-value', { skipTrust: true });
+// setup() requires an explicit executable-trust choice. Bind the token to
+// the calling executable (the safe, production choice):
+const token = vault.setup('my-secret', 'secret-value', {
+  executablePath: process.argv[1],
+});
+// In tests/development you may instead deliberately skip the binding with
+// `{ skipTrust: true }`.
 const { claims, secret } = vault.authorize(token);
 // `claims` never contains the raw secret; read it once via the accessor:
 const first4 = secret.read((value) => value.slice(0, 4));

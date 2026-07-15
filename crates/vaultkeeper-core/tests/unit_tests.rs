@@ -819,6 +819,27 @@ mod vault_keeper {
         assert_eq!(claims.exe, "/usr/bin/node");
     }
 
+    /// #147 (review): an empty or whitespace-only executable_path is not a valid
+    /// trust choice — it must be rejected up front, not minted into a token
+    /// whose empty `exe` claim authorize() would later reject as unusable.
+    #[tokio::test]
+    async fn setup_with_empty_executable_path_rejects_missing_choice() {
+        for bad in ["", "   ", "\t"] {
+            let vault = dev_vault().await;
+            let opts = vaultkeeper_core::vault::SetupOptions {
+                executable_path: Some(bad.to_string()),
+                ..Default::default()
+            };
+            let err = vault.setup("s", "v", Some(&opts)).unwrap_err();
+            match err {
+                VaultError::ExecutableTrustRequired { reason, .. } => {
+                    assert_eq!(reason, "missing-choice", "input {bad:?}");
+                }
+                other => panic!("expected ExecutableTrustRequired for {bad:?}, got {other:?}"),
+            }
+        }
+    }
+
     #[tokio::test]
     async fn setup_authorize_round_trip() {
         let host = TestHost::with_config();

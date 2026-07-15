@@ -235,6 +235,20 @@ impl VaultKeeper {
                     .to_string(),
                 reason: "legacy-dev-sentinel".to_string(),
             }),
+            // An empty or whitespace-only executable path is not a real trust
+            // choice: it would mint a token whose `exe` claim fails the
+            // not-empty invariant in validate_claims(), so authorize() would
+            // later reject it as an unusable token. Reject it up front as a
+            // missing choice rather than minting the bad token.
+            Some(path) if path.trim().is_empty() => Err(VaultError::ExecutableTrustRequired {
+                message: "VaultKeeper.setup() received an empty options.executablePath, which is \
+                          not a valid executable-trust choice. Pass options.executablePath set to \
+                          the calling executable's real path (runs trust-on-first-use \
+                          verification), or set options.skipTrust: true to deliberately skip \
+                          verification (development only)."
+                    .to_string(),
+                reason: "missing-choice".to_string(),
+            }),
             Some(path) => Ok(path.to_string()),
         }
     }
