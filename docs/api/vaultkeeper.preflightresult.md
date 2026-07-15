@@ -45,7 +45,7 @@ Description
 
 </td><td>
 
-[PreflightCheck](./vaultkeeper.preflightcheck.md)<!-- -->\[\]
+[ScopedPreflightCheck](./vaultkeeper.scopedpreflightcheck.md)<!-- -->\[\]
 
 
 </td><td>

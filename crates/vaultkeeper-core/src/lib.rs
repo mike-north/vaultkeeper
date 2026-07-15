@@ -20,7 +20,7 @@ pub use backend::InMemoryBackend;
 pub use errors::VaultError;
 pub use types::{
     BackendConfig, ExecRequest, ExecResult, FetchRequest, KeyStatus, PreflightCheck,
-    PreflightCheckStatus, PreflightResult, SecretAccessor, SignRequest, SignResult, TrustTier,
-    VaultClaims, VaultConfig, VaultResponse, VerifyRequest,
+    PreflightCheckStatus, PreflightResult, ScopedPreflightCheck, SecretAccessor, SignRequest,
+    SignResult, TrustTier, VaultClaims, VaultConfig, VaultResponse, VerifyRequest,
 };
 pub use vault::VaultKeeper;

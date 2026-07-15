@@ -30,10 +30,23 @@ export interface PreflightCheck {
   reason?: string | undefined
 }
 
+/**
+ * A {@link PreflightCheck} scoped by whether its dependency is required for
+ * the active/configured backend(s). Plugin-backend checks (`op`, `ykman`)
+ * are `required: false` when their backend isn't enabled — a non-`'ok'`
+ * status there is informational, not a system-readiness blocker (issue
+ * #116). They are promoted to `required: true` when their backend is
+ * explicitly enabled (e.g. `--backend yubikey` requires `ykman`).
+ */
+export interface ScopedPreflightCheck extends PreflightCheck {
+  /** Whether this dependency is required by the active/configured backend(s). */
+  required: boolean
+}
+
 /** Aggregated result from all preflight checks. */
 export interface PreflightResult {
   /** Individual check results, one per dependency inspected. */
-  checks: PreflightCheck[]
+  checks: ScopedPreflightCheck[]
   /** `true` if all required checks passed and the system is ready. */
   ready: boolean
   /** Non-fatal advisory messages about optional missing dependencies. */

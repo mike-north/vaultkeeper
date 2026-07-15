@@ -47,7 +47,17 @@ export async function doctorCommand(args: string[], configDir: string): Promise<
     }
     const result = await VaultKeeper.doctor({ configDir })
 
-    for (const check of result.checks) {
+    // A check that is not required for the active/configured backend(s)
+    // (e.g. `ykman`/`op` when no plugin backend is enabled) is informational,
+    // not a failure — rendering it with a ✗ alongside genuine failures made a
+    // safe, file-default first run look broken (issue #116). Checks that are
+    // both optional and unsatisfied are left out of the pass/fail list; they
+    // still surface, without the failure icon, in the "Warnings" section
+    // below — that's the visual separation between "checks for your active
+    // backend" and "optional plugin backends (not configured)".
+    const primaryChecks = result.checks.filter((check) => check.required || check.status === 'ok')
+
+    for (const check of primaryChecks) {
       const icon = check.status === 'ok' ? '✓' : '✗'
       const version = check.version !== undefined ? ` (${check.version})` : ''
       const reason = check.reason !== undefined ? ` — ${check.reason}` : ''

@@ -599,6 +599,70 @@ describe('backend-aware checks ignore disabled backends', () => {
 // "config" check. An invalid config is a failing, required check (issue #68).
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// checks[].required — each check result is scoped by whether it is required
+// for the active/configured backend(s), so the CLI can visually separate
+// "checks for your active backend" from "optional plugin backends (not
+// configured)" instead of rendering every non-'ok' status as a failure
+// (issue #116: a fresh file-default doctor run must not red-X ykman/op).
+// ---------------------------------------------------------------------------
+
+describe('checks[].required scoping (issue #116)', () => {
+  it('marks op and ykman as not required when only the file backend is enabled', async () => {
+    mockCheckOpenssl.mockReturnValue(mockOk('openssl'))
+    mockCheckSecurity.mockReturnValue(mockOk('security'))
+    mockCheckBash.mockReturnValue(mockOk('bash'))
+    mockCheckOp.mockReturnValue(mockMissing('op', 'not found'))
+    mockCheckYkman.mockReturnValue(mockMissing('ykman', 'not found'))
+
+    const result = await runDoctor({
+      platform: 'darwin',
+      backends: [{ type: 'file', enabled: true }],
+    })
+
+    expect(result.ready).toBe(true)
+    expect(result.checks.find((c) => c.name === 'op')?.required).toBe(false)
+    expect(result.checks.find((c) => c.name === 'ykman')?.required).toBe(false)
+  })
+
+  it('marks security as required when the keychain backend is enabled, but op/ykman stay optional', async () => {
+    mockCheckOpenssl.mockReturnValue(mockOk('openssl'))
+    mockCheckSecurity.mockReturnValue(mockOk('security'))
+    mockCheckBash.mockReturnValue(mockOk('bash'))
+    mockCheckOp.mockReturnValue(mockMissing('op', 'not found'))
+    mockCheckYkman.mockReturnValue(mockMissing('ykman', 'not found'))
+
+    const result = await runDoctor({
+      platform: 'darwin',
+      backends: [{ type: 'keychain', enabled: true }],
+    })
+
+    expect(result.checks.find((c) => c.name === 'security')?.required).toBe(true)
+    expect(result.checks.find((c) => c.name === 'op')?.required).toBe(false)
+    expect(result.checks.find((c) => c.name === 'ykman')?.required).toBe(false)
+  })
+
+  it('marks ykman as required when the yubikey backend is enabled', async () => {
+    mockCheckOpenssl.mockReturnValue(mockOk('openssl'))
+    mockCheckSecurity.mockReturnValue(mockOk('security'))
+    mockCheckBash.mockReturnValue(mockOk('bash'))
+    mockCheckOp.mockReturnValue(mockMissing('op', 'not found'))
+    mockCheckYkman.mockReturnValue(mockMissing('ykman', 'not found'))
+
+    const result = await runDoctor({
+      platform: 'darwin',
+      backends: [
+        { type: 'file', enabled: true },
+        { type: 'yubikey', enabled: true, plugin: true },
+      ],
+    })
+
+    expect(result.checks.find((c) => c.name === 'ykman')?.required).toBe(true)
+    // op stays optional — only yubikey was enabled.
+    expect(result.checks.find((c) => c.name === 'op')?.required).toBe(false)
+  })
+})
+
 describe('runDoctor with configDir', () => {
   it('adds an ok "config" check and scopes backend checks when the config loads successfully', async () => {
     mockCheckOpenssl.mockReturnValue(mockOk('openssl'))
@@ -617,8 +681,11 @@ describe('runDoctor with configDir', () => {
 
     const configCheck = result.checks.find((c) => c.name === 'config')
     expect(configCheck?.status).toBe('ok')
+    expect(configCheck?.required).toBe(true)
     // file backend does not require secret-tool -> demoted to optional, ready stays true
     expect(result.ready).toBe(true)
+    expect(result.checks.find((c) => c.name === 'op')?.required).toBe(false)
+    expect(result.checks.find((c) => c.name === 'ykman')?.required).toBe(false)
     expect(mockLoadConfig).toHaveBeenCalledWith('/fake')
   })
 

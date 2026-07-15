@@ -235,6 +235,8 @@ Authorization result. Combines the validated claims (secret redacted), the respo
 
 Individual preflight check result (Rust snake\_case field names).
 
+`required` reflects whether this dependency is required for the active/configured backend(s); plugin-backend checks (`op`<!-- -->, `ykman`<!-- -->) are `required: false` when their backend isn't enabled (issue \#116).
+
 
 </td></tr>
 <tr><td>

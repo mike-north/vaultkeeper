@@ -53,12 +53,29 @@ pub struct PreflightCheck {
     pub reason: Option<String>,
 }
 
+/// A [`PreflightCheck`] scoped by whether its dependency is required for the
+/// active/configured backend(s). Plugin-backend checks (`op`, `ykman`) are
+/// `required: false` when their backend isn't enabled — a non-`Ok` status
+/// there is informational, not a system-readiness blocker (issue #116). They
+/// are promoted to `required: true` when their backend is explicitly enabled
+/// (e.g. the `yubikey` backend requires `ykman`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ScopedPreflightCheck {
+    /// The underlying check result. Flattened so the JSON/JS shape is
+    /// identical to a plain `PreflightCheck` with an added `required` field.
+    #[serde(flatten)]
+    pub check: PreflightCheck,
+    /// Whether this dependency is required by the active/configured backend(s).
+    pub required: bool,
+}
+
 /// Aggregated result from all preflight checks.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PreflightResult {
     /// Individual check results, one per dependency inspected.
-    pub checks: Vec<PreflightCheck>,
+    pub checks: Vec<ScopedPreflightCheck>,
     /// `true` if all required checks passed and the system is ready.
     pub ready: bool,
     /// Non-fatal advisory messages about optional missing dependencies.

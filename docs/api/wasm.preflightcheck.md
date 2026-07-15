@@ -6,6 +6,8 @@
 
 Individual preflight check result (Rust snake\_case field names).
 
+`required` reflects whether this dependency is required for the active/configured backend(s); plugin-backend checks (`op`<!-- -->, `ykman`<!-- -->) are `required: false` when their backend isn't enabled (issue \#116).
+
 **Signature:**
 
 ```typescript
@@ -68,6 +70,23 @@ string \| null
 </td><td>
 
 _(Optional)_
+
+
+</td></tr>
+<tr><td>
+
+[required](./wasm.preflightcheck.required.md)
+
+
+</td><td>
+
+
+</td><td>
+
+boolean
+
+
+</td><td>
 
 
 </td></tr>

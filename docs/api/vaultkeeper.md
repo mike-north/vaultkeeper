@@ -529,6 +529,17 @@ Options for running the doctor.
 </td></tr>
 <tr><td>
 
+[ScopedPreflightCheck](./vaultkeeper.scopedpreflightcheck.md)
+
+
+</td><td>
+
+A [PreflightCheck](./vaultkeeper.preflightcheck.md) scoped by whether its dependency is required for the active/configured backend(s). Plugin-backend checks (`op`<!-- -->, `ykman`<!-- -->) are `required: false` when their backend isn't enabled — a non-`'ok'` status there is informational, not a system-readiness blocker (issue \#116). They are promoted to `required: true` when their backend is explicitly enabled (e.g. `--backend yubikey` requires `ykman`<!-- -->).
+
+
+</td></tr>
+<tr><td>
+
 [SecretAccessor](./vaultkeeper.secretaccessor.md)
 
 

@@ -43,7 +43,7 @@ describe('doctorCommand', () => {
     it('should return 0', async () => {
       mockDoctor.mockResolvedValue({
         ready: true,
-        checks: [{ name: 'keychain', status: 'ok' }],
+        checks: [{ name: 'keychain', status: 'ok', required: true }],
         warnings: [],
         nextSteps: [],
       })
@@ -55,7 +55,7 @@ describe('doctorCommand', () => {
     it('should write ready message to stdout', async () => {
       mockDoctor.mockResolvedValue({
         ready: true,
-        checks: [{ name: 'keychain', status: 'ok' }],
+        checks: [{ name: 'keychain', status: 'ok', required: true }],
         warnings: [],
         nextSteps: [],
       })
@@ -67,7 +67,7 @@ describe('doctorCommand', () => {
     it('should display each check result with ✓ icon', async () => {
       mockDoctor.mockResolvedValue({
         ready: true,
-        checks: [{ name: 'keychain', status: 'ok', version: '1.2.3' }],
+        checks: [{ name: 'keychain', status: 'ok', version: '1.2.3', required: true }],
         warnings: [],
         nextSteps: [],
       })
@@ -96,7 +96,7 @@ describe('doctorCommand', () => {
     it('should return 1', async () => {
       mockDoctor.mockResolvedValue({
         ready: false,
-        checks: [{ name: 'keychain', status: 'error', reason: 'not available' }],
+        checks: [{ name: 'keychain', status: 'error', reason: 'not available', required: true }],
         warnings: [],
         nextSteps: ['Install keychain'],
       })
@@ -108,7 +108,7 @@ describe('doctorCommand', () => {
     it('should display next steps', async () => {
       mockDoctor.mockResolvedValue({
         ready: false,
-        checks: [{ name: 'keychain', status: 'error', reason: 'not available' }],
+        checks: [{ name: 'keychain', status: 'error', reason: 'not available', required: true }],
         warnings: [],
         nextSteps: ['Install keychain'],
       })
@@ -121,7 +121,7 @@ describe('doctorCommand', () => {
     it('should display failed checks with ✗ icon', async () => {
       mockDoctor.mockResolvedValue({
         ready: false,
-        checks: [{ name: 'keychain', status: 'error', reason: 'not available' }],
+        checks: [{ name: 'keychain', status: 'error', reason: 'not available', required: true }],
         warnings: [],
         nextSteps: [],
       })
@@ -129,6 +129,29 @@ describe('doctorCommand', () => {
       await doctorCommand([], configDir)
       expect(stdoutOutput).toContain('✗')
       expect(stdoutOutput).toContain('not available')
+    })
+
+    // Issue #116: a check that is not required for the active/configured
+    // backend (e.g. `ykman`/`op` when no plugin backend is enabled) must not
+    // render with the ✗ failure icon — only genuinely required, failing
+    // checks should. This is the CLI-level regression test for the bug: a
+    // fresh file-default `doctor` run previously red-X'd unused plugin tools.
+    it('should not display an unmet optional check with the ✗ icon', async () => {
+      mockDoctor.mockResolvedValue({
+        ready: true,
+        checks: [
+          { name: 'openssl', status: 'ok', required: true },
+          { name: 'ykman', status: 'missing', reason: 'ykman not found in PATH', required: false },
+        ],
+        warnings: ['Optional dependency not found: ykman — ykman not found in PATH'],
+        nextSteps: [],
+      })
+      const { doctorCommand } = await import('../../../src/commands/doctor.js')
+      await doctorCommand([], configDir)
+      expect(stdoutOutput).not.toContain('✗')
+      expect(stdoutOutput).toContain('System ready.')
+      // Still surfaced, informationally, via the Warnings section.
+      expect(stdoutOutput).toContain('ykman')
     })
   })
 

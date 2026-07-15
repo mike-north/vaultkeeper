@@ -8,7 +8,9 @@ pub use types::DoctorCheckFn;
 use std::collections::HashSet;
 
 use crate::backend::{HostPlatform, Platform};
-use crate::types::{BackendConfig, PreflightCheck, PreflightCheckStatus, PreflightResult};
+use crate::types::{
+    BackendConfig, PreflightCheck, PreflightCheckStatus, PreflightResult, ScopedPreflightCheck,
+};
 use checks::{
     check_bash, check_op, check_openssl, check_powershell, check_secret_tool, check_security,
     check_ykman,
@@ -89,7 +91,13 @@ pub async fn run_doctor(
         }
     }
 
-    let checks = entries.into_iter().map(|e| e.result).collect();
+    let checks = entries
+        .into_iter()
+        .map(|e| ScopedPreflightCheck {
+            check: e.result,
+            required: e.required,
+        })
+        .collect();
     PreflightResult {
         checks,
         ready,
