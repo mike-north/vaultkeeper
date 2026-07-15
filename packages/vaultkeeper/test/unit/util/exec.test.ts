@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import { execCommand, execCommandFull } from '../../../src/util/exec.js'
 import { PluginNotFoundError, ExecError } from '../../../src/errors.js'
 
@@ -81,5 +81,49 @@ describe('execCommandFull', () => {
     await expect(
       execCommandFull('this-binary-absolutely-does-not-exist-anywhere', ['--version']),
     ).rejects.toThrow(PluginNotFoundError)
+  })
+
+  // Regression: PR #164 review (issue #127) — the timeout timer was never
+  // cleared when the process closed before it fired. Left pending, it kept
+  // the event loop alive until it eventually fired and called proc.kill() on
+  // an already-exited process. A distinctive timeoutMs value (98765, far
+  // from any other timeoutMs used in this file) identifies our setTimeout
+  // call unambiguously among any others the test runner itself may issue.
+  it('clears the timeout timer once the process closes, before it fires', async () => {
+    const setTimeoutSpy = vi.spyOn(globalThis, 'setTimeout')
+    const clearTimeoutSpy = vi.spyOn(globalThis, 'clearTimeout')
+
+    const result = await execCommandFull('echo', ['hello'], { timeoutMs: 98_765 })
+    expect(result.exitCode).toBe(0)
+
+    const ourSetTimeoutCalls = setTimeoutSpy.mock.calls.filter(([, delay]) => delay === 98_765)
+    expect(ourSetTimeoutCalls).toHaveLength(1)
+    // Pre-fix, clearTimeout was never called at all on the 'close' path — a
+    // fixed count (rather than inspecting the specific handle, which would
+    // require an unsafe `any`-typed read of the timer-returning spy's mock
+    // results) is enough to prove the timer we scheduled was torn down.
+    expect(clearTimeoutSpy).toHaveBeenCalledTimes(1)
+
+    setTimeoutSpy.mockRestore()
+    clearTimeoutSpy.mockRestore()
+  })
+
+  // Same regression, via the error path (spawn ENOENT) rather than 'close'.
+  it('clears the timeout timer when spawn errors, before it fires', async () => {
+    const setTimeoutSpy = vi.spyOn(globalThis, 'setTimeout')
+    const clearTimeoutSpy = vi.spyOn(globalThis, 'clearTimeout')
+
+    await expect(
+      execCommandFull('this-binary-absolutely-does-not-exist-anywhere', ['--version'], {
+        timeoutMs: 98_766,
+      }),
+    ).rejects.toThrow(PluginNotFoundError)
+
+    const ourSetTimeoutCalls = setTimeoutSpy.mock.calls.filter(([, delay]) => delay === 98_766)
+    expect(ourSetTimeoutCalls).toHaveLength(1)
+    expect(clearTimeoutSpy).toHaveBeenCalledTimes(1)
+
+    setTimeoutSpy.mockRestore()
+    clearTimeoutSpy.mockRestore()
   })
 })

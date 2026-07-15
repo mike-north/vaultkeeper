@@ -53,6 +53,12 @@ export function execCommandFull(
     })
     let stdout = ''
     let stderr = ''
+    // Undefined when no timeoutMs was given, or once the timer has fired.
+    // Tracked so 'close'/'error' can clear it — otherwise an already-settled
+    // promise still leaves the timer pending, which keeps the event loop
+    // alive until it fires and calls proc.kill() on an already-exited
+    // process (regression: PR #164 review, issue #127).
+    let timeoutHandle: ReturnType<typeof setTimeout> | undefined
 
     proc.stdout?.on('data', (data: Buffer) => {
       stdout += data.toString()
@@ -68,17 +74,23 @@ export function execCommandFull(
     }
 
     if (options?.timeoutMs !== undefined) {
-      setTimeout(() => {
+      timeoutHandle = setTimeout(() => {
         proc.kill('SIGTERM')
         reject(new ExecError(`Command timed out after ${String(options.timeoutMs)}ms`, command))
       }, options.timeoutMs)
     }
 
     proc.on('close', (code) => {
+      if (timeoutHandle !== undefined) {
+        clearTimeout(timeoutHandle)
+      }
       resolve({ stdout, stderr, exitCode: code ?? 1 })
     })
 
     proc.on('error', (error) => {
+      if (timeoutHandle !== undefined) {
+        clearTimeout(timeoutHandle)
+      }
       if ('code' in error && error.code === 'ENOENT') {
         reject(
           new PluginNotFoundError(
