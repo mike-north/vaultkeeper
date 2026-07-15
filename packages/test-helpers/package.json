@@ -46,10 +46,11 @@
   "publishConfig": {
     "access": "public"
   },
-  "dependencies": {
-    "vaultkeeper": "workspace:*"
+  "peerDependencies": {
+    "vaultkeeper": "workspace:^"
   },
   "devDependencies": {
+    "vaultkeeper": "workspace:*",
     "@microsoft/api-extractor": "^7.57.2",
     "@types/node": "^22.0.0",
     "tsup": "^8.0.0"
