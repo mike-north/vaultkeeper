@@ -853,6 +853,8 @@ describe('OnePasswordBackend', () => {
   // ---- createClient timeout ----
 
   describe('session timeout', () => {
+    // 2s test timeout keeps this well under the global 5s default while leaving
+    // ample room over the backend's 10ms sessionTimeoutMs.
     it('should throw BackendLockedError when createClient hangs beyond the session timeout', async () => {
       // createClient never resolves — simulates the known beta SDK hang
       mockCreateClient.mockReturnValue(
@@ -869,7 +871,7 @@ describe('OnePasswordBackend', () => {
       })
 
       await expect(backend.store('any-key', 'any-val')).rejects.toBeInstanceOf(BackendLockedError)
-    }, 2000) // Give this test 2s to avoid the global 5s default being a problem
+    }, 2000)
   })
 
   // ---- vault scoping ----
