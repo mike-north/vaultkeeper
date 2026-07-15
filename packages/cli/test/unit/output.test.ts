@@ -118,6 +118,25 @@ describe('formatError', () => {
       expect(formatted.toLowerCase()).toContain('permission')
     })
 
+    // Review follow-up (PR #158): an earlier draft suggested `ls -l <path>`
+    // as an example command — POSIX-only (confusing on the Windows dpapi
+    // backend) and an unquoted path that breaks on spaces/metacharacters
+    // (e.g. a user-supplied --config-dir). The message must stay
+    // platform-neutral prose with no embedded shell command.
+    it('does not embed a POSIX-only shell command example (e.g. `ls -l`) in the remediation', () => {
+      const configPath = path.join(CONFIG_DIR, 'config.json')
+      const err = new FilesystemError(
+        `Cannot read config file at ${configPath}: permission denied.`,
+        configPath,
+        'read',
+      )
+
+      const formatted = formatError(err, CONFIG_DIR)
+
+      expect(formatted).not.toContain('ls -l')
+      expect(formatted).not.toContain('`ls')
+    })
+
     it('does not intercept a FilesystemError for a write failure on config.json', () => {
       // Only a 'read' permission failure on config.json is the config-read
       // path; other permissions (or other paths) fall through to the

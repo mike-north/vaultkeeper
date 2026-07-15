@@ -95,12 +95,19 @@ function isUnreadableConfigFile(err: unknown, configDir: string): err is Filesys
  * The remediation here deliberately does NOT suggest `config init --force`:
  * that command would hit the exact same permission error trying to write the
  * replacement file, so it's a dead end for this failure mode.
+ *
+ * Review follow-up (issue #137, PR #158): an earlier draft suggested running
+ * `ls -l <path>` as an example command. That's POSIX-only — confusing on
+ * Windows, which this CLI supports via the dpapi backend — and embedded the
+ * path unquoted, which breaks if it contains spaces/metacharacters (e.g. a
+ * user-supplied `--config-dir`). Platform-neutral prose avoids both problems
+ * without introducing platform-branching for a single message.
  */
 function formatConfigReadError(err: FilesystemError): string {
   return (
     `${err.name}: The config at \`${err.path}\` could not be read — ` +
-    'check that the file exists and that your user has permission to read it ' +
-    `(e.g. \`ls -l ${err.path}\`), then try again.`
+    "check the file's permissions and ownership, and that it exists — the " +
+    'current user cannot read it. Then try again.'
   )
 }
 
