@@ -70,6 +70,62 @@ describe('configCommand', () => {
       await configCommand(['init'], configDir)
       expect(stderrOutput).toContain('Config already exists at')
     })
+
+    // Issue #97: without --force, config init must keep its current
+    // non-destructive refusal even though --force now exists as an option.
+    it('should still refuse without --force even after a prior successful init (regression: issue #97)', async () => {
+      const { configCommand } = await import('../../../src/commands/config.js')
+      await configCommand(['init'], configDir)
+      const configPath = path.join(configDir, 'config.json')
+      const before = await fs.readFile(configPath, 'utf8')
+
+      const code = await configCommand(['init'], configDir)
+
+      expect(code).toBe(1)
+      const after = await fs.readFile(configPath, 'utf8')
+      expect(after).toBe(before)
+    })
+
+    // Issue #97: config init --force overwrites an existing valid config.
+    it('should overwrite an existing config with --force and return 0', async () => {
+      const { configCommand } = await import('../../../src/commands/config.js')
+      await configCommand(['init'], configDir)
+      // Reset the captured buffer so this assertion validates only the
+      // forced init's own output, not output accumulated from the first
+      // (unforced) init above.
+      stdoutOutput = ''
+      const code = await configCommand(['init', '--force'], configDir)
+      expect(code).toBe(0)
+      expect(stdoutOutput).toContain('Config created at')
+    })
+
+    // Issue #97 repro: config init --force recovers from a corrupt config.json.
+    it('should overwrite a corrupt/unparseable config.json with --force and return 0 (issue #97 repro)', async () => {
+      const { configCommand } = await import('../../../src/commands/config.js')
+      await fs.mkdir(configDir, { recursive: true })
+      const configPath = path.join(configDir, 'config.json')
+      await fs.writeFile(configPath, '{ not valid json', 'utf8')
+
+      const code = await configCommand(['init', '--force'], configDir)
+
+      expect(code).toBe(0)
+      const content = await fs.readFile(configPath, 'utf8')
+      const parsed: unknown = JSON.parse(content)
+      expect(parsed).toMatchObject({ version: 1 })
+    })
+
+    // Issue #97 acceptance criterion 4: --backend interaction preserved
+    // under --force.
+    it('should honor --backend when combined with --force', async () => {
+      const { configCommand } = await import('../../../src/commands/config.js')
+      await configCommand(['init'], configDir)
+      const code = await configCommand(['init', '--force', '--backend', 'file'], configDir)
+      expect(code).toBe(0)
+      const configPath = path.join(configDir, 'config.json')
+      const content = await fs.readFile(configPath, 'utf8')
+      const parsed: unknown = JSON.parse(content)
+      expect(parsed).toMatchObject({ backends: [{ type: 'file', enabled: true }] })
+    })
   })
 
   describe('show subcommand', () => {

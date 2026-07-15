@@ -6,7 +6,7 @@
 
 Load the vaultkeeper config from disk, falling back to platform defaults only when the config file is missing (`ENOENT`<!-- -->).
 
-Any other read failure (e.g. `EACCES`<!-- -->, `EISDIR`<!-- -->) is a genuinely broken or unreadable config and is rethrown as a [FilesystemError](./vaultkeeper.filesystemerror.md) rather than silently defaulted — silently defaulting on a permissions error would hide the problem from `doctor` and `config show` (issue \#68). A present file that fails to parse as JSON throws [ConfigParseError](./vaultkeeper.configparseerror.md)<!-- -->; a present file that parses but fails schema validation throws [ConfigValidationError](./vaultkeeper.configvalidationerror.md)<!-- -->. All three error messages include the config file path and a remediation hint naming `vaultkeeper config init`<!-- -->.
+Any other read failure (e.g. `EACCES`<!-- -->, `EISDIR`<!-- -->) is a genuinely broken or unreadable config and is rethrown as a [FilesystemError](./vaultkeeper.filesystemerror.md) rather than silently defaulted — silently defaulting on a permissions error would hide the problem from `doctor` and `config show` (issue \#68). A present file that fails to parse as JSON throws [ConfigParseError](./vaultkeeper.configparseerror.md)<!-- -->; a present file that parses but fails schema validation throws [ConfigValidationError](./vaultkeeper.configvalidationerror.md)<!-- -->. All three error messages include the config file path and a remediation hint naming `vaultkeeper config init --force`<!-- -->, the supported recovery path for an existing-but-broken config (issue \#97).
 
 **Signature:**
 

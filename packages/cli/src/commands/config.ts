@@ -91,7 +91,8 @@ function printConfigHelp(): void {
       '  show   Print the current config file\n\n' +
       'Options for init:\n' +
       '  --backend <type>   Backend to configure as the active store\n' +
-      `                     (valid: ${BackendRegistry.getTypes().join(', ')})\n\n` +
+      `                     (valid: ${BackendRegistry.getTypes().join(', ')})\n` +
+      '  --force            Overwrite an existing (or corrupt) config file\n\n' +
       'Options:\n' +
       CONFIG_DIR_HELP_OPTION +
       '  -h, --help   Show this help message\n\n' +
@@ -103,11 +104,13 @@ function printConfigHelp(): void {
 
 function printConfigInitHelp(): void {
   process.stdout.write(
-    'Usage: vaultkeeper config init [--backend <type>]\n\n' +
+    'Usage: vaultkeeper config init [--backend <type>] [--force]\n\n' +
       'Create a default config file.\n\n' +
       'Options:\n' +
       '  --backend <type>   Backend to configure as the active store\n' +
       `                     (valid: ${BackendRegistry.getTypes().join(', ')})\n` +
+      '  --force            Overwrite an existing (or corrupt/unparseable)\n' +
+      '                     config file instead of refusing\n' +
       CONFIG_DIR_HELP_OPTION +
       '  -h, --help         Show this help message\n\n' +
       'Environment variables:\n' +
@@ -136,7 +139,7 @@ async function configInit(rest: string[], configDir: string): Promise<number> {
     return 0
   }
 
-  const unknownFlag = findUnknownFlag(rest, new Set(['backend']))
+  const unknownFlag = findUnknownFlag(rest, new Set(['backend', 'force']))
   if (unknownFlag !== undefined) {
     process.stderr.write(`Error: unknown option '${unknownFlag}' for 'config init'\n`)
     return 2
@@ -144,10 +147,11 @@ async function configInit(rest: string[], configDir: string): Promise<number> {
 
   const { values } = parseArgs({
     args: rest,
-    options: { backend: { type: 'string' } },
+    options: { backend: { type: 'string' }, force: { type: 'boolean' } },
     allowPositionals: true,
     strict: false,
   })
+  const force = values.force === true
 
   let requestedBackend: string | undefined
   if (values.backend !== undefined) {
@@ -172,12 +176,16 @@ async function configInit(rest: string[], configDir: string): Promise<number> {
     // Create config directory with restrictive permissions.
     await fs.mkdir(configDir, { recursive: true, mode: 0o700 })
 
-    try {
-      await fs.access(configPath)
-      process.stderr.write(`Config already exists at ${configPath}\n`)
+    // Only a genuinely missing file (ENOENT, via configFileExists) is safe to
+    // proceed over; any other access failure (e.g. EACCES) is a real problem
+    // and must not be swallowed into "doesn't exist, create it" — that could
+    // silently attempt to overwrite a file in an unusual permission state.
+    if (!force && (await configFileExists(configDir))) {
+      process.stderr.write(
+        `Config already exists at ${configPath}\n` +
+          "Run 'vaultkeeper config init --force' to overwrite it.\n",
+      )
       return 1
-    } catch {
-      // File doesn't exist — create it.
     }
 
     await fs.writeFile(configPath, buildConfig(backendType) + '\n', {

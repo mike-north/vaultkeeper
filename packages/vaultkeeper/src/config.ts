@@ -13,7 +13,8 @@ import { ConfigValidationError, ConfigParseError, FilesystemError } from './erro
  * always has a concrete next step, regardless of whether the failure was a
  * read error, a JSON syntax error, or a schema validation error (issue #68).
  */
-const CONFIG_REMEDIATION_HINT = "Run 'vaultkeeper config init' to create a valid config."
+const CONFIG_REMEDIATION_HINT =
+  "Fix the file, or run 'vaultkeeper config init --force' to overwrite it with a valid config."
 
 /** `true` if `err` is a Node.js filesystem error with the given `code`. */
 function hasErrorCode(err: unknown, code: string): boolean {
@@ -303,7 +304,8 @@ export function validateConfig(config: unknown): VaultConfig {
  * that fails to parse as JSON throws {@link ConfigParseError}; a present file
  * that parses but fails schema validation throws {@link ConfigValidationError}.
  * All three error messages include the config file path and a remediation
- * hint naming `vaultkeeper config init`.
+ * hint naming `vaultkeeper config init --force`, the supported recovery path
+ * for an existing-but-broken config (issue #97).
  *
  * @param configDir - Directory containing config.json. Defaults to
  * `getDefaultConfigDir()`, which itself honors `VAULTKEEPER_CONFIG_DIR`

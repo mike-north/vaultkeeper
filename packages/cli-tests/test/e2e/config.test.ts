@@ -202,4 +202,102 @@ describe('config command', () => {
     expect(result.exitCode).toBe(2)
     expect(result.stderr).toContain('Usage: vaultkeeper config')
   })
+
+  // Issue #97: a corrupt config.json previously had no CLI recovery path —
+  // `config init` refused to overwrite it, so the error's own remediation
+  // ("run config init") was a dead end. `config init --force` is the
+  // supported recovery command; this exercises the full corrupt -> recover
+  // -> show flow end-to-end.
+  describe('config init --force recovery (issue #97)', () => {
+    it('should refuse to overwrite an existing config without --force (regression: issue #97 dead-end remediation)', async () => {
+      env = await createCliTestEnv()
+      const result = await env.run(['config', 'init'])
+      expect(result.exitCode).toBe(1)
+      expect(result.stderr).toContain('already exists')
+      // The refusal itself must point at the working recovery command.
+      expect(result.stderr).toContain('vaultkeeper config init --force')
+    })
+
+    it('should recover from a corrupt config.json via config init --force, then config show succeeds (issue #97 repro)', async () => {
+      env = await createCliTestEnv()
+      await fs.writeFile(path.join(env.configDir, 'config.json'), '{ not valid json', 'utf8')
+
+      // Confirm the corruption is detected first (issue #68 behavior).
+      const broken = await env.run(['config', 'show'])
+      expect(broken.exitCode).not.toBe(0)
+
+      // The documented recovery command succeeds over the corrupt file.
+      const recover = await env.run(['config', 'init', '--force'])
+      expect(recover.exitCode).toBe(0)
+      expect(recover.stdout).toContain('Config created at')
+
+      // And config show now succeeds against the recovered config.
+      const recovered = await env.run(['config', 'show'])
+      expect(recovered.exitCode).toBe(0)
+      const parsed: unknown = JSON.parse(recovered.stdout)
+      expect(parsed).toHaveProperty('version', 1)
+    })
+
+    it('should overwrite a valid existing config with config init --force', async () => {
+      env = await createCliTestEnv()
+      const before = await readConfig(env.configDir)
+      expect(before).toHaveProperty('backends[0].type', 'file')
+
+      const result = await env.run([
+        'config',
+        'init',
+        '--force',
+        '--backend',
+        platformDefaultBackend,
+      ])
+      expect(result.exitCode).toBe(0)
+      const after = await readConfig(env.configDir)
+      expect(after).toHaveProperty('backends[0].type', platformDefaultBackend)
+    })
+
+    // Criterion 4: --backend interaction is preserved under --force.
+    it('should honor --backend when combined with --force (config init --force --backend file)', async () => {
+      env = await createCliTestEnv()
+      await fs.writeFile(path.join(env.configDir, 'config.json'), '{ still not valid json', 'utf8')
+
+      const result = await env.run(['config', 'init', '--force', '--backend', 'file'])
+      expect(result.exitCode).toBe(0)
+      const parsed = await readConfig(env.configDir)
+      expect(parsed).toHaveProperty('backends[0].type', 'file')
+      expect(result.stdout).toContain('Backend: file')
+    })
+
+    // Criterion 3: ConfigParseError's remediation text names a command that
+    // actually works in the state that produced the error.
+    it('should have ConfigParseError name the working recovery command (regression: issue #97)', async () => {
+      env = await createCliTestEnv()
+      await fs.writeFile(path.join(env.configDir, 'config.json'), '{ bad json', 'utf8')
+      const result = await env.run(['config', 'show'])
+      expect(result.exitCode).not.toBe(0)
+      expect(result.stderr).toContain('vaultkeeper config init --force')
+
+      // And that named command must actually succeed from this exact state.
+      const recover = await env.run(['config', 'init', '--force'])
+      expect(recover.exitCode).toBe(0)
+    })
+
+    // Criterion 3, ConfigValidationError variant: structurally valid JSON
+    // that fails schema validation shares the same remediation hint as
+    // ConfigParseError, so it must also name the working recovery command.
+    it('should have ConfigValidationError name the working recovery command (regression: issue #97)', async () => {
+      env = await createCliTestEnv()
+      await fs.writeFile(
+        path.join(env.configDir, 'config.json'),
+        JSON.stringify({ version: 99 }),
+        'utf8',
+      )
+      const result = await env.run(['config', 'show'])
+      expect(result.exitCode).not.toBe(0)
+      expect(result.stderr).toContain('vaultkeeper config init --force')
+
+      // And that named command must actually succeed from this exact state.
+      const recover = await env.run(['config', 'init', '--force'])
+      expect(recover.exitCode).toBe(0)
+    })
+  })
 })
