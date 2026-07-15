@@ -176,17 +176,16 @@ async function configInit(rest: string[], configDir: string): Promise<number> {
     // Create config directory with restrictive permissions.
     await fs.mkdir(configDir, { recursive: true, mode: 0o700 })
 
-    if (!force) {
-      try {
-        await fs.access(configPath)
-        process.stderr.write(
-          `Config already exists at ${configPath}\n` +
-            "Run 'vaultkeeper config init --force' to overwrite it.\n",
-        )
-        return 1
-      } catch {
-        // File doesn't exist — create it.
-      }
+    // Only a genuinely missing file (ENOENT, via configFileExists) is safe to
+    // proceed over; any other access failure (e.g. EACCES) is a real problem
+    // and must not be swallowed into "doesn't exist, create it" — that could
+    // silently attempt to overwrite a file in an unusual permission state.
+    if (!force && (await configFileExists(configDir))) {
+      process.stderr.write(
+        `Config already exists at ${configPath}\n` +
+          "Run 'vaultkeeper config init --force' to overwrite it.\n",
+      )
+      return 1
     }
 
     await fs.writeFile(configPath, buildConfig(backendType) + '\n', {
