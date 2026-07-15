@@ -1,11 +1,11 @@
 ---
-'vaultkeeper': major
+'vaultkeeper': minor
 '@vaultkeeper/test-helpers': minor
 ---
 
-Require an explicit executable-trust choice in `VaultKeeper.setup()`.
+Breaking (0.x): `VaultKeeper.setup()` now requires an explicit executable-trust choice. Versioned as a minor bump under 0.x semver.
 
-`setup()` previously defaulted `executablePath` to `'dev'` when omitted, which silently skipped Trust On First Use (TOFU) executable-identity verification — so a bare `await vault.setup(name)` minted an unverified token even though the caller may have believed trust was enforced. This was a permissive security default for a secrets tool.
+`setup()` previously defaulted `executablePath` to `'dev'` when omitted, which silently skipped Trust On First Use (TOFU) executable-identity verification — so a bare `await vault.setup(name)` minted an unverified token even though the caller may have believed trust was enforced. This was a permissive security default for a secrets tool. Existing `setup(name)` calls must now pass `executablePath` (runs TOFU verification) or `skipTrust: true` (development-only opt-out); omitting both throws `ExecutableTrustRequiredError`.
 
 `setup()` now requires the caller to make the decision explicitly. Provide exactly one of:
 
