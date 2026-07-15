@@ -78,5 +78,7 @@ The public half of the newly enrolled key.
 
 {<!-- -->InvalidAlgorithmError<!-- -->} If `algorithm` is not supported.
 
-{<!-- -->VaultError<!-- -->} If `name` is empty or contains `':'`<!-- -->, or a signing key already exists under `name`<!-- -->.
+{<!-- -->SigningKeyAlreadyExistsError<!-- -->} If a signing key already exists under `name`<!-- -->.
+
+{<!-- -->VaultError<!-- -->} If `name` is empty or contains `':'`<!-- -->.
 

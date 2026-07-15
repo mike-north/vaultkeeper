@@ -738,8 +738,8 @@ export class VaultKeeper {
    * @returns The public half of the newly enrolled key.
    * @throws {SigningNotSupportedError} If the active backend cannot sign.
    * @throws {InvalidAlgorithmError} If `algorithm` is not supported.
-   * @throws {VaultError} If `name` is empty or contains `':'`, or a signing key
-   *   already exists under `name`.
+   * @throws {SigningKeyAlreadyExistsError} If a signing key already exists under `name`.
+   * @throws {VaultError} If `name` is empty or contains `':'`.
    * @public
    */
   async createSigningKey(name: string, algorithm: SigningAlgorithm): Promise<SigningPublicKey> {
