@@ -33,10 +33,17 @@ const README = readFileSync(path.join(ROOT, 'README.md'), 'utf8')
 const VAULT_TS = readFileSync(path.join(ROOT, 'packages/vaultkeeper/src/vault.ts'), 'utf8')
 const INDEX_TS = readFileSync(path.join(ROOT, 'packages/vaultkeeper/src/index.ts'), 'utf8')
 
-/** Public (non-private, non-indented-deeper) instance method names on the `VaultKeeper` class. */
+/**
+ * Callable method names on the `VaultKeeper` class (non-private, non-getter,
+ * non-indented-deeper). Skips over any `public`/`private`/`protected`/
+ * `static`/`async` modifiers before the name so e.g. `static verify(...)`
+ * yields `verify`, not `static`. `#`-prefixed private methods and `get`/`set`
+ * accessors are excluded because they don't start with a plain identifier
+ * immediately followed by a modifier or `(`.
+ */
 export function extractVaultKeeperMethods(source: string): Set<string> {
   const names = new Set<string>()
-  const re = /^\s{2}(?:async\s+)?([a-zA-Z][a-zA-Z0-9]*)\s*\(/gm
+  const re = /^\s{2}(?:(?:public|private|protected|static|async)\s+)*([a-zA-Z][a-zA-Z0-9]*)\s*\(/gm
   let m: RegExpExecArray | null
   while ((m = re.exec(source)) !== null) {
     const name = m[1]
@@ -72,6 +79,10 @@ describe('README access-pattern names resolve to real exports', () => {
     expect(methods.has('fetch')).toBe(true)
     expect(methods.has('exec')).toBe(true)
     expect(methods.has('getSecret')).toBe(true)
+    // `static verify(...)` — the modifier itself must not be captured as a
+    // method name, and the real name after it must be.
+    expect(methods.has('static')).toBe(false)
+    expect(methods.has('verify')).toBe(true)
   })
 
   it('never names the removed createSecretAccessor as an access pattern (issue #102)', () => {
@@ -171,5 +182,18 @@ describe('README trust-tier description matches the real TOFU-manifest mechanism
     // back to an overclaim.
     expect(trustSection).toMatch(/stub/i)
     expect(trustSection).toMatch(/no executable is verified via Sigstore or any package registry/i)
+  })
+
+  it('does not claim every setup() call hashes the executable — dev-mode setup() calls skip hashing entirely', () => {
+    // packages/vaultkeeper/src/vault.ts: setup() defaults executablePath to
+    // 'dev' when none is passed, and skips verifyTrust() entirely for 'dev'
+    // or an executable registered via setDevelopmentMode(). The docs must
+    // not imply hashing is unconditional.
+    const trustSection = /## Trust tiers[\s\S]*?(?=\n## )/.exec(README)?.[0]
+    expect(trustSection, 'expected to find the "## Trust tiers" section in README.md').toBeDefined()
+    expect(trustSection).toMatch(/Hashing is skipped/i)
+    expect(trustSection).toMatch(/setDevelopmentMode/)
+    // The stale, unqualified claim this test guards against.
+    expect(trustSection).not.toMatch(/every `setup\(\)` call performs the same TOFU hash check/i)
   })
 })
