@@ -519,7 +519,16 @@ export class FilesystemError extends VaultError {
     this.permission = permission
     this.code = hasErrnoCode(cause) ? cause.code : undefined
     if (cause !== undefined) {
-      this.cause = cause
+      // Matches the property descriptor the native `new Error(message, {
+      // cause })` form installs (non-enumerable), rather than a plain
+      // assignment, which would make `cause` enumerable and thus show up in
+      // `Object.keys()`/`JSON.stringify()` output unlike a standard cause.
+      Object.defineProperty(this, 'cause', {
+        value: cause,
+        writable: true,
+        enumerable: false,
+        configurable: true,
+      })
     }
   }
 }

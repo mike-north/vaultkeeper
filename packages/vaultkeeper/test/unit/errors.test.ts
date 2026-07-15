@@ -52,6 +52,25 @@ describe('FilesystemError', () => {
     expect(err.code).toBeUndefined()
     expect(err.cause).toBe('not an error')
   })
+
+  // Regression: issue #133 review — a plain `this.cause = cause` assignment
+  // makes `cause` an enumerable own property, unlike the standard
+  // `new Error(message, { cause })` form, which installs it as
+  // non-enumerable. That mismatch would make `cause` show up in
+  // `Object.keys()`/`JSON.stringify()` output where a native cause would not.
+  it('should record cause as a non-enumerable own property, matching native Error.cause', () => {
+    const cause = fsError('EACCES', 'permission denied')
+    const err = new FilesystemError('Failed to read file at /x', '/x', 'read', cause)
+
+    expect(Object.prototype.hasOwnProperty.call(err, 'cause')).toBe(true)
+    const descriptor = Object.getOwnPropertyDescriptor(err, 'cause')
+    expect(descriptor?.enumerable).toBe(false)
+    expect(descriptor?.writable).toBe(true)
+    expect(descriptor?.configurable).toBe(true)
+    // Own enumerable properties (path/permission/code) are unaffected.
+    expect(Object.keys(err)).toEqual(expect.arrayContaining(['path', 'permission', 'code']))
+    expect(Object.keys(err)).not.toContain('cause')
+  })
 })
 
 describe('toFilesystemError', () => {
