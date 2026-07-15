@@ -269,6 +269,12 @@ export async function execCommand(args: string[], configDir: string): Promise<nu
 
   if (secret === undefined || envVar === undefined || caller === undefined) {
     process.stderr.write('Error: --secret, --env, and --caller are required\n')
+    // Every sibling validation error prints the Usage: line; this one omitted
+    // it (issue #183). Append it for consistency so a user who missed a flag
+    // sees the invocation shape, not just which flags were missing.
+    process.stderr.write(
+      'Usage: vaultkeeper exec --secret <name> --env <VAR> --caller <path> [options] -- <command...>\n',
+    )
     // Exit code 2: usage error (missing required flags)
     return 2
   }

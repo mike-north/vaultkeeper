@@ -7,6 +7,7 @@ vi.mock('node:fs/promises', () => ({
 // Must import after mock declaration
 const { access } = await import('node:fs/promises')
 const { configFileExists, noConfigMessage } = await import('../../src/config-status.js')
+const { FilesystemError } = await import('vaultkeeper')
 
 /** Build a Node.js-shaped filesystem error with a `code` (e.g. 'ENOENT'). */
 function fsError(code: string, message: string): NodeJS.ErrnoException {
@@ -32,16 +33,31 @@ describe('configFileExists', () => {
   // ANY fs.access failure as "no config file", so a config that exists but
   // isn't readable (EACCES on a parent directory, EPERM, etc.) was silently
   // reported as absent — the same class of bug loadConfig's ENOENT-only
-  // fallback fixes for issue #68. It must now rethrow non-ENOENT errors
-  // instead of reporting "no config file".
-  it('rethrows a non-ENOENT error instead of reporting "no config file" (regression: PR #94 review)', async () => {
+  // fallback fixes for issue #68. It must not report "no config file".
+  //
+  // Issue #181: it must rethrow a non-ENOENT error as a typed FilesystemError
+  // on the `config.json` read path (`permission: 'read'`, `path` =
+  // `configDir/config.json`, `code` = the original errno), so `formatError`
+  // renders the CLI's shared unreadable-config remediation instead of leaking
+  // the raw Node `EACCES: … access '.../config.json'` string.
+  it('rethrows an EACCES failure as a typed FilesystemError on the config.json read path (issue #181)', async () => {
     vi.mocked(access).mockRejectedValue(fsError('EACCES', 'permission denied'))
-    await expect(configFileExists('/fake')).rejects.toMatchObject({ code: 'EACCES' })
+    await expect(configFileExists('/fake')).rejects.toBeInstanceOf(FilesystemError)
+    await expect(configFileExists('/fake')).rejects.toMatchObject({
+      code: 'EACCES',
+      permission: 'read',
+      path: '/fake/config.json',
+    })
   })
 
-  it('rethrows an EPERM error instead of reporting "no config file"', async () => {
+  it('rethrows an EPERM failure as a typed FilesystemError, preserving the errno (issue #181)', async () => {
     vi.mocked(access).mockRejectedValue(fsError('EPERM', 'operation not permitted'))
-    await expect(configFileExists('/fake')).rejects.toMatchObject({ code: 'EPERM' })
+    await expect(configFileExists('/fake')).rejects.toBeInstanceOf(FilesystemError)
+    await expect(configFileExists('/fake')).rejects.toMatchObject({
+      code: 'EPERM',
+      permission: 'read',
+      path: '/fake/config.json',
+    })
   })
 })
 

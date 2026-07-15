@@ -10,6 +10,7 @@
 
 import * as fs from 'node:fs/promises'
 import * as path from 'node:path'
+import { FilesystemError } from 'vaultkeeper'
 
 /** `true` if `fs.access` failed because the config file truly does not exist. */
 function isEnoent(err: unknown): boolean {
@@ -24,18 +25,36 @@ function isEnoent(err: unknown): boolean {
  * permissions error on the file itself) is a real problem, not "no config" —
  * treating it as "no config" would silently fall back to platform defaults
  * for a config that actually exists but is broken, the same class of bug
- * `loadConfig`'s ENOENT-only fallback fixes (issue #68). Such errors rethrow
- * so the caller's own `loadConfig()` call surfaces the typed error instead.
+ * `loadConfig`'s ENOENT-only fallback fixes (issue #68).
+ *
+ * Such an error is rethrown as a typed {@link FilesystemError} on the same
+ * `config.json` read path `loadConfig` uses (`permission: 'read'`, `path`
+ * = `configDir/config.json`), so `formatError` renders it with the CLI's
+ * shared unreadable-config-file remediation — the exact wording `doctor`
+ * already produces (issue #169) — instead of leaking a raw Node
+ * `EACCES: … access '.../config.json'` string. `store`, `delete`, `exec`,
+ * and `config show` all funnel their presence check through here, so this
+ * one wrap is what makes all four honor the FilesystemError contract for an
+ * unreadable config dir (issue #181). The original errno is preserved as the
+ * cause, so `FilesystemError.code` carries `EACCES`/`EPERM`/etc. for the
+ * message to key on.
  */
 export async function configFileExists(configDir: string): Promise<boolean> {
+  const configPath = path.join(configDir, 'config.json')
   try {
-    await fs.access(path.join(configDir, 'config.json'))
+    await fs.access(configPath)
     return true
   } catch (err) {
     if (isEnoent(err)) {
       return false
     }
-    throw err
+    const detail = err instanceof Error ? err.message : String(err)
+    throw new FilesystemError(
+      `Cannot access config file at ${configPath}: ${detail}`,
+      configPath,
+      'read',
+      err,
+    )
   }
 }
 

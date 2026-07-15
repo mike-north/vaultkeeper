@@ -281,6 +281,39 @@ describe('formatError', () => {
       // shellQuote("weird'name") -> 'weird'\''name' (POSIX single-quote escaping)
       expect(message).toContain("vaultkeeper store --name 'weird'\\''name'")
     })
+
+    it("defaults to the access context (equivalent to passing 'access')", () => {
+      expect(secretNotFoundMessage('db-password', 'file')).toBe(
+        secretNotFoundMessage('db-password', 'file', 'access'),
+      )
+    })
+
+    // Issue #183: on the delete path, suggesting `store` to CREATE the secret
+    // the user is deleting is nonsensical. The delete context shares the
+    // diagnostic line but gives a neutral, non-creating hint.
+    describe("delete context (issue #183)", () => {
+      it('shares the diagnostic line but suggests no creation and names no store command', () => {
+        const message = secretNotFoundMessage('db-password', 'file', 'delete')
+        expect(message).toBe(
+          'Secret "db-password" not found in the "file" backend. ' +
+            'It may have already been deleted, or the name may be misspelled.',
+        )
+      })
+
+      it('never tells the user to store/create the secret being deleted', () => {
+        const message = secretNotFoundMessage('db-password', 'file', 'delete')
+        expect(message).not.toContain('to create it')
+        expect(message).not.toContain('vaultkeeper store')
+      })
+
+      it('formats as a proper SecretNotFoundError via formatError', () => {
+        const err = new SecretNotFoundError(secretNotFoundMessage('db-password', 'keychain', 'delete'))
+        expect(formatError(err, CONFIG_DIR)).toBe(
+          'SecretNotFoundError: Secret "db-password" not found in the "keychain" backend. ' +
+            'It may have already been deleted, or the name may be misspelled.',
+        )
+      })
+    })
   })
 })
 

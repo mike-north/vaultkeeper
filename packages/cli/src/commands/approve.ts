@@ -7,9 +7,16 @@ import { CONFIG_DIR_HELP_OPTION, CONFIG_DIR_HELP_ENV } from '../config-dir.js'
 function printApproveHelp(): void {
   process.stdout.write(
     'Usage: vaultkeeper approve --script <path>\n\n' +
-      'Record a script hash in the TOFU trust manifest so that invoking it via\n' +
-      'vaultkeeper exec does not prompt for trust. Running this on an already\n' +
-      'approved, unchanged script is idempotent.\n\n' +
+      'Record a script hash in the TOFU trust manifest, marking the script as a\n' +
+      'trusted caller for vaultkeeper exec.\n\n' +
+      'When this is required:\n' +
+      '  In a non-interactive or CI context (non-TTY stdin), approve is a REQUIRED\n' +
+      "  first step before a new caller's first exec: there is no prompt to grant\n" +
+      '  trust, so an un-approved caller fails. Pre-approve it here once (or pass\n' +
+      '  exec --yes to approve a single run). On an interactive terminal exec can\n' +
+      "  instead prompt [y/N] on first use, so approve is optional there — it's a\n" +
+      '  way to grant trust ahead of time and avoid that prompt.\n\n' +
+      'Running this on an already approved, unchanged script is idempotent.\n\n' +
       'Options:\n' +
       '  --script <path>   Path to the script to approve\n' +
       CONFIG_DIR_HELP_OPTION +
