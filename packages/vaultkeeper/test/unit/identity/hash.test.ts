@@ -5,7 +5,10 @@ import * as path from 'node:path'
 import { hashExecutable } from '../../../src/identity/hash.js'
 import { FilesystemError } from '../../../src/errors.js'
 
-async function withTempFile(content: string, fn: (filePath: string) => Promise<void>): Promise<void> {
+async function withTempFile(
+  content: string,
+  fn: (filePath: string) => Promise<void>,
+): Promise<void> {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'vaultkeeper-hash-'))
   const filePath = path.join(dir, 'test-binary')
   try {
