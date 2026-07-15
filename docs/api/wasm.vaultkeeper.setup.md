@@ -6,8 +6,6 @@
 
 Create a JWE token encapsulating a secret.
 
-Unlike the TypeScript `vaultkeeper` library's `setup(secretName, options?)`<!-- -->, this method does not read from the backend — it mints the token directly from `secretValue`<!-- -->. It never calls [VaultKeeper.store()](./wasm.vaultkeeper.store.md) / [VaultKeeper.retrieve()](./wasm.vaultkeeper.retrieve.md) or looks at anything already persisted under `secretName`<!-- -->, so a prior `store()` call has no effect on what `setup()` encapsulates. This is an intentional divergence between the two SDKs' `setup()` contracts, not a bug.
-
 **Signature:**
 
 ```typescript
@@ -81,4 +79,14 @@ _(Optional)_
 **Returns:**
 
 string
+
+## Exceptions
+
+[ExecutableTrustRequiredError](./wasm.executabletrustrequirederror.md) If neither `executablePath` nor `skipTrust: true` is provided, if both are, or if `executablePath` is the retired legacy `'dev'` opt-out sentinel (use `skipTrust: true`<!-- -->).
+
+## Remarks
+
+\*\*Explicit executable-trust choice required.\*\* Like the TypeScript `vaultkeeper` library's `setup()`<!-- -->, this method does not default to skipping executable-trust verification. The caller must make an unambiguous decision via [SetupOptions](./wasm.setupoptions.md)<!-- -->: provide exactly one of [SetupOptions.executablePath](./wasm.setupoptions.executablepath.md) (bind the token to the calling executable) or [SetupOptions.skipTrust](./wasm.setupoptions.skiptrust.md) (`true` — a development-only opt-out). Supplying neither — or both — or the retired `'dev'` sentinel as `executablePath` throws [ExecutableTrustRequiredError](./wasm.executabletrustrequirederror.md) rather than silently minting an unverified `'dev'`<!-- -->-bound token. Inspect the error's `reason` (`'missing-choice'` \| `'conflicting-choice'` \| `'legacy-dev-sentinel'`<!-- -->) to distinguish the cases.
+
+\*\*Backend divergence.\*\* Unlike the TypeScript `vaultkeeper` library's `setup(secretName, options?)`<!-- -->, this method does not read from the backend — it mints the token directly from `secretValue`<!-- -->. It never calls [VaultKeeper.store()](./wasm.vaultkeeper.store.md) / [VaultKeeper.retrieve()](./wasm.vaultkeeper.retrieve.md) or looks at anything already persisted under `secretName`<!-- -->, so a prior `store()` call has no effect on what `setup()` encapsulates. This is an intentional divergence between the two SDKs' `setup()` contracts, not a bug.
 

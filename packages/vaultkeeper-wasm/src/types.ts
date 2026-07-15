@@ -24,11 +24,29 @@ export interface VaultKeeperOptions {
   skipDoctor?: boolean;
 }
 
-/** Options for the setup (token creation) operation. */
+/**
+ * Options for the setup (token creation) operation.
+ *
+ * `setup()` requires an explicit executable-trust decision: provide exactly one
+ * of {@link SetupOptions.executablePath} or {@link SetupOptions.skipTrust}.
+ * Supplying neither, both, or the retired `'dev'` sentinel as `executablePath`
+ * throws `ExecutableTrustRequiredError`.
+ */
 export interface SetupOptions {
   ttlMinutes?: number;
   useLimit?: number;
+  /**
+   * The calling executable's real path, bound into the minted token. Mutually
+   * exclusive with {@link SetupOptions.skipTrust}. The retired `'dev'` sentinel
+   * is rejected — use `skipTrust: true` to skip verification instead.
+   */
   executablePath?: string;
+  /**
+   * Development-only opt-out that deliberately skips executable-trust binding,
+   * producing a `'dev'`-bound (unverified) token. Mutually exclusive with
+   * {@link SetupOptions.executablePath}.
+   */
+  skipTrust?: boolean;
   backendType?: string;
 }
 

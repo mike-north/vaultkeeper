@@ -696,10 +696,125 @@ mod vault_keeper {
         .await
         .unwrap();
 
-        let token = vault.setup("my-secret", "s3cret-value", None).unwrap();
+        let token = vault.setup(
+            "my-secret",
+            "s3cret-value",
+            Some(&vaultkeeper_core::vault::SetupOptions {
+                skip_trust: Some(true),
+                ..Default::default()
+            }),
+        ).unwrap();
 
         // JWE compact serialization has 5 dot-separated parts
         assert_eq!(token.split('.').count(), 5);
+    }
+
+    // --- Explicit executable-trust contract (parity with #123/#131) ---
+
+    async fn dev_vault() -> VaultKeeper {
+        let host = TestHost::with_config();
+        VaultKeeper::init(
+            &host,
+            Some(VaultKeeperOptions {
+                skip_doctor: true,
+                ..Default::default()
+            }),
+        )
+        .await
+        .unwrap()
+    }
+
+    /// #147: setup() with no options must not silently mint an unverified token —
+    /// it requires an explicit executable-trust choice (missing-choice).
+    #[tokio::test]
+    async fn setup_without_options_rejects_missing_choice() {
+        let vault = dev_vault().await;
+        let err = vault.setup("s", "v", None).unwrap_err();
+        match err {
+            VaultError::ExecutableTrustRequired { reason, .. } => {
+                assert_eq!(reason, "missing-choice");
+            }
+            other => panic!("expected ExecutableTrustRequired, got {other:?}"),
+        }
+    }
+
+    /// #147: empty options (neither executable_path nor skip_trust) is also a
+    /// missing choice, not a silent default to "dev".
+    #[tokio::test]
+    async fn setup_with_empty_options_rejects_missing_choice() {
+        let vault = dev_vault().await;
+        let opts = vaultkeeper_core::vault::SetupOptions::default();
+        let err = vault.setup("s", "v", Some(&opts)).unwrap_err();
+        match err {
+            VaultError::ExecutableTrustRequired { reason, .. } => {
+                assert_eq!(reason, "missing-choice");
+            }
+            other => panic!("expected ExecutableTrustRequired, got {other:?}"),
+        }
+    }
+
+    /// #147: supplying both executable_path and skip_trust is a conflicting
+    /// (mutually exclusive) choice.
+    #[tokio::test]
+    async fn setup_with_conflicting_choice_rejects() {
+        let vault = dev_vault().await;
+        let opts = vaultkeeper_core::vault::SetupOptions {
+            executable_path: Some("/usr/bin/node".to_string()),
+            skip_trust: Some(true),
+            ..Default::default()
+        };
+        let err = vault.setup("s", "v", Some(&opts)).unwrap_err();
+        match err {
+            VaultError::ExecutableTrustRequired { reason, .. } => {
+                assert_eq!(reason, "conflicting-choice");
+            }
+            other => panic!("expected ExecutableTrustRequired, got {other:?}"),
+        }
+    }
+
+    /// #147: the retired legacy `"dev"` sentinel as executable_path is rejected,
+    /// pointing migrating callers at skip_trust.
+    #[tokio::test]
+    async fn setup_with_legacy_dev_sentinel_rejects() {
+        let vault = dev_vault().await;
+        let opts = vaultkeeper_core::vault::SetupOptions {
+            executable_path: Some("dev".to_string()),
+            ..Default::default()
+        };
+        let err = vault.setup("s", "v", Some(&opts)).unwrap_err();
+        match err {
+            VaultError::ExecutableTrustRequired { reason, .. } => {
+                assert_eq!(reason, "legacy-dev-sentinel");
+            }
+            other => panic!("expected ExecutableTrustRequired, got {other:?}"),
+        }
+    }
+
+    /// #147: the explicit development-only opt-out mints a token bound to the
+    /// "dev" sentinel identity.
+    #[tokio::test]
+    async fn setup_with_skip_trust_binds_dev_identity() {
+        let mut vault = dev_vault().await;
+        let opts = vaultkeeper_core::vault::SetupOptions {
+            skip_trust: Some(true),
+            ..Default::default()
+        };
+        let token = vault.setup("s", "v", Some(&opts)).unwrap();
+        let (claims, _) = vault.authorize(&token).unwrap();
+        assert_eq!(claims.exe, "dev");
+    }
+
+    /// #147: an explicit executable_path binds that path into the token.
+    #[tokio::test]
+    async fn setup_with_executable_path_binds_it() {
+        let mut vault = dev_vault().await;
+        let opts = vaultkeeper_core::vault::SetupOptions {
+            executable_path: Some("/usr/bin/node".to_string()),
+            ..Default::default()
+        };
+        let token = vault.setup("s", "v", Some(&opts)).unwrap();
+        let (claims, _) = vault.authorize(&token).unwrap();
+        assert_eq!(claims.exe, "/usr/bin/node");
     }
 
     #[tokio::test]
@@ -715,7 +830,14 @@ mod vault_keeper {
         .await
         .unwrap();
 
-        let token = vault.setup("db-password", "hunter2", None).unwrap();
+        let token = vault.setup(
+            "db-password",
+            "hunter2",
+            Some(&vaultkeeper_core::vault::SetupOptions {
+                skip_trust: Some(true),
+                ..Default::default()
+            }),
+        ).unwrap();
         let (claims, response) = vault.authorize(&token).unwrap();
 
         assert_eq!(claims.sub, "db-password");
@@ -740,7 +862,14 @@ mod vault_keeper {
         .unwrap();
 
         // Create token with initial key
-        let token = vault.setup("api-key", "abc123", None).unwrap();
+        let token = vault.setup(
+            "api-key",
+            "abc123",
+            Some(&vaultkeeper_core::vault::SetupOptions {
+                skip_trust: Some(true),
+                ..Default::default()
+            }),
+        ).unwrap();
 
         // Rotate the key
         vault.rotate_key().unwrap();
@@ -773,7 +902,14 @@ mod vault_keeper {
         .await
         .unwrap();
 
-        let token = vault.setup("key", "val", None).unwrap();
+        let token = vault.setup(
+            "key",
+            "val",
+            Some(&vaultkeeper_core::vault::SetupOptions {
+                skip_trust: Some(true),
+                ..Default::default()
+            }),
+        ).unwrap();
 
         // Revoke all keys — generates a completely new key
         vault.revoke_key().unwrap();
@@ -798,6 +934,7 @@ mod vault_keeper {
 
         let opts = vaultkeeper_core::vault::SetupOptions {
             ttl_minutes: Some(5),
+            skip_trust: Some(true),
             ..Default::default()
         };
         let token = vault.setup("key", "val", Some(&opts)).unwrap();
@@ -851,6 +988,7 @@ mod vault_keeper {
 
         let opts = vaultkeeper_core::vault::SetupOptions {
             use_limit: Some(2),
+            skip_trust: Some(true),
             ..Default::default()
         };
         let token = vault.setup("limited", "val", Some(&opts)).unwrap();

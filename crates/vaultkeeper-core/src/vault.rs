@@ -21,14 +21,26 @@ pub struct VaultKeeperOptions {
 }
 
 /// Options for the setup operation.
+///
+/// `setup()` requires an explicit executable-trust decision: supply exactly one
+/// of [`SetupOptions::executable_path`] (bind the token to the calling
+/// executable) or [`SetupOptions::skip_trust`] (a development-only opt-out).
+/// Supplying neither, both, or the retired `"dev"` sentinel as
+/// `executable_path` fails with [`VaultError::ExecutableTrustRequired`].
 #[derive(Debug, Default)]
 pub struct SetupOptions {
     /// TTL in minutes for the JWE.
     pub ttl_minutes: Option<u32>,
     /// Usage limit (`None` for unlimited).
     pub use_limit: Option<u64>,
-    /// Executable path for identity binding. Use `"dev"` for dev mode.
+    /// Executable path to bind the token to (the calling executable's real
+    /// path). Mutually exclusive with [`SetupOptions::skip_trust`]. The retired
+    /// `"dev"` sentinel is rejected — use `skip_trust: Some(true)` instead.
     pub executable_path: Option<String>,
+    /// Development-only opt-out that deliberately skips executable-trust binding,
+    /// producing a `"dev"`-bound (unverified) token. Mutually exclusive with
+    /// [`SetupOptions::executable_path`].
+    pub skip_trust: Option<bool>,
     /// Trust tier override.
     pub trust_tier: Option<crate::types::TrustTier>,
     /// Backend type to use.
@@ -121,6 +133,14 @@ impl VaultKeeper {
     ///
     /// The returned compact JWE string can be passed to `authorize()` or
     /// the CLI `exec` command to retrieve the secret.
+    ///
+    /// The caller must make an explicit executable-trust decision via
+    /// [`SetupOptions`]: supply exactly one of
+    /// [`SetupOptions::executable_path`] (bind the token to a real executable)
+    /// or [`SetupOptions::skip_trust`] (a development-only opt-out). Supplying
+    /// neither, both, or the retired `"dev"` sentinel as `executable_path`
+    /// returns [`VaultError::ExecutableTrustRequired`] rather than silently
+    /// minting an unverified `"dev"`-bound token.
     pub fn setup(
         &self,
         secret_name: &str,
@@ -131,10 +151,7 @@ impl VaultKeeper {
             .and_then(|o| o.ttl_minutes)
             .unwrap_or(self.config.defaults.ttl_minutes);
         let use_limit = options.and_then(|o| o.use_limit);
-        let exe = options
-            .and_then(|o| o.executable_path.as_deref())
-            .unwrap_or("dev")
-            .to_string();
+        let exe = Self::resolve_executable_identity(options)?;
         let trust_tier = options
             .and_then(|o| o.trust_tier)
             .unwrap_or(self.config.defaults.trust_tier);
@@ -166,6 +183,62 @@ impl VaultKeeper {
                 kid: Some(current_key.id.clone()),
             },
         )
+    }
+
+    /// Resolve the executable identity to bind into a token, requiring an
+    /// explicit trust decision from the caller.
+    ///
+    /// Returns the sentinel `"dev"` (no executable binding) when trust is
+    /// deliberately skipped; otherwise returns the caller-supplied executable
+    /// path. Returns [`VaultError::ExecutableTrustRequired`] when the caller
+    /// makes no unambiguous choice — mirroring the TypeScript library's
+    /// `ExecutableTrustRequiredError` (message + `reason` discriminator).
+    fn resolve_executable_identity(
+        options: Option<&SetupOptions>,
+    ) -> Result<String, VaultError> {
+        let executable_path = options.and_then(|o| o.executable_path.as_deref());
+        let skip_trust = options.and_then(|o| o.skip_trust).unwrap_or(false);
+
+        if skip_trust && executable_path.is_some() {
+            return Err(VaultError::ExecutableTrustRequired {
+                message: "VaultKeeper.setup() received both options.executablePath and \
+                          options.skipTrust: true, which are mutually exclusive. Pass \
+                          options.executablePath to verify the calling executable, or \
+                          options.skipTrust: true to skip verification (development only) — not both."
+                    .to_string(),
+                reason: "conflicting-choice".to_string(),
+            });
+        }
+
+        if skip_trust {
+            // Explicit, greppable development-only opt-out: no executable identity
+            // is bound.
+            return Ok("dev".to_string());
+        }
+
+        match executable_path {
+            None => Err(VaultError::ExecutableTrustRequired {
+                message: "VaultKeeper.setup() requires an explicit executable-trust choice and \
+                          no longer defaults to skipping verification. Either pass \
+                          options.executablePath set to the calling executable's real path \
+                          (runs trust-on-first-use verification), or set options.skipTrust: \
+                          true to deliberately skip verification (development only)."
+                    .to_string(),
+                reason: "missing-choice".to_string(),
+            }),
+            // Reject the retired legacy opt-out sentinel. Before explicit-trust,
+            // options.executablePath: "dev" was the documented way to skip
+            // verification; point migrating callers at the dedicated opt-out.
+            Some("dev") => Err(VaultError::ExecutableTrustRequired {
+                message: "VaultKeeper.setup() no longer supports the legacy options.executablePath: 'dev' \
+                          sentinel for skipping trust verification. Set options.skipTrust: true to \
+                          deliberately skip verification (development only), or pass \
+                          options.executablePath set to the calling executable's real path to verify it."
+                    .to_string(),
+                reason: "legacy-dev-sentinel".to_string(),
+            }),
+            Some(path) => Ok(path.to_string()),
+        }
     }
 
     /// Decrypt a JWE token, validate its claims, and return the claims

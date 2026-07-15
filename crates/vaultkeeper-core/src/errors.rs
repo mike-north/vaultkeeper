@@ -96,6 +96,23 @@ pub enum VaultError {
         current_hash: String,
     },
 
+    /// `setup()` was called without an unambiguous executable-trust decision.
+    ///
+    /// Mirrors the TypeScript `vaultkeeper` library's `ExecutableTrustRequiredError`:
+    /// the caller must supply exactly one of an executable path (to verify) or an
+    /// explicit skip; supplying neither, both, or the retired `"dev"` sentinel
+    /// fails here instead of silently minting an unverified token.
+    #[error("{message}")]
+    ExecutableTrustRequired {
+        message: String,
+        /// Machine-readable discriminator for why the trust choice was rejected:
+        /// `"missing-choice"` (neither an executable path nor an explicit skip was
+        /// given), `"conflicting-choice"` (both were given), or
+        /// `"legacy-dev-sentinel"` (the retired `"dev"` opt-out sentinel was passed
+        /// as the executable path).
+        reason: String,
+    },
+
     // --- Infrastructure Failures ---
     /// A disallowed signing/verification algorithm was requested.
     #[error("{message}")]

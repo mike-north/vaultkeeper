@@ -104,6 +104,7 @@ fn vault_error_code(e: &VaultError) -> &'static str {
         VaultError::BackendUnavailable { .. } => "backend-unavailable",
         VaultError::PluginNotFound { .. } => "plugin-not-found",
         VaultError::IdentityMismatch { .. } => "identity-mismatch",
+        VaultError::ExecutableTrustRequired { .. } => "executable-trust-required",
         VaultError::InvalidAlgorithm { .. } => "invalid-algorithm",
         VaultError::Setup { .. } => "setup",
         VaultError::Filesystem { .. } => "filesystem",
@@ -139,6 +140,9 @@ fn vault_error_to_js(e: &VaultError) -> JsValue {
                 arr.push(&JsValue::from_str(a));
             }
             set("attempted", &arr);
+        }
+        VaultError::ExecutableTrustRequired { reason, .. } => {
+            set("reason", &JsValue::from_str(reason));
         }
         _ => {}
     }
@@ -390,6 +394,9 @@ impl WasmVaultKeeper {
             let executable_path = Reflect::get(&options, &JsValue::from_str("executablePath"))
                 .ok()
                 .and_then(|v| v.as_string());
+            let skip_trust = Reflect::get(&options, &JsValue::from_str("skipTrust"))
+                .ok()
+                .and_then(|v| v.as_bool());
             let backend_type = Reflect::get(&options, &JsValue::from_str("backendType"))
                 .ok()
                 .and_then(|v| v.as_string());
@@ -398,6 +405,7 @@ impl WasmVaultKeeper {
                 ttl_minutes: ttl,
                 use_limit,
                 executable_path,
+                skip_trust,
                 backend_type,
                 trust_tier: None,
             })

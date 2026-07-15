@@ -4,6 +4,8 @@
 
 ## SetupOptions.executablePath property
 
+The calling executable's real path, bound into the minted token. Mutually exclusive with [SetupOptions.skipTrust](./wasm.setupoptions.skiptrust.md)<!-- -->. The retired `'dev'` sentinel is rejected — use `skipTrust: true` to skip verification instead.
+
 **Signature:**
 
 ```typescript

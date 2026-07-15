@@ -143,18 +143,70 @@ export class AccessorConsumedError extends VaultError {
   }
 }
 
+/**
+ * Thrown by `setup()` when the caller does not make an unambiguous
+ * executable-trust decision.
+ *
+ * Mirrors the pure-TypeScript `vaultkeeper` library's
+ * `ExecutableTrustRequiredError`: `setup()` deliberately has no default trust
+ * behaviour, so the caller must pass either a real `executablePath` or
+ * explicitly opt out with `skipTrust: true`. Supplying neither — or both — or
+ * the retired `'dev'` sentinel as `executablePath` throws this error rather
+ * than silently minting an unverified token. Inspect
+ * {@link ExecutableTrustRequiredError.reason} to distinguish the cases.
+ */
+export class ExecutableTrustRequiredError extends VaultError {
+  /**
+   * Machine-readable discriminator for why the trust choice was rejected.
+   * `'missing-choice'` means neither `executablePath` nor `skipTrust: true` was
+   * provided. `'conflicting-choice'` means both were provided, which are
+   * mutually exclusive intents. `'legacy-dev-sentinel'` means `executablePath`
+   * was the retired literal `'dev'` opt-out sentinel, which is no longer
+   * supported and must be replaced with `skipTrust: true`.
+   */
+  readonly reason: 'missing-choice' | 'conflicting-choice' | 'legacy-dev-sentinel';
+
+  constructor(
+    message: string,
+    reason: 'missing-choice' | 'conflicting-choice' | 'legacy-dev-sentinel',
+  ) {
+    super(message);
+    this.name = 'ExecutableTrustRequiredError';
+    this.reason = reason;
+  }
+}
+
+/** The three reasons an executable-trust choice can be rejected. */
+type ExecutableTrustRequiredReason = 'missing-choice' | 'conflicting-choice' | 'legacy-dev-sentinel';
+
 /** Shape of the tagged error value thrown across the WASM boundary. */
 interface WasmErrorShape {
   vaultErrorCode: string;
   message: string;
   canRefresh?: boolean;
   path?: string;
+  reason?: string;
 }
 
 function isWasmErrorShape(value: unknown): value is WasmErrorShape {
   if (typeof value !== 'object' || value === null) return false;
   const record: Record<string, unknown> = { ...value };
   return typeof record.vaultErrorCode === 'string' && typeof record.message === 'string';
+}
+
+/**
+ * Narrow the raw `reason` string from the WASM boundary to the known union.
+ * Falls back to `'missing-choice'` for any unrecognized value so the typed
+ * error is always constructible.
+ */
+function toTrustRequiredReason(reason: string | undefined): ExecutableTrustRequiredReason {
+  switch (reason) {
+    case 'conflicting-choice':
+    case 'legacy-dev-sentinel':
+      return reason;
+    default:
+      return 'missing-choice';
+  }
 }
 
 /**
@@ -188,6 +240,8 @@ export function mapWasmError(thrown: unknown): VaultError {
         return new RotationInProgressError(message);
       case 'accessor-consumed':
         return new AccessorConsumedError(message);
+      case 'executable-trust-required':
+        return new ExecutableTrustRequiredError(message, toTrustRequiredReason(thrown.reason));
       default:
         return new VaultError(message);
     }
