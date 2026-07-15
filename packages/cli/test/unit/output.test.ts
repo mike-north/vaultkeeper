@@ -1,6 +1,11 @@
 import { describe, it, expect } from 'vitest'
 import * as path from 'node:path'
-import { ConfigParseError, ConfigValidationError, SecretNotFoundError } from 'vaultkeeper'
+import {
+  ConfigParseError,
+  ConfigValidationError,
+  FilesystemError,
+  SecretNotFoundError,
+} from 'vaultkeeper'
 import { formatError, formatPreflightConfigError, secretNotFoundMessage } from '../../src/output.js'
 import type { PreflightCheckError } from 'vaultkeeper'
 
@@ -82,6 +87,69 @@ describe('formatError', () => {
 
       expect(formatted).toContain(path.join(CONFIG_DIR, 'config.json'))
       expect(formatted).toContain('vaultkeeper config init --force')
+    })
+  })
+
+  // Issue #137: an unreadable config.json (EACCES/EPERM) throws
+  // FilesystemError, not ConfigParseError/ConfigValidationError, so #129/#114's
+  // fix didn't cover it — formatError fell through to the generic `Error`
+  // branch and printed the library's own message, still naming
+  // "install @vaultkeeper/cli". This must get its own CLI-native remediation
+  // that names the path, never suggests `config init --force` (that would
+  // hit the same permission error trying to write the replacement file), and
+  // points at checking permissions instead.
+  describe('unreadable config.json gets a CLI-native remediation (issue #137)', () => {
+    it('rewrites a read-permission FilesystemError on config.json to a CLI-native message', () => {
+      const configPath = path.join(CONFIG_DIR, 'config.json')
+      const err = new FilesystemError(
+        `Cannot read config file at ${configPath}: permission denied. ` +
+          "Fix the file — either install @vaultkeeper/cli and run 'vaultkeeper config init --force' " +
+          'to overwrite it with a valid config, or repair/replace it programmatically via this ' +
+          'library (pass an explicit `config` or `configDir`, or write a valid config.json yourself).',
+        configPath,
+        'read',
+      )
+
+      const formatted = formatError(err, CONFIG_DIR)
+
+      expect(formatted).toContain(configPath)
+      expect(formatted).not.toContain('install @vaultkeeper/cli')
+      expect(formatted).not.toContain('config init --force')
+      expect(formatted.toLowerCase()).toContain('permission')
+    })
+
+    it('does not intercept a FilesystemError for a write failure on config.json', () => {
+      // Only a 'read' permission failure on config.json is the config-read
+      // path; other permissions (or other paths) fall through to the
+      // generic Error branch unchanged.
+      const configPath = path.join(CONFIG_DIR, 'config.json')
+      const err = new FilesystemError(
+        `Cannot write config file at ${configPath}: EACCES`,
+        configPath,
+        'write',
+      )
+
+      const formatted = formatError(err, CONFIG_DIR)
+
+      expect(formatted).toBe(`FilesystemError: Cannot write config file at ${configPath}: EACCES`)
+    })
+
+    it('does not intercept a read-permission FilesystemError for a different path (e.g. a backend secret file)', () => {
+      // FileBackend secret reads never live at configDir/config.json, but
+      // guard the boundary explicitly so a future refactor can't silently
+      // widen this to swallow unrelated read failures.
+      const secretPath = path.join(CONFIG_DIR, 'secrets', 'db-password.json')
+      const err = new FilesystemError(
+        `Cannot read secret file at ${secretPath}: permission denied.`,
+        secretPath,
+        'read',
+      )
+
+      const formatted = formatError(err, CONFIG_DIR)
+
+      expect(formatted).toBe(
+        `FilesystemError: Cannot read secret file at ${secretPath}: permission denied.`,
+      )
     })
   })
 
@@ -167,16 +235,45 @@ describe('formatPreflightConfigError', () => {
     expect(formatted).not.toContain('install @vaultkeeper/cli')
   })
 
-  it('shares the exact remediation wording with formatError (one voice across commands)', () => {
+  it('shares the exact remediation wording with formatError for a config-parse failure (one voice across commands)', () => {
+    const err = new ConfigParseError(
+      `Failed to parse config file at ${configPath} at line 3, column 12: bad. ` +
+        'install @vaultkeeper/cli and run ...',
+      configPath,
+      'line 3, column 12',
+    )
+    // formatError prefixes the error name; the core sentence must match.
+    const errorPath = formatError(err, CONFIG_DIR)
+    const doctorPath = formatPreflightConfigError({
+      kind: 'config-parse',
+      configPath,
+      location: 'line 3, column 12',
+    })
+
+    expect(errorPath).toBe(`ConfigParseError: ${doctorPath}`)
+  })
+
+  // Issue #137: formatError now includes ConfigValidationError.field in its
+  // message (e.g. "is invalid (`version`)"), giving CLI users back the
+  // field-level detail #129 dropped. The doctor path's PreflightCheckError
+  // deliberately does NOT gain a `field` — extending that structured type is
+  // an explicit non-goal of #137 (see #130/#145's shipped design) — so the
+  // two paths diverge here rather than sharing wording exactly.
+  it('includes the failing field in formatError but not in the doctor path (issue #137, non-goal boundary)', () => {
     const err = new ConfigValidationError(
       `Invalid config at ${configPath}: bad. install @vaultkeeper/cli and run ...`,
       'version',
       configPath,
     )
-    // formatError prefixes the error name; the core sentence must match.
     const errorPath = formatError(err, CONFIG_DIR)
     const doctorPath = formatPreflightConfigError({ kind: 'config-validation', configPath })
 
-    expect(errorPath).toBe(`ConfigValidationError: ${doctorPath}`)
+    expect(errorPath).toBe(
+      `ConfigValidationError: The config at \`${configPath}\` is invalid (\`version\`) — ` +
+        'run `vaultkeeper config init --force` to overwrite it.',
+    )
+    expect(doctorPath).toBe(
+      `The config at \`${configPath}\` is invalid — run \`vaultkeeper config init --force\` to overwrite it.`,
+    )
   })
 })

@@ -211,6 +211,35 @@ describe('config command', () => {
     expect(result.stderr).not.toContain('install @vaultkeeper/cli')
   })
 
+  // Issue #137: an unreadable config.json (chmod 000, simulating EACCES/EPERM
+  // in the wild — e.g. a root-owned config) is a third config-error path that
+  // #114/#129 didn't cover, since it's a FilesystemError rather than
+  // ConfigParseError/ConfigValidationError. The CLI must still name the
+  // config path and never recommend `config init --force` — that command
+  // would hit the exact same permission error trying to write the
+  // replacement file, so it's a dead end here (unlike the parse/validation
+  // cases, where it's the documented recovery). Skipped on Windows (chmod
+  // semantics differ) and when running as root (root bypasses the
+  // permission bits entirely, so the repro wouldn't reproduce EACCES).
+  const isWindows = process.platform === 'win32'
+  const isRoot = typeof process.getuid === 'function' && process.getuid() === 0
+  describe.skipIf(isWindows || isRoot)('unreadable config.json (issue #137)', () => {
+    it('names the config path, suggests checking permissions, and never suggests install/force-reinit', async () => {
+      env = await createCliTestEnv()
+      const configPath = path.join(env.configDir, 'config.json')
+      await fs.chmod(configPath, 0o000)
+
+      const result = await env.run(['config', 'show'])
+
+      expect(result.exitCode).not.toBe(0)
+      expect(result.stdout).toBe('')
+      expect(result.stderr).toContain(configPath)
+      expect(result.stderr).not.toContain('install @vaultkeeper/cli')
+      expect(result.stderr).not.toContain('config init --force')
+      expect(result.stderr.toLowerCase()).toContain('permission')
+    })
+  })
+
   it('should exit 2 for config with no subcommand', async () => {
     env = await createCliTestEnv()
     const result = await env.run(['config'])
