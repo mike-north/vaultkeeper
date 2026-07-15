@@ -9,10 +9,14 @@
  * parseArgs consumes argv[2..] and extracts the subcommand as positionals[0].
  * commandArgs is argv[3..] — everything after the subcommand.
  *
- * Exit codes:
+ * Exit-code convention:
  *   0 — success
- *   1 — runtime / vault error
- *   2 — usage error (unknown command, missing required argument, bad flag)
+ *   1 — a valid invocation that failed at runtime (e.g. SecretNotFoundError)
+ *   2 — a bad invocation: usage / argument-validation error. Covers an unknown
+ *       command, an unknown top-level flag, a missing/invalid required
+ *       argument, empty stdin for `store`, and a bare invocation with no
+ *       subcommand (which prints usage to stderr rather than exiting 0, so
+ *       `vaultkeeper && next_step` does not proceed as if it succeeded).
  *
  * @internal
  */
@@ -81,8 +85,8 @@ const { positionals } = parseArgs({
 const subcommand = positionals[0]
 const commandArgs = filteredArgv.slice(1)
 
-function printHelp(): void {
-  process.stdout.write(
+function printHelp(stream: NodeJS.WritableStream = process.stdout): void {
+  stream.write(
     'Usage: vaultkeeper [--config-dir <path>] <command> [options]\n\n' +
       'Commands:\n' +
       '  exec         Run a command with a secret injected as an env var\n' +
@@ -117,11 +121,23 @@ async function main(): Promise<number> {
     return 0
   }
 
-  // A bare invocation (no arguments at all) or --help/-h prints help and
-  // exits 0 — this is the "getting started" case.
-  if (filteredArgv.length === 0 || firstArg === '--help' || firstArg === '-h') {
+  // An explicit --help / -h is a successful request for usage: print to
+  // stdout and exit 0.
+  if (firstArg === '--help' || firstArg === '-h') {
     printHelp()
     return 0
+  }
+
+  // A bare invocation (no arguments at all) is a usage error, not success:
+  // print usage to stderr and exit 2 so that `vaultkeeper && next_step` does
+  // not proceed as if a command had succeeded (issue #151). This matches the
+  // exit CODE of the unknown-command case (both 2); the output STREAM
+  // deliberately differs — a bare invocation has no error line, so its usage
+  // goes to stderr, whereas unknown-command writes its "Unknown command"
+  // error to stderr and the usage that follows to stdout.
+  if (filteredArgv.length === 0) {
+    printHelp(process.stderr)
+    return 2
   }
 
   // A first token that looks like a flag (starts with '-') but isn't a
@@ -136,10 +152,11 @@ async function main(): Promise<number> {
 
   // Defensive fallback: parseArgs with allowPositionals should always set
   // subcommand to firstArg when firstArg doesn't start with '-', but if it
-  // somehow didn't, treat it the same as a bare invocation.
+  // somehow didn't, treat it the same as a bare invocation — a usage error
+  // (issue #151), not a successful help print.
   if (subcommand === undefined) {
-    printHelp()
-    return 0
+    printHelp(process.stderr)
+    return 2
   }
 
   const configDir = resolveConfigDir(configDirFlag)

@@ -15,11 +15,14 @@ describe('help and usage', () => {
     }
   })
 
-  it('should print help and exit 0 when no arguments are given', async () => {
+  it('should print usage to stderr and exit 2 when no arguments are given', async () => {
+    // A bare invocation is a usage error, not success (issue #151): usage goes
+    // to stderr and the exit code is 2 so `vaultkeeper && next_step` does not
+    // proceed as if a command had succeeded. An explicit --help/-h still exits 0.
     env = await createCliTestEnv()
     const result = await env.run([])
-    expect(result.exitCode).toBe(0)
-    expect(result.stdout).toContain('Usage: vaultkeeper [--config-dir <path>] <command>')
+    expect(result.exitCode).toBe(2)
+    expect(result.stderr).toContain('Usage: vaultkeeper [--config-dir <path>] <command>')
   })
 
   it('should print help and exit 0 for --help', async () => {
