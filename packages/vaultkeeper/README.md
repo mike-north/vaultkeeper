@@ -73,9 +73,10 @@ your OS credential store.
 }
 ```
 
-- `backends` — ordered list of backend configs; the first one with `"enabled": true` is used. To
-  opt into an OS-native store instead, add an entry with `"type": "keychain"` (macOS), `"dpapi"`
-  (Windows), or `"secret-tool"` (Linux) — `file` must still be listed to keep it a valid fallback.
+- `backends` — ordered list of backend configs; whichever entry is **first** with `"enabled": true`
+  becomes the single active backend — there's no automatic fallback to a later entry. To switch to
+  an OS-native store, put an entry with `"type": "keychain"` (macOS), `"dpapi"` (Windows), or
+  `"secret-tool"` (Linux) ahead of (or in place of) the `file` entry.
 - `keyRotation.gracePeriodDays` — how many days the previous encryption key stays valid for
   decrypting existing tokens after `rotateKey()` runs; see [Key rotation](#key-rotation) below.
 - `defaults.ttlMinutes` / `defaults.trustTier` — applied to `setup()` when its options don't
@@ -88,16 +89,18 @@ The full field reference is documented on the `VaultConfig` interface in the pac
 
 `rotateKey()` replaces the active encryption key but keeps the previous one valid for decryption
 for `keyRotation.gracePeriodDays` days, so tokens minted before a rotation don't break immediately.
-After the grace period elapses, JWEs encrypted under the old key become permanently unreadable
-(`KeyRotatedError`).
+Once the grace period elapses, the retired key is dropped and JWEs encrypted under it can no
+longer be decrypted.
 
 ## Trust tiers
 
-`trustTier` (`1`, `2`, or `3`) is a policy label attached to a token at `setup()` time, describing
-how strongly the executable's identity was verified: `1` = Sigstore transparency log, `2` =
-registry signature, `3` = TOFU (Trust On First Use, hash stored in the local trust manifest).
-`defaults.trustTier` in the config sets the value used when `setup()` doesn't pass its own
-`trustTier` option.
+Executable identity is verified during `setup()` against a local trust-on-first-use (TOFU)
+manifest: a caller executable's hash is either already approved (trusted), unrecognized (first
+encounter, recorded automatically), or changed since it was approved (a conflict, which rejects
+the call until re-approved via `approveExecutable()`). Separately, `trustTier` (`1`, `2`, or `3`)
+is a policy **label** attached to the resulting token — it does not itself reflect the outcome of
+that verification. It defaults to `defaults.trustTier` from the config and can be overridden per
+call via `setup()`'s `trustTier` option.
 
 ## Backends
 

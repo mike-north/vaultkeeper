@@ -71,20 +71,24 @@ not your OS credential store:
 ```
 
 `vaultkeeper config show` prints this same shape (the file if one exists, otherwise the platform
-defaults). `keyRotation.gracePeriodDays` and `defaults.trustTier` are the two fields `config show`
-and `exec` surface directly — see below for what they mean.
+defaults) — that's where `keyRotation.gracePeriodDays` and `defaults.trustTier` are visible
+directly. `vaultkeeper exec` surfaces a related but distinct concept on every run: the caller's
+trust-on-first-use (TOFU) status (see below), not these config fields.
 
-## Key rotation and trust tiers
+## Key rotation and trust
 
 `vaultkeeper rotate-key` replaces the active encryption key but keeps the previous one valid for
 decryption for `keyRotation.gracePeriodDays` days, so secrets minted before a rotation don't break
-immediately; after the grace period, they become permanently unreadable.
+immediately; once the grace period elapses, they become permanently unreadable.
 
-`vaultkeeper exec` mints a token tagged with the config's `defaults.trustTier` (`1`, `2`, or `3`)
-as a policy label describing how the caller executable's identity was verified: `1` = Sigstore
-transparency log, `2` = registry signature, `3` = TOFU (Trust On First Use, hash stored in the
-local trust manifest — the default). `vaultkeeper approve --script <path>` pre-registers a TOFU
-hash so tier-3 executables aren't prompted on first use.
+`vaultkeeper exec` checks the caller executable (`--caller <path>`) against a local
+trust-on-first-use (TOFU) manifest before granting access, and reports the outcome to stderr:
+`Trust: verified (hash matches trust manifest)` for an already-approved caller, or a prompt/error
+if the caller is unrecognized or its hash has changed since it was approved (requiring
+re-approval). `vaultkeeper approve --script <path>` pre-registers a caller's hash so it's already
+trusted on its first `exec` run. This TOFU trust check is separate from the `trustTier` label
+(`1`, `2`, or `3`) that `defaults.trustTier` attaches to each minted token as policy metadata —
+the label doesn't itself reflect the TOFU check's outcome.
 
 ## Exit codes
 
