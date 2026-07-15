@@ -4,15 +4,7 @@ import { shouldSkipDoctor } from '../skip-doctor.js'
 import { formatError } from '../output.js'
 import { CONFIG_DIR_HELP_OPTION, CONFIG_DIR_HELP_ENV } from '../config-dir.js'
 import { configFileExists, noConfigMessage } from '../config-status.js'
-
-/**
- * Allowed characters for a secret `--name`: letters, digits, `.`, `_`, `-`,
- * and `/` (for path-like names such as `env/prod/db-password`). This mirrors
- * `printStoreHelp`'s documented character set (issue #69) — keep both in
- * sync if it changes. Non-empty is enforced separately by the regex's `+`
- * quantifier: it never matches an empty string.
- */
-const SECRET_NAME_PATTERN = /^[A-Za-z0-9._/-]+$/
+import { SECRET_NAME_PATTERN } from '../secret-name.js'
 
 function printStoreHelp(): void {
   process.stdout.write(

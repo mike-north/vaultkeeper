@@ -14,9 +14,12 @@
  *   1 — a valid invocation that failed at runtime (e.g. SecretNotFoundError)
  *   2 — a bad invocation: usage / argument-validation error. Covers an unknown
  *       command, an unknown top-level flag, a missing/invalid required
- *       argument, empty stdin for `store`, and a bare invocation with no
+ *       argument, empty stdin for `store`/`sign`, and a bare invocation with no
  *       subcommand (which prints usage to stderr rather than exiting 0, so
  *       `vaultkeeper && next_step` does not proceed as if it succeeded).
+ *   3 — `verify` only: signature did not verify (deliberate, documented
+ *       exception to the 0/1/2 taxonomy so scripts can tell a bad signature
+ *       from a broken tool — see commands/verify.ts)
  *
  * @internal
  */
@@ -95,6 +98,9 @@ function printHelp(stream: NodeJS.WritableStream = process.stdout): void {
       '  dev-mode     Toggle development mode for a script\n' +
       '  store        Store a secret (reads from stdin)\n' +
       '  delete       Delete a secret\n' +
+      '  key          Manage signing keys (create, export)\n' +
+      '  sign         Sign stdin with a signing key (detached JWS to stdout)\n' +
+      '  verify       Verify a detached signature offline (exit 3 = invalid)\n' +
       '  config       Manage configuration\n' +
       '  rotate-key   Rotate the encryption key\n' +
       '  revoke-key   Emergency key revocation\n\n' +
@@ -188,6 +194,19 @@ async function main(): Promise<number> {
     case 'delete': {
       const { deleteCommand } = await import('./commands/delete.js')
       return deleteCommand(commandArgs, configDir)
+    }
+    case 'key': {
+      const { keyCommand } = await import('./commands/key.js')
+      return keyCommand(commandArgs, configDir)
+    }
+    case 'sign': {
+      const { signCommand } = await import('./commands/sign.js')
+      return signCommand(commandArgs, configDir)
+    }
+    case 'verify': {
+      // verify is fully offline: no config dir, backend, or vault init.
+      const { verifyCommand } = await import('./commands/verify.js')
+      return verifyCommand(commandArgs)
     }
     case 'config': {
       const { configCommand } = await import('./commands/config.js')
