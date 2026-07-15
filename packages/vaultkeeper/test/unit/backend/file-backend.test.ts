@@ -47,6 +47,35 @@ describe('FileBackend', () => {
   })
 
   describe('store', () => {
+    // Regression: issue #133 review — with `{ recursive: true }`, mkdir never
+    // throws EEXIST for a directory that already exists (that case resolves
+    // silently); EEXIST means the storage path itself already exists as
+    // something other than a directory (e.g. a regular file). Swallowing it
+    // let a genuine file/directory collision pass silently instead of
+    // surfacing as a typed FilesystemError.
+    it('should surface an EEXIST mkdir failure (storage path occupied by a file) as a typed FilesystemError instead of silently continuing', async () => {
+      const eexistError = Object.assign(new Error('EEXIST: file already exists, mkdir'), {
+        code: 'EEXIST',
+      })
+      mockFs.mkdir.mockRejectedValueOnce(eexistError)
+
+      let caught: unknown
+      try {
+        await backend.store('my-secret', 'secret-value')
+      } catch (err) {
+        caught = err
+      }
+
+      expect(caught).toBeInstanceOf(FilesystemError)
+      if (caught instanceof FilesystemError) {
+        expect(caught.code).toBe('EEXIST')
+        expect(caught.cause).toBe(eexistError)
+        // Must not have proceeded to attempt the write as if the directory
+        // were ready.
+        expect(mockFs.writeFile).not.toHaveBeenCalled()
+      }
+    })
+
     it('should create storage directory and write the encrypted file', async () => {
       mockFs.mkdir.mockResolvedValue(undefined)
       // getOrCreateKey: readFile for key → ENOENT → writeFile for key

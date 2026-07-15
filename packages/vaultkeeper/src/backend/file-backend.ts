@@ -78,14 +78,17 @@ async function ensureStorageDir(storageDir: string): Promise<void> {
   try {
     await fs.mkdir(storageDir, { recursive: true, mode: 0o700 })
   } catch (err) {
-    if (err instanceof Error && 'code' in err && err.code !== 'EEXIST') {
-      throw new FilesystemError(
-        `Failed to create storage directory: ${storageDir}`,
-        storageDir,
-        'rwx',
-        err,
-      )
-    }
+    // With `recursive: true`, mkdir never throws EEXIST for a directory that
+    // already exists — that case resolves silently. An EEXIST here means
+    // `storageDir` itself already exists as something other than a
+    // directory (e.g. a regular file), a genuine collision that must
+    // surface rather than be swallowed as if the directory were ready.
+    throw new FilesystemError(
+      `Failed to create storage directory: ${storageDir}`,
+      storageDir,
+      'rwx',
+      err,
+    )
   }
 }
 
