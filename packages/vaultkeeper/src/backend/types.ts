@@ -91,3 +91,61 @@ export interface ListableBackend extends SecretBackend {
 export function isListableBackend(backend: SecretBackend): backend is ListableBackend {
   return 'list' in backend && typeof backend.list === 'function'
 }
+
+/**
+ * Backend that can enroll and use signing keys entirely on its own side.
+ *
+ * @remarks
+ * Signing keys are a distinct resource from secrets: a private key must never
+ * flow through {@link SecretBackend.store}/{@link SecretBackend.retrieve} or a
+ * capability token's claims. A signing backend generates the keypair, exposes
+ * only the public half, and performs the signature itself — the private key
+ * never leaves the backend. This is what keeps a key out of any JWE claims
+ * token and lets a presence-per-use backend enforce its guarantee for signing.
+ *
+ * Implementations must keep signing keys in a namespace that cannot collide
+ * with or be read as ordinary secrets.
+ *
+ * @public
+ */
+export interface SigningBackend extends SecretBackend {
+  /**
+   * Enroll a new signing keypair under `id`.
+   * @param id - Namespaced signing-key identifier.
+   * @param algorithm - The JOSE algorithm to generate a key for.
+   * @throws If a signing key already exists under `id`, or `algorithm` is not
+   *   supported by this backend.
+   */
+  generateSigningKey(id: string, algorithm: import('../types.js').SigningAlgorithm): Promise<void>
+
+  /**
+   * Return the public half of the signing key stored under `id`.
+   * @param id - Namespaced signing-key identifier.
+   * @throws A `SigningKeyNotFoundError` if no signing key exists under `id`.
+   */
+  getPublicKey(id: string): Promise<import('../types.js').SigningPublicKey>
+
+  /**
+   * Sign `data` with the private key stored under `id`, returning the raw
+   * signature bytes. The private key never leaves the backend.
+   * @param id - Namespaced signing-key identifier.
+   * @param data - The exact bytes to sign (e.g. a JWS signing input).
+   * @throws A `SigningKeyNotFoundError` if no signing key exists under `id`.
+   */
+  signWithKey(id: string, data: Buffer): Promise<Buffer>
+}
+
+/**
+ * Type guard for backends that implement the signing contract.
+ * @public
+ */
+export function isSigningBackend(backend: SecretBackend): backend is SigningBackend {
+  return (
+    'generateSigningKey' in backend &&
+    typeof backend.generateSigningKey === 'function' &&
+    'getPublicKey' in backend &&
+    typeof backend.getPublicKey === 'function' &&
+    'signWithKey' in backend &&
+    typeof backend.signWithKey === 'function'
+  )
+}

@@ -4,9 +4,9 @@
 
 ## VerifyRequest interface
 
-Request for signature verification.
+Request for detached-signature verification.
 
-This is a static operation that only requires public key material — no VaultKeeper instance or capability token is needed.
+This is a fully offline operation that only requires public key material — no VaultKeeper instance, backend, config, or capability token is needed.
 
 **Signature:**
 
@@ -39,7 +39,7 @@ Description
 </th></tr></thead>
 <tbody><tr><td>
 
-[algorithm?](./vaultkeeper.verifyrequest.algorithm.md)
+[jws](./vaultkeeper.verifyrequest.jws.md)
 
 
 </td><td>
@@ -47,18 +47,18 @@ Description
 
 </td><td>
 
-string \| undefined
+string
 
 
 </td><td>
 
-_(Optional)_ Override the hash algorithm. Ignored for Ed25519/Ed448 keys. Non-Edwards keys default to `'sha256'` when omitted.
+The detached-payload compact JWS produced by [SignResult.jws](./vaultkeeper.signresult.jws.md) (`<protected>..<signature>`<!-- -->).
 
 
 </td></tr>
 <tr><td>
 
-[data](./vaultkeeper.verifyrequest.data.md)
+[payload](./vaultkeeper.verifyrequest.payload.md)
 
 
 </td><td>
@@ -66,12 +66,12 @@ _(Optional)_ Override the hash algorithm. Ignored for Ed25519/Ed448 keys. Non-Ed
 
 </td><td>
 
-string \| Buffer
+string \| Buffer$1
 
 
 </td><td>
 
-The original data that was signed. Strings are treated as UTF-8.
+The detached payload bytes that were signed. Strings are treated as UTF-8.
 
 
 </td></tr>
@@ -93,25 +93,6 @@ string
 PEM-encoded public key (SPKI format) as a string.
 
 Other `KeyLike` formats supported by `crypto.createPublicKey()` are not accepted by this interface.
-
-
-</td></tr>
-<tr><td>
-
-[signature](./vaultkeeper.verifyrequest.signature.md)
-
-
-</td><td>
-
-
-</td><td>
-
-string
-
-
-</td><td>
-
-Base64-encoded signature to verify.
 
 
 </td></tr>

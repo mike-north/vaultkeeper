@@ -4,7 +4,7 @@
 
 ## InvalidKeyMaterialError class
 
-Thrown when a stored secret is used as signing key material but is not valid PEM or DER private key data (e.g. `crypto.createPrivateKey()` rejects it). Signing raises this error; verification instead returns `false` for invalid key material. The message never echoes any part of the secret.
+Thrown by verification when the supplied public key is not structurally parseable as a PEM/DER public key (e.g. `crypto.createPublicKey()` rejects it, or a private key was passed where a public key is required). This is an operational fault distinct from a signature that simply does not verify — a verification failure returns `false`<!-- -->, while unparseable key material throws. The message never echoes any part of the key material.
 
 **Signature:**
 

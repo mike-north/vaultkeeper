@@ -4,12 +4,17 @@ import type { VaultConfig } from '../../src/types.js'
 import { BackendRegistry } from '../../src/backend/registry.js'
 import type { SecretBackend } from '../../src/backend/types.js'
 import { clearBlocklist } from '../../src/jwe/claims.js'
-import { UsageLimitExceededError } from '../../src/errors.js'
+import {
+  UsageLimitExceededError,
+  AuthorizationDeniedError,
+  SigningNotSupportedError,
+  InvalidKeyMaterialError,
+} from '../../src/errors.js'
 import * as jweTokenModule from '../../src/jwe/token.js'
 import * as delegatedFetchModule from '../../src/access/delegated-fetch.js'
 import * as delegatedExecModule from '../../src/access/delegated-exec.js'
-import * as delegatedSignModule from '../../src/access/delegated-sign.js'
-import * as delegatedVerifyModule from '../../src/access/delegated-verify.js'
+import * as crypto from 'node:crypto'
+import { CompactSign } from 'jose'
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -550,37 +555,97 @@ describe('VaultKeeper', () => {
     })
   })
 
-  describe('sign', () => {
-    it('delegates to delegatedSign and returns the result with current keyStatus', async () => {
+  describe('signing keys on a non-signing backend', () => {
+    // AC8: a backend that does not implement the signing contract must fail
+    // with a typed SigningNotSupportedError naming the backends that do —
+    // never a silent emulation. The mock 'test' backend has no signing methods.
+    it('createSigningKey throws SigningNotSupportedError naming file backend', async () => {
+      const vault = await initVault()
+      await expect(vault.createSigningKey('k', 'EdDSA')).rejects.toBeInstanceOf(
+        SigningNotSupportedError,
+      )
+      await expect(vault.createSigningKey('k', 'EdDSA')).rejects.toMatchObject({
+        backendType: 'test',
+        supportedBackends: ['file'],
+      })
+    })
+
+    it('exportPublicKey throws SigningNotSupportedError', async () => {
+      const vault = await initVault()
+      await expect(vault.exportPublicKey('k')).rejects.toBeInstanceOf(SigningNotSupportedError)
+    })
+
+    it('authorizeSigningKey throws SigningNotSupportedError', async () => {
+      const vault = await initVault()
+      await expect(vault.authorizeSigningKey('k')).rejects.toBeInstanceOf(SigningNotSupportedError)
+    })
+  })
+
+  describe('sign rejects a non-signing token', () => {
+    // AC3 defense in depth: sign() requires a signing-key capability token.
+    // An ordinary secret token (from authorize()) must be rejected before any
+    // signing happens.
+    it('sign() with a secret token throws AuthorizationDeniedError', async () => {
       const vault = await initVault()
       const jwe = await vault.setup('my-secret', { skipTrust: true })
       const { token } = await vault.authorize(jwe)
 
-      const mockResult = { signature: 'c2lnbmF0dXJl', algorithm: 'ed25519' }
-      const signSpy = vi.spyOn(delegatedSignModule, 'delegatedSign').mockReturnValue(mockResult)
-
-      const { result, vaultResponse } = await vault.sign(token, { data: 'test-data' })
-
-      expect(signSpy).toHaveBeenCalledOnce()
-      const [calledSecret] = signSpy.mock.calls[0] ?? []
-      expect(calledSecret).toBe('hunter2')
-      expect(result).toBe(mockResult)
-      expect(vaultResponse.keyStatus).toBe('current')
+      await expect(vault.sign(token, { payload: 'test-data' })).rejects.toBeInstanceOf(
+        AuthorizationDeniedError,
+      )
     })
   })
 
-  describe('verify', () => {
-    it('delegates to delegatedVerify', () => {
-      const verifySpy = vi.spyOn(delegatedVerifyModule, 'delegatedVerify').mockReturnValue(true)
+  describe('verify (offline, static)', () => {
+    // Produce a detached compact JWS with jose (b64:false, crit:["b64"],
+    // alg EdDSA) so verify() is exercised against an independently-produced
+    // signature — not vaultkeeper's own signing path.
+    async function makeDetachedJws(
+      payload: string,
+    ): Promise<{ jws: string; publicKeyPem: string }> {
+      const { privateKey, publicKey } = crypto.generateKeyPairSync('ed25519')
+      const jws = await new CompactSign(Buffer.from(payload, 'utf8'))
+        .setProtectedHeader({ alg: 'EdDSA', b64: false, crit: ['b64'] })
+        .sign(privateKey)
+      return { jws, publicKeyPem: publicKey.export({ type: 'spki', format: 'pem' }).toString() }
+    }
 
-      const result = VaultKeeper.verify({
-        data: 'test',
-        signature: 'sig',
-        publicKey: 'pem',
-      })
+    it('returns true for a valid detached signature', async () => {
+      const payload = 'gate1:abc123:1706000000'
+      const { jws, publicKeyPem } = await makeDetachedJws(payload)
+      await expect(VaultKeeper.verify({ payload, jws, publicKey: publicKeyPem })).resolves.toBe(
+        true,
+      )
+    })
 
-      expect(verifySpy).toHaveBeenCalledOnce()
-      expect(result).toBe(true)
+    it('returns false for a tampered payload', async () => {
+      const { jws, publicKeyPem } = await makeDetachedJws('original')
+      await expect(
+        VaultKeeper.verify({ payload: 'tampered', jws, publicKey: publicKeyPem }),
+      ).resolves.toBe(false)
+    })
+
+    it('returns false for a structurally malformed JWS', async () => {
+      const { publicKeyPem } = await makeDetachedJws('x')
+      await expect(
+        VaultKeeper.verify({ payload: 'x', jws: 'not-a-jws', publicKey: publicKeyPem }),
+      ).resolves.toBe(false)
+    })
+
+    it('throws InvalidKeyMaterialError for an unparseable public key', async () => {
+      const { jws } = await makeDetachedJws('x')
+      await expect(
+        VaultKeeper.verify({ payload: 'x', jws, publicKey: 'not-a-pem' }),
+      ).rejects.toBeInstanceOf(InvalidKeyMaterialError)
+    })
+
+    it('throws InvalidKeyMaterialError when a private key is supplied as the public key', async () => {
+      const { privateKey } = crypto.generateKeyPairSync('ed25519')
+      const privatePem = privateKey.export({ type: 'pkcs8', format: 'pem' }).toString()
+      const { jws } = await makeDetachedJws('x')
+      await expect(
+        VaultKeeper.verify({ payload: 'x', jws, publicKey: privatePem }),
+      ).rejects.toBeInstanceOf(InvalidKeyMaterialError)
     })
   })
 

@@ -301,8 +301,10 @@ export class AccessorConsumedError extends VaultError {
 // --- Infrastructure Failures ---
 
 /**
- * Thrown when a caller requests a signing/verification algorithm that is not
- * in the allowed set (e.g. `'md5'`).
+ * Thrown when a caller requests a signing key algorithm that is not a
+ * supported JOSE algorithm identifier. The signing algorithm registry uses
+ * strict JOSE identifiers (currently `'EdDSA'`); an unrecognized value is
+ * rejected rather than defaulted.
  *
  * @public
  */
@@ -326,11 +328,12 @@ export class InvalidAlgorithmError extends VaultError {
 }
 
 /**
- * Thrown when a stored secret is used as signing key material but is not
- * valid PEM or DER private key data (e.g. `crypto.createPrivateKey()`
- * rejects it). Signing raises this error; verification instead returns
- * `false` for invalid key material. The message never echoes any part of
- * the secret.
+ * Thrown by verification when the supplied public key is not structurally
+ * parseable as a PEM/DER public key (e.g. `crypto.createPublicKey()` rejects
+ * it, or a private key was passed where a public key is required). This is an
+ * operational fault distinct from a signature that simply does not verify — a
+ * verification failure returns `false`, while unparseable key material throws.
+ * The message never echoes any part of the key material.
  *
  * @public
  */
@@ -338,6 +341,77 @@ export class InvalidKeyMaterialError extends VaultError {
   constructor(message: string) {
     super(message)
     this.name = 'InvalidKeyMaterialError'
+  }
+}
+
+/**
+ * Thrown when a named signing key does not exist in the active backend — for
+ * example `key export` or `sign` is asked for a name that was never enrolled
+ * with `key create`. This is distinct from {@link SecretNotFoundError}: signing
+ * keys occupy their own namespace and are never returned as ordinary secrets.
+ *
+ * @public
+ */
+export class SigningKeyNotFoundError extends VaultError {
+  /**
+   * The signing-key name that was requested (the caller-facing `--name`, not
+   * the internal namespaced identifier).
+   */
+  readonly keyName: string
+
+  constructor(message: string, keyName: string) {
+    super(message)
+    this.name = 'SigningKeyNotFoundError'
+    this.keyName = keyName
+  }
+}
+
+/**
+ * Thrown when `key create` (or `createSigningKey`) is asked to enroll a signing
+ * key under a name that already exists. Enrollment never silently overwrites an
+ * existing key, because a regenerated keypair would invalidate every public key
+ * that was previously exported and pinned by a verifier.
+ *
+ * @public
+ */
+export class SigningKeyAlreadyExistsError extends VaultError {
+  /**
+   * The signing-key name that already exists (the caller-facing `--name`, not
+   * the internal namespaced identifier).
+   */
+  readonly keyName: string
+
+  constructor(message: string, keyName: string) {
+    super(message)
+    this.name = 'SigningKeyAlreadyExistsError'
+    this.keyName = keyName
+  }
+}
+
+/**
+ * Thrown when a signing operation (`key create`, `key export`, `sign`) is
+ * requested against a backend that does not implement the signing contract.
+ * Signing is never silently emulated on a backend that cannot perform it in a
+ * key-stays-backend-side manner; inspect {@link SigningNotSupportedError.supportedBackends}
+ * for the backend types that do.
+ *
+ * @public
+ */
+export class SigningNotSupportedError extends VaultError {
+  /** The type identifier of the active backend that cannot sign. */
+  readonly backendType: string
+
+  /**
+   * The backend type identifiers that do implement the signing contract, so a
+   * caller can point the user at a backend that works.
+   */
+  readonly supportedBackends: string[]
+
+  constructor(message: string, backendType: string, supportedBackends: string[]) {
+    super(message)
+    this.name = 'SigningNotSupportedError'
+    this.backendType = backendType
+    this.supportedBackends = supportedBackends
   }
 }
 

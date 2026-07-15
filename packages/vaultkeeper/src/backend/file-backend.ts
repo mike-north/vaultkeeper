@@ -25,18 +25,44 @@
 import * as fs from 'node:fs/promises'
 import * as path from 'node:path'
 import * as os from 'node:os'
+import * as crypto from 'node:crypto'
 import {
   SecretNotFoundError,
   FilesystemError,
   DecryptionError,
   toFilesystemError,
+  SigningKeyNotFoundError,
+  SigningKeyAlreadyExistsError,
+  InvalidAlgorithmError,
 } from '../errors.js'
 import { encryptGcm, decryptGcm, getOrCreateWrapKey } from '../util/at-rest.js'
 import { getDefaultConfigDir } from '../config.js'
-import type { ListableBackend } from './types.js'
+import type { ListableBackend, SigningBackend } from './types.js'
+import type { SigningAlgorithm, SigningPublicKey } from '../types.js'
 
 const STORAGE_DIR_NAME = 'file'
 const KEY_FILE = '.key'
+/**
+ * Subdirectory (under the secret storage dir) holding encrypted signing-key
+ * private material. Kept separate from the `.enc` secret files so a signing key
+ * can never be read through {@link FileBackend.retrieve} or surface in
+ * {@link FileBackend.list}.
+ */
+const SIGNING_DIR_NAME = 'signing-keys'
+/** Namespace prefix for signing-key identifiers (see {@link SigningBackend}). */
+const SIGNING_KEY_PREFIX = 'signing-key:'
+/** Signing algorithms this backend can generate keys for. */
+const SUPPORTED_SIGNING_ALGORITHMS: readonly SigningAlgorithm[] = ['EdDSA']
+
+/** Compute the stable kid for an SPKI-DER public key: base64url(sha256(der)). */
+function computeKid(spkiDer: Buffer): string {
+  return crypto.createHash('sha256').update(spkiDer).digest('base64url')
+}
+
+/** Strip the namespace prefix to recover the caller-facing signing-key name. */
+function displayKeyName(id: string): string {
+  return id.startsWith(SIGNING_KEY_PREFIX) ? id.slice(SIGNING_KEY_PREFIX.length) : id
+}
 
 /**
  * Pre-#99 default storage directory, kept as a read-only fallback.
@@ -106,11 +132,13 @@ async function getOrCreateKey(storageDir: string): Promise<Buffer> {
  *
  * @internal
  */
-export class FileBackend implements ListableBackend {
+export class FileBackend implements ListableBackend, SigningBackend {
   readonly type = 'file'
   readonly displayName = 'Encrypted File Store'
 
   readonly #storageDir: string
+  /** Directory holding encrypted signing-key private material. */
+  readonly #signingDir: string
   /**
    * Pre-#99 default storage directory, consulted as a read-only fallback
    * when `storageDir` was not explicitly configured. `undefined` when an
@@ -128,6 +156,7 @@ export class FileBackend implements ListableBackend {
   constructor(storageDir?: string, configDir?: string) {
     this.#storageDir = resolveStorageDir(storageDir, configDir)
     this.#legacyStorageDir = storageDir === undefined ? legacyStorageDir() : undefined
+    this.#signingDir = path.join(this.#storageDir, SIGNING_DIR_NAME)
   }
 
   async isAvailable(): Promise<boolean> {
@@ -266,5 +295,125 @@ export class FileBackend implements ListableBackend {
     return entries
       .filter((f) => f.endsWith('.enc'))
       .map((f) => Buffer.from(f.slice(0, -4), 'hex').toString('utf8'))
+  }
+
+  // --- Signing contract (SigningBackend) ---
+
+  /** On-disk path of the encrypted private key for a signing-key id. */
+  #signingKeyPath(id: string): string {
+    const safeId = Buffer.from(id, 'utf8').toString('hex')
+    return path.join(this.#signingDir, `${safeId}.pem.enc`)
+  }
+
+  /**
+   * Load and decrypt the PKCS#8 private key PEM for `id`, or throw
+   * {@link SigningKeyNotFoundError} when no signing key exists under `id`.
+   */
+  async #loadSigningKeyPem(id: string): Promise<string> {
+    const keyPath = this.#signingKeyPath(id)
+    let encoded: string
+    try {
+      encoded = await fs.readFile(keyPath, 'utf8')
+    } catch (err) {
+      if (err instanceof Error && 'code' in err && err.code === 'ENOENT') {
+        throw new SigningKeyNotFoundError(
+          `Signing key not found: ${displayKeyName(id)}`,
+          displayKeyName(id),
+        )
+      }
+      throw toFilesystemError(err, 'signing key', keyPath, 'read')
+    }
+    const wrapKey = await getOrCreateKey(this.#storageDir)
+    try {
+      return decryptGcm(wrapKey, encoded)
+    } catch (err) {
+      throw new DecryptionError(
+        `Failed to decrypt signing key: ${err instanceof Error ? err.message : String(err)}`,
+        keyPath,
+      )
+    }
+  }
+
+  async generateSigningKey(id: string, algorithm: SigningAlgorithm): Promise<void> {
+    // Runtime guard for JS callers that may bypass the compile-time type.
+    if (!SUPPORTED_SIGNING_ALGORITHMS.includes(algorithm)) {
+      throw new InvalidAlgorithmError(
+        `Unsupported signing algorithm '${algorithm}'. Supported: ${SUPPORTED_SIGNING_ALGORITHMS.join(', ')}.`,
+        algorithm,
+        [...SUPPORTED_SIGNING_ALGORITHMS],
+      )
+    }
+    await ensureStorageDir(this.#storageDir)
+    try {
+      await fs.mkdir(this.#signingDir, { recursive: true, mode: 0o700 })
+    } catch (err) {
+      if (err instanceof Error && 'code' in err && err.code !== 'EEXIST') {
+        throw toFilesystemError(err, 'signing-key directory', this.#signingDir, 'create')
+      }
+    }
+
+    const keyPath = this.#signingKeyPath(id)
+    // Never silently replace an existing signing key — a regenerated key would
+    // invalidate every previously exported/pinned public key (a signature-trust
+    // break). Probe for an existing key, but distinguish the three outcomes:
+    //   - access() succeeds        -> a key exists; refuse (already-exists).
+    //   - access() fails w/ ENOENT -> confirmed absent; safe to generate.
+    //   - access() fails otherwise -> a transient/permission fault (e.g. EACCES).
+    //     Treating that as "absent" could clobber an existing key, so surface it
+    //     as a typed FilesystemError instead of proceeding.
+    let keyExists = false
+    try {
+      await fs.access(keyPath)
+      keyExists = true
+    } catch (err) {
+      if (!(err instanceof Error && 'code' in err && err.code === 'ENOENT')) {
+        throw toFilesystemError(err, 'signing key', keyPath, 'read')
+      }
+      // ENOENT: confirmed absent — fall through to generation.
+    }
+    if (keyExists) {
+      throw new SigningKeyAlreadyExistsError(
+        `Signing key already exists: ${displayKeyName(id)}`,
+        displayKeyName(id),
+      )
+    }
+
+    const { privateKey } = crypto.generateKeyPairSync('ed25519')
+    const pkcs8Pem = privateKey.export({ type: 'pkcs8', format: 'pem' }).toString()
+    const wrapKey = await getOrCreateKey(this.#storageDir)
+    const encrypted = encryptGcm(wrapKey, pkcs8Pem)
+    try {
+      // wx: fail if the path was created between our probe and here (TOCTOU),
+      // so a concurrent enrollment can never be silently overwritten either.
+      await fs.writeFile(keyPath, encrypted, { mode: 0o600, flag: 'wx' })
+    } catch (err) {
+      if (err instanceof Error && 'code' in err && err.code === 'EEXIST') {
+        throw new SigningKeyAlreadyExistsError(
+          `Signing key already exists: ${displayKeyName(id)}`,
+          displayKeyName(id),
+        )
+      }
+      throw toFilesystemError(err, 'signing key', keyPath, 'write')
+    }
+  }
+
+  async getPublicKey(id: string): Promise<SigningPublicKey> {
+    const pkcs8Pem = await this.#loadSigningKeyPem(id)
+    const privateKey = crypto.createPrivateKey(pkcs8Pem)
+    const publicKey = crypto.createPublicKey(privateKey)
+    const publicKeyPem = publicKey.export({ type: 'spki', format: 'pem' }).toString()
+    const spkiDer = publicKey.export({ type: 'spki', format: 'der' })
+    return {
+      publicKeyPem,
+      algorithm: 'EdDSA',
+      kid: computeKid(spkiDer),
+    }
+  }
+
+  async signWithKey(id: string, data: Buffer): Promise<Buffer> {
+    const pkcs8Pem = await this.#loadSigningKeyPem(id)
+    const privateKey = crypto.createPrivateKey(pkcs8Pem)
+    // Ed25519: the algorithm is implicit in the key, so pass null.
+    return crypto.sign(null, data, privateKey)
   }
 }

@@ -4,9 +4,9 @@
 
 ## VaultKeeper.sign() method
 
-Sign data using the private key embedded in a capability token.
+Sign a caller-supplied payload with a signing-key capability token.
 
-The signing key is extracted from the token's encrypted claims, used for a single `crypto.sign()` call, and never exposed to the caller. The algorithm is auto-detected from the key type unless overridden in the request.
+The signature is produced backend-side via [SigningBackend.signWithKey()](./vaultkeeper.signingbackend.signwithkey.md) — the private key never leaves the backend and never appears in the token, the claims, or this process. The result is a detached-payload Compact JWS (RFC 7515 §7.2.2 + RFC 7797 `b64:false`<!-- -->, `crit:["b64"]`<!-- -->, `alg:EdDSA`<!-- -->) that any standards-compliant JOSE library can verify given the payload and the public key.
 
 **Signature:**
 
@@ -47,7 +47,7 @@ token
 
 </td><td>
 
-A `CapabilityToken` obtained from `authorize()`<!-- -->.
+A signing-key `CapabilityToken` from [VaultKeeper.authorizeSigningKey()](./vaultkeeper.vaultkeeper.authorizesigningkey.md)<!-- -->.
 
 
 </td></tr>
@@ -63,7 +63,7 @@ request
 
 </td><td>
 
-The data to sign and optional algorithm override.
+The payload to sign.
 
 
 </td></tr>
@@ -73,13 +73,13 @@ The data to sign and optional algorithm override.
 
 Promise&lt;{ result: [SignResult](./vaultkeeper.signresult.md)<!-- -->; vaultResponse: [VaultResponse](./vaultkeeper.vaultresponse.md)<!-- -->; }&gt;
 
-The base64-encoded signature and algorithm label, together with the vault metadata (`vaultResponse`<!-- -->).
+The detached compact JWS and vault metadata.
 
 ## Exceptions
 
-{<!-- -->VaultError<!-- -->} If `token` is invalid or was not created by this vault instance.
+{<!-- -->AuthorizationDeniedError<!-- -->} If `token` is invalid or is not a signing-key token (e.g. an ordinary secret token).
 
-{<!-- -->InvalidAlgorithmError<!-- -->} If `request.algorithm` is not in the allowed set (e.g. `'md5'`<!-- -->).
+{<!-- -->SigningNotSupportedError<!-- -->} If the active backend cannot sign.
 
-{<!-- -->InvalidKeyMaterialError<!-- -->} If the stored secret is not valid PEM/DER private key material.
+{<!-- -->SigningKeyNotFoundError<!-- -->} If the referenced key no longer exists.
 

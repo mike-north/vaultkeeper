@@ -259,47 +259,71 @@ export interface SecretAccessor {
 }
 
 /**
- * Request for delegated signing.
+ * A signing algorithm identifier from the strict JOSE registry (RFC 7518).
  *
- * The `data` field is the payload to sign. Strings are UTF-8-encoded
- * before signing.
+ * Only `'EdDSA'` (Ed25519) is supported today; the identifier is intentionally
+ * a strict JOSE `alg` value so future algorithms (`'ES256'`, `'RS256'`, …) each
+ * bind to their proper curve/key type rather than an ambiguous label.
  */
-export interface SignRequest {
-  /** The data to sign. Strings are treated as UTF-8. */
-  data: string | Buffer
-  /**
-   * Override the hash algorithm (`'sha256'`, `'sha384'`, or `'sha512'`).
-   * Ignored for Ed25519/Ed448 keys where the algorithm is implicit.
-   * Non-Edwards keys (RSA, EC) default to `'sha256'` when omitted.
-   * Weak algorithms (e.g. `'md5'`, `'sha1'`) are rejected.
-   */
-  algorithm?: string | undefined
-}
+export type SigningAlgorithm = 'EdDSA'
 
-/** Result from a delegated signing operation. */
-export interface SignResult {
-  /** Base64-encoded signature. */
-  signature: string
+/**
+ * The public half of an enrolled signing key.
+ *
+ * Returned by `key create` / `key export` and used to verify detached
+ * signatures independently of vaultkeeper.
+ */
+export interface SigningPublicKey {
+  /** SPKI (SubjectPublicKeyInfo) PEM encoding of the public key. */
+  publicKeyPem: string
+  /** The JOSE algorithm this key signs with. */
+  algorithm: SigningAlgorithm
   /**
-   * Algorithm label describing how the signature was produced.
-   * For Edwards keys this is the key type (e.g. `'ed25519'`).
-   * For other keys this matches the `algorithm` field from the request
-   * (or the default `'sha256'`).
+   * Stable key identifier: the base64url-encoded SHA-256 of the SPKI DER. Used
+   * as the JWS `kid` protected-header value so a verifier can select the key.
    */
-  algorithm: string
+  kid: string
 }
 
 /**
- * Request for signature verification.
+ * Request to sign a caller-supplied payload with a named signing key.
  *
- * This is a static operation that only requires public key material —
- * no VaultKeeper instance or capability token is needed.
+ * The `payload` is arbitrary bytes to be signed with detachment (RFC 7797) —
+ * it is never stored and never treated as a secret. Strings are UTF-8-encoded
+ * before signing.
+ */
+export interface SignRequest {
+  /** The payload bytes to sign. Strings are treated as UTF-8. */
+  payload: string | Buffer
+}
+
+/**
+ * Result of a signing operation.
+ *
+ * The signature is a detached-payload Compact JWS (RFC 7515 §7.2.2 + RFC 7797
+ * `b64:false`, `crit:["b64"]`): `<protected>..<signature>`, with the payload
+ * omitted. Any standards-compliant JOSE library can verify it given the
+ * detached payload and the public key.
+ */
+export interface SignResult {
+  /** The detached-payload compact JWS (`<protected>..<signature>`). */
+  jws: string
+}
+
+/**
+ * Request for detached-signature verification.
+ *
+ * This is a fully offline operation that only requires public key material —
+ * no VaultKeeper instance, backend, config, or capability token is needed.
  */
 export interface VerifyRequest {
-  /** The original data that was signed. Strings are treated as UTF-8. */
-  data: string | Buffer
-  /** Base64-encoded signature to verify. */
-  signature: string
+  /** The detached payload bytes that were signed. Strings are treated as UTF-8. */
+  payload: string | Buffer
+  /**
+   * The detached-payload compact JWS produced by {@link SignResult.jws}
+   * (`<protected>..<signature>`).
+   */
+  jws: string
   /**
    * PEM-encoded public key (SPKI format) as a string.
    *
@@ -307,11 +331,26 @@ export interface VerifyRequest {
    * accepted by this interface.
    */
   publicKey: string
-  /**
-   * Override the hash algorithm. Ignored for Ed25519/Ed448 keys.
-   * Non-Edwards keys default to `'sha256'` when omitted.
-   */
-  algorithm?: string | undefined
+}
+
+/**
+ * Claims backing a signing-key capability token.
+ *
+ * @remarks
+ * A signing-key token carries only the references needed to ask the backend to
+ * sign — never any private key material. The `keyType` discriminator lets
+ * secret-access paths (`getSecret`/`fetch`/`exec`) reject a signing-key token
+ * outright, and lets `sign` reject an ordinary secret token.
+ *
+ * @internal
+ */
+export interface SigningClaims {
+  /** Discriminator marking this as a signing-key capability, not a secret. */
+  keyType: 'signing-key'
+  /** The signing key's stable identifier (see {@link SigningPublicKey.kid}). */
+  kid: string
+  /** The backend key identifier used to invoke `signWithKey` (never the key). */
+  backendRef: string
 }
 
 /** Vaultkeeper configuration file structure. */

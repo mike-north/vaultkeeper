@@ -17,12 +17,15 @@ import type {
   SignRequest,
   SignResult,
   VerifyRequest,
+  SigningAlgorithm,
+  SigningPublicKey,
 } from './types.js'
 import { loadConfig, getDefaultConfigDir } from './config.js'
 import { KeyManager } from './keys/manager.js'
 import { loadKeyState, saveKeyState } from './keys/storage.js'
 import { BackendRegistry } from './backend/registry.js'
-import type { SecretBackend } from './backend/types.js'
+import { isSigningBackend } from './backend/types.js'
+import type { SecretBackend, SigningBackend } from './backend/types.js'
 import { createToken, decryptToken, extractKid, validateClaims, blockToken } from './jwe/index.js'
 import { verifyTrust } from './identity/trust.js'
 import { hashExecutable } from './identity/hash.js'
@@ -30,13 +33,14 @@ import { loadManifest, saveManifest, addTrustedHash, isTrusted } from './identit
 import {
   CapabilityToken,
   createCapabilityToken,
+  createSigningCapabilityToken,
   validateCapabilityToken,
+  isSigningClaims,
 } from './identity/session.js'
 import { delegatedFetch } from './access/delegated-fetch.js'
 import { delegatedExec } from './access/delegated-exec.js'
 import { createSecretAccessor } from './access/controlled-direct.js'
-import { delegatedSign } from './access/delegated-sign.js'
-import { delegatedVerify } from './access/delegated-verify.js'
+import { createDetachedJws, verifyDetachedJws } from './access/jws.js'
 import { runDoctor } from './doctor/runner.js'
 import type { RunDoctorOptions } from './doctor/runner.js'
 import {
@@ -46,6 +50,7 @@ import {
   BackendUnavailableError,
   VaultError,
   KeyRevokedError,
+  SigningNotSupportedError,
 } from './errors.js'
 
 /**
@@ -259,6 +264,13 @@ export interface ExecutableTrustStatus {
   /** Human-readable description of how trust was (or was not) established. */
   reason: string
 }
+
+/**
+ * Backend type identifiers that implement the signing contract
+ * ({@link SigningBackend}). Named in {@link SigningNotSupportedError} so a
+ * caller on a non-signing backend is told exactly where signing works.
+ */
+const SIGNING_CAPABLE_BACKENDS = ['file'] as const
 
 /** Usage tracking for tokens with use limits. */
 const usageCounts = new Map<string, number>()
@@ -692,66 +704,164 @@ export class VaultKeeper {
    */
   getSecret(token: CapabilityToken): SecretAccessor {
     const claims = validateCapabilityToken(token)
+    // Defense in depth: a signing-key token carries no secret and must never be
+    // read through the secret-access path.
+    if (isSigningClaims(claims)) {
+      throw new AuthorizationDeniedError(
+        'This capability token authorizes a signing key, not a secret — ' +
+          'it cannot be read with getSecret(). Use sign() instead.',
+      )
+    }
     return createSecretAccessor(claims.val)
   }
 
   /**
-   * Sign data using the private key embedded in a capability token.
+   * Enroll a new signing keypair under `name` in the active backend.
    *
-   * The signing key is extracted from the token's encrypted claims, used
-   * for a single `crypto.sign()` call, and never exposed to the caller.
-   * The algorithm is auto-detected from the key type unless overridden
-   * in the request.
+   * The keypair is generated and stored entirely backend-side (see
+   * {@link SigningBackend}); the private key never enters vault claims, a
+   * capability token, or the caller's process. Signing keys occupy a namespace
+   * distinct from secrets, so a signing key and a secret can share a name
+   * without colliding, and a signing key can never be read as a secret.
    *
-   * @param token - A `CapabilityToken` obtained from `authorize()`.
-   * @param request - The data to sign and optional algorithm override.
-   * @returns The base64-encoded signature and algorithm label, together
-   *   with the vault metadata (`vaultResponse`).
-   * @throws {VaultError} If `token` is invalid or was not created by this
-   *   vault instance.
-   * @throws {InvalidAlgorithmError} If `request.algorithm` is not in the
-   *   allowed set (e.g. `'md5'`).
-   * @throws {InvalidKeyMaterialError} If the stored secret is not valid
-   *   PEM/DER private key material.
+   * @param name - Caller-facing signing key name.
+   * @param algorithm - The JOSE signing algorithm (currently only `'EdDSA'`).
+   * @returns The public half of the newly enrolled key.
+   * @throws {SigningNotSupportedError} If the active backend cannot sign.
+   * @throws {InvalidAlgorithmError} If `algorithm` is not supported.
+   * @throws {VaultError} If a signing key already exists under `name`.
+   * @public
+   */
+  async createSigningKey(name: string, algorithm: SigningAlgorithm): Promise<SigningPublicKey> {
+    VaultKeeper.#validateSecretName(name)
+    const backend = this.#requireSigningBackend()
+    const id = VaultKeeper.#signingKeyId(name)
+    // The backend validates the algorithm (throws InvalidAlgorithmError) — it is
+    // the authority on which algorithms it can generate keys for.
+    await backend.generateSigningKey(id, algorithm)
+    return backend.getPublicKey(id)
+  }
+
+  /**
+   * Export the SPKI PEM public key for the signing key named `name`.
+   *
+   * @param name - Caller-facing signing key name.
+   * @returns The public key material (SPKI PEM, algorithm, kid).
+   * @throws {SigningNotSupportedError} If the active backend cannot sign.
+   * @throws {SigningKeyNotFoundError} If no signing key exists under `name`.
+   * @public
+   */
+  async exportPublicKey(name: string): Promise<SigningPublicKey> {
+    VaultKeeper.#validateSecretName(name)
+    const backend = this.#requireSigningBackend()
+    return backend.getPublicKey(VaultKeeper.#signingKeyId(name))
+  }
+
+  /**
+   * Mint a signing-key capability token for the key named `name`.
+   *
+   * The returned token carries only `{ kid, backendRef, keyType: 'signing-key' }`
+   * — never any key material — and is accepted only by {@link VaultKeeper.sign}.
+   * Passing it to `getSecret`/`fetch`/`exec` is rejected.
+   *
+   * @param name - Caller-facing signing key name.
+   * @returns An opaque {@link CapabilityToken} usable with `sign()`.
+   * @throws {SigningNotSupportedError} If the active backend cannot sign.
+   * @throws {SigningKeyNotFoundError} If no signing key exists under `name`.
+   * @public
+   */
+  async authorizeSigningKey(name: string): Promise<CapabilityToken> {
+    VaultKeeper.#validateSecretName(name)
+    const backend = this.#requireSigningBackend()
+    const id = VaultKeeper.#signingKeyId(name)
+    // getPublicKey validates the key exists (throws SigningKeyNotFoundError).
+    const pub = await backend.getPublicKey(id)
+    return createSigningCapabilityToken({ keyType: 'signing-key', kid: pub.kid, backendRef: id })
+  }
+
+  /**
+   * Sign a caller-supplied payload with a signing-key capability token.
+   *
+   * The signature is produced backend-side via {@link SigningBackend.signWithKey}
+   * — the private key never leaves the backend and never appears in the token,
+   * the claims, or this process. The result is a detached-payload Compact JWS
+   * (RFC 7515 §7.2.2 + RFC 7797 `b64:false`, `crit:["b64"]`, `alg:EdDSA`) that
+   * any standards-compliant JOSE library can verify given the payload and the
+   * public key.
+   *
+   * @param token - A signing-key `CapabilityToken` from {@link VaultKeeper.authorizeSigningKey}.
+   * @param request - The payload to sign.
+   * @returns The detached compact JWS and vault metadata.
+   * @throws {AuthorizationDeniedError} If `token` is invalid or is not a
+   *   signing-key token (e.g. an ordinary secret token).
+   * @throws {SigningNotSupportedError} If the active backend cannot sign.
+   * @throws {SigningKeyNotFoundError} If the referenced key no longer exists.
+   * @public
    */
   async sign(
     token: CapabilityToken,
     request: SignRequest,
   ): Promise<{ result: SignResult; vaultResponse: VaultResponse }> {
     const claims = validateCapabilityToken(token)
-    const result = delegatedSign(claims.val, request)
-    // Await to satisfy require-await; sign() is async for API consistency
-    // with fetch()/exec() and to reserve the right to check vaultResponse.rotatedJwt.
-    await Promise.resolve()
+    if (!isSigningClaims(claims)) {
+      throw new AuthorizationDeniedError(
+        'sign() requires a signing-key capability token from authorizeSigningKey() — ' +
+          'an ordinary secret token cannot be used to sign.',
+      )
+    }
+    const backend = this.#requireSigningBackend()
+    const jws = await createDetachedJws(claims.kid, request.payload, (data) =>
+      backend.signWithKey(claims.backendRef, data),
+    )
     return {
-      result,
+      result: { jws },
       vaultResponse: { keyStatus: 'current' },
     }
   }
 
   /**
-   * Verify a signature using a public key.
+   * Verify a detached-payload Compact JWS against a public key — fully offline.
    *
-   * This is a static, synchronous method — it returns `boolean`, not
-   * `Promise<boolean>`, and no VaultKeeper instance, secrets, or capability
-   * tokens are required. It is safe to call from CI or any context that has
-   * access to public key material.
+   * This is a static, asynchronous method: no VaultKeeper instance, backend,
+   * config, or capability token is required, so it is safe to call in CI or any
+   * context holding only public material.
    *
-   * Returns `false` for invalid key material, malformed signatures, or
-   * any verification failure (except disallowed algorithms, which throw).
-   * Because the method is synchronous, that throw happens immediately on
-   * the call stack — not via a rejected `Promise` — so callers must guard
-   * it with a regular `try`/`catch`, not `.catch()`.
+   * Returns `false` for a signature that does not verify — a tampered payload,
+   * the wrong key, or a structurally malformed JWS. It throws
+   * {@link InvalidKeyMaterialError} only when the public key itself is not
+   * parseable (or a private key was supplied) — an operational fault distinct
+   * from a bad signature.
    *
-   * @throws {InvalidAlgorithmError} If `request.algorithm` is not in the
-   *   allowed set (e.g. `'md5'`).
-   *
-   * @param request - The data, signature, public key, and optional
-   *   algorithm override.
+   * @param request - The detached payload, the JWS, and the SPKI PEM public key.
    * @returns `true` if the signature is valid, `false` otherwise.
+   * @throws {InvalidKeyMaterialError} If `request.publicKey` is not parseable
+   *   SPKI public key material.
+   * @public
    */
-  static verify(request: VerifyRequest): boolean {
-    return delegatedVerify(request)
+  static async verify(request: VerifyRequest): Promise<boolean> {
+    return verifyDetachedJws(request)
+  }
+
+  /**
+   * Resolve the active backend and assert it implements the signing contract.
+   * @throws {SigningNotSupportedError} If the active backend cannot sign.
+   */
+  #requireSigningBackend(): SigningBackend {
+    const backend = this.#requireBackend()
+    if (!isSigningBackend(backend)) {
+      throw new SigningNotSupportedError(
+        `Backend '${backend.type}' does not support signing keys. ` +
+          `Signing is currently supported by: ${SIGNING_CAPABLE_BACKENDS.join(', ')}.`,
+        backend.type,
+        [...SIGNING_CAPABLE_BACKENDS],
+      )
+    }
+    return backend
+  }
+
+  /** Map a caller-facing signing key name to its namespaced backend id. */
+  static #signingKeyId(name: string): string {
+    return `signing-key:${name}`
   }
 
   /**
@@ -910,7 +1020,7 @@ export class VaultKeeper {
 
   static #resolveSecrets(token: CapabilityToken | SecretTokenMap): string | Record<string, string> {
     if (token instanceof CapabilityToken) {
-      return validateCapabilityToken(token).val
+      return VaultKeeper.#requireSecretClaims(token).val
     }
     const result: Record<string, string> = {}
     for (const [name, t] of Object.entries(token)) {
@@ -919,9 +1029,26 @@ export class VaultKeeper {
           `Invalid capability token for secret "${name}" — expected a CapabilityToken from authorize()`,
         )
       }
-      result[name] = validateCapabilityToken(t).val
+      result[name] = VaultKeeper.#requireSecretClaims(t).val
     }
     return result
+  }
+
+  /**
+   * Resolve a token to its secret claims, rejecting a signing-key token.
+   *
+   * Defense in depth: a signing-key capability must never be injectable as a
+   * secret through `fetch()`/`exec()`.
+   */
+  static #requireSecretClaims(token: CapabilityToken): VaultClaims {
+    const claims = validateCapabilityToken(token)
+    if (isSigningClaims(claims)) {
+      throw new AuthorizationDeniedError(
+        'This capability token authorizes a signing key, not a secret — ' +
+          'it cannot be injected into fetch() or exec().',
+      )
+    }
+    return claims
   }
 
   static #validateSecretName(name: string): void {

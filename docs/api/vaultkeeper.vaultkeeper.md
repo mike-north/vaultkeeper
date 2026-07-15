@@ -110,6 +110,22 @@ Decrypt a JWE, validate claims, verify executable identity, and return an opaque
 </td></tr>
 <tr><td>
 
+[authorizeSigningKey(name)](./vaultkeeper.vaultkeeper.authorizesigningkey.md)
+
+
+</td><td>
+
+
+</td><td>
+
+Mint a signing-key capability token for the key named `name`<!-- -->.
+
+The returned token carries only `{ kid, backendRef, keyType: 'signing-key' }` — never any key material — and is accepted only by [VaultKeeper.sign()](./vaultkeeper.vaultkeeper.sign.md)<!-- -->. Passing it to `getSecret`<!-- -->/`fetch`<!-- -->/`exec` is rejected.
+
+
+</td></tr>
+<tr><td>
+
 [checkExecutableTrust(executablePath)](./vaultkeeper.vaultkeeper.checkexecutabletrust.md)
 
 
@@ -121,6 +137,22 @@ Decrypt a JWE, validate claims, verify executable identity, and return an opaque
 Check whether an executable is trusted according to the trust manifest, without modifying the manifest.
 
 This is a read-only probe. Unlike [VaultKeeper.setup()](./vaultkeeper.vaultkeeper.setup.md)<!-- -->, it never records a hash, so it can be used to decide whether an interactive approval prompt is required before proceeding.
+
+
+</td></tr>
+<tr><td>
+
+[createSigningKey(name, algorithm)](./vaultkeeper.vaultkeeper.createsigningkey.md)
+
+
+</td><td>
+
+
+</td><td>
+
+Enroll a new signing keypair under `name` in the active backend.
+
+The keypair is generated and stored entirely backend-side (see [SigningBackend](./vaultkeeper.signingbackend.md)<!-- -->); the private key never enters vault claims, a capability token, or the caller's process. Signing keys occupy a namespace distinct from secrets, so a signing key and a secret can share a name without colliding, and a signing key can never be read as a secret.
 
 
 </td></tr>
@@ -177,6 +209,20 @@ Execute a delegated command, injecting secrets from the token(s).
 Secret placeholders are not supported in `request.command` or `request.args` — process arguments are visible to other processes via `ps` and often collected in logs and telemetry.
 
 The raw secret is never exposed in the return value: by default the captured `stdout`<!-- -->/`stderr` is scrubbed of every injected secret value (replaced with `[REDACTED]`<!-- -->), so a command that echoes the secret does not leak it back. Pass `request.redact = false` to receive raw, unredacted output — only when a caller genuinely needs it, since that forfeits the guarantee.
+
+
+</td></tr>
+<tr><td>
+
+[exportPublicKey(name)](./vaultkeeper.vaultkeeper.exportpublickey.md)
+
+
+</td><td>
+
+
+</td><td>
+
+Export the SPKI PEM public key for the signing key named `name`<!-- -->.
 
 
 </td></tr>
@@ -320,9 +366,9 @@ Read a stored secret from the backend and mint a JWE token that encapsulates it.
 
 </td><td>
 
-Sign data using the private key embedded in a capability token.
+Sign a caller-supplied payload with a signing-key capability token.
 
-The signing key is extracted from the token's encrypted claims, used for a single `crypto.sign()` call, and never exposed to the caller. The algorithm is auto-detected from the key type unless overridden in the request.
+The signature is produced backend-side via [SigningBackend.signWithKey()](./vaultkeeper.signingbackend.signwithkey.md) — the private key never leaves the backend and never appears in the token, the claims, or this process. The result is a detached-payload Compact JWS (RFC 7515 §7.2.2 + RFC 7797 `b64:false`<!-- -->, `crit:["b64"]`<!-- -->, `alg:EdDSA`<!-- -->) that any standards-compliant JOSE library can verify given the payload and the public key.
 
 
 </td></tr>
@@ -354,11 +400,11 @@ This is a convenience method that delegates to the active backend's `store()` me
 
 </td><td>
 
-Verify a signature using a public key.
+Verify a detached-payload Compact JWS against a public key — fully offline.
 
-This is a static, synchronous method — it returns `boolean`<!-- -->, not `Promise<boolean>`<!-- -->, and no VaultKeeper instance, secrets, or capability tokens are required. It is safe to call from CI or any context that has access to public key material.
+This is a static, asynchronous method: no VaultKeeper instance, backend, config, or capability token is required, so it is safe to call in CI or any context holding only public material.
 
-Returns `false` for invalid key material, malformed signatures, or any verification failure (except disallowed algorithms, which throw). Because the method is synchronous, that throw happens immediately on the call stack — not via a rejected `Promise` — so callers must guard it with a regular `try`<!-- -->/`catch`<!-- -->, not `.catch()`<!-- -->.
+Returns `false` for a signature that does not verify — a tampered payload, the wrong key, or a structurally malformed JWS. It throws [InvalidKeyMaterialError](./vaultkeeper.invalidkeymaterialerror.md) only when the public key itself is not parseable (or a private key was supplied) — an operational fault distinct from a bad signature.
 
 
 </td></tr>

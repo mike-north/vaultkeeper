@@ -4,16 +4,16 @@
 
 ## VaultKeeper.verify() method
 
-Verify a signature using a public key.
+Verify a detached-payload Compact JWS against a public key — fully offline.
 
-This is a static, synchronous method — it returns `boolean`<!-- -->, not `Promise<boolean>`<!-- -->, and no VaultKeeper instance, secrets, or capability tokens are required. It is safe to call from CI or any context that has access to public key material.
+This is a static, asynchronous method: no VaultKeeper instance, backend, config, or capability token is required, so it is safe to call in CI or any context holding only public material.
 
-Returns `false` for invalid key material, malformed signatures, or any verification failure (except disallowed algorithms, which throw). Because the method is synchronous, that throw happens immediately on the call stack — not via a rejected `Promise` — so callers must guard it with a regular `try`<!-- -->/`catch`<!-- -->, not `.catch()`<!-- -->.
+Returns `false` for a signature that does not verify — a tampered payload, the wrong key, or a structurally malformed JWS. It throws [InvalidKeyMaterialError](./vaultkeeper.invalidkeymaterialerror.md) only when the public key itself is not parseable (or a private key was supplied) — an operational fault distinct from a bad signature.
 
 **Signature:**
 
 ```typescript
-static verify(request: VerifyRequest): boolean;
+static verify(request: VerifyRequest): Promise<boolean>;
 ```
 
 ## Parameters
@@ -46,7 +46,7 @@ request
 
 </td><td>
 
-The data, signature, public key, and optional algorithm override.
+The detached payload, the JWS, and the SPKI PEM public key.
 
 
 </td></tr>
@@ -54,11 +54,11 @@ The data, signature, public key, and optional algorithm override.
 
 **Returns:**
 
-boolean
+Promise&lt;boolean&gt;
 
 `true` if the signature is valid, `false` otherwise.
 
 ## Exceptions
 
-{<!-- -->InvalidAlgorithmError<!-- -->} If `request.algorithm` is not in the allowed set (e.g. `'md5'`<!-- -->).
+{<!-- -->InvalidKeyMaterialError<!-- -->} If `request.publicKey` is not parseable SPKI public key material.
 

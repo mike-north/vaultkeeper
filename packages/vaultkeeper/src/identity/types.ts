@@ -2,7 +2,7 @@
  * Types for the executable identity and trust layer.
  */
 
-import type { TrustTier, VaultClaims } from '../types.js'
+import type { TrustTier, VaultClaims, SigningClaims } from '../types.js'
 
 export type { TrustTier }
 
@@ -82,5 +82,5 @@ export interface TrustManifestEntry {
  */
 export type TrustManifest = Map<string, TrustManifestEntry>
 
-/** Re-export `VaultClaims` for use in session module. */
-export type { VaultClaims }
+/** Re-export claim shapes for use in the session module. */
+export type { VaultClaims, SigningClaims }

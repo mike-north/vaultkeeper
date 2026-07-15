@@ -27,6 +27,9 @@ export {
   AccessorConsumedError,
   InvalidAlgorithmError,
   InvalidKeyMaterialError,
+  SigningKeyNotFoundError,
+  SigningKeyAlreadyExistsError,
+  SigningNotSupportedError,
   DecryptionError,
   FetchError,
   SetupError,
@@ -53,18 +56,25 @@ export type {
   SignRequest,
   SignResult,
   VerifyRequest,
+  SigningAlgorithm,
+  SigningPublicKey,
   VaultConfig,
   BackendConfig,
 } from './types.js'
 
-export type { SecretBackend, BackendFactory, ListableBackend } from './backend/index.js'
+export type {
+  SecretBackend,
+  BackendFactory,
+  ListableBackend,
+  SigningBackend,
+} from './backend/index.js'
 export type {
   SetupQuestion,
   SetupChoice,
   SetupResult,
   BackendSetupFactory,
 } from './backend/index.js'
-export { BackendRegistry, isListableBackend } from './backend/index.js'
+export { BackendRegistry, isListableBackend, isSigningBackend } from './backend/index.js'
 
 export { CapabilityToken } from './identity/index.js'
 

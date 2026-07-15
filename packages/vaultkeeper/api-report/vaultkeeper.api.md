@@ -189,6 +189,9 @@ export class InvalidTokenError extends VaultError {
 export function isListableBackend(backend: SecretBackend): backend is ListableBackend;
 
 // @public
+export function isSigningBackend(backend: SecretBackend): backend is SigningBackend;
+
+// @public
 export class KeyRevokedError extends VaultError {
     constructor(message: string);
 }
@@ -345,15 +348,43 @@ export interface SetupResult {
 }
 
 // @public
+export type SigningAlgorithm = 'EdDSA';
+
+// @public
+export interface SigningBackend extends SecretBackend {
+    generateSigningKey(id: string, algorithm: SigningAlgorithm): Promise<void>;
+    getPublicKey(id: string): Promise<SigningPublicKey>;
+    signWithKey(id: string, data: Buffer): Promise<Buffer>;
+}
+
+// @public
+export class SigningKeyNotFoundError extends VaultError {
+    constructor(message: string, keyName: string);
+    readonly keyName: string;
+}
+
+// @public
+export class SigningNotSupportedError extends VaultError {
+    constructor(message: string, backendType: string, supportedBackends: string[]);
+    readonly backendType: string;
+    readonly supportedBackends: string[];
+}
+
+// @public
+export interface SigningPublicKey {
+    algorithm: SigningAlgorithm;
+    kid: string;
+    publicKeyPem: string;
+}
+
+// @public
 export interface SignRequest {
-    algorithm?: string | undefined;
-    data: string | Buffer_2;
+    payload: string | Buffer_2;
 }
 
 // @public
 export interface SignResult {
-    algorithm: string;
-    signature: string;
+    jws: string;
 }
 
 // @public
@@ -404,13 +435,16 @@ export class VaultKeeper {
         token: CapabilityToken;
         vaultResponse: VaultResponse;
     }>;
+    authorizeSigningKey(name: string): Promise<CapabilityToken>;
     checkExecutableTrust(executablePath: string): Promise<ExecutableTrustStatus>;
+    createSigningKey(name: string, algorithm: SigningAlgorithm): Promise<SigningPublicKey>;
     delete(name: string): Promise<void>;
     static doctor(options?: RunDoctorOptions): Promise<PreflightResult>;
     exec(token: CapabilityToken | SecretTokenMap, request: ExecRequest): Promise<{
         result: ExecResult;
         vaultResponse: VaultResponse;
     }>;
+    exportPublicKey(name: string): Promise<SigningPublicKey>;
     fetch(token: CapabilityToken | SecretTokenMap, request: FetchRequest): Promise<{
         response: Response;
         vaultResponse: VaultResponse;
@@ -427,7 +461,7 @@ export class VaultKeeper {
         vaultResponse: VaultResponse;
     }>;
     store(name: string, value: string): Promise<void>;
-    static verify(request: VerifyRequest): boolean;
+    static verify(request: VerifyRequest): Promise<boolean>;
 }
 
 // @public
@@ -446,10 +480,9 @@ export interface VaultResponse {
 
 // @public
 export interface VerifyRequest {
-    algorithm?: string | undefined;
-    data: string | Buffer_2;
+    jws: string;
+    payload: string | Buffer_2;
     publicKey: string;
-    signature: string;
 }
 
 // (No @packageDocumentation comment for this package)
