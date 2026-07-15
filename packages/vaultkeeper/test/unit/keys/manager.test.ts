@@ -248,6 +248,23 @@ describe('KeyManager.rotateKey — concurrent rotation guard', () => {
     )
   })
 
+  // Regression: an empty or whitespace-only message (possible from the WASM
+  // error mapper) previously left a bare leading period — ". Either wait ..."
+  // — before the next-step guidance. It should be omitted entirely instead.
+  it('omits the leading period for an empty or whitespace-only message', () => {
+    const emptyMessage = new RotationInProgressError('')
+    const whitespaceMessage = new RotationInProgressError('   ')
+
+    for (const err of [emptyMessage, whitespaceMessage]) {
+      expect(err.message.startsWith('. ')).toBe(false)
+      expect(err.message).toBe(
+        'Either wait for the current grace period to elapse before rotating again, ' +
+          "or run 'vaultkeeper revoke-key' (or call revokeKey()) to invalidate the previous key " +
+          'immediately and clear the grace period.',
+      )
+    }
+  })
+
   it('allows a new rotation after the grace period expires', async () => {
     const mgr = await makeInitializedManager()
     mgr.rotateKey(1_000)
