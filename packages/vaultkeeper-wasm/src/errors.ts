@@ -33,13 +33,19 @@ export class SecretNotFoundError extends VaultError {
  * Mirrors the pure-TypeScript `vaultkeeper` library's `DecryptionError`.
  */
 export class DecryptionError extends VaultError {
-  /** The path of the encrypted entry that failed to decrypt. */
-  readonly path: string;
+  /**
+   * The path of the encrypted entry that failed to decrypt. `undefined` only
+   * if the WASM boundary did not supply one — this is never fabricated as an
+   * empty string, so its absence is distinguishable from a genuine path.
+   */
+  readonly path?: string;
 
-  constructor(message: string, path: string) {
+  constructor(message: string, path?: string) {
     super(message);
     this.name = 'DecryptionError';
-    this.path = path;
+    if (path !== undefined) {
+      this.path = path;
+    }
   }
 }
 
@@ -165,7 +171,7 @@ export function mapWasmError(thrown: unknown): VaultError {
       case 'secret-not-found':
         return new SecretNotFoundError(message);
       case 'decryption':
-        return new DecryptionError(message, thrown.path ?? '');
+        return new DecryptionError(message, thrown.path);
       case 'invalid-token':
         return new InvalidTokenError(message);
       case 'token-expired':

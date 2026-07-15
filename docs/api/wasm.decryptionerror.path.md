@@ -4,10 +4,10 @@
 
 ## DecryptionError.path property
 
-The path of the encrypted entry that failed to decrypt.
+The path of the encrypted entry that failed to decrypt. `undefined` only if the WASM boundary did not supply one — this is never fabricated as an empty string, so its absence is distinguishable from a genuine path.
 
 **Signature:**
 
 ```typescript
-readonly path: string;
+readonly path?: string;
 ```

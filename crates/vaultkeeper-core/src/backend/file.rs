@@ -74,16 +74,11 @@ impl FileBackend {
                         self.host.write_file(&key_path, &key, 0o600).await?;
                         Ok(key)
                     }
-                    Ok(true) => {
-                        // File exists but couldn't be read — surface the original error
-                        Err(read_err)
-                    }
-                    // TODO(#134 follow-up): this discards `read_err` in favor of
-                    // the exists-probe's own failure, the same issue fixed in
-                    // `retrieve()` per PR #135 review feedback. Left as-is here
-                    // since it's outside that thread's scope; worth aligning
-                    // (return `Err(read_err)`) in a follow-up pass.
-                    Err(exists_err) => Err(exists_err),
+                    // Whether the exists-probe found the key file or itself
+                    // failed, the definitive signal is the original read
+                    // failure — the probe is only a best-effort disambiguation
+                    // step and a probe failure must not mask or replace it.
+                    Ok(true) | Err(_) => Err(read_err),
                 }
             }
         }
@@ -546,6 +541,36 @@ mod tests {
             // permission == "read" identifies this as the original read
             // failure; the exists-probe's simulated failure uses "stat" and
             // must never surface here.
+            VaultError::Filesystem { permission, .. } => {
+                assert_eq!(
+                    permission, "read",
+                    "must surface the original read failure, not the exists-probe failure"
+                );
+            }
+            other => panic!("expected the original read Filesystem error, got {other:?}"),
+        }
+    }
+
+    /// Regression test for PR #135 review feedback: `get_or_create_key()` has
+    /// the identical read-failure / exists-probe-failure pattern as
+    /// `retrieve()` — a failing exists-probe must not mask the original
+    /// failure to read an existing key file.
+    #[tokio::test]
+    async fn get_or_create_key_read_failure_survives_exists_probe_failure() {
+        let host = make_test_host();
+        let backend = FileBackend::new(host.clone());
+        let key_path = backend.storage_dir().join(KEY_FILE);
+        // Seed a key file so read_file() has something to fail on, then deny
+        // both the read and the follow-up exists-probe.
+        host.files
+            .lock()
+            .unwrap()
+            .insert(key_path.clone(), vec![0u8; GCM_KEY_BYTES]);
+        host.deny_read.lock().unwrap().insert(key_path.clone());
+        host.deny_exists.lock().unwrap().insert(key_path);
+
+        let err = backend.get_or_create_key().await.unwrap_err();
+        match err {
             VaultError::Filesystem { permission, .. } => {
                 assert_eq!(
                     permission, "read",

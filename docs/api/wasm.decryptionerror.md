@@ -72,7 +72,7 @@ Description
 </th></tr></thead>
 <tbody><tr><td>
 
-[path](./wasm.decryptionerror.path.md)
+[path?](./wasm.decryptionerror.path.md)
 
 
 </td><td>
@@ -87,7 +87,7 @@ string
 
 </td><td>
 
-The path of the encrypted entry that failed to decrypt.
+_(Optional)_ The path of the encrypted entry that failed to decrypt. `undefined` only if the WASM boundary did not supply one — this is never fabricated as an empty string, so its absence is distinguishable from a genuine path.
 
 
 </td></tr>

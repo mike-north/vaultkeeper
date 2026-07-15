@@ -27,8 +27,8 @@ export function createVaultKeeper(options?: VaultKeeperOptions, configDir?: stri
 
 // @public
 export class DecryptionError extends VaultError {
-    constructor(message: string, path: string);
-    readonly path: string;
+    constructor(message: string, path?: string);
+    readonly path?: string;
 }
 
 // @public

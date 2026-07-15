@@ -9,7 +9,7 @@ Constructs a new instance of the `DecryptionError` class
 **Signature:**
 
 ```typescript
-constructor(message: string, path: string);
+constructor(message: string, path?: string);
 ```
 
 ## Parameters
@@ -55,6 +55,8 @@ string
 
 
 </td><td>
+
+_(Optional)_
 
 
 </td></tr>
