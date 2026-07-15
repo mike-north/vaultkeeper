@@ -211,6 +211,37 @@ export class IdentityMismatchError extends VaultError {
   }
 }
 
+/**
+ * Thrown by {@link VaultKeeper.setup} when the caller does not make an
+ * unambiguous executable-trust decision.
+ *
+ * `setup()` deliberately has no default trust behaviour: the caller must either
+ * pass a real `executablePath` (which runs trust-on-first-use verification) or
+ * explicitly opt out with `skipTrust: true` (a development-only escape hatch).
+ * Supplying neither — or both at once — throws this error rather than silently
+ * skipping verification. Inspect {@link ExecutableTrustRequiredError.reason} to
+ * distinguish the two cases.
+ *
+ * @public
+ */
+export class ExecutableTrustRequiredError extends VaultError {
+  /**
+   * Machine-readable discriminator for why the trust choice was rejected:
+   *
+   * - `'missing-choice'` — neither `executablePath` nor `skipTrust: true` was
+   *   provided, so no trust decision was expressed.
+   * - `'conflicting-choice'` — both `executablePath` and `skipTrust: true` were
+   *   provided, which are mutually exclusive intents.
+   */
+  readonly reason: 'missing-choice' | 'conflicting-choice'
+
+  constructor(message: string, reason: 'missing-choice' | 'conflicting-choice') {
+    super(message)
+    this.name = 'ExecutableTrustRequiredError'
+    this.reason = reason
+  }
+}
+
 // --- Access Pattern Failures ---
 
 /**

@@ -147,7 +147,7 @@ describe('BackendConfig.path plumbing (file backend)', () => {
     }
     const vault = await VaultKeeper.init({ skipDoctor: true, config, configDir: fakeHome })
 
-    const jwe = await vault.setup('legacy-key', { executablePath: 'dev' })
+    const jwe = await vault.setup('legacy-key', { skipTrust: true })
     const { token } = await vault.authorize(jwe)
     let secret: string | undefined
     vault.getSecret(token).read((buf) => {
@@ -179,7 +179,7 @@ describe('BackendConfig.path plumbing (file backend)', () => {
       expect(await fs.readdir(storageDir)).toContain(entryFile('api-key'))
 
       const vault2 = await VaultKeeper.init({ skipDoctor: true, config, configDir })
-      const jwe = await vault2.setup('api-key', { executablePath: 'dev' })
+      const jwe = await vault2.setup('api-key', { skipTrust: true })
       const { token } = await vault2.authorize(jwe)
       let secret: string | undefined
       vault2.getSecret(token).read((buf) => {

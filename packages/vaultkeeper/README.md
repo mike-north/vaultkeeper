@@ -40,10 +40,12 @@ const vault = await VaultKeeper.init()
 // 2. Store a secret in the configured backend
 await vault.store('MY_API_KEY', 'my-secret-value')
 
-// 3. Mint a JWE token for the stored secret. Optional setup options
-//    (ttlMinutes, useLimit, trustTier, ...) may be passed as a second
-//    argument; useLimit defaults to unlimited (null) when omitted.
-const jwe = await vault.setup('MY_API_KEY')
+// 3. Mint a JWE token for the stored secret. `setup()` requires an explicit
+//    executable-trust choice: pass `executablePath` to verify the caller
+//    (Trust On First Use), or `{ skipTrust: true }` to skip verification in
+//    development. Other options (ttlMinutes, useLimit, trustTier, ...) are
+//    optional; useLimit defaults to unlimited (null) when omitted.
+const jwe = await vault.setup('MY_API_KEY', { executablePath: process.argv[1] })
 
 // 4. Authorize: decrypt and validate the token
 const { token, vaultResponse } = await vault.authorize(jwe)
@@ -64,7 +66,7 @@ const { VaultKeeper } = require('vaultkeeper')
 async function main() {
   const vault = await VaultKeeper.init()
   await vault.store('MY_API_KEY', 'my-secret-value')
-  const jwe = await vault.setup('MY_API_KEY')
+  const jwe = await vault.setup('MY_API_KEY', { executablePath: process.argv[1] })
   const { token } = await vault.authorize(jwe)
   const { response } = await vault.fetch(token, {
     url: 'https://api.example.com/data',
@@ -121,26 +123,30 @@ longer be decrypted.
 
 ## Trust tiers
 
-Executable identity verification against a local trust-on-first-use (TOFU) manifest only runs
-when `setup()` is given a real `executablePath`. **`setup()`'s `executablePath` option defaults to
-`'dev'` when omitted, which skips verification entirely** — so the common/default call,
-`vault.setup('MY_API_KEY')` with no options, is unverified by default. To protect a production
-caller you must explicitly pass its path: `vault.setup('MY_API_KEY', { executablePath:
-'/usr/local/bin/my-tool' })`. Once a real path is passed, the caller's hash is either already
-approved (trusted), unrecognized (first encounter, recorded automatically), or changed since it
-was approved (a conflict, which rejects the call until re-approved via `approveExecutable()`).
-Separately, `trustTier` (`1`, `2`, or `3`) is a policy **label** attached to the resulting token —
-it does not itself reflect the outcome of that verification, and it has no effect when
-`executablePath` is left at its `'dev'` default. It defaults to `defaults.trustTier` from the
-config and can be overridden per call via `setup()`'s `trustTier` option.
+Executable identity verification against a local trust-on-first-use (TOFU) manifest runs
+when `setup()` is given a real `executablePath`. **`setup()` requires an explicit executable-trust
+choice — it has no default and never silently skips verification.** Pass the caller's real path to
+protect a production caller: `vault.setup('MY_API_KEY', { executablePath: '/usr/local/bin/my-tool'
+})`. To deliberately skip verification during development, pass the explicit, greppable opt-out
+`vault.setup('MY_API_KEY', { skipTrust: true })` instead — a token minted this way carries no
+executable identity binding, so use it only in local development or tests, never in production.
+Calling `setup()` with neither option (or both) throws `ExecutableTrustRequiredError`. Once a real
+path is passed, the caller's hash is either already approved (trusted), unrecognized (first
+encounter, recorded automatically), or changed since it was approved (a conflict, which rejects the
+call until re-approved via `approveExecutable()`). Separately, `trustTier` (`1`, `2`, or `3`) is a
+policy **label** attached to the resulting token — it does not itself reflect the outcome of that
+verification, and it has no effect when verification is skipped via `skipTrust`. It defaults to
+`defaults.trustTier` from the config and can be overridden per call via `setup()`'s `trustTier`
+option.
 
 ## Development mode
 
-Development mode is a second, separate way to bypass the TOFU check above for a _specific_
-executable path — useful when you want to keep passing a real `executablePath` (so a later
-`setDevelopmentMode(path, false)` re-enables verification for it) while a binary that's rebuilt
-frequently during local development doesn't get rejected as an `IdentityMismatchError` every time
-its hash changes. Add an executable with `await vault.setDevelopmentMode(path, true)` (persisted in
+The `setDevelopmentMode` allowlist is a second, separate way to bypass the TOFU check above for a
+_specific_ executable path — distinct from the per-call `{ skipTrust: true }` opt-out (which names
+no path and binds no executable identity). Use the allowlist when you want to keep passing a real
+`executablePath` (so a later `setDevelopmentMode(path, false)` re-enables verification for it) while
+a binary that's rebuilt frequently during local development doesn't get rejected as an
+`IdentityMismatchError` every time its hash changes. Add an executable with `await vault.setDevelopmentMode(path, true)` (persisted in
 `config.developmentMode.executables`). Only use this for local workflows — remove the executable
 from the list (or don't add it) so a production caller stays on TOFU verification.
 

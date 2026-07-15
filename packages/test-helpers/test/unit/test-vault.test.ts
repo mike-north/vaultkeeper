@@ -75,7 +75,7 @@ describe('TestVault', () => {
 
   it('should store and retrieve secrets through the full vault flow', async () => {
     await vault.store('test-secret', 'my-secret-value')
-    const jwe = await vault.keeper.setup('test-secret')
+    const jwe = await vault.setup('test-secret')
     expect(typeof jwe).toBe('string')
     expect(jwe.length).toBeGreaterThan(0)
 
@@ -97,13 +97,31 @@ describe('TestVault', () => {
   })
 
   it('should fail to setup with nonexistent secret', async () => {
-    await expect(vault.keeper.setup('nonexistent')).rejects.toThrow()
+    await expect(vault.setup('nonexistent')).rejects.toThrow()
+  })
+
+  describe('setup() convenience method', () => {
+    // The passthrough defaults to the development-only skipTrust opt-out so
+    // consumer tests stay hermetic without naming a real executable to hash.
+    it('mints a JWE for a stored secret without a trust choice (defaults to skipTrust)', async () => {
+      await vault.store('conv-secret', 'conv-value')
+      const jwe = await vault.setup('conv-secret')
+      expect(jwe.split('.')).toHaveLength(5)
+      const { token } = await vault.keeper.authorize(jwe)
+      expect(token).toBeDefined()
+    })
+
+    it('passes an explicit skipTrust choice through to the keeper', async () => {
+      await vault.store('conv-secret', 'conv-value')
+      const jwe = await vault.setup('conv-secret', { skipTrust: true, ttlMinutes: 1 })
+      expect(typeof jwe).toBe('string')
+    })
   })
 
   describe('store() convenience method', () => {
     it('stores a secret accessible through the full vault flow', async () => {
       await vault.store('conv-secret', 'conv-value')
-      const jwe = await vault.keeper.setup('conv-secret')
+      const jwe = await vault.setup('conv-secret')
       const { token, vaultResponse } = await vault.keeper.authorize(jwe)
       expect(token).toBeDefined()
       expect(vaultResponse.keyStatus).toBe('current')

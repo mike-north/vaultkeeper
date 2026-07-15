@@ -168,8 +168,12 @@ console.log(vault.activeBackendType) // "file"
 // 2. Store a secret in the configured backend
 await vault.store('MY_API_KEY', 'my-secret-value')
 
-// 3. Mint a JWE token for the stored secret
-const jwe = await vault.setup('MY_API_KEY')
+// 3. Mint a JWE token for the stored secret, bound to this executable's
+//    verified identity (Trust On First Use). `setup()` requires an explicit
+//    executable-trust choice: pass the calling executable's path to verify it,
+//    or `{ skipTrust: true }` to deliberately skip verification in development
+//    (see "Development mode").
+const jwe = await vault.setup('MY_API_KEY', { executablePath: process.argv[1] })
 
 // 4. Authorize: decrypt and validate the token
 const { token, vaultResponse } = await vault.authorize(jwe)
@@ -223,7 +227,9 @@ import { TestVault } from '@vaultkeeper/test-helpers'
 
 const vault = await TestVault.create()
 await vault.store('MY_API_KEY', 'my-secret-value')
-const jwe = await vault.keeper.setup('MY_API_KEY')
+// TestVault.setup() defaults to the development-only skipTrust opt-out so tests
+// stay hermetic (no real executable to hash).
+const jwe = await vault.setup('MY_API_KEY')
 ```
 
 ## WASM SDK quick start
@@ -416,7 +422,7 @@ Key material is persisted across processes. When `VaultKeeper` loads its configu
 
 ## Trust tiers
 
-Executable identity is verified during `setup()` by hashing the executable (SHA-256) and checking that hash against a local trust manifest — this is a **TOFU (Trust On First Use)** model, not a package-registry or transparency-log lookup. Hashing is skipped — and identity is treated as unverified — when `executablePath` is `'dev'` (the default when no `executablePath` option is passed) or when the executable has been registered via `setDevelopmentMode()`; see [Development mode](#development-mode). Otherwise, `setup()` produces one of three outcomes:
+Executable identity is verified during `setup()` by hashing the executable (SHA-256) and checking that hash against a local trust manifest — this is a **TOFU (Trust On First Use)** model, not a package-registry or transparency-log lookup. `setup()` requires an explicit executable-trust choice and never skips verification by default: pass `executablePath` (the calling executable's real path) to verify it. Hashing is skipped — and identity is treated as unverified — only when you deliberately opt out with `{ skipTrust: true }` or when the executable has been registered via `setDevelopmentMode()`; see [Development mode](#development-mode). When an `executablePath` is verified, `setup()` produces one of three outcomes:
 
 - **Not yet approved** — first encounter with this executable path. The hash is recorded in the trust manifest so the same binary is recognized next time.
 - **Approved** — the executable's current hash matches what's recorded in the trust manifest (via `vaultkeeper approve --script <path>` or a prior `setup()` call).
@@ -442,8 +448,10 @@ Development mode bypasses TOFU identity verification for listed executables — 
 ```ts
 await vault.setDevelopmentMode('/path/to/my-dev-tool', true)
 
-// Or set executablePath to 'dev' directly in setup:
-const jwe = await vault.setup('MY_API_KEY', { executablePath: 'dev' })
+// Or opt out of verification for a single call with the explicit, greppable
+// escape hatch. Development only — a token minted this way carries no
+// executable identity binding, so any process holding the JWE can redeem it.
+const jwe = await vault.setup('MY_API_KEY', { skipTrust: true })
 ```
 
 ## Testing
@@ -460,7 +468,7 @@ import { TestVault } from '@vaultkeeper/test-helpers'
 const vault = await TestVault.create()
 await vault.store('MY_SECRET', 'hunter2')
 
-const jwe = await vault.keeper.setup('MY_SECRET')
+const jwe = await vault.setup('MY_SECRET')
 const { token } = await vault.keeper.authorize(jwe)
 const { result } = await vault.keeper.exec(token, {
   command: 'echo',
@@ -483,7 +491,10 @@ import { VaultKeeper } from 'vaultkeeper'
 
 export async function buildAuthHeader(secretName: string): Promise<string> {
   const vault = await VaultKeeper.init() // always the real backend + doctor checks
-  const jwe = await vault.setup(secretName)
+  // Production code should pass `{ executablePath: process.argv[1] }` to enforce
+  // executable trust; this dependency-injection example uses the development-only
+  // `skipTrust` opt-out so the test below stays hermetic.
+  const jwe = await vault.setup(secretName, { skipTrust: true })
   const { token } = await vault.authorize(jwe)
   const accessor = vault.getSecret(token)
   let header = ''
@@ -501,7 +512,10 @@ export async function buildAuthHeader(secretName: string): Promise<string> {
 import type { VaultKeeper } from 'vaultkeeper'
 
 export async function buildAuthHeader(vault: VaultKeeper, secretName: string): Promise<string> {
-  const jwe = await vault.setup(secretName)
+  // Production code should pass `{ executablePath: process.argv[1] }` to enforce
+  // executable trust; this dependency-injection example uses the development-only
+  // `skipTrust` opt-out so the test below stays hermetic.
+  const jwe = await vault.setup(secretName, { skipTrust: true })
   const { token } = await vault.authorize(jwe)
   const accessor = vault.getSecret(token)
   let header = ''
@@ -554,7 +568,9 @@ const backend = new InMemoryBackend()
 const vault = await VaultKeeper.init({ backend, skipDoctor: true })
 
 await vault.store('MY_SECRET', 'hunter2')
-const jwe = await vault.setup('MY_SECRET')
+// Embedder/test context: skip executable-trust verification. Pass
+// `{ executablePath }` instead in production to enforce it.
+const jwe = await vault.setup('MY_SECRET', { skipTrust: true })
 ```
 
 See the `backend` option's JSDoc for how it interacts with `config`/`configDir`.
@@ -585,14 +601,18 @@ Config is loaded from `~/.config/vaultkeeper/config.json` by default. Override w
 
 ## Setup options
 
-All fields are optional; omitting `useLimit` defaults it to `null` (unlimited uses) rather than
+You must make an explicit executable-trust choice — provide exactly one of
+`executablePath` (verify the caller) or `skipTrust: true` (development-only opt-out).
+Supplying neither, or both, throws `ExecutableTrustRequiredError`. The remaining fields
+are optional; omitting `useLimit` defaults it to `null` (unlimited uses) rather than
 single-use.
 
 ```ts
 const jwe = await vault.setup('SECRET_NAME', {
+  executablePath: '/path/to/caller', // verify the calling executable (TOFU)
+  // skipTrust: true,                 // OR deliberately skip verification (dev only) — mutually exclusive
   ttlMinutes: 30, // token TTL (default: from config)
   useLimit: 1, // null for unlimited (the default when omitted)
-  executablePath: '/path/to/caller', // or 'dev' to skip identity check
   trustTier: 3,
   backendType: 'keychain',
 })
@@ -602,27 +622,28 @@ const jwe = await vault.setup('SECRET_NAME', {
 
 All errors extend `VaultError`. The `@vaultkeeper/wasm` package exports and throws a subset of this hierarchy (see the "In `@vaultkeeper/wasm`" column) — errors tied to platform credential-store integration or executable-identity checks that don't apply to the WASM SDK's file-backend-only, lower-level surface are TS-library-only.
 
-| Class                      | When thrown                                                                                                                                          | In `@vaultkeeper/wasm` |
-| -------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- | :--------------------: |
-| `BackendLockedError`       | Keychain or credential store is locked                                                                                                               |    TS-library-only     |
-| `DeviceNotPresentError`    | Required hardware device not connected                                                                                                               |    TS-library-only     |
-| `AuthorizationDeniedError` | User denied an OS permission dialog                                                                                                                  |    TS-library-only     |
-| `BackendUnavailableError`  | No configured backend is reachable                                                                                                                   |    TS-library-only     |
-| `PluginNotFoundError`      | A required plugin binary is not installed                                                                                                            |    TS-library-only     |
-| `SecretNotFoundError`      | Secret does not exist in the backend                                                                                                                 |          Yes           |
-| `TokenExpiredError`        | JWE has passed its `exp` claim                                                                                                                       |          Yes           |
-| `KeyRotatedError`          | Key exited grace period; JWE is permanently unreadable                                                                                               |          Yes           |
-| `KeyRevokedError`          | Key was explicitly revoked                                                                                                                           |          Yes           |
-| `TokenRevokedError`        | Token has been blocked (e.g. single-use token already consumed)                                                                                      |          Yes           |
-| `UsageLimitExceededError`  | Token presented more times than its `use` limit allows                                                                                               |          Yes           |
-| `IdentityMismatchError`    | Executable hash changed since TOFU approval                                                                                                          |    TS-library-only     |
-| `ExecError`                | `exec()` request was invalid (e.g. `{{secret}}` in the `command` or `args` field) or the command could not be started (not found or failed to spawn) |    TS-library-only     |
-| `InvalidTokenError`        | JWE could not be decrypted or validated (e.g. structurally malformed, tampered, or failed decryption)                                                |          Yes           |
-| `AccessorConsumedError`    | `SecretAccessor.read()` called after already consumed                                                                                                |          Yes           |
-| `InvalidAlgorithmError`    | Signing/verifying with a disallowed algorithm (e.g. `md5`)                                                                                           |    TS-library-only     |
-| `SetupError`               | Required system dependency missing or incompatible at init                                                                                           |    TS-library-only     |
-| `FilesystemError`          | Config directory not readable or writable                                                                                                            |    TS-library-only     |
-| `RotationInProgressError`  | `rotateKey()` called while previous key is still in grace period                                                                                     |          Yes           |
+| Class                          | When thrown                                                                                                                                          | In `@vaultkeeper/wasm` |
+| ------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------- | :--------------------: |
+| `BackendLockedError`           | Keychain or credential store is locked                                                                                                               |    TS-library-only     |
+| `DeviceNotPresentError`        | Required hardware device not connected                                                                                                               |    TS-library-only     |
+| `AuthorizationDeniedError`     | User denied an OS permission dialog                                                                                                                  |    TS-library-only     |
+| `BackendUnavailableError`      | No configured backend is reachable                                                                                                                   |    TS-library-only     |
+| `PluginNotFoundError`          | A required plugin binary is not installed                                                                                                            |    TS-library-only     |
+| `SecretNotFoundError`          | Secret does not exist in the backend                                                                                                                 |          Yes           |
+| `TokenExpiredError`            | JWE has passed its `exp` claim                                                                                                                       |          Yes           |
+| `KeyRotatedError`              | Key exited grace period; JWE is permanently unreadable                                                                                               |          Yes           |
+| `KeyRevokedError`              | Key was explicitly revoked                                                                                                                           |          Yes           |
+| `TokenRevokedError`            | Token has been blocked (e.g. single-use token already consumed)                                                                                      |          Yes           |
+| `UsageLimitExceededError`      | Token presented more times than its `use` limit allows                                                                                               |          Yes           |
+| `IdentityMismatchError`        | Executable hash changed since TOFU approval                                                                                                          |    TS-library-only     |
+| `ExecutableTrustRequiredError` | `setup()` called without an explicit executable-trust choice (neither `executablePath` nor `skipTrust: true`, or both)                               |    TS-library-only     |
+| `ExecError`                    | `exec()` request was invalid (e.g. `{{secret}}` in the `command` or `args` field) or the command could not be started (not found or failed to spawn) |    TS-library-only     |
+| `InvalidTokenError`            | JWE could not be decrypted or validated (e.g. structurally malformed, tampered, or failed decryption)                                                |          Yes           |
+| `AccessorConsumedError`        | `SecretAccessor.read()` called after already consumed                                                                                                |          Yes           |
+| `InvalidAlgorithmError`        | Signing/verifying with a disallowed algorithm (e.g. `md5`)                                                                                           |    TS-library-only     |
+| `SetupError`                   | Required system dependency missing or incompatible at init                                                                                           |    TS-library-only     |
+| `FilesystemError`              | Config directory not readable or writable                                                                                                            |    TS-library-only     |
+| `RotationInProgressError`      | `rotateKey()` called while previous key is still in grace period                                                                                     |          Yes           |
 
 ## Architecture
 

@@ -5,6 +5,7 @@
 ```ts
 
 import { ListableBackend } from 'vaultkeeper';
+import { SetupOptions } from 'vaultkeeper';
 import { VaultKeeper } from 'vaultkeeper';
 
 // @public
@@ -36,6 +37,7 @@ export class TestVault {
     delete(name: string): Promise<void>;
     readonly keeper: VaultKeeper;
     reset(): void;
+    setup(name: string, options?: SetupOptions): Promise<string>;
     store(name: string, value: string): Promise<void>;
 }
 

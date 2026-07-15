@@ -2,7 +2,7 @@
  * Pre-configured VaultKeeper for consumer tests.
  */
 
-import type { VaultConfig } from 'vaultkeeper'
+import type { VaultConfig, SetupOptions } from 'vaultkeeper'
 import { VaultKeeper, BackendRegistry } from 'vaultkeeper'
 import { InMemoryBackend } from './in-memory-backend.js'
 
@@ -38,7 +38,7 @@ export interface TestVaultOptions {
  * ```ts
  * const vault = await TestVault.create()
  * await vault.store('my-secret', 'hunter2')
- * const jwe = await vault.keeper.setup('my-secret')
+ * const jwe = await vault.setup('my-secret')
  * const { token } = await vault.keeper.authorize(jwe)
  * ```
  *
@@ -99,6 +99,28 @@ export class TestVault {
    */
   store(name: string, value: string): Promise<void> {
     return this.backend.store(name, value)
+  }
+
+  /**
+   * Mint a JWE for a stored secret via the wrapped keeper.
+   *
+   * @remarks
+   * Convenience shorthand for `vault.keeper.setup(name, options)` that defaults
+   * to the development-only `skipTrust: true` opt-out, so tests stay hermetic
+   * (there is no real calling executable to hash). Pass `executablePath`
+   * explicitly to exercise real TOFU verification instead — when either
+   * `executablePath` or `skipTrust` is supplied, the caller's choice is passed
+   * through unchanged.
+   *
+   * @param name - The secret identifier.
+   * @param options - Optional setup options; the trust choice defaults to
+   *   `skipTrust: true` when the caller does not specify one.
+   * @returns The minted compact JWE string.
+   * @public
+   */
+  setup(name: string, options?: SetupOptions): Promise<string> {
+    const hasTrustChoice = options?.executablePath !== undefined || options?.skipTrust !== undefined
+    return this.keeper.setup(name, hasTrustChoice ? options : { ...options, skipTrust: true })
   }
 
   /**

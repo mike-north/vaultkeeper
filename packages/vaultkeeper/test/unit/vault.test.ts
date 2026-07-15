@@ -171,7 +171,7 @@ describe('VaultKeeper', () => {
       const retrieved = await backend.retrieve('injected-secret')
       expect(retrieved).toBe('injected-value')
 
-      const jwe = await vault.setup('injected-secret', { executablePath: 'dev' })
+      const jwe = await vault.setup('injected-secret', { skipTrust: true })
       const { token } = await vault.authorize(jwe)
       const accessor = vault.getSecret(token)
       let captured = ''
@@ -188,7 +188,7 @@ describe('VaultKeeper', () => {
       // `backend` is set, instead of calling loadConfig().
       const vault = await VaultKeeper.init({ skipDoctor: true, backend })
 
-      const jwe = await vault.setup('my-secret', { executablePath: 'dev' })
+      const jwe = await vault.setup('my-secret', { skipTrust: true })
       expect(typeof jwe).toBe('string')
     })
 
@@ -241,7 +241,7 @@ describe('VaultKeeper', () => {
         backend: injectedBackend,
       })
 
-      const jwe = await vault.setup('my-secret', { executablePath: 'dev' })
+      const jwe = await vault.setup('my-secret', { skipTrust: true })
       const { token } = await vault.authorize(jwe)
       const accessor = vault.getSecret(token)
       let captured = ''
@@ -266,7 +266,7 @@ describe('VaultKeeper', () => {
 
       // ttlMinutes from the supplied config is used even though the backend
       // resolution itself is overridden by the `backend` option.
-      const jwe = await vault.setup('my-secret', { executablePath: 'dev' })
+      const jwe = await vault.setup('my-secret', { skipTrust: true })
       expect(typeof jwe).toBe('string')
     })
   })
@@ -284,7 +284,7 @@ describe('VaultKeeper', () => {
   describe('setup + authorize lifecycle', () => {
     it('should create a JWE and authorize it', async () => {
       const vault = await initVault()
-      const jwe = await vault.setup('my-secret', { executablePath: 'dev' })
+      const jwe = await vault.setup('my-secret', { skipTrust: true })
 
       expect(typeof jwe).toBe('string')
       expect(jwe.split('.')).toHaveLength(5) // compact JWE
@@ -298,7 +298,7 @@ describe('VaultKeeper', () => {
     it('should respect TTL override', async () => {
       const vault = await initVault()
       const jwe = await vault.setup('my-secret', {
-        executablePath: 'dev',
+        skipTrust: true,
         ttlMinutes: 5,
       })
       expect(typeof jwe).toBe('string')
@@ -307,7 +307,7 @@ describe('VaultKeeper', () => {
     it('should respect use limit — throws UsageLimitExceededError after limit reached', async () => {
       const vault = await initVault()
       const jwe = await vault.setup('my-secret', {
-        executablePath: 'dev',
+        skipTrust: true,
         useLimit: 1,
       })
 
@@ -323,7 +323,7 @@ describe('VaultKeeper', () => {
     it('should throw UsageLimitExceededError (not TokenRevokedError) for use=2 after second use', async () => {
       const vault = await initVault()
       const jwe = await vault.setup('my-secret', {
-        executablePath: 'dev',
+        skipTrust: true,
         useLimit: 2,
       })
 
@@ -340,7 +340,7 @@ describe('VaultKeeper', () => {
   describe('getSecret', () => {
     it('should return a SecretAccessor that yields the secret', async () => {
       const vault = await initVault()
-      const jwe = await vault.setup('my-secret', { executablePath: 'dev' })
+      const jwe = await vault.setup('my-secret', { skipTrust: true })
       const { token } = await vault.authorize(jwe)
 
       const accessor = vault.getSecret(token)
@@ -355,7 +355,7 @@ describe('VaultKeeper', () => {
   describe('rotateKey', () => {
     it('should rotate the key and provide rotatedJwt on authorize', async () => {
       const vault = await initVault()
-      const jwe = await vault.setup('my-secret', { executablePath: 'dev' })
+      const jwe = await vault.setup('my-secret', { skipTrust: true })
 
       await vault.rotateKey()
 
@@ -376,7 +376,7 @@ describe('VaultKeeper', () => {
   describe('revokeKey', () => {
     it('should revoke the key making old JWEs unusable', async () => {
       const vault = await initVault()
-      const jwe = await vault.setup('my-secret', { executablePath: 'dev' })
+      const jwe = await vault.setup('my-secret', { skipTrust: true })
 
       await vault.revokeKey()
 
@@ -402,7 +402,7 @@ describe('VaultKeeper', () => {
   describe('fetch', () => {
     it('delegates to delegatedFetch and returns the response with current keyStatus', async () => {
       const vault = await initVault()
-      const jwe = await vault.setup('my-secret', { executablePath: 'dev' })
+      const jwe = await vault.setup('my-secret', { skipTrust: true })
       const { token } = await vault.authorize(jwe)
 
       const mockResponse = new Response('ok', { status: 200 })
@@ -425,7 +425,7 @@ describe('VaultKeeper', () => {
   describe('exec', () => {
     it('delegates to delegatedExec and returns the result with current keyStatus', async () => {
       const vault = await initVault()
-      const jwe = await vault.setup('my-secret', { executablePath: 'dev' })
+      const jwe = await vault.setup('my-secret', { skipTrust: true })
       const { token } = await vault.authorize(jwe)
 
       const mockResult = { stdout: 'hunter2\n', stderr: '', exitCode: 0 }
@@ -446,7 +446,7 @@ describe('VaultKeeper', () => {
   describe('sign', () => {
     it('delegates to delegatedSign and returns the result with current keyStatus', async () => {
       const vault = await initVault()
-      const jwe = await vault.setup('my-secret', { executablePath: 'dev' })
+      const jwe = await vault.setup('my-secret', { skipTrust: true })
       const { token } = await vault.authorize(jwe)
 
       const mockResult = { signature: 'c2lnbmF0dXJl', algorithm: 'ed25519' }
@@ -557,7 +557,7 @@ describe('VaultKeeper', () => {
 
     it('should reject setup for nonexistent secret', async () => {
       const vault = await initVault()
-      await expect(vault.setup('nonexistent', { executablePath: 'dev' })).rejects.toThrow(
+      await expect(vault.setup('nonexistent', { skipTrust: true })).rejects.toThrow(
         'Secret not found',
       )
     })
@@ -579,7 +579,7 @@ describe('VaultKeeper', () => {
 
     it('should reject setup with empty secret name', async () => {
       const vault = await initVault()
-      await expect(vault.setup('', { executablePath: 'dev' })).rejects.toThrow(
+      await expect(vault.setup('', { skipTrust: true })).rejects.toThrow(
         'Secret name must not be empty',
       )
     })
