@@ -87,7 +87,7 @@ pnpm add vaultkeeper
 pnpm add -D @types/node
 ```
 
-**Supported TypeScript version:** tested against TypeScript 5.0.4–7.0.2 (the stated floor plus the latest release of the 5.x, 6.x, and 7.x majors). The guarantee is specifically that the shipped `.d.ts` files typecheck cleanly under a **standard strict NodeNext** consumer config across that range — verified by a CI matrix (`packages/vaultkeeper/test/e2e/consumer-typecheck.test.ts`), so a future `.d.ts` change that breaks a tested version fails the build. It is **not** a blanket "typechecks under any strict tsconfig": forcing `esModuleInterop: false` together with `allowSyntheticDefaultImports: false` makes TypeScript 7.0.2 error, so leave those two at their defaults. A known-good consumer config (what the matrix uses):
+**Supported TypeScript version:** tested against TypeScript 5.0.4–7.0.2 (the stated floor plus the latest release of the 5.x, 6.x, and 7.x majors). The guarantee is specifically that the shipped `.d.ts` files typecheck cleanly under the strict NodeNext consumer config below across that range — verified by a CI matrix (`packages/vaultkeeper/test/e2e/consumer-typecheck.test.ts`), so a future `.d.ts` change that breaks a tested version fails the build. The exact `compilerOptions` that matrix uses (verified known-good — copy these):
 
 ```jsonc
 {
@@ -96,13 +96,14 @@ pnpm add -D @types/node
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
     "strict": true,
-    // Do NOT force esModuleInterop:false + allowSyntheticDefaultImports:false —
-    // that combination errors on TypeScript 7.0.2. Leave them at their defaults.
+    "skipLibCheck": false,
+    "noEmit": true,
+    "types": [],
   },
 }
 ```
 
-The shipped output relies on `verbatimModuleSyntax`; a bare `npm install -D typescript` within the tested range is fine.
+`types: []` scopes ambient globals to none (a common strict-monorepo pattern), so install `@types/node` as shown above — the shipped `.d.ts` resolves `Buffer` through its own import rather than an ambient global. The output relies on `verbatimModuleSyntax`; a bare `npm install -D typescript` within the tested range is fine.
 
 The package ships both ESM (`import`) and CommonJS (`require()`) builds. The `exports` map selects the correct build automatically, but consumers still need the standard ESM/CJS project setup (e.g. `"type": "module"` for ESM) — see the [TypeScript quick start](#typescript-quick-start) below for both forms.
 

@@ -16,7 +16,7 @@ secret never appears in a return value.
 pnpm add vaultkeeper
 ```
 
-**Requirements:** Node >= 20. **TypeScript version:** tested against TypeScript 5.0.4–7.0.2 (the stated floor plus the latest release of the 5.x, 6.x, and 7.x majors). The precise guarantee is narrower than "typechecks under any strict tsconfig": the CI matrix (`packages/vaultkeeper/test/e2e/consumer-typecheck.test.ts`) verifies that the shipped `.d.ts` files typecheck cleanly under a **standard strict NodeNext** consumer config (below) across that version range, so a future `.d.ts` change that breaks a tested version fails the build. It is **not** a claim that every compiler-option combination works — e.g. forcing `esModuleInterop: false` together with `allowSyntheticDefaultImports: false` makes TypeScript 7.0.2 error. Leave those two at their defaults. A known-good consumer config (what the matrix uses):
+**Requirements:** Node >= 20. **TypeScript version:** tested against TypeScript 5.0.4–7.0.2 (the stated floor plus the latest release of the 5.x, 6.x, and 7.x majors). The CI matrix (`packages/vaultkeeper/test/e2e/consumer-typecheck.test.ts`) verifies that the shipped `.d.ts` files typecheck cleanly under the strict NodeNext consumer config below across that version range, so a future `.d.ts` change that breaks a tested version fails the build. The exact `compilerOptions` that matrix uses (verified known-good — copy these):
 
 ```jsonc
 {
@@ -25,13 +25,14 @@ pnpm add vaultkeeper
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
     "strict": true,
-    // Do NOT force esModuleInterop:false + allowSyntheticDefaultImports:false —
-    // that combination errors on TypeScript 7.0.2. Leave them at their defaults.
+    "skipLibCheck": false,
+    "noEmit": true,
+    "types": [],
   },
 }
 ```
 
-The shipped output relies on `verbatimModuleSyntax`; a bare `npm install -D typescript` within the tested range is fine.
+`types: []` scopes ambient globals to none (a common strict-monorepo pattern); because the public API references `Buffer`, install `@types/node` as a devDependency — the shipped `.d.ts` resolves `Buffer` through its own import rather than an ambient global. The output relies on `verbatimModuleSyntax`; a bare `npm install -D typescript` within the tested range is fine.
 
 ## Quick start
 
