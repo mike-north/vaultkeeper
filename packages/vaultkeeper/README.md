@@ -16,7 +16,7 @@ secret never appears in a return value.
 pnpm add vaultkeeper
 ```
 
-**Requirements:** Node >= 20. Typechecking against the shipped `.d.ts` files requires at least TypeScript 5.0 (the output relies on `verbatimModuleSyntax`); this package is developed and tested against the `5.x` line (`^5.7.0`) — an unpinned `npm install -D typescript` may install a newer major that isn't verified against it.
+**Requirements:** Node >= 20. Typechecking against the shipped `.d.ts` files requires TypeScript 5.x (the output relies on `verbatimModuleSyntax`). Install a 5.x compiler explicitly — `npm install -D typescript@5` — rather than a bare `npm install -D typescript`, which installs whatever major is current and may not be 5.x.
 
 ## Quick start
 
