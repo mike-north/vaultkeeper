@@ -48,7 +48,9 @@ async function main(): Promise<void> {
   // The SDK is an optional peer dependency, loaded lazily so the worker only
   // requires it when a per-access retrieval actually runs. Report its absence
   // with a distinct code the parent maps to a typed PluginNotFoundError.
-  let sdk
+  // Type-only annotation (typeof import) keeps the load itself dynamic while
+  // giving `sdk` a precise type instead of an implicit any.
+  let sdk: typeof import('@1password/sdk')
   try {
     sdk = await import('@1password/sdk')
   } catch {
