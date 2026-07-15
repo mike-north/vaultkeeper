@@ -69,6 +69,8 @@ jobs:
 
       - run: pnpm check:lint-ts
 
+      - run: pnpm check:format
+
       - run: pnpm check:api-report
 
       - run: pnpm check:api-docs
