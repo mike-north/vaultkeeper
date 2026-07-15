@@ -78,6 +78,11 @@ impl FileBackend {
                         // File exists but couldn't be read — surface the original error
                         Err(read_err)
                     }
+                    // TODO(#134 follow-up): this discards `read_err` in favor of
+                    // the exists-probe's own failure, the same issue fixed in
+                    // `retrieve()` per PR #135 review feedback. Left as-is here
+                    // since it's outside that thread's scope; worth aligning
+                    // (return `Err(read_err)`) in a follow-up pass.
                     Err(exists_err) => Err(exists_err),
                 }
             }
@@ -210,6 +215,12 @@ impl SecretBackend for FileBackend {
         // SecretNotFound. Any other read failure (e.g. EACCES/EPERM, surfaced
         // by the host as a typed VaultError::Filesystem) must propagate
         // unchanged so callers can tell "missing" apart from "unreadable".
+        //
+        // The exists-probe below exists solely to disambiguate; if the probe
+        // itself fails, that is not a more informative signal than the read
+        // failure we already have — the caller asked to read a secret, not
+        // to check for its existence, so a probe failure must not mask or
+        // replace the original read error.
         let data = match self.host.read_file(&entry_path).await {
             Ok(data) => data,
             Err(read_err) => {
@@ -217,8 +228,7 @@ impl SecretBackend for FileBackend {
                     Ok(false) => Err(VaultError::SecretNotFound {
                         message: format!("Secret not found in file store: {id}"),
                     }),
-                    Ok(true) => Err(read_err),
-                    Err(exists_err) => Err(exists_err),
+                    Ok(true) | Err(_) => Err(read_err),
                 };
             }
         };
@@ -346,12 +356,15 @@ mod tests {
     /// distinct from "file does not exist": paths added to `deny_read` /
     /// `deny_delete` still exist (so `file_exists` returns `true`) but their
     /// read/delete calls fail with a `VaultError::Filesystem`, mirroring what
-    /// the real `NativeHostPlatform` produces for EACCES/EPERM.
+    /// the real `NativeHostPlatform` produces for EACCES/EPERM. `deny_exists`
+    /// separately simulates the exists-probe itself failing (e.g. EACCES
+    /// stat'ing a parent directory).
     struct TestHost {
         files: Mutex<HashMap<PathBuf, Vec<u8>>>,
         config_dir: PathBuf,
         deny_read: Mutex<HashSet<PathBuf>>,
         deny_delete: Mutex<HashSet<PathBuf>>,
+        deny_exists: Mutex<HashSet<PathBuf>>,
     }
 
     #[async_trait::async_trait]
@@ -396,6 +409,13 @@ mod tests {
             Ok(())
         }
         async fn file_exists(&self, path: &Path) -> Result<bool, VaultError> {
+            if self.deny_exists.lock().unwrap().contains(path) {
+                return Err(VaultError::Filesystem {
+                    message: format!("Permission denied checking existence of {}", path.display()),
+                    path: path.display().to_string(),
+                    permission: "stat".to_string(),
+                });
+            }
             Ok(self.files.lock().unwrap().contains_key(path))
         }
         async fn delete_file(&self, path: &Path) -> Result<(), VaultError> {
@@ -441,6 +461,7 @@ mod tests {
             config_dir: PathBuf::from("/test/config"),
             deny_read: Mutex::new(HashSet::new()),
             deny_delete: Mutex::new(HashSet::new()),
+            deny_exists: Mutex::new(HashSet::new()),
         })
     }
 
@@ -501,6 +522,37 @@ mod tests {
                 assert_eq!(permission, "read");
             }
             other => panic!("expected VaultError::Filesystem, got {other:?}"),
+        }
+    }
+
+    /// Regression test for PR #135 review feedback: when the read fails AND
+    /// the follow-up exists-probe used to disambiguate "missing" from
+    /// "unreadable" *also* fails, the probe's own failure must not replace
+    /// the original read failure. The read failure is the definitive signal
+    /// for what `retrieve()` actually attempted; the probe is only a
+    /// best-effort disambiguation step and its failure carries no more
+    /// information than "we couldn't disambiguate."
+    #[tokio::test]
+    async fn retrieve_read_failure_survives_exists_probe_failure() {
+        let host = make_test_host();
+        let backend = FileBackend::new(host.clone());
+        backend.store("probe-fails", "value").await.unwrap();
+        let entry_path = backend.entry_path("probe-fails");
+        host.deny_read.lock().unwrap().insert(entry_path.clone());
+        host.deny_exists.lock().unwrap().insert(entry_path.clone());
+
+        let err = backend.retrieve("probe-fails").await.unwrap_err();
+        match err {
+            // permission == "read" identifies this as the original read
+            // failure; the exists-probe's simulated failure uses "stat" and
+            // must never surface here.
+            VaultError::Filesystem { permission, .. } => {
+                assert_eq!(
+                    permission, "read",
+                    "must surface the original read failure, not the exists-probe failure"
+                );
+            }
+            other => panic!("expected the original read Filesystem error, got {other:?}"),
         }
     }
 
