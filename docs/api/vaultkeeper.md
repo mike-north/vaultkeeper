@@ -796,7 +796,7 @@ The OS platform identifier used for platform-specific behavior.
 
 </td><td>
 
-The kind of error that made a preflight check fail, as a stable machine-readable discriminant. `'config-parse'` means the config file could not be parsed as JSON; `'config-validation'` means it parsed but failed schema validation.
+The kind of error that made a preflight check fail, as a stable machine-readable discriminant. `'config-parse'` means the config file could not be parsed as JSON; `'config-validation'` means it parsed but failed schema validation; `'config-read'` means the config file could not be read at all (for example a permission failure on the file or its parent directory) — a different remediation from parse/validation, since overwriting the file (`config init --force`<!-- -->) cannot fix a read-permission problem.
 
 
 </td></tr>

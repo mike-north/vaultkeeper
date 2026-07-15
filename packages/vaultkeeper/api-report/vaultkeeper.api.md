@@ -232,13 +232,14 @@ export interface PreflightCheck {
 
 // @public
 export interface PreflightCheckError {
+    code?: string | undefined;
     configPath: string;
     kind: PreflightCheckErrorKind;
     location?: string | undefined;
 }
 
 // @public
-export type PreflightCheckErrorKind = 'config-parse' | 'config-validation';
+export type PreflightCheckErrorKind = 'config-parse' | 'config-validation' | 'config-read';
 
 // @public
 export type PreflightCheckStatus = 'ok' | 'missing' | 'version-unsupported' | 'invalid';

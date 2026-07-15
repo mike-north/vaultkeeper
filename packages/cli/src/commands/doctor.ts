@@ -42,7 +42,21 @@ export async function doctorCommand(args: string[], configDir: string): Promise<
     // validates it itself (via `configDir`), so a present-but-invalid config
     // file surfaces as a failing "config" check rather than being silently
     // skipped or crashing doctor outright (issue #68).
-    if (!(await configFileExists(configDir))) {
+    // The no-config advisory is only shown when we can positively determine
+    // the file is absent. When `configFileExists` cannot tell — e.g. the
+    // config dir is unreadable (chmod-000), so `fs.access` fails with
+    // EACCES/EPERM rather than ENOENT — do NOT abort here (issue #169): let
+    // `VaultKeeper.doctor` load the config so the read failure surfaces as a
+    // failing `config` check (like a parse error does) instead of crashing
+    // before any check renders. `loadConfig` wraps that read error as a
+    // typed FilesystemError, which the runner records on the check.
+    let configPresent = true
+    try {
+      configPresent = await configFileExists(configDir)
+    } catch {
+      configPresent = true
+    }
+    if (!configPresent) {
       process.stderr.write(noConfigMessage(defaultBackendType()))
     }
     const result = await VaultKeeper.doctor({ configDir })

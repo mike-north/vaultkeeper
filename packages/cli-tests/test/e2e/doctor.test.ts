@@ -230,6 +230,83 @@ describe('doctor command', () => {
   })
 })
 
+// Issue #169: doctor against a config DIRECTORY the process cannot read
+// (chmod-000) previously aborted with a raw Node `Error: EACCES: permission
+// denied, access '.../config.json'` (from the `fs.access` presence pre-check)
+// before any check rendered — no typed class, no fix hint. It must instead
+// render the read failure as a failing `config` check (like a parse error
+// does), with a CLI-native permissions remediation and a non-zero exit, and
+// never leak the raw errno string.
+//
+// A chmod-000 directory only yields EACCES on POSIX, and not for root (which
+// bypasses permission bits), so this repro is guarded to a non-root POSIX host.
+const canTestDirPermissions =
+  process.platform !== 'win32' && !(typeof process.getuid === 'function' && process.getuid() === 0)
+
+describe('doctor renders an unreadable config dir as a failing check, not a raw crash (issue #169)', () => {
+  let env: CliTestEnv | undefined
+  let lockedDir: string | undefined
+
+  afterEach(async () => {
+    // Restore traversal so the harness can remove the temp tree, even if an
+    // assertion threw before the in-test restore ran.
+    if (lockedDir !== undefined) {
+      await fs.chmod(lockedDir, 0o755).catch(() => undefined)
+      lockedDir = undefined
+    }
+    if (env !== undefined) {
+      await env.cleanup()
+      env = undefined
+    }
+  })
+
+  it.skipIf(!canTestDirPermissions)(
+    'reports a failing config check with a permissions remediation and no raw EACCES leak',
+    async () => {
+      env = await createCliTestEnv({ configDirMode: 'flag' })
+      const configPath = path.join(env.configDir, 'config.json')
+
+      // Make the config dir unreadable/untraversable, so reading config.json
+      // inside it fails with EACCES.
+      lockedDir = env.configDir
+      await fs.chmod(env.configDir, 0o000)
+
+      const result = await env.run(['doctor', '--config-dir', env.configDir])
+
+      // Restore immediately so subsequent assertions can't leave a locked tree.
+      await fs.chmod(env.configDir, 0o755)
+      lockedDir = undefined
+
+      // Non-zero exit — an unreadable config is a real failure.
+      expect(result.exitCode).not.toBe(0)
+
+      // Doctor did NOT abort before rendering: the config check shows ✗ and
+      // at least one other check (openssl is always in the list) still renders.
+      expect(result.stdout).toContain('✗')
+      expect(result.stdout).toContain('config')
+      expect(result.stdout).toContain('openssl')
+
+      // The raw Node errno string never leaks to the user (neither stream).
+      expect(result.stdout).not.toContain('EACCES')
+      expect(result.stderr).not.toContain('EACCES')
+
+      // A typed, human remediation naming the file and pointing at permissions.
+      expect(result.stdout).toContain(configPath)
+      expect(result.stdout).toContain('could not be read')
+      expect(result.stdout).toContain('permissions')
+
+      // `config init --force` cannot fix a read-permission problem (it would
+      // hit the same denial writing the replacement), so it must NOT be
+      // suggested for this failure — unlike the parse/validation path.
+      expect(result.stdout).not.toContain('config init --force')
+
+      // Never the library's wrong-audience hint, and never a false all-clear.
+      expect(result.stdout).not.toContain('install @vaultkeeper/cli')
+      expect(result.stdout).not.toContain('System ready.')
+    },
+  )
+})
+
 // Issue #149: the printed recovery command must repair the exact diagnosed
 // file even when a non-default config dir is active. Issue #152: it must be
 // printed exactly once. Both share the same doctor output surface.

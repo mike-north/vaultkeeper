@@ -14,7 +14,7 @@ import {
 } from './checks.js'
 import { currentPlatform } from '../util/platform.js'
 import { loadConfig } from '../config.js'
-import { ConfigParseError, ConfigValidationError } from '../errors.js'
+import { ConfigParseError, ConfigValidationError, FilesystemError } from '../errors.js'
 import type {
   BackendConfig,
   PreflightCheck,
@@ -177,6 +177,14 @@ function toPreflightConfigError(err: unknown, configPath: string): PreflightChec
   }
   if (err instanceof ConfigValidationError) {
     return { kind: 'config-validation', configPath: err.configFilePath ?? configPath }
+  }
+  if (err instanceof FilesystemError) {
+    // A read failure (e.g. EACCES/EPERM on the config file or its parent
+    // directory) — `loadConfig` wraps any non-ENOENT read error as a
+    // FilesystemError. The errno `code`, when present, lets a consumer pick
+    // permission-specific wording; the remediation is never `config init
+    // --force`, which cannot fix a read-permission problem.
+    return { kind: 'config-read', configPath: err.path, code: err.code }
   }
   return undefined
 }
