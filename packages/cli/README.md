@@ -109,11 +109,13 @@ Two things are easy to misread:
 - **A checkmark means the binary was found on `PATH`, not that a backend is active.** A green `op`
   means the 1Password CLI is installed — not that a 1Password backend is enabled. Secrets only
   route through a backend that is enabled in your config (`vaultkeeper config show`).
-- **Plugin-backend checks (`op`, `ykman`, and a native tool whose backend isn't enabled) are
-  always-run informational.** They appear even when only the default `file` backend is enabled, and
-  a missing one is reported as a **warning** — it never makes `doctor` fail. `doctor` reports "not
-  ready" (and exits non-zero) only when a **required** check fails: `openssl`, or the native
-  credential tool (`security`/`powershell`/`secret-tool`) for the backend you actually enabled.
+- **Plugin-backend checks (`op`, `ykman`) are informational only while their backend isn't
+  enabled.** They're always listed — even with just the default `file` backend — and a missing one
+  is a **warning** that doesn't make `doctor` fail. But enabling the corresponding backend
+  (`1password` → `op`, `yubikey` → `ykman`) **promotes that check to required**, so a missing tool
+  then makes `doctor` report "not ready" and exit non-zero. The same promotion applies to the
+  native credential tool (`security`/`powershell`/`secret-tool`): required when its backend is the
+  enabled one, informational otherwise. `openssl` is always required.
 
 The native Rust CLI's `doctor` and the WASM SDK's `doctor()` apply the same required-vs-informational
 rules.

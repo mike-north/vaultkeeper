@@ -172,13 +172,13 @@ shipped `.d.ts`):
 
 Each `BackendConfig` entry in `backends`:
 
-| Field     | Type                     | Required | Meaning                                                                                            |
-| --------- | ------------------------ | -------- | -------------------------------------------------------------------------------------------------- |
-| `type`    | `string`                 | yes      | Backend type: `'file'`, `'keychain'`, `'dpapi'`, `'secret-tool'`, `'1password'`, `'yubikey'`.      |
-| `enabled` | `boolean`                | yes      | Whether this backend is active. Only enabled backends are considered during initialization.        |
-| `plugin`  | `boolean`                | no       | `true` for plugin-provided backends (1Password, YubiKey) rather than built-in ones.                |
-| `path`    | `string`                 | no       | Storage directory for file-based backends. Defaults to `<configDir>/file/` for the `file` backend. |
-| `options` | `Record<string, string>` | no       | Backend-specific options collected during interactive setup.                                       |
+| Field     | Type                     | Required | Meaning                                                                                           |
+| --------- | ------------------------ | -------- | ------------------------------------------------------------------------------------------------- |
+| `type`    | `string`                 | yes      | Backend type: `'file'`, `'keychain'`, `'dpapi'`, `'secret-tool'`, `'1password'`, `'yubikey'`.     |
+| `enabled` | `boolean`                | yes      | Whether this backend is active. Only enabled backends are considered during initialization.       |
+| `plugin`  | `boolean`                | no       | `true` for plugin-provided backends (1Password, YubiKey) rather than built-in ones.               |
+| `path`    | `string`                 | no       | Storage directory for file-based backends. Defaults to `<configDir>/file` for the `file` backend. |
+| `options` | `Record<string, string>` | no       | Backend-specific options collected during interactive setup.                                      |
 
 ## Key rotation
 
@@ -262,7 +262,7 @@ default on every platform. Configure a different backend explicitly to opt in: `
 `dpapi` (Windows), or `secret-tool` (Linux, via `libsecret`). Plugin backends for 1Password and
 YubiKey are also available.
 
-With no explicit `path`, the `file` backend stores secrets under `<configDir>/file/` — the same
+With no explicit `path`, the `file` backend stores secrets under `<configDir>/file` — the same
 resolved config directory (`~/.config/vaultkeeper` by default) that holds `config.json` and key
 material.
 
@@ -281,9 +281,10 @@ binary was found, and every result is classified **required** or **informational
   backend, demoting the others to informational.
 - **Informational** checks never fail readiness — a failure is reported as a **warning** only.
   The plugin-backend binaries `op` (1Password) and `ykman` (YubiKey) are always listed but stay
-  informational unless their backend is explicitly enabled in `backends`. So with only the default
-  `file` backend enabled, `op`/`ykman` still appear in the output — a failing one will not block
-  `ready`.
+  informational only while their backend isn't enabled. So with just the default `file` backend
+  enabled, `op`/`ykman` still appear in the output and a failing one will not block `ready`. But
+  enabling the corresponding backend (`1password` → `op`, `yubikey` → `ykman`) **promotes that
+  check to required**, so a missing tool then does block `ready`.
 
 A checkmark next to a plugin check therefore means **the binary was detected on `PATH`**, not that
 the backend is active or configured — e.g. a green `op` means the 1Password CLI is installed, not
@@ -328,13 +329,13 @@ read-only properties for machine-readable context.
 
 **Access patterns**
 
-| Class                     | When thrown                                                                                                                                |
-| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
-| `FetchError`              | Delegated `fetch()` failed before a `Response` (malformed URL, network failure) (field: `url`).                                            |
-| `ExecError`               | `exec()` request was invalid, or the command could not be started (field: `command`).                                                      |
-| `AccessorConsumedError`   | `SecretAccessor.read()` called after it was already consumed.                                                                              |
-| `InvalidAlgorithmError`   | Signing/verifying with a disallowed algorithm (fields: `algorithm`, `allowed`; see [Signing and verification](#signing-and-verification)). |
-| `InvalidKeyMaterialError` | The stored secret is not valid PEM/DER private key material (raised by `sign()`; `verify()` returns `false` instead).                      |
+| Class                     | When thrown                                                                                                                                                                       |
+| ------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `FetchError`              | Delegated `fetch()` failed before a `Response` (malformed URL, network failure) (field: `url`).                                                                                   |
+| `ExecError`               | `exec()` request was invalid, or the command could not be started (field: `command`).                                                                                             |
+| `AccessorConsumedError`   | `SecretAccessor.read()` called after it was already consumed.                                                                                                                     |
+| `InvalidAlgorithmError`   | Signing/verifying with a disallowed algorithm (fields: `algorithm`, `allowed`; see [Signing and verification](#signing-and-verification)).                                        |
+| `InvalidKeyMaterialError` | `sign()` could not parse the stored secret as PEM/DER **private** key material. Specific to `sign()` — `VaultKeeper.verify()` does not read stored secrets and never throws this. |
 
 **Config, filesystem & key rotation**
 
