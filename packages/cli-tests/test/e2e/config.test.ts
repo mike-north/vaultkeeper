@@ -280,5 +280,24 @@ describe('config command', () => {
       const recover = await env.run(['config', 'init', '--force'])
       expect(recover.exitCode).toBe(0)
     })
+
+    // Criterion 3, ConfigValidationError variant: structurally valid JSON
+    // that fails schema validation shares the same remediation hint as
+    // ConfigParseError, so it must also name the working recovery command.
+    it('should have ConfigValidationError name the working recovery command (regression: issue #97)', async () => {
+      env = await createCliTestEnv()
+      await fs.writeFile(
+        path.join(env.configDir, 'config.json'),
+        JSON.stringify({ version: 99 }),
+        'utf8',
+      )
+      const result = await env.run(['config', 'show'])
+      expect(result.exitCode).not.toBe(0)
+      expect(result.stderr).toContain('vaultkeeper config init --force')
+
+      // And that named command must actually succeed from this exact state.
+      const recover = await env.run(['config', 'init', '--force'])
+      expect(recover.exitCode).toBe(0)
+    })
   })
 })
