@@ -5,6 +5,7 @@
  * - Exposes a single `.read()` method
  * - Passes a Buffer containing the secret to the callback
  * - Zeros the buffer after the callback returns
+ * - Passes the callback's return value back through to the caller
  * - Prevents double-read (throws a descriptive Error on second call)
  * - Redacts itself from Node.js inspect output
  */
