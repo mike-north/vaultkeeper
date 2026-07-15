@@ -46,7 +46,6 @@ import {
   BackendUnavailableError,
   VaultError,
   KeyRevokedError,
-  FilesystemError,
 } from './errors.js'
 
 /**
@@ -763,7 +762,7 @@ export class VaultKeeper {
    */
   async approveExecutable(executablePath: string): Promise<ExecutableTrustStatus> {
     const resolved = path.resolve(executablePath)
-    const hash = await VaultKeeper.#hashExecutableOrThrow(resolved)
+    const hash = await hashExecutable(resolved)
     const manifest = await loadManifest(this.#configDir)
     const updated = addTrustedHash(manifest, resolved, hash)
     await saveManifest(this.#configDir, updated)
@@ -793,7 +792,7 @@ export class VaultKeeper {
    */
   async checkExecutableTrust(executablePath: string): Promise<ExecutableTrustStatus> {
     const resolved = path.resolve(executablePath)
-    const hash = await VaultKeeper.#hashExecutableOrThrow(resolved)
+    const hash = await hashExecutable(resolved)
     const manifest = await loadManifest(this.#configDir)
     const approvedHashes = manifest.get(resolved)?.hashes ?? []
 
@@ -822,23 +821,6 @@ export class VaultKeeper {
   // ---------------------------------------------------------------------------
   // Private helpers
   // ---------------------------------------------------------------------------
-
-  /**
-   * Hash the file at `resolvedPath`, converting any read failure (e.g. a
-   * missing file) into a typed {@link FilesystemError} that names the path.
-   */
-  static async #hashExecutableOrThrow(resolvedPath: string): Promise<string> {
-    try {
-      return await hashExecutable(resolvedPath)
-    } catch (err) {
-      const detail = err instanceof Error ? err.message : String(err)
-      throw new FilesystemError(
-        `Cannot read executable at ${resolvedPath}: ${detail}`,
-        resolvedPath,
-        'read',
-      )
-    }
-  }
 
   static #resolveSecrets(token: CapabilityToken | SecretTokenMap): string | Record<string, string> {
     if (token instanceof CapabilityToken) {
