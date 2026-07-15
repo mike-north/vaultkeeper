@@ -16,7 +16,22 @@ secret never appears in a return value.
 pnpm add vaultkeeper
 ```
 
-**Requirements:** Node >= 20. **TypeScript version:** tested against TypeScript 5.0.4–7.0.2 (the stated floor plus the latest release of the 5.x, 6.x, and 7.x majors) — all typecheck cleanly against the shipped `.d.ts` files (the output relies on `verbatimModuleSyntax`). A bare `npm install -D typescript` is fine; this range is verified by a CI matrix (`packages/vaultkeeper/test/e2e/consumer-typecheck.test.ts`) so a future `.d.ts` change that breaks a tested version fails the build.
+**Requirements:** Node >= 20. **TypeScript version:** tested against TypeScript 5.0.4–7.0.2 (the stated floor plus the latest release of the 5.x, 6.x, and 7.x majors). The precise guarantee is narrower than "typechecks under any strict tsconfig": the CI matrix (`packages/vaultkeeper/test/e2e/consumer-typecheck.test.ts`) verifies that the shipped `.d.ts` files typecheck cleanly under a **standard strict NodeNext** consumer config (below) across that version range, so a future `.d.ts` change that breaks a tested version fails the build. It is **not** a claim that every compiler-option combination works — e.g. forcing `esModuleInterop: false` together with `allowSyntheticDefaultImports: false` makes TypeScript 7.0.2 error. Leave those two at their defaults. A known-good consumer config (what the matrix uses):
+
+```jsonc
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "strict": true,
+    // Do NOT force esModuleInterop:false + allowSyntheticDefaultImports:false —
+    // that combination errors on TypeScript 7.0.2. Leave them at their defaults.
+  },
+}
+```
+
+The shipped output relies on `verbatimModuleSyntax`; a bare `npm install -D typescript` within the tested range is fine.
 
 ## Quick start
 
@@ -77,6 +92,12 @@ async function main() {
 main()
 ```
 
+> **Scope:** the access patterns below — `fetch()`, `exec()`, `getSecret()`, and `sign()`/`verify()`
+> — are methods of **this TypeScript library's** `VaultKeeper` class. The
+> [`@vaultkeeper/wasm`](https://www.npmjs.com/package/@vaultkeeper/wasm) SDK exposes a different,
+> lower-level surface (`store()`/`retrieve()` plus a `setup()`/`authorize()` pair with different
+> signatures) and does **not** provide these delegated patterns — see that package's README.
+
 Other access patterns share the same capability-token flow (`setup()` → `authorize()`):
 
 **Delegated `exec()`** injects the secret into a child process's environment — never its `argv`,
@@ -93,12 +114,24 @@ const { result } = await vault.exec(token, {
 console.log(result.stdout, result.exitCode)
 ```
 
-**Controlled direct access** via `getSecret()` is different — it returns a `SecretAccessor` whose
-secret is only reachable through a single-use `read(callback)` call backed by an auto-zeroing
-buffer; no placeholder substitution is involved. `sign()`/`verify()` are a fourth pattern for
-signing/verifying data with a stored private key without ever exposing it — see
-[Signing and verification](#signing-and-verification) below. See the `SecretAccessor` and
-`ExecRequest` types in the package's shipped `.d.ts` for their full signatures.
+**Controlled direct access** via `getSecret()` is different — unlike `fetch()`/`exec()`, it does
+**not** take a callback of its own and returns **synchronously**. It hands back a `SecretAccessor`
+whose secret is only reachable through a single-use `read(callback)` call backed by an auto-zeroing
+buffer; no placeholder substitution is involved. `read()` returns whatever the callback returns, so
+derive the value you need (a header string, a hash) inside the callback and capture that — never the
+raw `Buffer`, which is zeroed before `read()` returns. A second `read()` throws `AccessorConsumedError`:
+
+```ts
+// `token` comes from authorize(), exactly like the fetch()/exec() examples above.
+const accessor = vault.getSecret(token) // synchronous — no await, no callback here
+const authHeader = accessor.read((buf) => `Bearer ${buf.toString('utf8')}`)
+// `authHeader` is now the derived string; the underlying buffer is already zeroed.
+// accessor.read(...) // <- calling read() again throws AccessorConsumedError
+```
+
+`sign()`/`verify()` are a fourth pattern for signing/verifying data with a stored private key
+without ever exposing it — see [Signing and verification](#signing-and-verification) below. See the
+`SecretAccessor` and `ExecRequest` types in the package's shipped `.d.ts` for their full signatures.
 
 ## Multiple secrets in one request
 
@@ -193,8 +226,12 @@ In this TypeScript library, executable identity verification against a local tru
 (TOFU) manifest runs when `VaultKeeper.setup()` is given a real `executablePath`. **This library's
 `setup()` requires an explicit executable-trust choice — it has no default and never silently skips
 verification.** (The separate [`@vaultkeeper/wasm`](https://www.npmjs.com/package/@vaultkeeper/wasm)
-SDK also requires the explicit choice, but records `executablePath` as a claim label without running
-TOFU verification — see that package's API reference.) Pass the caller's real path to
+SDK also requires the explicit choice, but its `executablePath` is only a **claim label** — the WASM
+`setup()` binds that path into the token without hashing the executable or running any TOFU
+verification, so it does not detect a changed or unrecognized binary the way this library does. Only
+this TypeScript library's `setup()` actually verifies executable identity. See that package's API
+reference and [#165](https://github.com/mike-north/vaultkeeper/issues/165) for the parity gap.) Pass
+the caller's real path to
 protect a production caller: `vault.setup('MY_API_KEY', { executablePath: '/usr/local/bin/my-tool'
 })`. To deliberately skip verification during development, pass the explicit, greppable opt-out
 `vault.setup('MY_API_KEY', { skipTrust: true })` instead — a token minted this way carries no
@@ -234,17 +271,67 @@ await vault.setDevelopmentMode('/path/to/my-dev-tool', false)
 `sign()`/`verify()` are a fourth access pattern: they let you sign or verify data with a stored
 private/public key without the private key ever leaving `VaultKeeper` internals.
 
+> **Precondition — the stored secret must be a private key, not an arbitrary string.** `sign()`
+> feeds the secret behind the token to `crypto.createPrivateKey()`, so the value you `store()` must
+> be **PEM- or DER-encoded private-key material** (e.g. a PKCS#8 PEM). A plain string like the quick
+> start's `'my-secret-value'` is **not** a key — signing a token minted over one throws
+> `InvalidKeyMaterialError`. Do not reuse the quick start's plain-string secret here; store a real
+> key first, as the worked example below does. (`verify()` takes a **public** key and never reads a
+> stored secret, so it never throws `InvalidKeyMaterialError`.)
+
 ```ts
-// Sign — requires a capability token, like fetch()/exec()/getSecret()
-const { result } = await vault.sign(token, { data: 'payload-to-sign' })
+// Sign — requires a capability token, like fetch()/exec()/getSecret(). The token
+// must have been minted over a stored PEM/DER PRIVATE key (see the precondition
+// above and the worked example below), not a plain-string secret.
+const { result } = await vault.sign(token, { data: 'order-42:refund:1999' })
 console.log(result.signature, result.algorithm) // base64 signature + algorithm label
 
-// Verify — a static method: no VaultKeeper instance, secret, or token needed
+// Verify — a static method: no VaultKeeper instance, secret, or token needed.
+// `publicKey` is the SPKI PEM matching the private key that signed the data.
 const isValid = VaultKeeper.verify({
-  data: 'payload-to-sign',
+  data: 'order-42:refund:1999',
   signature: result.signature,
   publicKey: myPublicKeyPem,
 })
+```
+
+### End-to-end: generate a key, store it, sign, and verify
+
+A complete round-trip — generate an RSA key pair with Node's `crypto`, store the **private** key as
+the secret, mint a token over it, sign, then verify with the **public** key. Runnable as written:
+
+```ts
+import { generateKeyPairSync } from 'node:crypto'
+import { VaultKeeper } from 'vaultkeeper'
+
+// 1. Generate a key pair. The PRIVATE key (PEM) is the secret sign() needs;
+//    the PUBLIC key (PEM) is what verify() checks the signature against.
+const { privateKey, publicKey } = generateKeyPairSync('rsa', {
+  modulusLength: 2048,
+  publicKeyEncoding: { type: 'spki', format: 'pem' },
+  privateKeyEncoding: { type: 'pkcs8', format: 'pem' },
+})
+
+const vault = await VaultKeeper.init()
+
+// 2. Store the PEM private key as the secret — NOT a plain string.
+await vault.store('SIGNING_KEY', privateKey)
+
+// 3. Mint a capability token over it and authorize (first run auto-records this
+//    executable in the TOFU manifest; see "Trust tiers").
+const jwe = await vault.setup('SIGNING_KEY', { executablePath: process.argv[1] })
+const { token } = await vault.authorize(jwe)
+
+// 4. Sign — the private key never leaves the vault.
+const { result } = await vault.sign(token, { data: 'order-42:refund:1999' })
+
+// 5. Verify with the PUBLIC key — static and synchronous.
+const isValid = VaultKeeper.verify({
+  data: 'order-42:refund:1999',
+  signature: result.signature,
+  publicKey,
+})
+console.log(isValid) // true
 ```
 
 `verify()` is synchronous and returns `false` for invalid key material, malformed signatures, or a
@@ -274,6 +361,13 @@ material.
 `VaultKeeper.init()` runs a preflight check pass (the same checks the `runDoctor()` export and the
 CLI's `vaultkeeper doctor` / WASM `doctor()` surface). Each check reports whether a dependency
 binary was found, and every result is classified **required** or **informational**:
+
+> **Why unused backends show up:** doctor deliberately probes the tooling for **all** supported
+> backends, not just the one you have enabled. So on a file-only config (and on `@vaultkeeper/wasm`,
+> which is always file-backed) you will still see entries for `security`/`op`/`ykman` — that is by
+> design, an at-a-glance inventory of what is installed, not noise. Those entries stay
+> **informational** (a failure is a warning, never a readiness failure) until you actually enable the
+> matching backend, which promotes its check to **required** (see the classification below).
 
 - **Required** checks gate readiness. A required check that fails makes the overall result
   **not ready** and produces a remediation next-step. `openssl` is always required. By default —
