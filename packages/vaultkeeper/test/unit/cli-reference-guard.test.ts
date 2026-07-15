@@ -9,12 +9,31 @@ import { fileURLToPath } from 'node:url'
  * config init` as if the CLI shipped with this package. `vaultkeeper` has no
  * `bin` — the CLI ships separately as `@vaultkeeper/cli` — so every mention
  * of `vaultkeeper config init` must be qualified with `@vaultkeeper/cli`
- * (or a JS-API alternative) in the surrounding text (issue #100).
+ * or a JS-API remediation (repairing/replacing the config programmatically,
+ * e.g. via `config`/`configDir`) in the surrounding text (issue #100).
  */
 
 const SRC_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../src')
 
 const BARE_COMMAND_PATTERN = /vaultkeeper config init/g
+
+/**
+ * Matches the JS-API remediation alternative to `@vaultkeeper/cli`: text
+ * that points at fixing the config programmatically through this library
+ * rather than installing the CLI.
+ */
+const JS_API_QUALIFIER_PATTERN = /\bprogrammatically\b|\bJS[- ]API\b/i
+
+/**
+ * Whether `block` qualifies every bare-command mention it contains — either
+ * by naming `@vaultkeeper/cli` or by pointing at the JS-API remediation
+ * path. This is the single source of truth for the rule; both the file scan
+ * below and the negative-control test call it, so the control actually
+ * proves the matcher rejects an unqualified block.
+ */
+function isQualified(block: string): boolean {
+  return block.includes('@vaultkeeper/cli') || JS_API_QUALIFIER_PATTERN.test(block)
+}
 
 /** Recursively collect every `.ts` file under `dir`. */
 function collectSourceFiles(dir: string): string[] {
@@ -60,17 +79,30 @@ describe('library must not reference a bare CLI command (issue #100)', () => {
           continue
         }
         expect(
-          block.includes('@vaultkeeper/cli'),
-          `"vaultkeeper config init" in ${path.relative(SRC_DIR, filePath)} must be qualified ` +
-            'with "@vaultkeeper/cli" (or a JS-API alternative) in the same comment/statement block:\n\n' +
+          isQualified(block),
+          `"vaultkeeper config init" in ${path.relative(SRC_DIR, filePath)} must be qualified, ` +
+            'either by naming "@vaultkeeper/cli" or by pointing at the JS-API remediation ' +
+            '(e.g. "programmatically" / "JS API"), in the same comment/statement block:\n\n' +
             block,
         ).toBe(true)
       }
     },
   )
 
-  it('rejects an unqualified bare command (negative control)', () => {
-    const block = "Run 'vaultkeeper config init' to create a valid config."
-    expect(block.includes('@vaultkeeper/cli')).toBe(false)
+  describe('isQualified (negative control)', () => {
+    it('rejects a block with a bare command and no qualification', () => {
+      const block = "Run 'vaultkeeper config init' to create a valid config."
+      expect(isQualified(block)).toBe(false)
+    })
+
+    it('accepts a block qualified with @vaultkeeper/cli', () => {
+      const block = "Install @vaultkeeper/cli and run 'vaultkeeper config init'."
+      expect(isQualified(block)).toBe(true)
+    })
+
+    it('accepts a block qualified with a JS-API remediation', () => {
+      const block = "Instead of 'vaultkeeper config init', fix the config programmatically."
+      expect(isQualified(block)).toBe(true)
+    })
   })
 })
