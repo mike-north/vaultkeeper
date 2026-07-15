@@ -5,7 +5,7 @@
 ```ts
 
 import { ListableBackend } from 'vaultkeeper';
-import { SetupOptions } from 'vaultkeeper';
+import { SetupOptionsBase } from 'vaultkeeper';
 import { VaultKeeper } from 'vaultkeeper';
 
 // @public
@@ -37,7 +37,7 @@ export class TestVault {
     delete(name: string): Promise<void>;
     readonly keeper: VaultKeeper;
     reset(): void;
-    setup(name: string, options?: SetupOptions): Promise<string>;
+    setup(name: string, options?: TestVaultSetupOptions): Promise<string>;
     store(name: string, value: string): Promise<void>;
 }
 
@@ -45,6 +45,12 @@ export class TestVault {
 export interface TestVaultOptions {
     trustTier?: 1 | 2 | 3 | undefined;
     ttlMinutes?: number | undefined;
+}
+
+// @public
+export interface TestVaultSetupOptions extends SetupOptionsBase {
+    executablePath?: string | undefined;
+    skipTrust?: boolean | undefined;
 }
 
 // (No @packageDocumentation comment for this package)

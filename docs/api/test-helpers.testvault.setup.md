@@ -9,7 +9,7 @@ Mint a JWE for a stored secret via the wrapped keeper.
 **Signature:**
 
 ```typescript
-setup(name: string, options?: SetupOptions): Promise<string>;
+setup(name: string, options?: TestVaultSetupOptions): Promise<string>;
 ```
 
 ## Parameters
@@ -53,7 +53,7 @@ options
 
 </td><td>
 
-[SetupOptions](./vaultkeeper.setupoptions.md)
+[TestVaultSetupOptions](./test-helpers.testvaultsetupoptions.md)
 
 
 </td><td>
@@ -72,5 +72,5 @@ The minted compact JWE string.
 
 ## Remarks
 
-Convenience shorthand for `vault.keeper.setup(name, options)` that defaults to the development-only `skipTrust: true` opt-out, so tests stay hermetic (there is no real calling executable to hash). Pass `executablePath` explicitly to exercise real TOFU verification instead. Mirroring `VaultKeeper`<!-- -->'s own semantics, only `executablePath` or `skipTrust: true` count as an explicit trust choice — `skipTrust: false` is not a choice, so it is treated the same as omitting the option entirely and still receives the convenience default.
+Convenience shorthand for `vault.keeper.setup(name, options)` that defaults to the development-only `skipTrust: true` opt-out, so tests stay hermetic (there is no real calling executable to hash). Pass `executablePath` explicitly to exercise real TOFU verification instead. Mirroring `VaultKeeper`<!-- -->'s own semantics, only `executablePath` or `skipTrust: true` count as an explicit trust choice — `skipTrust: false` is not a choice, so it is treated the same as omitting the option entirely and still receives the convenience default. If `executablePath` is supplied it always wins (it cannot be combined with `skipTrust` — the library's `SetupOptions` union forbids both).
 

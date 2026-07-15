@@ -2,152 +2,24 @@
 
 [Home](./index.md) &gt; [vaultkeeper](./vaultkeeper.md) &gt; [SetupOptions](./vaultkeeper.setupoptions.md)
 
-## SetupOptions interface
+## SetupOptions type
 
 Options for the setup operation.
 
 **Signature:**
 
 ```typescript
-interface SetupOptions 
+type SetupOptions = SetupOptionsBase & ({
+    executablePath: string;
+    skipTrust?: never;
+} | {
+    skipTrust: true;
+    executablePath?: never;
+});
 ```
+**References:** [SetupOptionsBase](./vaultkeeper.setupoptionsbase.md)
 
-## Properties
+## Remarks
 
-<table><thead><tr><th>
-
-Property
-
-
-</th><th>
-
-Modifiers
-
-
-</th><th>
-
-Type
-
-
-</th><th>
-
-Description
-
-
-</th></tr></thead>
-<tbody><tr><td>
-
-[backendType?](./vaultkeeper.setupoptions.backendtype.md)
-
-
-</td><td>
-
-
-</td><td>
-
-string \| undefined
-
-
-</td><td>
-
-_(Optional)_ Backend type to use.
-
-
-</td></tr>
-<tr><td>
-
-[executablePath?](./vaultkeeper.setupoptions.executablepath.md)
-
-
-</td><td>
-
-
-</td><td>
-
-string \| undefined
-
-
-</td><td>
-
-_(Optional)_ Path to the calling executable, used to bind the minted token to that executable's identity. When set, `setup()` runs trust-on-first-use (TOFU) verification: the file is hashed (SHA-256) and checked against the local trust manifest. This is the safe, production choice.
-
-
-</td></tr>
-<tr><td>
-
-[skipTrust?](./vaultkeeper.setupoptions.skiptrust.md)
-
-
-</td><td>
-
-
-</td><td>
-
-boolean \| undefined
-
-
-</td><td>
-
-_(Optional)_ Development-only escape hatch: set to `true` to deliberately skip executable-trust (TOFU) verification. The minted token carries no executable identity binding.
-
-
-</td></tr>
-<tr><td>
-
-[trustTier?](./vaultkeeper.setupoptions.trusttier.md)
-
-
-</td><td>
-
-
-</td><td>
-
-[TrustTier](./vaultkeeper.trusttier.md) \| undefined
-
-
-</td><td>
-
-_(Optional)_ Trust tier override.
-
-
-</td></tr>
-<tr><td>
-
-[ttlMinutes?](./vaultkeeper.setupoptions.ttlminutes.md)
-
-
-</td><td>
-
-
-</td><td>
-
-number \| undefined
-
-
-</td><td>
-
-_(Optional)_ TTL in minutes for the JWE.
-
-
-</td></tr>
-<tr><td>
-
-[useLimit?](./vaultkeeper.setupoptions.uselimit.md)
-
-
-</td><td>
-
-
-</td><td>
-
-number \| null \| undefined
-
-
-</td><td>
-
-_(Optional)_ Usage limit (null for unlimited).
-
-
-</td></tr>
-</tbody></table>
+The executable-trust choice is \*\*mandatory and mutually exclusive\*\*, and the type system enforces it: `SetupOptions` is [SetupOptionsBase](./vaultkeeper.setupoptionsbase.md) intersected with a choice of \*\*exactly one\*\* of `executablePath` (run trust-on-first-use verification — the production choice) or `skipTrust: true` (deliberately skip verification — development only). An options object with \*\*neither\*\* field, or with \*\*both\*\*, fails to typecheck; and because [VaultKeeper.setup()](./vaultkeeper.vaultkeeper.setup.md)<!-- -->'s options argument is required, `vault.setup('NAME')` and `vault.setup('NAME', {})` are compile-time type errors rather than runtime-only failures. [ExecutableTrustRequiredError](./vaultkeeper.executabletrustrequirederror.md) remains a runtime backstop for callers without static typing (e.g. plain JavaScript), and is still thrown if `executablePath` is the retired legacy `'dev'` sentinel.
 

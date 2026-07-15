@@ -146,7 +146,10 @@ async function main(): Promise<number> {
   // `vaultkeeper --bogus` previously exited 0).
   if (firstArg?.startsWith('-') === true) {
     process.stderr.write(`Error: unknown option '${firstArg}'\n`)
-    // Exit code 2: usage error (unknown top-level flag)
+    // Print the Usage: block so an unknown top-level flag matches the
+    // unknown-command case (and subcommand-level usage errors), all of which
+    // pair the error line on stderr with usage on stdout. Exit 2 (usage error).
+    printHelp()
     return 2
   }
 

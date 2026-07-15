@@ -47,16 +47,23 @@ const vault = await createVaultKeeper()
 // Mint a JWE token directly from a value you already have — setup() does not
 // read from the backend (see above), so no prior store() call is needed.
 //
-// setup() requires an explicit executable-trust choice: verify and bind the
-// calling executable's identity into the token, or deliberately skip that
-// binding (development only). Omitting the choice throws
-// ExecutableTrustRequiredError. With executablePath, setup() hashes the
-// executable and runs trust-on-first-use verification, throwing
-// IdentityMismatchError if the hash changed from a previously approved value.
+// setup() requires an explicit executable-trust choice: bind the calling
+// executable's identity into the token, or deliberately skip that binding
+// (development only). Omitting the choice throws ExecutableTrustRequiredError.
+// With executablePath, setup() hashes that executable and records/checks it
+// trust-on-first-use, throwing IdentityMismatchError if the hash changed from
+// a previously approved value.
+//
+// IMPORTANT — do not point executablePath at a file you rebuild. Its content
+// hash changes on every recompile/bundle, so `process.argv[1]` (your compiled
+// entry file) throws IdentityMismatchError on the next run after any rebuild.
+// For production, bind a STABLE anchor: `process.execPath` (the Node runtime)
+// or the path to a released, unchanging binary. For local iterative dev, use
+// `{ skipTrust: true }` (below) so a rebuild loop doesn't re-throw.
 const jwe = await vault.setup('MY_API_KEY', 'my-secret-value', {
-  executablePath: process.argv[1], // production: bind to the calling executable
+  executablePath: process.execPath, // production: a stable anchor (the Node runtime)
 })
-// …or, in development/tests only:
+// …or, in development/tests only (no rebuild footgun):
 // const jwe = await vault.setup('MY_API_KEY', 'my-secret-value', { skipTrust: true })
 
 // Authorize: decrypt and validate. The result's `claims` never contain the
@@ -73,6 +80,25 @@ vault.dispose()
 ```
 
 This package ships a committed `.wasm` binary — no `wasm-pack` install step required to consume it.
+
+## Doctor / preflight checks
+
+`vault.doctor()` runs the same preflight pass as the `vaultkeeper` library and CLI, returning a
+`PreflightResult` whose per-dependency entries are classified **required** or **informational**
+(see the [`vaultkeeper` README's "Doctor / preflight checks"](https://www.npmjs.com/package/vaultkeeper)
+for the full model).
+
+One WASM-specific caveat: this SDK persists secrets through the built-in **`file`** backend only —
+it does not route through an OS-native credential store. But `doctor()` here runs the **unscoped**
+preflight (it is not narrowed to the file backend the way `VaultKeeper.init()` narrows to your
+configured backends), so the platform-native credential tool (`security` on macOS, `powershell` on
+Windows, `secret-tool` on Linux) is still reported with `required: true`. For this SDK's file-backend
+usage that entry is effectively an **inventory** signal, not a real readiness gate — a missing native
+tool does not stop the SDK from working, because nothing here uses it. Only `openssl` (always
+required) genuinely gates file-backend operation. Treat a failing native-tool entry from
+`vault.doctor()` as informational unless you have separately arranged to use that OS store. (Scoping
+the WASM `doctor()` to the file backend so this entry demotes to informational is tracked as a
+follow-up; it needs a change to the Rust core and a rebuild of the committed `.wasm`.)
 
 ## Full documentation
 

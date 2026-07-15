@@ -137,49 +137,91 @@ export interface VaultKeeperOptions {
   skipDoctor?: boolean | undefined
 }
 
-/** Options for the setup operation. */
-export interface SetupOptions {
+/**
+ * Options for {@link VaultKeeper.setup} that are independent of the mandatory
+ * executable-trust choice. Intersected with that choice to form
+ * {@link SetupOptions}.
+ *
+ * @public
+ */
+export interface SetupOptionsBase {
   /** TTL in minutes for the JWE. */
   ttlMinutes?: number | undefined
   /** Usage limit (null for unlimited). */
   useLimit?: number | null | undefined
-  /**
-   * Path to the calling executable, used to bind the minted token to that
-   * executable's identity. When set, `setup()` runs trust-on-first-use (TOFU)
-   * verification: the file is hashed (SHA-256) and checked against the local
-   * trust manifest. This is the safe, production choice.
-   *
-   * @remarks
-   * There is no default. Exactly one of {@link SetupOptions.executablePath} or
-   * {@link SetupOptions.skipTrust} must be provided; supplying neither — or
-   * both — throws {@link ExecutableTrustRequiredError}. `setup()` never
-   * silently skips executable-trust verification.
-   *
-   * A path registered via {@link VaultKeeper.setDevelopmentMode} is still
-   * exempted from hashing (the established development-mode allowlist); any
-   * other path is verified.
-   */
-  executablePath?: string | undefined
-  /**
-   * Development-only escape hatch: set to `true` to deliberately skip
-   * executable-trust (TOFU) verification. The minted token carries no
-   * executable identity binding.
-   *
-   * @remarks
-   * **Security warning:** a token minted with `skipTrust: true` is not bound to
-   * any calling executable, so any process that obtains the JWE can redeem it.
-   * Use this only in local development or tests — never in production. Prefer
-   * {@link SetupOptions.executablePath} so executable trust is actually
-   * enforced.
-   *
-   * Mutually exclusive with {@link SetupOptions.executablePath}: providing both
-   * throws {@link ExecutableTrustRequiredError}.
-   */
-  skipTrust?: boolean | undefined
   /** Trust tier override. */
   trustTier?: TrustTier | undefined
   /** Backend type to use. */
   backendType?: string | undefined
+}
+
+/**
+ * Options for the setup operation.
+ *
+ * @remarks
+ * The executable-trust choice is **mandatory and mutually exclusive**, and the
+ * type system enforces it: `SetupOptions` is {@link SetupOptionsBase}
+ * intersected with a choice of **exactly one** of `executablePath` (run
+ * trust-on-first-use verification — the production choice) or `skipTrust: true`
+ * (deliberately skip verification — development only). An options object with
+ * **neither** field, or with **both**, fails to typecheck; and because
+ * {@link VaultKeeper.setup}'s options argument is required, `vault.setup('NAME')`
+ * and `vault.setup('NAME', {})` are compile-time type errors rather than
+ * runtime-only failures. {@link ExecutableTrustRequiredError} remains a runtime
+ * backstop for callers without static typing (e.g. plain JavaScript), and is
+ * still thrown if `executablePath` is the retired legacy `'dev'` sentinel.
+ *
+ * @public
+ */
+export type SetupOptions = SetupOptionsBase &
+  (
+    | {
+        /**
+         * Path to the calling executable, used to bind the minted token to that
+         * executable's identity. `setup()` runs trust-on-first-use (TOFU)
+         * verification: the file is hashed (SHA-256) and checked against the
+         * local trust manifest. This is the safe, production choice.
+         *
+         * A path registered via `setDevelopmentMode` is still exempted from
+         * hashing (the established development-mode allowlist); any other path
+         * is verified. Mutually exclusive with `skipTrust`.
+         *
+         * **Rebuild caveat:** for a compiled or bundled entry point the file's
+         * hash changes on every rebuild, so binding to a dev build target (e.g.
+         * `process.argv[1]`) makes the next `setup()` after a recompile throw
+         * `IdentityMismatchError`. In production point this at a **stable**
+         * artifact — a released binary, or `process.execPath` to trust the Node
+         * runtime; for a frequently-rebuilt local caller you want to keep
+         * verifying, use `setDevelopmentMode` instead.
+         */
+        executablePath: string
+        skipTrust?: never
+      }
+    | {
+        /**
+         * Development-only escape hatch: skip executable-trust (TOFU)
+         * verification. The minted token carries no executable identity binding.
+         *
+         * **Security warning:** a token minted with `skipTrust: true` is not
+         * bound to any calling executable, so any process that obtains the JWE
+         * can redeem it. Use this only in local development or tests — never in
+         * production. Prefer `executablePath` so executable trust is actually
+         * enforced. Mutually exclusive with `executablePath`.
+         */
+        skipTrust: true
+        executablePath?: never
+      }
+  )
+
+/**
+ * Loose trust-choice shape accepted by the internal resolver. Unlike the public
+ * {@link SetupOptions} discriminated union, both fields are independently
+ * optional here so the runtime mutual-exclusion / missing-choice backstops stay
+ * reachable for untyped (plain-JavaScript) callers.
+ */
+interface TrustChoiceInput extends SetupOptionsBase {
+  executablePath?: string | undefined
+  skipTrust?: boolean | undefined
 }
 
 /**
@@ -435,20 +477,30 @@ export class VaultKeeper {
    *
    * @remarks
    * `setup()` requires an explicit executable-trust decision — it has no
-   * default and never silently skips verification. Pass
-   * {@link SetupOptions.executablePath} (the calling executable's real path) to
-   * run trust-on-first-use verification, or {@link SetupOptions.skipTrust} to
-   * deliberately skip it in development. Supplying neither, or both, throws
-   * {@link ExecutableTrustRequiredError}.
+   * default and never silently skips verification. Pass `executablePath` (the
+   * calling executable's real path) to run trust-on-first-use verification, or
+   * `skipTrust: true` to deliberately skip it in development. The {@link SetupOptions}
+   * type enforces this choice at compile time (exactly one, and the options
+   * argument is required); {@link ExecutableTrustRequiredError} is the runtime
+   * backstop for untyped callers.
    *
    * @example
    * ```ts
-   * // Production: bind the token to the verified calling executable.
-   * const jwe = await vault.setup('MY_API_KEY', { executablePath: process.argv[1] })
+   * // Production: bind the token to a STABLE executable so a swapped binary is
+   * // rejected. Point executablePath at a released binary, or process.execPath
+   * // to trust the Node runtime. Do NOT use process.argv[1] for a compiled entry
+   * // point — its hash changes on every rebuild, so the next setup() after a
+   * // recompile throws IdentityMismatchError (use setDevelopmentMode or
+   * // skipTrust for a frequently-rebuilt local caller).
+   * const jwe = await vault.setup('MY_API_KEY', { executablePath: '/usr/local/bin/my-tool' })
+   *
+   * // Local development: skip verification so rebuilds don't reject the caller.
+   * const devJwe = await vault.setup('MY_API_KEY', { skipTrust: true })
    * ```
    *
    * @param secretName - Identifier for the secret
-   * @param options - Setup options
+   * @param options - Setup options; must carry exactly one of `executablePath`
+   *   or `skipTrust: true`
    * @returns Compact JWE string
    * @throws {@link ExecutableTrustRequiredError} If neither `executablePath`
    *   nor `skipTrust: true` is provided, if both are, or if `executablePath` is
@@ -459,17 +511,22 @@ export class VaultKeeper {
    *   for verification, or the trust manifest cannot be read or written while
    *   recording the executable.
    */
-  async setup(secretName: string, options?: SetupOptions): Promise<string> {
+  async setup(secretName: string, options: SetupOptions): Promise<string> {
     VaultKeeper.#validateSecretName(secretName)
     const backend = this.#requireBackend()
-    const backendType = VaultKeeper.#resolveBackendTypeHint(backend, options?.backendType)
-    const ttlMinutes = options?.ttlMinutes ?? this.#config.defaults.ttlMinutes
-    const trustTier = options?.trustTier ?? this.#config.defaults.trustTier
-    const useLimit = options?.useLimit ?? null
 
-    // Resolve (and validate) the executable-trust choice before touching the
-    // backend so a malformed call fails fast without a secret read.
+    // Resolve (and validate) the executable-trust choice first — before reading
+    // any option field or touching the backend — so a malformed call fails fast
+    // without a secret read. This also guards the runtime backstop: an untyped
+    // (plain-JavaScript) caller can pass `undefined` despite the required type,
+    // and this call throws ExecutableTrustRequiredError instead of dereferencing
+    // `undefined`. Past this point `options` is guaranteed present.
     const exeIdentity = await this.#resolveExecutableIdentity(options)
+
+    const backendType = VaultKeeper.#resolveBackendTypeHint(backend, options.backendType)
+    const ttlMinutes = options.ttlMinutes ?? this.#config.defaults.ttlMinutes
+    const trustTier = options.trustTier ?? this.#config.defaults.trustTier
+    const useLimit = options.useLimit ?? null
 
     const secretValue = await backend.retrieve(secretName)
 
@@ -940,7 +997,7 @@ export class VaultKeeper {
    *   retired legacy `'dev'` opt-out sentinel.
    * @throws {IdentityMismatchError} On a TOFU hash conflict.
    */
-  async #resolveExecutableIdentity(options: SetupOptions | undefined): Promise<string> {
+  async #resolveExecutableIdentity(options: TrustChoiceInput | undefined): Promise<string> {
     const executablePath = options?.executablePath
     const skipTrust = options?.skipTrust === true
 

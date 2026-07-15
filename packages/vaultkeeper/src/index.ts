@@ -72,6 +72,7 @@ export { VaultKeeper } from './vault.js'
 export type {
   VaultKeeperOptions,
   SetupOptions,
+  SetupOptionsBase,
   SecretTokenMap,
   ExecutableTrustStatus,
 } from './vault.js'

@@ -15,3 +15,7 @@ doctor(): Promise<PreflightResult>;
 
 Promise&lt;[PreflightResult](./wasm.preflightresult.md)<!-- -->&gt;
 
+## Remarks
+
+Returns the same required-vs-informational `PreflightResult` model as the `vaultkeeper` library and CLI. Note this runs the \*\*unscoped\*\* preflight: it is not narrowed to the `file` backend this SDK uses, so the platform-native credential tool (`security`<!-- -->/`powershell`<!-- -->/`secret-tool`<!-- -->) is reported `required: true` even though nothing here uses it. For this SDK's file-backend usage treat that entry as an inventory signal, not a readiness gate — only `openssl` genuinely gates file-backend operation. See the package README's "Doctor / preflight checks" section.
+

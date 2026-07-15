@@ -65,5 +65,16 @@ Options for creating a [TestVault](./test-helpers.testvault.md)<!-- -->.
 
 
 </td></tr>
+<tr><td>
+
+[TestVaultSetupOptions](./test-helpers.testvaultsetupoptions.md)
+
+
+</td><td>
+
+Options accepted by [TestVault.setup()](./test-helpers.testvault.setup.md)<!-- -->. Deliberately looser than the library's discriminated `SetupOptions` union: the trust choice is optional here because `TestVault.setup` defaults it to `skipTrust: true` when omitted, so tests can call `setup('NAME')` with no trust choice at all.
+
+
+</td></tr>
 </tbody></table>
 

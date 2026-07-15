@@ -316,10 +316,17 @@ export class SetupError extends VaultError {
 }
 
 // @public
-export interface SetupOptions {
+export type SetupOptions = SetupOptionsBase & ({
+    executablePath: string;
+    skipTrust?: never;
+} | {
+    skipTrust: true;
+    executablePath?: never;
+});
+
+// @public
+export interface SetupOptionsBase {
     backendType?: string | undefined;
-    executablePath?: string | undefined;
-    skipTrust?: boolean | undefined;
     trustTier?: TrustTier | undefined;
     ttlMinutes?: number | undefined;
     useLimit?: number | null | undefined;
@@ -414,7 +421,7 @@ export class VaultKeeper {
     rotateKey(): Promise<void>;
     secretExists(name: string): Promise<boolean>;
     setDevelopmentMode(executablePath: string, enabled: boolean): Promise<void>;
-    setup(secretName: string, options?: SetupOptions): Promise<string>;
+    setup(secretName: string, options: SetupOptions): Promise<string>;
     sign(token: CapabilityToken, request: SignRequest): Promise<{
         result: SignResult;
         vaultResponse: VaultResponse;

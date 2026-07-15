@@ -9,7 +9,7 @@ Read a stored secret from the backend and mint a JWE token that encapsulates it.
 **Signature:**
 
 ```typescript
-setup(secretName: string, options?: SetupOptions): Promise<string>;
+setup(secretName: string, options: SetupOptions): Promise<string>;
 ```
 
 ## Parameters
@@ -58,7 +58,7 @@ options
 
 </td><td>
 
-_(Optional)_ Setup options
+Setup options; must carry exactly one of `executablePath` or `skipTrust: true`
 
 
 </td></tr>
@@ -80,13 +80,21 @@ Compact JWE string
 
 ## Remarks
 
-`setup()` requires an explicit executable-trust decision — it has no default and never silently skips verification. Pass [SetupOptions.executablePath](./vaultkeeper.setupoptions.executablepath.md) (the calling executable's real path) to run trust-on-first-use verification, or [SetupOptions.skipTrust](./vaultkeeper.setupoptions.skiptrust.md) to deliberately skip it in development. Supplying neither, or both, throws [ExecutableTrustRequiredError](./vaultkeeper.executabletrustrequirederror.md)<!-- -->.
+`setup()` requires an explicit executable-trust decision — it has no default and never silently skips verification. Pass `executablePath` (the calling executable's real path) to run trust-on-first-use verification, or `skipTrust: true` to deliberately skip it in development. The [SetupOptions](./vaultkeeper.setupoptions.md) type enforces this choice at compile time (exactly one, and the options argument is required); [ExecutableTrustRequiredError](./vaultkeeper.executabletrustrequirederror.md) is the runtime backstop for untyped callers.
 
 ## Example
 
 
 ```ts
-// Production: bind the token to the verified calling executable.
-const jwe = await vault.setup('MY_API_KEY', { executablePath: process.argv[1] })
+// Production: bind the token to a STABLE executable so a swapped binary is
+// rejected. Point executablePath at a released binary, or process.execPath
+// to trust the Node runtime. Do NOT use process.argv[1] for a compiled entry
+// point — its hash changes on every rebuild, so the next setup() after a
+// recompile throws IdentityMismatchError (use setDevelopmentMode or
+// skipTrust for a frequently-rebuilt local caller).
+const jwe = await vault.setup('MY_API_KEY', { executablePath: '/usr/local/bin/my-tool' })
+
+// Local development: skip verification so rebuilds don't reject the caller.
+const devJwe = await vault.setup('MY_API_KEY', { skipTrust: true })
 ```
 

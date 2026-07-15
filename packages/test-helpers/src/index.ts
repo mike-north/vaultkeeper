@@ -6,4 +6,4 @@
 
 export { InMemoryBackend } from './in-memory-backend.js'
 export { TestVault } from './test-vault.js'
-export type { TestVaultOptions } from './test-vault.js'
+export type { TestVaultOptions, TestVaultSetupOptions } from './test-vault.js'
