@@ -1,12 +1,12 @@
 # vaultkeeper
 
-Unified, policy-enforced secret storage across OS backends. Secrets are stored in the native credential store for the current platform and accessed through short-lived JWE tokens. No secret ever appears in a return value — callers use delegated patterns that inject the value at the last possible moment.
+Unified, policy-enforced secret storage across OS backends. By default secrets are stored in a portable, self-contained AES-256-GCM encrypted file; your platform's native credential store (macOS Keychain, Windows DPAPI) is available as an explicit opt-in. Secrets are accessed through short-lived JWE tokens, and no secret ever appears in a return value — callers use delegated patterns that inject the value at the last possible moment.
 
 Available as a **native Rust CLI**, a **TypeScript library**, a **WASM-backed SDK**, and a **Node.js CLI**.
 
 ## Which package should I use?
 
-- **`vaultkeeper`** — the pure TypeScript library. Use this by default: it offers the delegated access patterns (`fetch`, `exec`, `createSecretAccessor`) that keep raw secrets out of application memory. With no config file present it falls back to the file backend, same as the WASM SDK; run `vaultkeeper config init` to write the platform-default backend instead (Keychain on macOS, DPAPI on Windows, `file` on Linux).
+- **`vaultkeeper`** — the pure TypeScript library. Use this by default: it offers the delegated access patterns (`fetch`, `exec`, `createSecretAccessor`) that keep raw secrets out of application memory. With no config file present it uses the safe `file` backend, same as the WASM SDK; `vaultkeeper config init` writes that same `file` default. To opt into your platform's native credential store instead, run `vaultkeeper config init --backend keychain` (macOS) / `--backend dpapi` (Windows), or set it in an explicit config.
 - **`@vaultkeeper/wasm`** — a WASM-backed SDK with a similar feature set, backed by the Rust core instead of the `jose` npm package. Reach for it when you specifically need the Rust implementation (e.g. to match native-CLI behavior exactly) or want to avoid a `jose` dependency. It hardcodes the file backend rather than using platform defaults — see [WASM SDK quick start](#wasm-sdk-quick-start).
 - **`@vaultkeeper/cli`** — the Node.js CLI (`vaultkeeper` on the command line). Use this for shell scripts, CI pipelines, or interactive use where you don't need a library API at all.
 
@@ -66,12 +66,18 @@ pnpm add @vaultkeeper/wasm
 
 Both the native Rust CLI and the Node.js CLI share the same command surface:
 
+> [!NOTE]
+> The safe `file` default described below (a bare `config init` writing the `file` backend) currently applies to the **Node.js CLI** and the TypeScript library. The native Rust CLI's zero-config default still targets the platform-native store; converging it onto this behavior is tracked in [#75](https://github.com/mike-north/vaultkeeper/issues/75).
+
 ```sh
 # Run preflight checks
 vaultkeeper doctor
 
-# Initialize configuration
-vaultkeeper config init
+# Initialize configuration. With no --backend the Node CLI writes the safe,
+# portable `file` backend (never your real OS keychain). Opt into the native
+# store explicitly with --backend, e.g.:
+vaultkeeper config init                      # safe default: file backend
+vaultkeeper config init --backend keychain   # opt in to the macOS Keychain
 
 # Show current configuration
 vaultkeeper config show
@@ -123,28 +129,29 @@ must re-approve it with `vaultkeeper approve --script <caller>`.
 
 ## TypeScript quick start
 
-> [!WARNING]
-> With no config file present, a bare `VaultKeeper.init()` — and `vaultkeeper config init` with no `--backend` — targets your **real OS credential store**: the macOS Keychain on macOS, Windows DPAPI on Windows. On those platforms, secrets you store land in the live system store. To use a portable, CI-friendly encrypted file instead, choose the `file` backend explicitly (shown below). Inspect `vault.activeBackendType` to confirm which backend an instance resolved to.
+> [!NOTE]
+> With no config file present, a bare `VaultKeeper.init()` — and `vaultkeeper config init` with no `--backend` — resolves to the safe, portable `file` backend on **every** platform. It never silently writes a secret to your real OS credential store, so copy-pasting this quick start is safe on macOS and Windows. To opt into the platform-native store (macOS Keychain, Windows DPAPI), pass an explicit config with that backend, or run `vaultkeeper config init --backend keychain` / `--backend dpapi`. Inspect `vault.activeBackendType` to confirm which backend an instance resolved to.
 
 ```ts
 import { VaultKeeper } from 'vaultkeeper'
 
 // 1. Initialize (runs doctor preflight checks)
-//    With no config file, the backend defaults to the platform's OS credential
-//    store (keychain on macOS, dpapi on Windows, file elsewhere).
+//    With no config file, the backend resolves to the safe `file` backend on
+//    every platform — never your real OS credential store.
 const vault = await VaultKeeper.init()
-console.log(vault.activeBackendType) // e.g. "keychain" on macOS
+console.log(vault.activeBackendType) // "file"
 
-// Prefer a portable, CI-friendly encrypted file? Pass an explicit config:
+// Want your platform's native store (macOS Keychain, Windows DPAPI)? Opt in
+// with an explicit config:
 // const vault = await VaultKeeper.init({
 //   config: {
 //     version: 1,
-//     backends: [{ type: 'file', enabled: true }],
+//     backends: [{ type: 'keychain', enabled: true }],
 //     keyRotation: { gracePeriodDays: 7 },
 //     defaults: { ttlMinutes: 60, trustTier: 3 },
 //   },
 // })
-// From the CLI, the equivalent is: vaultkeeper config init --backend file
+// From the CLI, the equivalent is: vaultkeeper config init --backend keychain
 
 // 2. Store a secret in the configured backend
 await vault.store('MY_API_KEY', 'my-secret-value')
@@ -275,14 +282,16 @@ The first enabled backend in the configuration is used.
 
 ## Platforms
 
-| Platform | Default backend | Required dependencies                                            |
-| -------- | --------------- | ---------------------------------------------------------------- |
-| macOS    | `keychain`      | `security` (built-in)                                            |
-| Linux    | `file`          | None (AES-256-GCM encrypted file, no OS credential store needed) |
-| Windows  | `dpapi`         | PowerShell (built-in)                                            |
-| Any      | `file`          | None (AES-256-GCM encrypted file, no OS credential store needed) |
+The **zero-config default is the `file` backend on every platform** — a bare `VaultKeeper.init()` or `vaultkeeper config init` (no `--backend`) never silently writes to your real OS credential store. Each platform additionally offers a native credential store you can **opt into** explicitly (`--backend <type>`, or an explicit config):
 
-The `file` backend works on all platforms and requires no system dependencies. Use it as a fallback or in environments without a native credential store (CI, Docker, etc.). With no explicit `path` configured, it stores secrets under `<configDir>/file/` — the same resolved config directory (`~/.config/vaultkeeper` by default, overridable via `--config-dir`/`VAULTKEEPER_CONFIG_DIR`) that holds `config.json` and key material, so everything lives in one discoverable place. Set `"path"` on the backend config to store secrets elsewhere instead.
+| Platform | Zero-config default | Native store (opt-in) | Opt-in dependencies                                              |
+| -------- | ------------------- | --------------------- | ---------------------------------------------------------------- |
+| macOS    | `file`              | `keychain`            | `security` (built-in)                                            |
+| Windows  | `file`              | `dpapi`               | PowerShell (built-in)                                            |
+| Linux    | `file`              | `secret-tool`         | `libsecret` / `secret-tool` (`sudo apt install libsecret-tools`) |
+| Any      | `file`              | —                     | None (AES-256-GCM encrypted file, no OS credential store needed) |
+
+The `file` backend works on all platforms and requires no system dependencies, which is why it is the safe default and a good fit for CI, Docker, and environments without a native credential store. With no explicit `path` configured, it stores secrets under `<configDir>/file/` — the same resolved config directory (`~/.config/vaultkeeper` by default, overridable via `--config-dir`/`VAULTKEEPER_CONFIG_DIR`) that holds `config.json` and key material, so everything lives in one discoverable place. Set `"path"` on the backend config to store secrets elsewhere instead.
 
 To use the native Linux credential store instead, install `secret-tool` (`sudo apt install libsecret-tools`) and set `"type": "secret-tool"` in your config.
 

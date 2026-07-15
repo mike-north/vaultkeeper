@@ -71,7 +71,7 @@ export type {
   ExecutableTrustStatus,
 } from './vault.js'
 
-export { platformDefaultBackendType } from './config.js'
+export { defaultBackendType, platformNativeBackendType } from './config.js'
 export { getDefaultConfigDir, loadConfig } from './config.js'
 
 export { runDoctor } from './doctor/runner.js'

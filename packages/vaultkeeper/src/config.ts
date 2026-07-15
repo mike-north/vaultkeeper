@@ -83,46 +83,83 @@ export function getDefaultConfigDir(): string {
 }
 
 /**
- * Resolve the backend type that vaultkeeper uses by default on the current
- * platform when no backend is explicitly configured.
+ * The backend type vaultkeeper uses by default when no backend is explicitly
+ * configured — the **`file`** backend, on every platform.
  *
  * @remarks
- * The default deliberately targets the platform-native OS credential store so
- * that secrets are protected by the operating system out of the box:
+ * The zero-config default is deliberately the portable, self-contained
+ * AES-256-GCM encrypted file backend rather than the platform-native OS
+ * credential store. This guarantees that a bare {@link VaultKeeper.init} — or a
+ * `vaultkeeper config init` with no `--backend` flag — can never silently write
+ * a secret into the user's real login keychain (or Windows DPAPI store) before
+ * they have chosen to. It also matches the WASM SDK, which always uses the file
+ * backend.
+ *
+ * The OS-native store is still available as an explicit opt-in: pass
+ * `--backend keychain` (macOS) / `--backend dpapi` (Windows) to
+ * `vaultkeeper config init`, or set it in an explicit config. Use
+ * {@link platformNativeBackendType} to discover which native store the current
+ * platform offers.
+ *
+ * @returns The zero-config default backend type identifier (`'file'`).
+ * @public
+ */
+export function defaultBackendType(): string {
+  return 'file'
+}
+
+/**
+ * Resolve the OS-native credential store type for the current platform.
+ *
+ * @remarks
+ * This is **not** the zero-config default — {@link defaultBackendType} (always
+ * `'file'`) is. This function reports which platform-native store a user can
+ * explicitly opt into (e.g. via `vaultkeeper config init --backend keychain`):
  *
  * - **macOS** → `keychain` (macOS Keychain)
  * - **Windows** → `dpapi` (Windows DPAPI)
- * - **all other platforms** (Linux, etc.) → `file` (AES-256-GCM encrypted file)
+ * - **Linux** → `secret-tool` (Secret Service via `libsecret`; opting in
+ *   requires the `libsecret-tools` package)
+ * - **any other platform** → `file` (no built-in native store integration, so
+ *   the portable AES-256-GCM encrypted file backend is the only option)
  *
- * On macOS and Windows this means a bare {@link VaultKeeper.init} — or a
- * `vaultkeeper config init` with no `--backend` flag — writes to the real OS
- * credential store. Choose `file` explicitly for a portable, CI-friendly store
- * that requires no system credential service.
+ * Use it to tell the user which native store is available on their platform, or
+ * to label the opt-in. It never affects what an unconfigured vault resolves to
+ * — that is always {@link defaultBackendType} (`file`).
  *
- * @returns The default backend type identifier for the current platform.
+ * @returns The OS-native backend type identifier for the current platform.
  * @public
  */
-export function platformDefaultBackendType(): string {
+export function platformNativeBackendType(): string {
   if (process.platform === 'darwin') {
     return 'keychain'
   }
   if (process.platform === 'win32') {
     return 'dpapi'
   }
-  // Linux and other Unix-like systems. Use 'file' rather than 'secret-tool'
-  // because secret-tool requires libsecret-tools, which many systems lack.
+  if (process.platform === 'linux') {
+    // The `secret-tool` backend is a real shipped built-in (Secret Service via
+    // libsecret) — the Linux OS-native store a user can opt into. It is not the
+    // zero-config default (that is `file`), so naming it here never risks a
+    // silent write: the caller must explicitly choose `--backend secret-tool`.
+    return 'secret-tool'
+  }
+  // Other platforms (e.g. the BSDs) have no built-in native-store integration.
   return 'file'
 }
 
 /**
  * Default configuration when no config file exists.
  *
- * The active backend is resolved by {@link platformDefaultBackendType}.
+ * The active backend is the safe zero-config default resolved by
+ * {@link defaultBackendType} (the `file` backend on every platform), never the
+ * OS-native credential store — a missing config must never silently target the
+ * real keychain (issue #98).
  */
 function defaultConfig(): VaultConfig {
   return {
     version: 1,
-    backends: [{ type: platformDefaultBackendType(), enabled: true }],
+    backends: [{ type: defaultBackendType(), enabled: true }],
     keyRotation: { gracePeriodDays: 7 },
     defaults: { ttlMinutes: 60, trustTier: 3 },
   }

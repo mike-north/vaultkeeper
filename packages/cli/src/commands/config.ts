@@ -1,7 +1,12 @@
 import { parseArgs } from 'node:util'
 import * as fs from 'node:fs/promises'
 import * as path from 'node:path'
-import { BackendRegistry, platformDefaultBackendType, loadConfig } from 'vaultkeeper'
+import {
+  BackendRegistry,
+  defaultBackendType,
+  platformNativeBackendType,
+  loadConfig,
+} from 'vaultkeeper'
 import { formatError } from '../output.js'
 import { CONFIG_DIR_HELP_OPTION, CONFIG_DIR_HELP_ENV } from '../config-dir.js'
 import { configFileExists, noConfigMessage } from '../config-status.js'
@@ -169,7 +174,10 @@ async function configInit(rest: string[], configDir: string): Promise<number> {
     requestedBackend = values.backend
   }
 
-  const backendType = requestedBackend ?? platformDefaultBackendType()
+  // No --backend => the safe zero-config default (file) on every platform, so
+  // a copy-pasted `config init` can never silently target the real OS
+  // credential store (issue #98). The native store is an explicit opt-in.
+  const backendType = requestedBackend ?? defaultBackendType()
 
   try {
     const configPath = path.join(configDir, 'config.json')
@@ -195,15 +203,15 @@ async function configInit(rest: string[], configDir: string): Promise<number> {
     process.stdout.write(`Config created at ${configPath}\n`)
 
     if (requestedBackend === undefined) {
-      if (backendType === 'file') {
+      const native = platformNativeBackendType()
+      if (native === 'file') {
         process.stdout.write(
-          `Backend: file (${platformLabel()} default). ` +
-            'Use --backend <type> to target an OS credential store.\n',
+          'Backend: file (safe default). ' + 'Use --backend <type> to choose a different store.\n',
         )
       } else {
         process.stdout.write(
-          `Backend: ${backendType} (${platformLabel()} default). ` +
-            'Use --backend file for a portable, CI-friendly store.\n',
+          'Backend: file (safe default). ' +
+            `Opt into the ${platformLabel()} native store with --backend ${native}.\n`,
         )
       }
     } else {
@@ -248,11 +256,10 @@ async function configShow(rest: string[], configDir: string): Promise<number> {
     if (!exists) {
       // No config file: fall back to platform defaults and say so, the same
       // story store/delete/exec/doctor use (issue #68) — never error here.
-      const activeType =
-        config.backends.find((b) => b.enabled)?.type ?? platformDefaultBackendType()
+      const activeType = config.backends.find((b) => b.enabled)?.type ?? defaultBackendType()
       process.stderr.write(noConfigMessage(activeType))
       process.stdout.write(`${JSON.stringify(config, null, 2)}\n`)
-      process.stderr.write(`Active backend: ${activeType} (platform default)\n`)
+      process.stderr.write(`Active backend: ${activeType} (default)\n`)
       return 0
     }
 

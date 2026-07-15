@@ -40,13 +40,16 @@ export async function configFileExists(configDir: string): Promise<boolean> {
 }
 
 /**
- * One-line advisory printed when a command falls back to platform defaults
- * because no config file exists. Always names the active backend and points
- * at `vaultkeeper config init` so the user can persist a real config.
+ * One-line advisory printed when a command falls back to the default backend
+ * because no config file exists. Names the active backend and points at
+ * `vaultkeeper config init --backend <type>` — spelling out `--backend`
+ * explicitly, never a bare `config init`, so following the hint verbatim can
+ * never silently persist a different (e.g. OS-native) backend than the one the
+ * fallback just reported (issue #98).
  */
 export function noConfigMessage(activeBackendType: string): string {
   return (
-    `No config file found; using platform defaults (${activeBackendType}). ` +
-    "Run 'vaultkeeper config init' to persist one.\n"
+    `No config file found; using the default backend (${activeBackendType}). ` +
+    `Run 'vaultkeeper config init --backend ${activeBackendType}' to persist it.\n`
   )
 }

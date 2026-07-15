@@ -1,8 +1,9 @@
 # @vaultkeeper/cli
 
 Command-line interface for [vaultkeeper](https://www.npmjs.com/package/vaultkeeper) — store,
-retrieve, and inject secrets with policy-enforced access control, backed by your OS credential
-store.
+retrieve, and inject secrets with policy-enforced access control. Secrets are kept in a portable,
+self-contained encrypted `file` backend by default; your OS credential store (macOS Keychain,
+Windows DPAPI) is available as an explicit opt-in.
 
 ## Installation
 
@@ -20,7 +21,9 @@ npm install -g @vaultkeeper/cli
 # Run preflight checks
 vaultkeeper doctor
 
-# Initialize configuration
+# Initialize configuration. With no --backend this writes the safe, portable
+# `file` backend — never your real OS keychain. Opt into the native store
+# explicitly with --backend, e.g. `vaultkeeper config init --backend keychain`.
 vaultkeeper config init
 
 # Store a secret (reads from stdin)

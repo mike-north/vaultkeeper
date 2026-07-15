@@ -13,7 +13,7 @@ vi.mock('vaultkeeper', () => ({
     doctor: mockDoctor,
   },
   loadConfig: mockLoadConfig,
-  platformDefaultBackendType: vi.fn().mockReturnValue('file'),
+  defaultBackendType: vi.fn().mockReturnValue('file'),
 }))
 
 describe('doctorCommand', () => {

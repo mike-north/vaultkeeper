@@ -164,12 +164,13 @@ describe('configCommand', () => {
       expect(parsed).toMatchObject({ version: 1 })
     })
 
-    it('should show a user-friendly "using platform defaults" message when no config file exists', async () => {
+    it('should show a user-friendly default-backend message when no config file exists', async () => {
       const { configCommand } = await import('../../../src/commands/config.js')
       await configCommand(['show'], configDir)
       expect(stderrOutput).toContain('No config file found')
-      expect(stderrOutput).toContain('using platform defaults')
-      expect(stderrOutput).toContain('vaultkeeper config init')
+      expect(stderrOutput).toContain('using the default backend (file)')
+      // Issue #98: the hint spells out --backend, and the default is file.
+      expect(stderrOutput).toContain('vaultkeeper config init --backend file')
     })
 
     it('should exit non-zero with a parse error, path, location, and remediation hint on invalid JSON (issue #68)', async () => {

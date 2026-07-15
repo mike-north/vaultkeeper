@@ -82,6 +82,9 @@ export class ConfigValidationError extends VaultError {
 }
 
 // @public
+export function defaultBackendType(): string;
+
+// @public
 export class DeviceNotPresentError extends VaultError {
     constructor(message: string, timeoutMs: number);
     readonly timeoutMs: number;
@@ -193,7 +196,7 @@ export function loadConfig(configDir?: string): Promise<VaultConfig>;
 export type Platform = 'darwin' | 'win32' | 'linux';
 
 // @public
-export function platformDefaultBackendType(): string;
+export function platformNativeBackendType(): string;
 
 // @public
 export class PluginNotFoundError extends VaultError {

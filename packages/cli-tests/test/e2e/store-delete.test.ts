@@ -94,9 +94,10 @@ describe('store and delete lifecycle', () => {
     expect(result.stderr).toContain('vaultkeeper config init')
   })
 
-  // No-config story (issue #68): store falls back to platform defaults and
-  // says so, the same as config show/doctor/delete/exec.
-  it('store should report a "using platform defaults" message when no config file exists', async () => {
+  // No-config story (issue #68): store falls back to the default backend and
+  // says so, the same as config show/doctor/delete/exec. Issue #98: that
+  // default is the safe file backend, and the hint spells out --backend.
+  it('store should report a default-backend message naming the file backend when no config file exists', async () => {
     env = await createCliTestEnv()
     await fs.rm(path.join(env.configDir, 'config.json'))
     const result = await env.runWithStdin(
@@ -104,7 +105,7 @@ describe('store and delete lifecycle', () => {
       'sk-live-abc123',
     )
     expect(result.stderr).toContain('No config file found')
-    expect(result.stderr).toContain('using platform defaults')
-    expect(result.stderr).toContain('vaultkeeper config init')
+    expect(result.stderr).toContain('using the default backend (file)')
+    expect(result.stderr).toContain('vaultkeeper config init --backend file')
   })
 })

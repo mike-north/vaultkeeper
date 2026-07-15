@@ -16,7 +16,7 @@ vi.mock('vaultkeeper', () => ({
     getTypes: mockGetTypes,
     create: mockCreate,
   },
-  platformDefaultBackendType: vi.fn().mockReturnValue('file'),
+  defaultBackendType: vi.fn().mockReturnValue('file'),
 }))
 
 function mockStdinWith(value: string): void {

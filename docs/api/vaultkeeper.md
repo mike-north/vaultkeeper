@@ -339,6 +339,17 @@ Description
 </th></tr></thead>
 <tbody><tr><td>
 
+[defaultBackendType()](./vaultkeeper.defaultbackendtype.md)
+
+
+</td><td>
+
+The backend type vaultkeeper uses by default when no backend is explicitly configured — the \*\*`file`<!-- -->\*\* backend, on every platform.
+
+
+</td></tr>
+<tr><td>
+
 [getDefaultConfigDir()](./vaultkeeper.getdefaultconfigdir.md)
 
 
@@ -376,12 +387,12 @@ Any other read failure (e.g. `EACCES`<!-- -->, `EISDIR`<!-- -->) is a genuinely 
 </td></tr>
 <tr><td>
 
-[platformDefaultBackendType()](./vaultkeeper.platformdefaultbackendtype.md)
+[platformNativeBackendType()](./vaultkeeper.platformnativebackendtype.md)
 
 
 </td><td>
 
-Resolve the backend type that vaultkeeper uses by default on the current platform when no backend is explicitly configured.
+Resolve the OS-native credential store type for the current platform.
 
 
 </td></tr>

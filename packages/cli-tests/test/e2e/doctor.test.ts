@@ -61,15 +61,16 @@ describe('doctor command', () => {
     expect(result.stdout).toContain('version must be 1')
   })
 
-  // No-config story (issue #68): doctor falls back to platform defaults and
+  // No-config story (issue #68): doctor falls back to the default backend and
   // says so, uniformly with store/delete/exec/config show, rather than
-  // silently defaulting or erroring.
-  it('should report a "using platform defaults" message when no config file exists', async () => {
+  // silently defaulting or erroring. Issue #98: that default is the safe file
+  // backend, and the hint spells out --backend.
+  it('should report a default-backend message naming the file backend when no config file exists', async () => {
     env = await createCliTestEnv()
     await fs.rm(path.join(env.configDir, 'config.json'))
     const result = await env.run(['doctor'])
     expect(result.stderr).toContain('No config file found')
-    expect(result.stderr).toContain('using platform defaults')
-    expect(result.stderr).toContain('vaultkeeper config init')
+    expect(result.stderr).toContain('using the default backend (file)')
+    expect(result.stderr).toContain('vaultkeeper config init --backend file')
   })
 })

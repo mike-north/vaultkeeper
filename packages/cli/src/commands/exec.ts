@@ -33,7 +33,7 @@ import {
   VaultKeeper,
   IdentityMismatchError,
   SecretNotFoundError,
-  platformDefaultBackendType,
+  defaultBackendType,
 } from 'vaultkeeper'
 import { promptApproval } from '../approval.js'
 import { readCachedToken, writeCachedToken, invalidateCache } from '../cache.js'
@@ -306,7 +306,7 @@ export async function execCommand(args: string[], configDir: string): Promise<nu
     // (issue #68): fall back to platform defaults and say so, rather than
     // silently defaulting.
     if (!(await configFileExists(configDir))) {
-      process.stderr.write(noConfigMessage(platformDefaultBackendType()))
+      process.stderr.write(noConfigMessage(defaultBackendType()))
     }
 
     const vault = await VaultKeeper.init({ configDir, skipDoctor })
