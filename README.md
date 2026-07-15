@@ -213,7 +213,7 @@ The WASM SDK exposes lower-level APIs than the TypeScript library's delegated pa
 
 **The WASM SDK always uses the file backend.** Unlike the native and Node.js CLIs and the TypeScript library, it does not read the `backends` config and does not use the platform-default credential store (Keychain, DPAPI, `secret-tool`) — secrets are always stored in the AES-256-GCM encrypted file backend regardless of platform.
 
-**`setup()` does not read from the backend.** This is the one method where the WASM SDK's contract deliberately diverges from the TypeScript library's: `vault.setup(secretName, secretValue, options?)` mints a JWE directly from the `secretValue` argument you pass in — it never calls `store()`/`retrieve()` or looks at anything already persisted under `secretName`. The TypeScript library's `vault.setup(secretName, options?)` has no `secretValue` parameter at all; it always reads the current value from the configured backend. `store()` and `setup()` are independent operations here — calling `store()` first has no effect on what `setup()` encapsulates.
+**`setup()` does not read from the backend.** `vault.setup(secretName, secretValue, options?)` mints a JWE directly from the `secretValue` argument you pass in — it never calls `store()`/`retrieve()` or looks at anything already persisted under `secretName`. This diverges from the TypeScript library's `vault.setup(secretName, options?)`, which has no `secretValue` parameter at all and always reads the current value from the configured backend. `store()` and `setup()` are independent operations here — calling `store()` first has no effect on what `setup()` encapsulates.
 
 ```ts
 import { createVaultKeeper } from '@vaultkeeper/wasm'
@@ -233,7 +233,7 @@ const apiKey = result.secret.read((value) => value)
 // when you want the WASM SDK to persist a secret for later retrieval, but
 // note that setup() above will not read what you stored here.
 await vault.store('MY_API_KEY', 'my-secret-value')
-const stored = await vault.retrieve('MY_API_KEY')
+console.log(await vault.retrieve('MY_API_KEY'))
 
 // Rotate or revoke keys
 vault.rotateKey()
