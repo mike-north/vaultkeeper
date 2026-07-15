@@ -20,9 +20,16 @@
  * material) and accurate error surfacing on the cached-token path: a revoked
  * key must be reported as `KeyRevokedError`, not a generic "expired" message.
  *
+ * Issue #104 re-verifies the cross-process cache-reuse behavior from #59
+ * still holds against the current CLI: "reuses a cached token across
+ * processes without re-authenticating" below runs two separate CLI
+ * subprocesses sharing a config dir and asserts the second invocation
+ * neither re-prompts nor prints an "expired"/re-authentication notice.
+ *
  * @see https://github.com/mike-north/vaultkeeper/issues/57
  * @see https://github.com/mike-north/vaultkeeper/issues/58
  * @see https://github.com/mike-north/vaultkeeper/issues/59
+ * @see https://github.com/mike-north/vaultkeeper/issues/104
  */
 import * as fs from 'node:fs/promises'
 import * as os from 'node:os'

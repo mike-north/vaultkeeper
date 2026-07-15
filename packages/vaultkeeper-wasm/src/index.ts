@@ -154,7 +154,17 @@ export class VaultKeeper {
     return callAsync(() => this.#inner.doctor());
   }
 
-  /** Create a JWE token encapsulating a secret. */
+  /**
+   * Create a JWE token encapsulating a secret.
+   *
+   * Unlike the TypeScript `vaultkeeper` library's `setup(secretName, options?)`,
+   * this method does not read from the backend — it mints the token directly
+   * from `secretValue`. It never calls {@link VaultKeeper.store} /
+   * {@link VaultKeeper.retrieve} or looks at anything already persisted under
+   * `secretName`, so a prior `store()` call has no effect on what `setup()`
+   * encapsulates. This is an intentional divergence between the two SDKs'
+   * `setup()` contracts, not a bug.
+   */
   setup(secretName: string, secretValue: string, options?: SetupOptions): string {
     return callSync(() => this.#inner.setup(secretName, secretValue, options ?? {}));
   }

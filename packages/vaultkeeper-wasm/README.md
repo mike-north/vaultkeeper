@@ -8,6 +8,13 @@ The public API is not a drop-in replacement for the TypeScript library — some 
 differ (e.g. `setup(secretName, secretValue, ...)` here, vs. the TS library's
 `setup(secretName, options?)`).
 
+**`setup()` does not read from the backend.** This package's `setup(secretName, secretValue, options?)`
+mints a JWE directly from the `secretValue` argument — it never calls `store()`/`retrieve()` or reads
+whatever is already persisted under `secretName`. The TS library's `setup(secretName, options?)` has
+no `secretValue` parameter at all and always reads the current value from the configured backend.
+`store()` and `setup()` are independent operations here; calling `store()` first has no effect on
+what `setup()` encapsulates.
+
 ## Installation
 
 ```sh
@@ -23,10 +30,8 @@ import { createVaultKeeper } from '@vaultkeeper/wasm'
 
 const vault = await createVaultKeeper()
 
-// Store a secret
-await vault.store('MY_API_KEY', 'my-secret-value')
-
-// Mint a JWE token
+// Mint a JWE token directly from a value you already have — setup() does not
+// read from the backend (see above), so no prior store() call is needed.
 const jwe = vault.setup('MY_API_KEY', 'my-secret-value')
 
 // Authorize: decrypt and validate. The result's `claims` never contain the

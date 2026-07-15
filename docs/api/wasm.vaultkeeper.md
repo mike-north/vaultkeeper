@@ -174,6 +174,8 @@ Rotate the encryption key.
 
 Create a JWE token encapsulating a secret.
 
+Unlike the TypeScript `vaultkeeper` library's `setup(secretName, options?)`<!-- -->, this method does not read from the backend — it mints the token directly from `secretValue`<!-- -->. It never calls [VaultKeeper.store()](./wasm.vaultkeeper.store.md) / [VaultKeeper.retrieve()](./wasm.vaultkeeper.retrieve.md) or looks at anything already persisted under `secretName`<!-- -->, so a prior `store()` call has no effect on what `setup()` encapsulates. This is an intentional divergence between the two SDKs' `setup()` contracts, not a bug.
+
 
 </td></tr>
 <tr><td>
