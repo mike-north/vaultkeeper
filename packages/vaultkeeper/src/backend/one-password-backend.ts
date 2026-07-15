@@ -19,6 +19,7 @@ import {
   SecretNotFoundError,
   PluginNotFoundError,
   BackendLockedError,
+  BackendUnavailableError,
   AuthorizationDeniedError,
 } from '../errors.js'
 import type { ListableBackend } from './types.js'
@@ -32,11 +33,17 @@ type Client = import('@1password/sdk').Client
 type Item = import('@1password/sdk').Item
 type ItemOverview = import('@1password/sdk').ItemOverview
 
-const SDK_INSTALL_URL = 'https://developer.1password.com/docs/sdks/'
 const TAG = 'vaultkeeper'
 const PASSWORD_FIELD_TITLE = 'password'
 const SESSION_TIMEOUT_MS = 30_000
-import { INTEGRATION_NAME, getIntegrationVersion } from './one-password-constants.js'
+import {
+  INTEGRATION_NAME,
+  SDK_INSTALL_URL,
+  SDK_NOT_INSTALLED_MESSAGE,
+  SDK_PACKAGE,
+  getIntegrationVersion,
+  isModuleNotFoundError,
+} from './one-password-constants.js'
 
 /** Options accepted by `OnePasswordBackend`. */
 export interface OnePasswordBackendOptions {
@@ -139,7 +146,9 @@ export class OnePasswordBackend implements ListableBackend {
 
   /**
    * Dynamically import the SDK. Returns `null` if the SDK is not installed or
-   * the native library cannot be loaded.
+   * the native library cannot be loaded. Used by {@link isAvailable}, which
+   * only needs a yes/no answer; call {@link loadSdkOrThrow} on paths that must
+   * report *why* the SDK could not be loaded.
    */
   private async tryLoadSdk(): Promise<SdkModule | null> {
     try {
@@ -147,6 +156,24 @@ export class OnePasswordBackend implements ListableBackend {
       return sdk
     } catch {
       return null
+    }
+  }
+
+  /**
+   * Dynamically import the SDK, throwing a typed {@link PluginNotFoundError}
+   * only when the module cannot be resolved (the optional peer is not
+   * installed). A present-but-broken SDK (native binding failure, init throw,
+   * incompatible Node) surfaces its real error instead of a misleading
+   * "not installed" message.
+   */
+  private async loadSdkOrThrow(): Promise<SdkModule> {
+    try {
+      return await import('@1password/sdk')
+    } catch (error: unknown) {
+      if (isModuleNotFoundError(error)) {
+        throw new PluginNotFoundError(SDK_NOT_INSTALLED_MESSAGE, SDK_PACKAGE, SDK_INSTALL_URL)
+      }
+      throw error
     }
   }
 
@@ -165,21 +192,16 @@ export class OnePasswordBackend implements ListableBackend {
   }
 
   private async createClientInternal(): Promise<Client> {
-    const sdk = await this.tryLoadSdk()
-    if (sdk === null) {
-      throw new PluginNotFoundError(
-        '1Password SDK (@1password/sdk) is not available. Install it to use this backend.',
-        '@1password/sdk',
-        SDK_INSTALL_URL,
-      )
-    }
+    const sdk = await this.loadSdkOrThrow()
 
     const auth = this.buildAuth(sdk)
 
     let timerId: ReturnType<typeof setTimeout> | undefined
     const timeoutPromise = new Promise<never>((_resolve, reject) => {
       timerId = setTimeout(() => {
-        reject(new BackendLockedError('1Password session timed out waiting for authentication', true))
+        reject(
+          new BackendLockedError('1Password session timed out waiting for authentication', true),
+        )
       }, this.sessionTimeoutMs)
     })
 
@@ -198,14 +220,9 @@ export class OnePasswordBackend implements ListableBackend {
         throw err
       }
       if (err instanceof sdk.DesktopSessionExpiredError) {
-        throw new BackendLockedError(
-          '1Password session has expired. Please unlock the app.',
-          true,
-        )
+        throw new BackendLockedError('1Password session has expired. Please unlock the app.', true)
       }
-      throw new AuthorizationDeniedError(
-        `1Password authentication failed: ${String(err)}`,
-      )
+      throw new AuthorizationDeniedError(`1Password authentication failed: ${String(err)}`)
     } finally {
       if (timerId !== undefined) {
         clearTimeout(timerId)
@@ -227,10 +244,7 @@ export class OnePasswordBackend implements ListableBackend {
    * List all items in the vault tagged "vaultkeeper" and find one with the
    * matching title (= secret ID). Returns `undefined` if not found.
    */
-  private async findItemOverview(
-    client: Client,
-    id: string,
-  ): Promise<ItemOverview | undefined> {
+  private async findItemOverview(client: Client, id: string): Promise<ItemOverview | undefined> {
     const overviews = await client.items.list(this.vaultId)
     for (const overview of overviews) {
       if (overview.title === id && overview.tags.includes(TAG)) {
@@ -258,9 +272,7 @@ export class OnePasswordBackend implements ListableBackend {
         return field.value
       }
     }
-    throw new SecretNotFoundError(
-      `Secret found in 1Password but missing password field: ${id}`,
-    )
+    throw new SecretNotFoundError(`Secret found in 1Password but missing password field: ${id}`)
   }
 
   // ---- SecretBackend / ListableBackend implementation ----
@@ -331,17 +343,12 @@ export class OnePasswordBackend implements ListableBackend {
    */
   private retrieveViaWorker(id: string): Promise<string> {
     return new Promise((resolve, reject) => {
-      const workerPath = join(
-        dirname(fileURLToPath(import.meta.url)),
-        'one-password-worker.js',
-      )
+      const workerPath = join(dirname(fileURLToPath(import.meta.url)), 'one-password-worker.js')
 
       const accountArg = this.account ?? ''
-      const child = spawn(
-        process.execPath,
-        [workerPath, accountArg, this.vaultId, id],
-        { stdio: ['ignore', 'pipe', 'pipe'] },
-      )
+      const child = spawn(process.execPath, [workerPath, accountArg, this.vaultId, id], {
+        stdio: ['ignore', 'pipe', 'pipe'],
+      })
 
       const stdoutChunks: Buffer[] = []
       const stderrChunks: Buffer[] = []
@@ -371,13 +378,20 @@ export class OnePasswordBackend implements ListableBackend {
           return
         }
         if (!isWorkerResponse(parsed)) {
-          reject(new SecretNotFoundError(`Worker returned unexpected response shape for secret: ${id}`))
+          reject(
+            new SecretNotFoundError(`Worker returned unexpected response shape for secret: ${id}`),
+          )
           return
         }
         if (isWorkerSuccess(parsed)) {
           resolve(parsed.value)
         } else {
           switch (parsed.code) {
+            case 'PLUGIN_NOT_FOUND':
+              reject(
+                new PluginNotFoundError(SDK_NOT_INSTALLED_MESSAGE, SDK_PACKAGE, SDK_INSTALL_URL),
+              )
+              break
             case 'NOT_FOUND':
               reject(new SecretNotFoundError(`Secret not found in 1Password: ${id}`))
               break
@@ -387,6 +401,19 @@ export class OnePasswordBackend implements ListableBackend {
             case 'LOCKED':
               reject(new BackendLockedError('1Password is locked. Please unlock and retry.', true))
               break
+            case 'INTERNAL':
+              // A worker-internal failure (e.g. a present-but-broken SDK that
+              // could not be loaded) is a backend problem, not a missing
+              // secret — surface it as such with the worker's real detail so it
+              // isn't misclassified as SecretNotFoundError.
+              reject(
+                new BackendUnavailableError(
+                  `1Password per-access worker failed for secret ${id}: ${parsed.error}`,
+                  'worker-internal-error',
+                  ['1password'],
+                ),
+              )
+              break
             default:
               reject(new SecretNotFoundError(`Worker failed for secret ${id}: ${parsed.error}`))
           }
@@ -394,9 +421,9 @@ export class OnePasswordBackend implements ListableBackend {
       })
 
       child.on('error', (err) => {
-        reject(new Error(
-          `Failed to spawn 1Password per-access worker at ${workerPath}: ${String(err)}`,
-        ))
+        reject(
+          new Error(`Failed to spawn 1Password per-access worker at ${workerPath}: ${String(err)}`),
+        )
       })
     })
   }
@@ -430,16 +457,11 @@ export class OnePasswordBackend implements ListableBackend {
 
   // ---- Private helpers ----
 
-  /** Load SDK and throw PluginNotFoundError if unavailable. */
-  private async requireSdk(): Promise<SdkModule> {
-    const sdk = await this.tryLoadSdk()
-    if (sdk === null) {
-      throw new PluginNotFoundError(
-        '1Password SDK (@1password/sdk) is not available.',
-        '@1password/sdk',
-        SDK_INSTALL_URL,
-      )
-    }
-    return sdk
+  /**
+   * Load SDK, throwing a typed {@link PluginNotFoundError} when it is not
+   * installed and surfacing the real error when it is present but broken.
+   */
+  private requireSdk(): Promise<SdkModule> {
+    return this.loadSdkOrThrow()
   }
 }

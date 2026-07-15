@@ -14,11 +14,14 @@
  * stdout on failure: `{ "error": "<message>", "code": "<code>" }`
  */
 
-import { createClient, DesktopAuth, DesktopSessionExpiredError } from '@1password/sdk'
-
 const TAG = 'vaultkeeper'
 const PASSWORD_FIELD_TITLE = 'password'
-import { INTEGRATION_NAME, getIntegrationVersion } from './one-password-constants.js'
+import {
+  INTEGRATION_NAME,
+  SDK_NOT_INSTALLED_MESSAGE,
+  getIntegrationVersion,
+  isModuleNotFoundError,
+} from './one-password-constants.js'
 
 interface SuccessResponse {
   value: string
@@ -46,6 +49,26 @@ async function main(): Promise<void> {
     writeFailure('Worker invoked with missing arguments', 'INTERNAL')
     process.exit(1)
   }
+
+  // The SDK is an optional peer dependency, loaded lazily so the worker only
+  // requires it when a per-access retrieval actually runs. A genuine "module
+  // not resolved" is reported with PLUGIN_NOT_FOUND (the parent maps it to a
+  // typed PluginNotFoundError); a present-but-broken SDK surfaces its real
+  // error instead of a misleading "not installed" message.
+  // Type-only annotation (typeof import) keeps the load itself dynamic while
+  // giving `sdk` a precise type instead of an implicit any.
+  let sdk: typeof import('@1password/sdk')
+  try {
+    sdk = await import('@1password/sdk')
+  } catch (err) {
+    if (isModuleNotFoundError(err)) {
+      writeFailure(SDK_NOT_INSTALLED_MESSAGE, 'PLUGIN_NOT_FOUND')
+    } else {
+      writeFailure(`Failed to load 1Password SDK: ${String(err)}`, 'INTERNAL')
+    }
+    process.exit(1)
+  }
+  const { createClient, DesktopAuth, DesktopSessionExpiredError } = sdk
 
   let client
   try {

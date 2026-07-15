@@ -123,13 +123,13 @@ importers:
 
   packages/vaultkeeper:
     dependencies:
-      '@1password/sdk':
-        specifier: ^0.4.0
-        version: 0.4.0
       jose:
         specifier: ^6.0.0
         version: 6.1.3
     devDependencies:
+      '@1password/sdk':
+        specifier: ^0.4.0
+        version: 0.4.0
       '@microsoft/api-documenter':
         specifier: ^7.0.0
         version: 7.29.2(@types/node@22.19.11)

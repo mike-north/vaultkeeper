@@ -49,18 +49,22 @@
     "access": "public"
   },
   "dependencies": {
-    "@1password/sdk": "^0.4.0",
     "jose": "^6.0.0"
   },
   "peerDependencies": {
+    "@1password/sdk": "^0.4.0",
     "@types/node": ">=20"
   },
   "peerDependenciesMeta": {
+    "@1password/sdk": {
+      "optional": true
+    },
     "@types/node": {
       "optional": true
     }
   },
   "devDependencies": {
+    "@1password/sdk": "^0.4.0",
     "@microsoft/api-documenter": "^7.0.0",
     "@microsoft/api-extractor": "^7.57.2",
     "@types/node": "^22.0.0",
