@@ -38,13 +38,13 @@ export interface SetupOptions {
   /**
    * The calling executable's real path, bound into the minted token. Mutually
    * exclusive with {@link SetupOptions.skipTrust}. The retired `'dev'` sentinel
-   * is rejected — use `skipTrust: true` to skip verification instead.
+   * is rejected — use `skipTrust: true` to skip binding a real identity instead.
    */
   executablePath?: string;
   /**
-   * Development-only opt-out that deliberately skips executable-trust binding,
-   * producing a `'dev'`-bound (unverified) token. Mutually exclusive with
-   * {@link SetupOptions.executablePath}.
+   * Development-only opt-out that deliberately skips binding a real executable
+   * identity, producing a `'dev'`-bound token (no executable identity bound).
+   * Mutually exclusive with {@link SetupOptions.executablePath}.
    */
   skipTrust?: boolean;
   backendType?: string;

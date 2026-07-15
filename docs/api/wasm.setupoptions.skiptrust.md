@@ -4,7 +4,7 @@
 
 ## SetupOptions.skipTrust property
 
-Development-only opt-out that deliberately skips executable-trust binding, producing a `'dev'`<!-- -->-bound (unverified) token. Mutually exclusive with [SetupOptions.executablePath](./wasm.setupoptions.executablepath.md)<!-- -->.
+Development-only opt-out that deliberately skips binding a real executable identity, producing a `'dev'`<!-- -->-bound token (no executable identity bound). Mutually exclusive with [SetupOptions.executablePath](./wasm.setupoptions.executablepath.md)<!-- -->.
 
 **Signature:**
 

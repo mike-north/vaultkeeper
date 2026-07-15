@@ -585,9 +585,9 @@ describe('@vaultkeeper/wasm setup() contract (issue #104)', () => {
 
 // Explicit executable-trust contract (issue #147): the WASM SDK's setup() must
 // reach the same safe posture as the TypeScript library's setup() (#123/#131) —
-// it must NOT silently mint an unverified 'dev'-bound token. The caller must
-// make an explicit trust choice, and the failure surfaces as the same typed,
-// reason-tagged error across both SDKs.
+// it must NOT silently mint a 'dev'-bound token with no explicit choice. The
+// caller must make an explicit trust choice, and the failure surfaces as the
+// same typed, reason-tagged error across both SDKs.
 describe('@vaultkeeper/wasm setup() explicit-trust contract (issue #147)', () => {
   it('setup() without a trust choice throws ExecutableTrustRequiredError (missing-choice) — no silent token', async () => {
     await withTempDir(async (dir) => {
@@ -670,7 +670,7 @@ describe('@vaultkeeper/wasm setup() explicit-trust contract (issue #147)', () =>
   it('setup() with an explicit executablePath binds that path into the token', async () => {
     await withTempDir(async (dir) => {
       const vault = await createTestVault(dir);
-      const token = vault.setup('verified', 'value', { executablePath: '/usr/bin/node' });
+      const token = vault.setup('bound-path', 'value', { executablePath: '/usr/bin/node' });
       const result = vault.authorize(token);
       assert.equal(result.claims.exe, '/usr/bin/node');
       vault.dispose();

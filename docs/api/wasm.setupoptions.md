@@ -71,7 +71,7 @@ string
 
 </td><td>
 
-_(Optional)_ The calling executable's real path, bound into the minted token. Mutually exclusive with [SetupOptions.skipTrust](./wasm.setupoptions.skiptrust.md)<!-- -->. The retired `'dev'` sentinel is rejected — use `skipTrust: true` to skip verification instead.
+_(Optional)_ The calling executable's real path, bound into the minted token. Mutually exclusive with [SetupOptions.skipTrust](./wasm.setupoptions.skiptrust.md)<!-- -->. The retired `'dev'` sentinel is rejected — use `skipTrust: true` to skip binding a real identity instead.
 
 
 </td></tr>
@@ -90,7 +90,7 @@ boolean
 
 </td><td>
 
-_(Optional)_ Development-only opt-out that deliberately skips executable-trust binding, producing a `'dev'`<!-- -->-bound (unverified) token. Mutually exclusive with [SetupOptions.executablePath](./wasm.setupoptions.executablepath.md)<!-- -->.
+_(Optional)_ Development-only opt-out that deliberately skips binding a real executable identity, producing a `'dev'`<!-- -->-bound token (no executable identity bound). Mutually exclusive with [SetupOptions.executablePath](./wasm.setupoptions.executablepath.md)<!-- -->.
 
 
 </td></tr>
