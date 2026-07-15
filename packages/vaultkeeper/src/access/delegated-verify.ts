@@ -8,7 +8,7 @@
 
 import * as crypto from 'node:crypto'
 import type { VerifyRequest } from '../types.js'
-import { resolveAlgorithmForKey } from './sign-util.js'
+import { assertAllowedAlgorithm, resolveAlgorithmForKey } from './sign-util.js'
 
 /**
  * Verify a signature using a public key.
@@ -24,9 +24,16 @@ import { resolveAlgorithmForKey } from './sign-util.js'
  * @internal
  */
 export function delegatedVerify(request: VerifyRequest): boolean {
+  // A disallowed algorithm (e.g. 'md5') is a downgrade attempt and must throw
+  // InvalidAlgorithmError unconditionally — including when the public key is
+  // also malformed or attacker-controlled. This guard therefore runs BEFORE
+  // parsing the key: parsing first would short-circuit to `return false` on a
+  // bad key and silently skip the algorithm check (see issue #180).
+  assertAllowedAlgorithm(request.algorithm)
+
   // Invalid key material or malformed signatures are treated as verification
   // failures (return false) rather than thrown errors. Disallowed algorithms
-  // are the deliberate exception — see resolveAlgorithmForKey below.
+  // are the deliberate exception — already rejected above.
   let key: crypto.KeyObject
   try {
     key = crypto.createPublicKey(request.publicKey)
