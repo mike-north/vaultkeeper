@@ -6,7 +6,7 @@ Available as a **native Rust CLI**, a **TypeScript library**, a **WASM-backed SD
 
 ## Which package should I use?
 
-- **`vaultkeeper`** — the pure TypeScript library. Use this by default: it offers the delegated access patterns (`fetch`, `exec`, `createSecretAccessor`) that keep raw secrets out of application memory. With no config file present it uses the safe `file` backend, same as the WASM SDK; `vaultkeeper config init` writes that same `file` default. To opt into your platform's native credential store instead, run `vaultkeeper config init --backend keychain` (macOS) / `--backend dpapi` (Windows), or set it in an explicit config.
+- **`vaultkeeper`** — the pure TypeScript library. Use this by default: it offers the delegated access patterns (`fetch`, `exec`, `getSecret()`) that keep raw secrets out of application memory. With no config file present it uses the safe `file` backend, same as the WASM SDK; `vaultkeeper config init` writes that same `file` default. To opt into your platform's native credential store instead, run `vaultkeeper config init --backend keychain` (macOS) / `--backend dpapi` (Windows), or set it in an explicit config.
 - **`@vaultkeeper/wasm`** — a WASM-backed SDK with a similar feature set, backed by the Rust core instead of the `jose` npm package. Reach for it when you specifically need the Rust implementation (e.g. to match native-CLI behavior exactly) or want to avoid a `jose` dependency. It hardcodes the file backend rather than using platform defaults — see [WASM SDK quick start](#wasm-sdk-quick-start).
 - **`@vaultkeeper/cli`** — the Node.js CLI (`vaultkeeper` on the command line). Use this for shell scripts, CI pipelines, or interactive use where you don't need a library API at all.
 
