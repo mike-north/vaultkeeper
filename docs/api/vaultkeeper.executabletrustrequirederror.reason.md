@@ -4,9 +4,7 @@
 
 ## ExecutableTrustRequiredError.reason property
 
-Machine-readable discriminator for why the trust choice was rejected:
-
-- `'missing-choice'` — neither `executablePath` nor `skipTrust: true` was provided, so no trust decision was expressed. - `'conflicting-choice'` — both `executablePath` and `skipTrust: true` were provided, which are mutually exclusive intents.
+Machine-readable discriminator for why the trust choice was rejected. `'missing-choice'` means neither `executablePath` nor `skipTrust: true` was provided, so no trust decision was expressed. `'conflicting-choice'` means both `executablePath` and `skipTrust: true` were provided, which are mutually exclusive intents.
 
 **Signature:**
 

@@ -226,12 +226,11 @@ export class IdentityMismatchError extends VaultError {
  */
 export class ExecutableTrustRequiredError extends VaultError {
   /**
-   * Machine-readable discriminator for why the trust choice was rejected:
-   *
-   * - `'missing-choice'` — neither `executablePath` nor `skipTrust: true` was
-   *   provided, so no trust decision was expressed.
-   * - `'conflicting-choice'` — both `executablePath` and `skipTrust: true` were
-   *   provided, which are mutually exclusive intents.
+   * Machine-readable discriminator for why the trust choice was rejected.
+   * `'missing-choice'` means neither `executablePath` nor `skipTrust: true`
+   * was provided, so no trust decision was expressed. `'conflicting-choice'`
+   * means both `executablePath` and `skipTrust: true` were provided, which
+   * are mutually exclusive intents.
    */
   readonly reason: 'missing-choice' | 'conflicting-choice'
 
