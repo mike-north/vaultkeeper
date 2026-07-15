@@ -31,14 +31,6 @@
   "engines": {
     "node": ">=20.0.0"
   },
-  "peerDependencies": {
-    "typescript": ">=5.0.0"
-  },
-  "peerDependenciesMeta": {
-    "typescript": {
-      "optional": true
-    }
-  },
   "scripts": {
     "build": "tsup && node scripts/inject-node-types-reference.mjs",
     "clean": "node -e \"import('node:fs').then(fs=>fs.rmSync('dist',{recursive:true,force:true}))\"",
