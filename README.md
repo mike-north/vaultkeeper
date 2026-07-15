@@ -6,7 +6,7 @@ Available as a **native Rust CLI**, a **TypeScript library**, a **WASM-backed SD
 
 ## Which package should I use?
 
-- **`vaultkeeper`** — the pure TypeScript library. Use this by default: it offers the delegated access patterns (`fetch`, `exec`, `createSecretAccessor`) that keep raw secrets out of application memory. With no config file present it uses the safe `file` backend, same as the WASM SDK; `vaultkeeper config init` writes that same `file` default. To opt into your platform's native credential store instead, run `vaultkeeper config init --backend keychain` (macOS) / `--backend dpapi` (Windows), or set it in an explicit config.
+- **`vaultkeeper`** — the pure TypeScript library. Use this by default: it offers the delegated access patterns (`fetch()`, `exec()`, `getSecret()`) that keep raw secrets out of application memory. With no config file present it uses the safe `file` backend, same as the WASM SDK; `vaultkeeper config init` writes that same `file` default. To opt into your platform's native credential store instead, run `vaultkeeper config init --backend keychain` (macOS) / `--backend dpapi` (Windows), or set it in an explicit config.
 - **`@vaultkeeper/wasm`** — a WASM-backed SDK with a similar feature set, backed by the Rust core instead of the `jose` npm package. Reach for it when you specifically need the Rust implementation (e.g. to match native-CLI behavior exactly) or want to avoid a `jose` dependency. It hardcodes the file backend rather than using platform defaults — see [WASM SDK quick start](#wasm-sdk-quick-start).
 - **`@vaultkeeper/cli`** — the Node.js CLI (`vaultkeeper` on the command line). Use this for shell scripts, CI pipelines, or interactive use where you don't need a library API at all.
 
@@ -385,17 +385,17 @@ Key material is persisted across processes. When `VaultKeeper` loads its configu
 
 ## Trust tiers
 
-Executable identity is verified during `setup()`. A `trustTier` value can be attached to the resulting token as a policy label.
+Executable identity is verified during `setup()` by hashing the executable (SHA-256) and checking that hash against a local trust manifest — this is a **TOFU (Trust On First Use)** model, not a package-registry or transparency-log lookup. Hashing is skipped — and identity is treated as unverified — when `executablePath` is `'dev'` (the default when no `executablePath` option is passed) or when the executable has been registered via `setDevelopmentMode()`; see [Development mode](#development-mode). Otherwise, `setup()` produces one of three outcomes:
 
-> **Note:** In the current implementation, `trustTier` is recorded in the token claims but does not change which verification mechanism is used. Future versions may introduce tier-specific verification behavior.
+- **Not yet approved** — first encounter with this executable path. The hash is recorded in the trust manifest so the same binary is recognized next time.
+- **Approved** — the executable's current hash matches what's recorded in the trust manifest (via `vaultkeeper approve --script <path>` or a prior `setup()` call).
+- **Mismatch** — the executable's current hash differs from what's recorded (the binary was rebuilt or replaced). `setup()` throws `IdentityMismatchError`; re-approve with `vaultkeeper approve --script <caller>`.
 
-| Tier | Intended method                                           |
-| ---- | --------------------------------------------------------- |
-| `1`  | Sigstore transparency log                                 |
-| `2`  | Registry signature                                        |
-| `3`  | TOFU (Trust On First Use) — hash stored in trust manifest |
+A `trustTier` value (`1`, `2`, or `3`) can also be attached to the resulting token as a policy label, independent of the TOFU check above.
 
-Pass `trustTier` in setup options to override the configured default:
+> **Note:** `trustTier` is recorded in the token claims as a label only — it does not select or change which verification mechanism runs; every `setup()` call that actually hashes the executable (i.e. not a dev-mode call, see above) applies the same TOFU check regardless of the `trustTier` value passed. Tier `1` is reserved for a possible future Sigstore-based verification path; the codebase contains a Sigstore integration point, but it is currently a stub that always falls through to the TOFU check — no executable is verified via Sigstore or any package registry today. Tier `2` does not correspond to a registry signature check either; it is simply the "hash found in the trust manifest" case of the same TOFU model as tier `3`.
+
+Pass `trustTier` in setup options to set that policy label:
 
 ```ts
 const jwe = await vault.setup('MY_API_KEY', {

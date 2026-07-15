@@ -257,7 +257,7 @@ Overall preflight result.
 
 A one-time accessor for the raw secret produced by `authorize()`<!-- -->.
 
-Mirrors the `createSecretAccessor` pattern in the TypeScript library: the plaintext secret is exposed only through a single `read()` callback and cannot be read a second time. This keeps the secret out of the default return shape and confines its lifetime to the callback.
+Mirrors the `getSecret()` pattern in the TypeScript library: the plaintext secret is exposed only through a single `read()` callback and cannot be read a second time. This keeps the secret out of the default return shape and confines its lifetime to the callback.
 
 
 </td></tr>
