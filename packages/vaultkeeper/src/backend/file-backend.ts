@@ -25,7 +25,7 @@
 import * as fs from 'node:fs/promises'
 import * as path from 'node:path'
 import * as os from 'node:os'
-import { SecretNotFoundError, FilesystemError } from '../errors.js'
+import { SecretNotFoundError, FilesystemError, DecryptionError } from '../errors.js'
 import { encryptGcm, decryptGcm, getOrCreateWrapKey } from '../util/at-rest.js'
 import { getDefaultConfigDir } from '../config.js'
 import type { ListableBackend } from './types.js'
@@ -88,6 +88,22 @@ async function getOrCreateKey(storageDir: string): Promise<Buffer> {
 }
 
 /**
+ * Re-throw a caught filesystem error as a typed {@link FilesystemError},
+ * preserving the underlying message. `permission` should describe the
+ * access level that was being attempted (e.g. `'read'`, `'write'`) —
+ * appropriate for `EACCES`/`EPERM` failures encountered while reading or
+ * writing a secret entry on disk.
+ */
+function toFilesystemError(err: unknown, filePath: string, permission: string): FilesystemError {
+  const detail = err instanceof Error ? err.message : String(err)
+  return new FilesystemError(
+    `Failed to ${permission} secret file at ${filePath}: ${detail}`,
+    filePath,
+    permission,
+  )
+}
+
+/**
  * Encrypted file fallback backend.
  *
  * @remarks
@@ -137,7 +153,11 @@ export class FileBackend implements ListableBackend {
     const key = await getOrCreateKey(storageDir)
     const entryPath = getEntryPath(storageDir, id)
     const encrypted = encryptGcm(key, secret)
-    await fs.writeFile(entryPath, encrypted, { mode: 0o600 })
+    try {
+      await fs.writeFile(entryPath, encrypted, { mode: 0o600 })
+    } catch (err) {
+      throw toFilesystemError(err, entryPath, 'write')
+    }
   }
 
   /**
@@ -155,15 +175,16 @@ export class FileBackend implements ListableBackend {
       if (err instanceof Error && 'code' in err && err.code === 'ENOENT') {
         return undefined
       }
-      throw err
+      throw toFilesystemError(err, entryPath, 'read')
     }
 
     const key = await getOrCreateKey(storageDir)
     try {
       return decryptGcm(key, encoded)
     } catch (err) {
-      throw new Error(
+      throw new DecryptionError(
         `Failed to decrypt secret: ${err instanceof Error ? err.message : String(err)}`,
+        entryPath,
       )
     }
   }
@@ -192,17 +213,18 @@ export class FileBackend implements ListableBackend {
       return
     } catch (err) {
       if (!(err instanceof Error && 'code' in err && err.code === 'ENOENT')) {
-        throw err
+        throw toFilesystemError(err, entryPath, 'write')
       }
     }
 
     if (this.#legacyStorageDir !== undefined) {
+      const legacyEntryPath = getEntryPath(this.#legacyStorageDir, id)
       try {
-        await fs.unlink(getEntryPath(this.#legacyStorageDir, id))
+        await fs.unlink(legacyEntryPath)
         return
       } catch (err) {
         if (!(err instanceof Error && 'code' in err && err.code === 'ENOENT')) {
-          throw err
+          throw toFilesystemError(err, legacyEntryPath, 'write')
         }
       }
     }

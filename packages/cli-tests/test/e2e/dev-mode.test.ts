@@ -24,10 +24,8 @@ describe('dev-mode', () => {
   it('should enable dev mode or fail with doctor error', async () => {
     env = await createCliTestEnv()
     const result = await env.run(['dev-mode', 'enable', '--script', '/tmp/test-script.sh'])
-    const succeeded =
-      result.exitCode === 0 && result.stdout.includes('enabled')
-    const doctorFailed =
-      result.exitCode === 1 && result.stderr.includes('System not ready')
+    const succeeded = result.exitCode === 0 && result.stdout.includes('enabled')
+    const doctorFailed = result.exitCode === 1 && result.stderr.includes('System not ready')
     expect(succeeded || doctorFailed).toBe(true)
   })
 
@@ -35,6 +33,19 @@ describe('dev-mode', () => {
     env = await createCliTestEnv()
     const result = await env.run(['dev-mode'])
     expect(result.exitCode).toBe(2)
+    expect(result.stderr).toContain('missing action or --script flag')
     expect(result.stderr).toContain('Usage')
+  })
+
+  // Regression: issue #115 — an invalid action (e.g. "banana") supplied
+  // alongside --script previously produced the identical "missing action or
+  // --script flag" message used for genuinely absent args, even though both
+  // an action and --script were present.
+  it('should distinguish an invalid action from missing args', async () => {
+    env = await createCliTestEnv()
+    const result = await env.run(['dev-mode', 'banana', '--script', '/tmp/test-script.sh'])
+    expect(result.exitCode).toBe(2)
+    expect(result.stderr).toContain('unknown action "banana" (expected "enable" or "disable")')
+    expect(result.stderr).not.toContain('missing action or --script flag')
   })
 })

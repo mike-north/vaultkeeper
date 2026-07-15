@@ -1,4 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
 import {
   validateConfig,
   loadConfig,
@@ -408,6 +410,24 @@ describe('loadConfig', () => {
   it('should rethrow an EISDIR read error as a typed FilesystemError instead of silently defaulting', async () => {
     vi.mocked(readFile).mockRejectedValue(fsError('EISDIR', 'illegal operation on a directory'))
     await expect(loadConfig('/fake')).rejects.toBeInstanceOf(FilesystemError)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Plain-Error audit (issue #115)
+// ---------------------------------------------------------------------------
+
+// Regression: issue #115 audit — config.ts and its loader/validation code
+// must throw only typed VaultError subclasses (ConfigValidationError,
+// ConfigParseError, FilesystemError), never a plain `Error`. This greps the
+// source directly so a future edit that reintroduces `throw new Error(...)`
+// fails CI instead of silently regressing the "never throw plain Error"
+// convention (see CLAUDE.md).
+describe('plain-Error audit', () => {
+  it('should contain no `throw new Error(` in config.ts', () => {
+    const configSourcePath = fileURLToPath(new URL('../../src/config.ts', import.meta.url))
+    const source = readFileSync(configSourcePath, 'utf8')
+    expect(source).not.toMatch(/throw new Error\(/)
   })
 })
 

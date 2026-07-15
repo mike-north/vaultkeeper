@@ -26,6 +26,7 @@ export {
   AccessorConsumedError,
   InvalidAlgorithmError,
   InvalidKeyMaterialError,
+  DecryptionError,
   FetchError,
   SetupError,
   FilesystemError,

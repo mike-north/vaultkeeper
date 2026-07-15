@@ -113,6 +113,17 @@ Thrown when a config value fails structural or semantic validation (e.g. a white
 </td></tr>
 <tr><td>
 
+[DecryptionError](./vaultkeeper.decryptionerror.md)
+
+
+</td><td>
+
+Thrown when an encrypted-at-rest secret entry cannot be decrypted — e.g. the stored ciphertext is truncated/corrupted or the AES-GCM auth tag fails to verify. The message never echoes any part of the secret or key material.
+
+
+</td></tr>
+<tr><td>
+
 [DeviceNotPresentError](./vaultkeeper.devicenotpresenterror.md)
 
 

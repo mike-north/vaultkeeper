@@ -306,6 +306,27 @@ export class InvalidKeyMaterialError extends VaultError {
 }
 
 /**
+ * Thrown when an encrypted-at-rest secret entry cannot be decrypted — e.g.
+ * the stored ciphertext is truncated/corrupted or the AES-GCM auth tag fails
+ * to verify. The message never echoes any part of the secret or key
+ * material.
+ *
+ * @public
+ */
+export class DecryptionError extends VaultError {
+  /**
+   * The path of the encrypted entry that failed to decrypt.
+   */
+  readonly path: string
+
+  constructor(message: string, path: string) {
+    super(message)
+    this.name = 'DecryptionError'
+    this.path = path
+  }
+}
+
+/**
  * Thrown when a delegated `fetch()` call fails before a `Response` can be
  * produced — for example the URL is malformed or the underlying network
  * request fails (DNS failure, connection refused, TLS error).

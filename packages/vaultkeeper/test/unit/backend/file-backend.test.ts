@@ -14,7 +14,7 @@ vi.mock('node:fs/promises', () => ({
 import * as fs from 'node:fs/promises'
 import { FileBackend } from '../../../src/backend/file-backend.js'
 import { getDefaultConfigDir } from '../../../src/config.js'
-import { SecretNotFoundError } from '../../../src/errors.js'
+import { SecretNotFoundError, FilesystemError, DecryptionError } from '../../../src/errors.js'
 
 const mockFs = vi.mocked(fs)
 
@@ -106,6 +106,22 @@ describe('FileBackend', () => {
       expect(encryptedWriteCall?.[0]).toEqual(expect.stringContaining(customDir))
       // Default config-dir-relative location must never be touched.
       expect(mockFs.mkdir).not.toHaveBeenCalledWith(defaultStorageDir, expect.anything())
+    })
+
+    // Regression: issue #115 — a permission failure writing the encrypted
+    // entry previously propagated as the raw Node EACCES error instead of a
+    // typed VaultError subclass.
+    it('should surface an EACCES write failure as a typed FilesystemError', async () => {
+      mockFs.mkdir.mockResolvedValue(undefined)
+      const keyBuffer = Buffer.alloc(32, 0xcd)
+      mockFs.readFile.mockResolvedValue(keyBuffer) // key exists
+      const permError = Object.assign(new Error('permission denied'), { code: 'EACCES' })
+      mockFs.writeFile.mockRejectedValue(permError)
+
+      await expect(backend.store('my-secret', 'secret-value')).rejects.toBeInstanceOf(
+        FilesystemError,
+      )
+      await expect(backend.store('my-secret', 'secret-value')).rejects.toThrow('permission denied')
     })
   })
 
@@ -207,7 +223,7 @@ describe('FileBackend', () => {
       await expect(backend.retrieve('missing')).rejects.toBeInstanceOf(SecretNotFoundError)
     })
 
-    it('should throw Error when decryption fails (bad auth tag)', async () => {
+    it('should throw a typed DecryptionError when decryption fails (bad auth tag)', async () => {
       // Provide a malformed encoded string that will fail decryption
       mockFs.mkdir.mockResolvedValue(undefined)
       const badEncoded = 'AAAA:BBBB:CCCC' // wrong base64 format for GCM
@@ -215,7 +231,22 @@ describe('FileBackend', () => {
       mockFs.readFile.mockResolvedValueOnce(badEncoded)
       mockFs.readFile.mockResolvedValueOnce(keyBuffer)
 
+      await expect(backend.retrieve('corrupted')).rejects.toBeInstanceOf(DecryptionError)
+      mockFs.readFile.mockResolvedValueOnce(badEncoded)
+      mockFs.readFile.mockResolvedValueOnce(keyBuffer)
       await expect(backend.retrieve('corrupted')).rejects.toThrow('Failed to decrypt secret')
+    })
+
+    // Regression: issue #115 — a non-ENOENT read error (e.g. EACCES) reading
+    // the encrypted entry previously propagated as the raw Node error instead
+    // of a typed VaultError subclass.
+    it('should surface an EACCES read failure as a typed FilesystemError', async () => {
+      mockFs.mkdir.mockResolvedValue(undefined)
+      const permError = Object.assign(new Error('permission denied'), { code: 'EACCES' })
+      mockFs.readFile.mockRejectedValue(permError)
+
+      await expect(backend.retrieve('protected')).rejects.toBeInstanceOf(FilesystemError)
+      await expect(backend.retrieve('protected')).rejects.toThrow('permission denied')
     })
   })
 
@@ -235,10 +266,14 @@ describe('FileBackend', () => {
       await expect(backend.delete('missing')).rejects.toBeInstanceOf(SecretNotFoundError)
     })
 
-    it('should rethrow non-ENOENT filesystem errors', async () => {
+    // Regression: issue #115 — a non-ENOENT unlink error (e.g. EPERM/EACCES)
+    // previously propagated as the raw Node error instead of a typed
+    // VaultError subclass.
+    it('should rethrow non-ENOENT filesystem errors as a typed FilesystemError', async () => {
       const permError = Object.assign(new Error('EPERM'), { code: 'EPERM' })
       mockFs.unlink.mockRejectedValue(permError)
 
+      await expect(backend.delete('protected')).rejects.toBeInstanceOf(FilesystemError)
       await expect(backend.delete('protected')).rejects.toThrow('EPERM')
     })
   })
