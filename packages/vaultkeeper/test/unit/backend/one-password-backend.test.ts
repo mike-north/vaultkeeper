@@ -728,6 +728,27 @@ describe('OnePasswordBackend', () => {
       expect(error).toBeInstanceOf(PluginNotFoundError)
       expect(error).toMatchObject({ plugin: '@1password/sdk' })
     })
+
+    // Regression for https://github.com/mike-north/vaultkeeper/issues/113: a
+    // present-but-broken SDK makes the worker report an INTERNAL failure with
+    // the real load error — the backend must NOT misreport that as a missing
+    // plugin (which would tell the user to reinstall something already there).
+    it('should NOT throw PluginNotFoundError when the worker reports a non-plugin SDK load failure', async () => {
+      const backend = makePerAccessBackend()
+      const proc = makeWorkerProcess(
+        JSON.stringify({
+          error: 'Failed to load 1Password SDK: Error: native binding failed',
+          code: 'INTERNAL',
+        }),
+      )
+      mockSpawn.mockReturnValue(proc)
+
+      const error = await backend.retrieve('my-secret').catch((err: unknown) => err)
+      expect(error).not.toBeInstanceOf(PluginNotFoundError)
+      expect(error).toBeInstanceOf(Error)
+      // The real load error text is preserved, not swapped for a "reinstall" hint.
+      expect(error instanceof Error ? error.message : '').toContain('native binding failed')
+    })
   })
 
   // ---- delete ----
@@ -848,8 +869,7 @@ describe('OnePasswordBackend', () => {
       })
 
       await expect(backend.store('any-key', 'any-val')).rejects.toBeInstanceOf(BackendLockedError)
-    }, // Give this test 2s to avoid the global 5s default being a problem
-    2000)
+    }, 2000) // Give this test 2s to avoid the global 5s default being a problem
   })
 
   // ---- vault scoping ----

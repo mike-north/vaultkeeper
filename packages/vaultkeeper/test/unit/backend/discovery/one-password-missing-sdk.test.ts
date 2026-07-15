@@ -9,10 +9,13 @@
  */
 import { describe, it, expect, vi } from 'vitest'
 
-// Simulate the optional peer being absent: importing '@1password/sdk' rejects,
+// Simulate the optional peer being absent: importing '@1password/sdk' rejects
+// with a module-resolution error (Node sets code ERR_MODULE_NOT_FOUND),
 // exactly as it would when the package is not installed.
 vi.mock('@1password/sdk', () => {
-  throw new Error("Cannot find package '@1password/sdk'")
+  const err = new Error("Cannot find package '@1password/sdk'")
+  Object.assign(err, { code: 'ERR_MODULE_NOT_FOUND' })
+  throw err
 })
 
 import { createOnePasswordSetup } from '../../../../src/backend/discovery/one-password.js'

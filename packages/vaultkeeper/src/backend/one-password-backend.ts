@@ -32,11 +32,17 @@ type Client = import('@1password/sdk').Client
 type Item = import('@1password/sdk').Item
 type ItemOverview = import('@1password/sdk').ItemOverview
 
-const SDK_INSTALL_URL = 'https://developer.1password.com/docs/sdks/'
 const TAG = 'vaultkeeper'
 const PASSWORD_FIELD_TITLE = 'password'
 const SESSION_TIMEOUT_MS = 30_000
-import { INTEGRATION_NAME, getIntegrationVersion } from './one-password-constants.js'
+import {
+  INTEGRATION_NAME,
+  SDK_INSTALL_URL,
+  SDK_NOT_INSTALLED_MESSAGE,
+  SDK_PACKAGE,
+  getIntegrationVersion,
+  isModuleNotFoundError,
+} from './one-password-constants.js'
 
 /** Options accepted by `OnePasswordBackend`. */
 export interface OnePasswordBackendOptions {
@@ -139,7 +145,9 @@ export class OnePasswordBackend implements ListableBackend {
 
   /**
    * Dynamically import the SDK. Returns `null` if the SDK is not installed or
-   * the native library cannot be loaded.
+   * the native library cannot be loaded. Used by {@link isAvailable}, which
+   * only needs a yes/no answer; call {@link loadSdkOrThrow} on paths that must
+   * report *why* the SDK could not be loaded.
    */
   private async tryLoadSdk(): Promise<SdkModule | null> {
     try {
@@ -147,6 +155,24 @@ export class OnePasswordBackend implements ListableBackend {
       return sdk
     } catch {
       return null
+    }
+  }
+
+  /**
+   * Dynamically import the SDK, throwing a typed {@link PluginNotFoundError}
+   * only when the module cannot be resolved (the optional peer is not
+   * installed). A present-but-broken SDK (native binding failure, init throw,
+   * incompatible Node) surfaces its real error instead of a misleading
+   * "not installed" message.
+   */
+  private async loadSdkOrThrow(): Promise<SdkModule> {
+    try {
+      return await import('@1password/sdk')
+    } catch (error: unknown) {
+      if (isModuleNotFoundError(error)) {
+        throw new PluginNotFoundError(SDK_NOT_INSTALLED_MESSAGE, SDK_PACKAGE, SDK_INSTALL_URL)
+      }
+      throw error
     }
   }
 
@@ -165,14 +191,7 @@ export class OnePasswordBackend implements ListableBackend {
   }
 
   private async createClientInternal(): Promise<Client> {
-    const sdk = await this.tryLoadSdk()
-    if (sdk === null) {
-      throw new PluginNotFoundError(
-        '1Password SDK (@1password/sdk) is not available. Install it to use this backend.',
-        '@1password/sdk',
-        SDK_INSTALL_URL,
-      )
-    }
+    const sdk = await this.loadSdkOrThrow()
 
     const auth = this.buildAuth(sdk)
 
@@ -369,11 +388,7 @@ export class OnePasswordBackend implements ListableBackend {
           switch (parsed.code) {
             case 'PLUGIN_NOT_FOUND':
               reject(
-                new PluginNotFoundError(
-                  '1Password SDK (@1password/sdk) is not available. Install it to use this backend.',
-                  '@1password/sdk',
-                  SDK_INSTALL_URL,
-                ),
+                new PluginNotFoundError(SDK_NOT_INSTALLED_MESSAGE, SDK_PACKAGE, SDK_INSTALL_URL),
               )
               break
             case 'NOT_FOUND':
@@ -428,16 +443,11 @@ export class OnePasswordBackend implements ListableBackend {
 
   // ---- Private helpers ----
 
-  /** Load SDK and throw PluginNotFoundError if unavailable. */
-  private async requireSdk(): Promise<SdkModule> {
-    const sdk = await this.tryLoadSdk()
-    if (sdk === null) {
-      throw new PluginNotFoundError(
-        '1Password SDK (@1password/sdk) is not available.',
-        '@1password/sdk',
-        SDK_INSTALL_URL,
-      )
-    }
-    return sdk
+  /**
+   * Load SDK, throwing a typed {@link PluginNotFoundError} when it is not
+   * installed and surfacing the real error when it is present but broken.
+   */
+  private requireSdk(): Promise<SdkModule> {
+    return this.loadSdkOrThrow()
   }
 }

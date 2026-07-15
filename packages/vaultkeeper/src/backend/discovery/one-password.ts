@@ -6,7 +6,14 @@
 
 import { PluginNotFoundError, SetupError } from '../../errors.js'
 import type { SetupChoice, SetupQuestion, SetupResult } from '../setup-types.js'
-import { INTEGRATION_NAME, getIntegrationVersion } from '../one-password-constants.js'
+import {
+  INTEGRATION_NAME,
+  SDK_INSTALL_URL,
+  SDK_NOT_INSTALLED_MESSAGE,
+  SDK_PACKAGE,
+  getIntegrationVersion,
+  isModuleNotFoundError,
+} from '../one-password-constants.js'
 
 // SDK types are referenced type-only; the module itself is loaded lazily via
 // dynamic import() so the optional `@1password/sdk` peer dependency is never
@@ -14,23 +21,20 @@ import { INTEGRATION_NAME, getIntegrationVersion } from '../one-password-constan
 type Client = import('@1password/sdk').Client
 type VaultOverview = import('@1password/sdk').VaultOverview
 
-const SDK_PACKAGE = '@1password/sdk'
-const SDK_INSTALL_URL = 'https://developer.1password.com/docs/sdks/'
-
 /**
- * Dynamically import the 1Password SDK, throwing a typed
- * {@link PluginNotFoundError} that names the missing peer dependency when it is
- * not installed.
+ * Dynamically import the 1Password SDK. Throws a typed
+ * {@link PluginNotFoundError} that names the missing peer dependency only when
+ * the module cannot be resolved; a present-but-broken SDK surfaces its real
+ * error instead of a misleading "not installed" message.
  */
 async function loadSdk(): Promise<typeof import('@1password/sdk')> {
   try {
     return await import('@1password/sdk')
-  } catch {
-    throw new PluginNotFoundError(
-      '1Password SDK (@1password/sdk) is not installed. Install it to set up the 1Password backend.',
-      SDK_PACKAGE,
-      SDK_INSTALL_URL,
-    )
+  } catch (error: unknown) {
+    if (isModuleNotFoundError(error)) {
+      throw new PluginNotFoundError(SDK_NOT_INSTALLED_MESSAGE, SDK_PACKAGE, SDK_INSTALL_URL)
+    }
+    throw error
   }
 }
 
