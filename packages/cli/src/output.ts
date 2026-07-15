@@ -84,8 +84,16 @@ export function formatPreflightConfigError(error: PreflightCheckError): string {
  * always include a recovery hint.
  */
 export function secretNotFoundMessage(name: string, backendType: string): string {
+  // JSON.stringify quotes AND escapes: `backendType` can only ever be one of
+  // the fixed registry identifiers (file/keychain/dpapi/secret-tool/
+  // 1password/yubikey — see packages/vaultkeeper/src/backend/register-builtins.ts),
+  // none of which contain a quote, but `name` is user-supplied and, on the
+  // exec path (`--secret`), is validated only for non-emptiness — not
+  // restricted to store/delete's safe `--name` character set. A name
+  // containing a literal `"` would otherwise unbalance the surrounding
+  // quotes in this message (review follow-up, issue #118).
   return (
-    `Secret "${name}" not found in the "${backendType}" backend. ` +
+    `Secret ${JSON.stringify(name)} not found in the ${JSON.stringify(backendType)} backend. ` +
     `Run \`vaultkeeper store --name ${name}\` to create it.`
   )
 }

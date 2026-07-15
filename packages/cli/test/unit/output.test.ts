@@ -106,6 +106,19 @@ describe('formatError', () => {
           'Run `vaultkeeper store --name db-password` to create it.',
       )
     })
+
+    // Regression (review follow-up, issue #118): `exec --secret` is only
+    // validated for non-emptiness, not restricted to store/delete's safe
+    // `--name` character set, so a secret name can contain a literal
+    // double quote. Unescaped interpolation would unbalance the quotes
+    // around the name; JSON.stringify() escapes it instead.
+    it('escapes a double quote in the secret name instead of unbalancing the surrounding quotes', () => {
+      const message = secretNotFoundMessage('foo"bar', 'file')
+      expect(message).toBe(
+        'Secret "foo\\"bar" not found in the "file" backend. ' +
+          'Run `vaultkeeper store --name foo"bar` to create it.',
+      )
+    })
   })
 })
 
