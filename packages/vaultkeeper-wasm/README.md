@@ -31,10 +31,11 @@ build, so there is no `require()` fallback. The snippet below is ESM and require
 `npm init -y` project is CommonJS, so add that field first — otherwise Node rejects the
 `import` line with `SyntaxError: Cannot use import statement outside a module`:
 
-```jsonc
-// package.json
+In `package.json`:
+
+```json
 {
-  "type": "module",
+  "type": "module"
 }
 ```
 
