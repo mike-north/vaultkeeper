@@ -26,6 +26,41 @@ describe('redactSecrets', () => {
     expect(redactSecrets('a real real one', ['', 'real'])).toBe(`a ${REDACTED} ${REDACTED} one`)
   })
 
+  it('skips whitespace-only secret values (must not blank ubiquitous whitespace)', () => {
+    // A whitespace-only secret would match the spaces throughout the text and
+    // shred it. It must be dropped like an empty string.
+    expect(redactSecrets('a b c d', ['   '])).toBe('a b c d')
+    expect(redactSecrets('tab\tsep', ['\t'])).toBe('tab\tsep')
+  })
+
+  // Regression (PR #195 review): when one secret is a prefix/substring of
+  // another, redacting the shorter first leaves the longer secret's suffix
+  // visible (e.g. "abc" before "abc123" -> "[REDACTED]123", leaking "123").
+  // Redaction must sort longer-first so the longer value is fully masked, and
+  // the outcome must not depend on the order the secrets are supplied in.
+  it('fully redacts a longer secret even when a shorter one is its prefix (no suffix leak)', () => {
+    const shortFirst = redactSecrets('key=abc123', ['abc', 'abc123'])
+    const longFirst = redactSecrets('key=abc123', ['abc123', 'abc'])
+
+    for (const result of [shortFirst, longFirst]) {
+      expect(result).not.toContain('abc123')
+      expect(result).not.toContain('123')
+      expect(result).toBe(`key=${REDACTED}`)
+    }
+    // Order-independent.
+    expect(shortFirst).toBe(longFirst)
+  })
+
+  it('redacts both a shared-prefix secret and its standalone shorter sibling', () => {
+    // The shorter secret also appears on its own elsewhere; both the standalone
+    // occurrence and the longer superstring must be masked, leaking neither raw
+    // value nor the longer secret's suffix.
+    const result = redactSecrets('a=abc b=abc123', ['abc', 'abc123'])
+    expect(result).not.toContain('abc')
+    expect(result).not.toContain('123')
+    expect(result).toBe(`a=${REDACTED} b=${REDACTED}`)
+  })
+
   it('uses a custom replacement token when provided', () => {
     expect(redactSecrets('my secret value', ['secret'], '***')).toBe('my *** value')
   })

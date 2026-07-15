@@ -6,7 +6,11 @@
 
 Replace every occurrence of each secret value in `text` with `replacement`<!-- -->.
 
-Empty secret values are skipped: an empty string matches between every character, so redacting it would replace the whole text. This is used to scrub captured child-process `stdout`<!-- -->/`stderr` so a secret injected into a delegated command never surfaces in the returned output.
+This is used to scrub captured child-process `stdout`<!-- -->/`stderr` so a secret injected into a delegated command never surfaces in the returned output.
+
+Before redacting, the secret set is normalized so masking is complete and order-independent:
+
+- \*\*Empty/whitespace-only values are dropped.\*\* An empty string matches between every character, and a whitespace-only value matches ubiquitous whitespace, so redacting either would blank the text rather than a secret. - \*\*Duplicates are removed\*\* so each distinct value is processed once. - \*\*Longer values are redacted first.\*\* If one secret is a substring or prefix of another — common for keys that share a prefix — redacting the shorter one first would leave the longer secret's remaining suffix visible (redacting `"abc"` before `"abc123"` yields `"[REDACTED]123"`<!-- -->, leaking `"123"`<!-- -->). Sorting by length descending guarantees each longer value is fully masked before any shorter substring pass runs.
 
 **Signature:**
 
@@ -60,7 +64,7 @@ readonly string\[\]
 
 </td><td>
 
-The secret values to redact. Every non-empty value has all of its occurrences replaced.
+The secret values to redact. Every non-empty, non-whitespace value has all of its occurrences replaced.
 
 
 </td></tr>
@@ -86,5 +90,5 @@ _(Optional)_ The token to substitute for each occurrence. Defaults to [REDACTED]
 
 string
 
-`text` with every occurrence of each non-empty secret replaced.
+`text` with every occurrence of each redactable secret replaced.
 
