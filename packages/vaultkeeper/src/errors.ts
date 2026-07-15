@@ -484,8 +484,12 @@ export class FilesystemError extends VaultError {
   readonly path: string
 
   /**
-   * The permission level that was required but not available
-   * (e.g. `'read'`, `'write'`, `'execute'`).
+   * The file operation or access mode that was being attempted when the
+   * failure occurred, for example 'read', 'write', 'delete', or 'rwx' for a
+   * directory create/access check. Despite the field name, this does not
+   * imply the failure was itself a permission problem — it names the
+   * attempted operation regardless of the underlying errno, which may be a
+   * non-permission code such as ENOSPC or EISDIR.
    */
   readonly permission: string
 
@@ -501,8 +505,9 @@ export class FilesystemError extends VaultError {
   /**
    * @param message - Human-readable description of the failure.
    * @param filePath - The path of the file or directory that caused the error.
-   * @param permission - The permission level that was required but not
-   * available.
+   * @param permission - The file operation or access mode being attempted,
+   * for example 'read', 'write', 'delete', or 'rwx'. See the `permission`
+   * property for why this need not indicate an actual permission problem.
    * @param cause - The underlying error that was caught, if any. Recorded as
    * the standard `Error.cause` and used to populate `code` when it exposes a
    * string errno code.

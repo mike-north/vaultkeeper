@@ -74,7 +74,7 @@ string
 
 </td><td>
 
-The permission level that was required but not available.
+The file operation or access mode being attempted, for example 'read', 'write', 'delete', or 'rwx'. See the `permission` property for why this need not indicate an actual permission problem.
 
 
 </td></tr>

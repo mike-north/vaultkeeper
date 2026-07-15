@@ -129,7 +129,7 @@ string
 
 </td><td>
 
-The permission level that was required but not available (e.g. `'read'`<!-- -->, `'write'`<!-- -->, `'execute'`<!-- -->).
+The file operation or access mode that was being attempted when the failure occurred, for example 'read', 'write', 'delete', or 'rwx' for a directory create/access check. Despite the field name, this does not imply the failure was itself a permission problem — it names the attempted operation regardless of the underlying errno, which may be a non-permission code such as ENOSPC or EISDIR.
 
 
 </td></tr>
