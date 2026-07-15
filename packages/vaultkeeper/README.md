@@ -271,17 +271,18 @@ await vault.setDevelopmentMode('/path/to/my-dev-tool', false)
 `sign()`/`verify()` are a fourth access pattern: they let you sign or verify data with a stored
 private/public key without the private key ever leaving `VaultKeeper` internals.
 
-> **Precondition — the stored secret must be a private key, not an arbitrary string.** `sign()`
-> feeds the secret behind the token to `crypto.createPrivateKey()`, so the value you `store()` must
-> be **PEM- or DER-encoded private-key material** (e.g. a PKCS#8 PEM). A plain string like the quick
-> start's `'my-secret-value'` is **not** a key — signing a token minted over one throws
-> `InvalidKeyMaterialError`. Do not reuse the quick start's plain-string secret here; store a real
-> key first, as the worked example below does. (`verify()` takes a **public** key and never reads a
-> stored secret, so it never throws `InvalidKeyMaterialError`.)
+> **Precondition — the stored secret must be a PEM private key, not an arbitrary string.** `sign()`
+> feeds the stored secret string straight to `crypto.createPrivateKey()`, which treats a string as
+> **PEM**, so the value you `store()` must be **PEM-encoded private-key material** (e.g. a PKCS#8
+> PEM). Because secrets are stored as text, raw binary DER is not directly storable — convert DER to
+> PEM first. A plain string like the quick start's `'my-secret-value'` is **not** a key — signing a
+> token minted over one throws `InvalidKeyMaterialError`. Do not reuse the quick start's plain-string
+> secret here; store a real key first, as the worked example below does. (`verify()` takes a
+> **public** key and never reads a stored secret, so it never throws `InvalidKeyMaterialError`.)
 
 ```ts
 // Sign — requires a capability token, like fetch()/exec()/getSecret(). The token
-// must have been minted over a stored PEM/DER PRIVATE key (see the precondition
+// must have been minted over a stored PEM PRIVATE key (see the precondition
 // above and the worked example below), not a plain-string secret.
 const { result } = await vault.sign(token, { data: 'order-42:refund:1999' })
 console.log(result.signature, result.algorithm) // base64 signature + algorithm label
@@ -426,13 +427,13 @@ read-only properties for machine-readable context.
 
 **Access patterns**
 
-| Class                     | When thrown                                                                                                                                                                       |
-| ------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `FetchError`              | Delegated `fetch()` failed before a `Response` (malformed URL, network failure) (field: `url`).                                                                                   |
-| `ExecError`               | `exec()` request was invalid, or the command could not be started (field: `command`).                                                                                             |
-| `AccessorConsumedError`   | `SecretAccessor.read()` called after it was already consumed.                                                                                                                     |
-| `InvalidAlgorithmError`   | Signing/verifying with a disallowed algorithm (fields: `algorithm`, `allowed`; see [Signing and verification](#signing-and-verification)).                                        |
-| `InvalidKeyMaterialError` | `sign()` could not parse the stored secret as PEM/DER **private** key material. Specific to `sign()` — `VaultKeeper.verify()` does not read stored secrets and never throws this. |
+| Class                     | When thrown                                                                                                                                                                                                                                                  |
+| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `FetchError`              | Delegated `fetch()` failed before a `Response` (malformed URL, network failure) (field: `url`).                                                                                                                                                              |
+| `ExecError`               | `exec()` request was invalid, or the command could not be started (field: `command`).                                                                                                                                                                        |
+| `AccessorConsumedError`   | `SecretAccessor.read()` called after it was already consumed.                                                                                                                                                                                                |
+| `InvalidAlgorithmError`   | Signing/verifying with a disallowed algorithm (fields: `algorithm`, `allowed`; see [Signing and verification](#signing-and-verification)).                                                                                                                   |
+| `InvalidKeyMaterialError` | `sign()` could not parse the stored secret as **PEM private-key** material (secrets are stored as text, so raw binary DER must be converted to PEM first). Specific to `sign()` — `VaultKeeper.verify()` does not read stored secrets and never throws this. |
 
 **Config, filesystem & key rotation**
 
