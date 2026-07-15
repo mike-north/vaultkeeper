@@ -66,17 +66,20 @@ export function decryptGcm(key: Buffer, encoded: string, path = ''): string {
   const authTag = Buffer.from(authTagB64, 'base64')
   const ciphertext = Buffer.from(ciphertextB64, 'base64')
 
-  const decipher = crypto.createDecipheriv('aes-256-gcm', key, iv, {
-    authTagLength: GCM_TAG_LENGTH_BITS / 8,
-  })
-  decipher.setAuthTag(authTag)
   try {
+    // Inside the try from createDecipheriv onward: the iv and authTag lengths
+    // come from the on-disk envelope, so a truncated/corrupt entry can make
+    // createDecipheriv or setAuthTag throw a native RangeError/TypeError —
+    // not just decipher.final()'s auth-tag failure.
+    const decipher = crypto.createDecipheriv('aes-256-gcm', key, iv, {
+      authTagLength: GCM_TAG_LENGTH_BITS / 8,
+    })
+    decipher.setAuthTag(authTag)
     const decrypted = Buffer.concat([decipher.update(ciphertext), decipher.final()])
     return decrypted.toString('utf8')
   } catch (err) {
-    // decipher.final() throws a native crypto Error when the GCM auth tag
-    // fails to verify (tampered/corrupt ciphertext or wrong key) — wrap it so
-    // the documented @throws {DecryptionError} contract holds on every path.
+    // Wrap every native crypto failure so the documented
+    // @throws {DecryptionError} contract holds on every path.
     throw new DecryptionError(
       `Failed to decrypt envelope: ${err instanceof Error ? err.message : String(err)}`,
       path,

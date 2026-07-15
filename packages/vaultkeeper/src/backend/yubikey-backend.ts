@@ -228,16 +228,19 @@ function decryptGcm(key: Buffer, encoded: string, path: string): string {
     const authTag = Buffer.from(authTagB64, 'base64')
     const ciphertext = Buffer.from(ciphertextB64, 'base64')
 
-    const decipher = crypto.createDecipheriv('aes-256-gcm', key, iv, {
-      authTagLength: GCM_TAG_LENGTH_BITS / 8,
-    })
-    decipher.setAuthTag(authTag)
-
+    // createDecipheriv/setAuthTag sit inside this try too: the iv and
+    // authTag lengths come from the on-disk file, so a truncated/corrupt
+    // entry can throw a native RangeError/TypeError before decryption even
+    // starts — every native crypto failure must wrap as DecryptionError.
     try {
+      const decipher = crypto.createDecipheriv('aes-256-gcm', key, iv, {
+        authTagLength: GCM_TAG_LENGTH_BITS / 8,
+      })
+      decipher.setAuthTag(authTag)
       decrypted = Buffer.concat([decipher.update(ciphertext), decipher.final()])
     } catch (err) {
       throw new DecryptionError(
-        `GCM authentication failed — ciphertext may be tampered: ${err instanceof Error ? err.message : String(err)}`,
+        `GCM authentication failed — ciphertext may be tampered or corrupt: ${err instanceof Error ? err.message : String(err)}`,
         path,
       )
     }

@@ -22,7 +22,10 @@ export interface ExecCommandResult {
 
 /**
  * Execute a command and return stdout.
- * @throws {ExecError} if the command exits with a non-zero code.
+ * @throws {ExecError} if the command exits with a non-zero code, or if the
+ *   process cannot be spawned for any reason other than the binary being
+ *   missing (e.g. `EACCES`).
+ * @throws {PluginNotFoundError} if the command binary is not found (`ENOENT`).
  */
 export async function execCommand(
   command: string,
