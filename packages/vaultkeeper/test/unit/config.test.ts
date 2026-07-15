@@ -417,7 +417,8 @@ describe('loadConfig', () => {
 // Plain-Error audit (issue #115)
 // ---------------------------------------------------------------------------
 
-// Regression: issue #115 audit — config.ts and its loader/validation code
+// Regression: issue #115 audit — config.ts (all config loading and
+// validation lives in this single file; there is no separate loader module)
 // must throw only typed VaultError subclasses (ConfigValidationError,
 // ConfigParseError, FilesystemError), never a plain `Error`. This greps the
 // source directly so a future edit that reintroduces `throw new Error(...)`
