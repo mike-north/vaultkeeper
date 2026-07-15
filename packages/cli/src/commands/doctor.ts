@@ -1,6 +1,6 @@
 import { parseArgs } from 'node:util'
 import { VaultKeeper, defaultBackendType } from 'vaultkeeper'
-import { formatError } from '../output.js'
+import { formatError, formatPreflightConfigError } from '../output.js'
 import { CONFIG_DIR_HELP_OPTION, CONFIG_DIR_HELP_ENV } from '../config-dir.js'
 import { configFileExists, noConfigMessage } from '../config-status.js'
 
@@ -57,10 +57,17 @@ export async function doctorCommand(args: string[], configDir: string): Promise<
     // backend" and "optional plugin backends (not configured)".
     const primaryChecks = result.checks.filter((check) => check.required || check.status === 'ok')
 
+    // A check carrying structured `error` context (currently only the
+    // `config` check on an invalid config file) is rendered with the
+    // CLI-native remediation built from that structured field — never the
+    // library's `reason` prose, which points a user already running this CLI
+    // at installing it (issue #130). All other checks render their `reason`.
     for (const check of primaryChecks) {
       const icon = check.status === 'ok' ? '✓' : '✗'
       const version = check.version !== undefined ? ` (${check.version})` : ''
-      const reason = check.reason !== undefined ? ` — ${check.reason}` : ''
+      const reasonText =
+        check.error !== undefined ? formatPreflightConfigError(check.error) : check.reason
+      const reason = reasonText !== undefined ? ` — ${reasonText}` : ''
       process.stdout.write(`  ${icon} ${check.name}${version}${reason}\n`)
     }
 
@@ -76,8 +83,26 @@ export async function doctorCommand(args: string[], configDir: string): Promise<
       return 0
     }
 
+    // The library's `nextSteps` carries the config check's `reason` prose
+    // (with its "install @vaultkeeper/cli" remediation) for an invalid
+    // config. Swap that one entry for the CLI-native remediation built from
+    // the check's structured `error`, leaving every other next step intact
+    // (issue #130).
+    const invalidConfig = result.checks.find(
+      (check) => check.name === 'config' && check.error !== undefined,
+    )
+    const nextSteps =
+      invalidConfig?.error !== undefined
+        ? [
+            formatPreflightConfigError(invalidConfig.error),
+            ...result.nextSteps.filter(
+              (step) => step !== (invalidConfig.reason ?? 'Config file is invalid.'),
+            ),
+          ]
+        : result.nextSteps
+
     process.stdout.write('\nNext steps:\n')
-    for (const step of result.nextSteps) {
+    for (const step of nextSteps) {
       process.stdout.write(`  → ${step}\n`)
     }
     return 1

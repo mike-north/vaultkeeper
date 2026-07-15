@@ -21,7 +21,7 @@ vi.mock('../../../src/config.js', () => ({
 }))
 
 import { loadConfig } from '../../../src/config.js'
-import { ConfigParseError } from '../../../src/errors.js'
+import { ConfigParseError, ConfigValidationError } from '../../../src/errors.js'
 import {
   checkOpenssl,
   checkBash,
@@ -711,6 +711,92 @@ describe('runDoctor with configDir', () => {
     expect(configCheck?.reason).toContain('line 1, column 3')
     expect(result.ready).toBe(false)
     expect(result.nextSteps.some((s) => s.includes('/fake/config.json'))).toBe(true)
+  })
+
+  // Issue #130: the invalid "config" check carries structured,
+  // remediation-free error context (kind + configPath + optional parse
+  // location) so a CLI consumer can build its own remediation instead of
+  // parsing the library's `reason` prose.
+  it('attaches structured config-parse error context on a JSON parse failure', async () => {
+    mockCheckOpenssl.mockReturnValue(mockOk('openssl'))
+    mockCheckBash.mockReturnValue(mockOk('bash'))
+    mockCheckSecretTool.mockReturnValue(mockOk('secret-tool'))
+    mockCheckOp.mockReturnValue(mockMissing('op'))
+    mockCheckYkman.mockReturnValue(mockMissing('ykman'))
+    mockLoadConfig.mockRejectedValue(
+      new ConfigParseError(
+        "Failed to parse config file at /fake/config.json at line 1, column 3: Unexpected token. Run 'vaultkeeper config init' to create a valid config.",
+        '/fake/config.json',
+        'line 1, column 3',
+      ),
+    )
+
+    const result = await runDoctor({ platform: 'linux', configDir: '/fake' })
+
+    const configCheck = result.checks.find((c) => c.name === 'config')
+    expect(configCheck?.error).toEqual({
+      kind: 'config-parse',
+      configPath: '/fake/config.json',
+      location: 'line 1, column 3',
+    })
+  })
+
+  it('attaches structured config-validation error context (no location) on a schema failure', async () => {
+    mockCheckOpenssl.mockReturnValue(mockOk('openssl'))
+    mockCheckBash.mockReturnValue(mockOk('bash'))
+    mockCheckSecretTool.mockReturnValue(mockOk('secret-tool'))
+    mockCheckOp.mockReturnValue(mockMissing('op'))
+    mockCheckYkman.mockReturnValue(mockMissing('ykman'))
+    mockLoadConfig.mockRejectedValue(
+      new ConfigValidationError(
+        'Invalid config at /fake/config.json: Config version must be 1. Fix the file — either install @vaultkeeper/cli and run ...',
+        'version',
+        '/fake/config.json',
+      ),
+    )
+
+    const result = await runDoctor({ platform: 'linux', configDir: '/fake' })
+
+    const configCheck = result.checks.find((c) => c.name === 'config')
+    expect(configCheck?.error).toEqual({
+      kind: 'config-validation',
+      configPath: '/fake/config.json',
+    })
+    // Validation failures have no parse location.
+    expect(configCheck?.error?.location).toBeUndefined()
+  })
+
+  it('falls back to the configDir-derived path when a validation error has no file path', async () => {
+    mockCheckOpenssl.mockReturnValue(mockOk('openssl'))
+    mockCheckBash.mockReturnValue(mockOk('bash'))
+    mockCheckSecretTool.mockReturnValue(mockOk('secret-tool'))
+    mockCheckOp.mockReturnValue(mockMissing('op'))
+    mockCheckYkman.mockReturnValue(mockMissing('ykman'))
+    mockLoadConfig.mockRejectedValue(
+      new ConfigValidationError('Invalid config: Config version must be 1.', 'version'),
+    )
+
+    const result = await runDoctor({ platform: 'linux', configDir: '/fake' })
+
+    const configCheck = result.checks.find((c) => c.name === 'config')
+    expect(configCheck?.error?.configPath).toBe('/fake/config.json')
+  })
+
+  it('leaves `error` undefined for an unrecognized config load failure', async () => {
+    mockCheckOpenssl.mockReturnValue(mockOk('openssl'))
+    mockCheckBash.mockReturnValue(mockOk('bash'))
+    mockCheckSecretTool.mockReturnValue(mockOk('secret-tool'))
+    mockCheckOp.mockReturnValue(mockMissing('op'))
+    mockCheckYkman.mockReturnValue(mockMissing('ykman'))
+    mockLoadConfig.mockRejectedValue(new Error('some unexpected failure'))
+
+    const result = await runDoctor({ platform: 'linux', configDir: '/fake' })
+
+    const configCheck = result.checks.find((c) => c.name === 'config')
+    expect(configCheck?.status).toBe('invalid')
+    expect(configCheck?.error).toBeUndefined()
+    // The human-readable reason is still available as a fallback.
+    expect(configCheck?.reason).toContain('some unexpected failure')
   })
 
   it('does not load config when an explicit backends option is also provided', async () => {

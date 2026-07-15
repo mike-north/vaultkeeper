@@ -213,11 +213,22 @@ export class PluginNotFoundError extends VaultError {
 
 // @public
 export interface PreflightCheck {
+    error?: PreflightCheckError | undefined;
     name: string;
     reason?: string | undefined;
     status: PreflightCheckStatus;
     version?: string | undefined;
 }
+
+// @public
+export interface PreflightCheckError {
+    configPath: string;
+    kind: PreflightCheckErrorKind;
+    location?: string | undefined;
+}
+
+// @public
+export type PreflightCheckErrorKind = 'config-parse' | 'config-validation';
 
 // @public
 export type PreflightCheckStatus = 'ok' | 'missing' | 'version-unsupported' | 'invalid';
