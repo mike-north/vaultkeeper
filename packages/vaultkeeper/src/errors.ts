@@ -328,11 +328,13 @@ export class InvalidAlgorithmError extends VaultError {
 }
 
 /**
- * Thrown by verification when the supplied public key is not structurally
- * parseable as a PEM/DER public key (e.g. `crypto.createPublicKey()` rejects
- * it, or a private key was passed where a public key is required). This is an
- * operational fault distinct from a signature that simply does not verify — a
- * verification failure returns `false`, while unparseable key material throws.
+ * Thrown when signing-key material cannot be parsed. Two paths raise it. During
+ * verification, the supplied public key is not a structurally parseable SPKI PEM
+ * public key (or a private key was passed where a public key is required); this
+ * is an operational fault distinct from a signature that simply does not verify,
+ * which returns `false`. During key use, a stored signing key decrypts cleanly
+ * but is not valid private key material — corrupt or tampered on disk — when
+ * exporting its public half or signing with it (`getPublicKey`/`signWithKey`).
  * The message never echoes any part of the key material.
  *
  * @public

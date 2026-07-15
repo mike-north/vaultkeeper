@@ -699,8 +699,9 @@ export class VaultKeeper {
    *
    * @param token - A `CapabilityToken` obtained from `authorize()`.
    * @returns A `SecretAccessor` that can be read exactly once.
-   * @throws {Error} If `token` is invalid or was not created by this vault
-   *   instance.
+   * @throws {AuthorizationDeniedError} If `token` is invalid or was not created
+   *   by this vault instance, or if it is a signing-key token — a signing key
+   *   carries no secret and cannot be read through `getSecret()` (use `sign()`).
    */
   getSecret(token: CapabilityToken): SecretAccessor {
     const claims = validateCapabilityToken(token)
