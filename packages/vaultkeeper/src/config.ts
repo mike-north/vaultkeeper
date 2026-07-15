@@ -18,7 +18,7 @@ import { ConfigValidationError, ConfigParseError, FilesystemError } from './erro
  * `@vaultkeeper/cli` package to run `vaultkeeper config init --force`, or fix
  * the config through the JS API directly (issue #100).
  */
-const CONFIG_REMEDIATION_HINT = `Fix the file, install @vaultkeeper/cli and run 'vaultkeeper config init --force' to overwrite it with a valid config, or repair/replace it programmatically via this library (pass an explicit \`config\` or \`configDir\`, or write a valid config.json yourself).`
+const CONFIG_REMEDIATION_HINT = `Fix the file — either install @vaultkeeper/cli and run 'vaultkeeper config init --force' to overwrite it with a valid config, or repair/replace it programmatically via this library (pass an explicit \`config\` or \`configDir\`, or write a valid config.json yourself).`
 
 /** `true` if `err` is a Node.js filesystem error with the given `code`. */
 function hasErrorCode(err: unknown, code: string): boolean {
