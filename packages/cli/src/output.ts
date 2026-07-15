@@ -5,7 +5,7 @@
  */
 
 import * as path from 'node:path'
-import { ConfigParseError, ConfigValidationError } from 'vaultkeeper'
+import { ConfigParseError, ConfigValidationError, FilesystemError } from 'vaultkeeper'
 import type { PreflightCheckError } from 'vaultkeeper'
 import { shellQuote } from './shell-quote.js'
 
@@ -32,18 +32,22 @@ export function dim(text: string): string {
  * — correct advice for a library consumer that doesn't have a CLI installed
  * (issue #100), but wrong for a user who is already running this CLI
  * (issue #114). Only structured fields that are safe to depend on are used
- * (the file path, and — for a parse error — its line/column location); the
- * library-internal validation reason text lives only in `.message`
- * alongside the wrong remediation, so it is deliberately not reused here.
- * `configDir` is a fallback for `ConfigValidationError.configFilePath`,
- * which is `undefined` when the error came from validating an in-memory
- * value rather than a loaded file — a case the CLI itself never hits, since
- * it only ever validates via `loadConfig`/`VaultKeeper.init`.
+ * (the file path, and — for a parse error, its line/column location; for a
+ * validation error, its `field`); the library-internal validation *reason*
+ * text (e.g. "must be a non-empty string") lives only in `.message`
+ * alongside the wrong remediation, so it is deliberately not reused here —
+ * but `field` (the dotted/bracketed path to the offending field, e.g.
+ * `version`) is itself a structured, remediation-free field and safe to
+ * surface (issue #137). `configDir` is a fallback for
+ * `ConfigValidationError.configFilePath`, which is `undefined` when the
+ * error came from validating an in-memory value rather than a loaded file —
+ * a case the CLI itself never hits, since it only ever validates via
+ * `loadConfig`/`VaultKeeper.init`.
  */
-function configRemediation(configPath: string, location: string | undefined): string {
-  const locationSuffix = location !== undefined ? ` (at ${location})` : ''
+function configRemediation(configPath: string, detail: string | undefined): string {
+  const detailSuffix = detail !== undefined ? ` (${detail})` : ''
   return (
-    `The config at \`${configPath}\` is invalid${locationSuffix} — ` +
+    `The config at \`${configPath}\` is invalid${detailSuffix} — ` +
     'run `vaultkeeper config init --force` to overwrite it.'
   )
 }
@@ -56,8 +60,82 @@ function formatConfigError(
     err instanceof ConfigParseError
       ? err.path
       : (err.configFilePath ?? path.join(configDir, 'config.json'))
-  const location = err instanceof ConfigParseError ? err.location : undefined
-  return `${err.name}: ${configRemediation(configPath, location)}`
+  const detail =
+    err instanceof ConfigParseError
+      ? err.location !== undefined
+        ? `at ${err.location}`
+        : undefined
+      : `\`${err.field}\``
+  return `${err.name}: ${configRemediation(configPath, detail)}`
+}
+
+/**
+ * True when `err` is the `FilesystemError` `loadConfig` throws for a failed
+ * read of `config.json` — any errno (`EACCES`/`EPERM`/`EISDIR`/etc.), not
+ * only permission failures; `formatConfigReadError` picks the actual wording
+ * from `err.code`. `FileBackend` secret reads never live at
+ * `configDir/config.json`, so this check can't collide with a backend read
+ * failure (issue #137).
+ */
+function isUnreadableConfigFile(err: unknown, configDir: string): err is FilesystemError {
+  return (
+    err instanceof FilesystemError &&
+    err.permission === 'read' &&
+    err.path === path.join(configDir, 'config.json')
+  )
+}
+
+/**
+ * Errno codes handled by `isUnreadableConfigFile` that are actually
+ * permission problems. `undefined` (no errno code recovered — see
+ * `FilesystemError.code`'s docs) is treated the same way, conservatively:
+ * it's the pre-#141 shape, and a permissions hint is still broadly correct
+ * for a read failure of unknown cause.
+ */
+const PERMISSION_ERROR_CODES = new Set(['EACCES', 'EPERM'])
+
+/**
+ * Build the CLI-native remediation for an unreadable `config.json`.
+ *
+ * Regression: issue #114 fixed this wrong-audience remediation for parse and
+ * validation errors, but the read-failure path (`FilesystemError` from an
+ * EACCES/EPERM `config.json`, e.g. a root-owned or chmod'd file) still fell
+ * through to `formatError`'s generic `Error` branch, printing the library's
+ * own message — which still names `install @vaultkeeper/cli` (issue #137).
+ * The remediation here deliberately does NOT suggest `config init --force`
+ * for any variant below: that command would either hit the exact same read
+ * failure trying to write the replacement file (a permission problem) or be
+ * the wrong fix entirely (e.g. overwriting a directory doesn't make it a
+ * file) — a dead end either way.
+ *
+ * Review follow-up (issue #137, PR #158): an earlier draft suggested running
+ * `ls -l <path>` as an example command. That's POSIX-only — confusing on
+ * Windows, which this CLI supports via the dpapi backend — and embedded the
+ * path unquoted, which breaks if it contains spaces/metacharacters (e.g. a
+ * user-supplied `--config-dir`). Platform-neutral prose avoids both problems
+ * without introducing platform-branching for a single message.
+ *
+ * Review follow-up (issue #137, PR #158): `isUnreadableConfigFile` matches
+ * *any* read-path `FilesystemError` on `config.json`, not only permission
+ * failures — `EISDIR`, `ENOSPC`-adjacent codes, etc. can also reach here, and
+ * asserting "the current user cannot read it" would be an outright wrong
+ * diagnosis for those. `FilesystemError.code` (added in #141) lets this
+ * branch on the actual errno rather than assume permissions: a genuine
+ * permission code (or no code at all, conservatively) keeps the permissions
+ * wording; any other code gets an honest, code-naming message instead.
+ */
+function formatConfigReadError(err: FilesystemError): string {
+  if (err.code === undefined || PERMISSION_ERROR_CODES.has(err.code)) {
+    return (
+      `${err.name}: The config at \`${err.path}\` could not be read — ` +
+      "check the file's permissions and ownership, and that it exists — the " +
+      'current user cannot read it. Then try again.'
+    )
+  }
+  return (
+    `${err.name}: The config at \`${err.path}\` could not be read (${err.code}) — ` +
+    'check that the path is a regular, readable file, then try again.'
+  )
 }
 
 /**
@@ -69,7 +147,8 @@ function formatConfigError(
  * the CLI.
  */
 export function formatPreflightConfigError(error: PreflightCheckError): string {
-  return configRemediation(error.configPath, error.location)
+  const detail = error.location !== undefined ? `at ${error.location}` : undefined
+  return configRemediation(error.configPath, detail)
 }
 
 /**
@@ -112,6 +191,9 @@ export function secretNotFoundMessage(name: string, backendType: string): string
 export function formatError(err: unknown, configDir: string): string {
   if (err instanceof ConfigParseError || err instanceof ConfigValidationError) {
     return formatConfigError(err, configDir)
+  }
+  if (isUnreadableConfigFile(err, configDir)) {
+    return formatConfigReadError(err)
   }
   if (err instanceof Error) {
     return `${err.name}: ${err.message}`

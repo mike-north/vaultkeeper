@@ -199,11 +199,15 @@ describe('configCommand', () => {
     })
 
     // Issue #114: the CLI's own message no longer echoes the library's
-    // field-level reason verbatim (that text lives only alongside the
-    // library's "install @vaultkeeper/cli" remediation — issue #100); it
-    // instead builds a CLI-native message from the error's remediation-free
-    // structured fields (path here; also location for a parse error).
-    it('exits non-zero with a CLI-native remediation, path, and recovery command on structurally invalid config', async () => {
+    // field-level *reason* verbatim (that text lives only in `.message`,
+    // alongside the library's "install @vaultkeeper/cli" remediation — issue
+    // #100); it instead builds a CLI-native message from the error's
+    // remediation-free structured fields (path; also location for a parse
+    // error). Issue #137: the failing field's *name* (`ConfigValidationError
+    // .field`, itself a structured, remediation-free field) is restored —
+    // #129 dropped the field-level detail entirely with no replacement, so
+    // this re-asserts it via the structured field rather than `.message`.
+    it('exits non-zero with a CLI-native remediation, path, failing field, and recovery command on structurally invalid config', async () => {
       await fs.mkdir(configDir, { recursive: true })
       await fs.writeFile(
         path.join(configDir, 'config.json'),
@@ -214,6 +218,7 @@ describe('configCommand', () => {
       const code = await configCommand(['show'], configDir)
       expect(code).toBe(1)
       expect(stderrOutput).toContain(path.join(configDir, 'config.json'))
+      expect(stderrOutput).toContain('`version`')
       expect(stderrOutput).toContain('vaultkeeper config init --force')
       expect(stderrOutput).not.toContain('install @vaultkeeper/cli')
     })
