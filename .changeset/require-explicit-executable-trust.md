@@ -1,9 +1,9 @@
 ---
-'vaultkeeper': major
+'vaultkeeper': minor
 '@vaultkeeper/test-helpers': minor
 ---
 
-Breaking: `VaultKeeper.setup()` now requires an explicit executable-trust choice. This is a major bump on `vaultkeeper`, authorized by the maintainer on issue #123.
+Breaking (0.x): `VaultKeeper.setup()` now requires an explicit executable-trust choice. Versioned as a minor bump under 0.x semver (breaking changes ship as minor bumps while `vaultkeeper` is pre-1.0).
 
 `setup()` previously defaulted `executablePath` to `'dev'` when omitted, which silently skipped Trust On First Use (TOFU) executable-identity verification — so a bare `await vault.setup(name)` minted an unverified token even though the caller may have believed trust was enforced. This was a permissive security default for a secrets tool. Existing `setup(name)` calls must now pass `executablePath` (runs TOFU verification) or `skipTrust: true` (development-only opt-out); omitting both throws `ExecutableTrustRequiredError`.
 
@@ -12,7 +12,7 @@ Breaking: `VaultKeeper.setup()` now requires an explicit executable-trust choice
 - `executablePath` — the calling executable's real path, which runs TOFU verification (the safe, production choice), or
 - `skipTrust: true` — a self-describing, greppable, development-only opt-out that deliberately skips verification.
 
-Supplying neither — or both — now throws the new typed `ExecutableTrustRequiredError` (a `VaultError` subclass, exported from the package root) instead of silently skipping trust. Its `reason` field is `'missing-choice'` or `'conflicting-choice'`.
+Supplying neither — or both — now throws the new typed `ExecutableTrustRequiredError` (a `VaultError` subclass, exported from the package root) instead of silently skipping trust. Its `reason` field is `'missing-choice'`, `'conflicting-choice'`, or `'legacy-dev-sentinel'` (the retired `executablePath: 'dev'` opt-out).
 
 Passing a real `executablePath` behaves exactly as before, including the existing `setDevelopmentMode()` allowlist bypass and `IdentityMismatchError` on a hash conflict.
 
