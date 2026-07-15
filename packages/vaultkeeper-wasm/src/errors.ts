@@ -50,6 +50,60 @@ export class DecryptionError extends VaultError {
 }
 
 /**
+ * Thrown when a filesystem operation fails while reading, writing, or
+ * deleting a stored secret entry. Common causes include a permission or
+ * access problem, but the underlying failure may be any OS errno condition —
+ * inspect {@link FilesystemError.code} for the specific errno when one is
+ * available. Mirrors the pure-TypeScript `vaultkeeper` library's
+ * `FilesystemError` field names (`path`, `permission`, `code`).
+ */
+export class FilesystemError extends VaultError {
+  /**
+   * The path that caused the error. In practice the Rust core always
+   * supplies this for `VaultError::Filesystem`, so `undefined` only occurs
+   * if a malformed boundary shape omitted it — never fabricated as an empty
+   * string, so its absence is distinguishable from a genuine path.
+   */
+  readonly path?: string;
+
+  /**
+   * The file operation that was being attempted, e.g. `'read'` or `'write'`
+   * — the WASM host bridge reports a delete as `'write'`, mirroring the
+   * native CLI host's classification (crates/vaultkeeper-cli/src/host.rs).
+   * Despite the field name, this does not imply the failure was itself a
+   * permission problem: it names the attempted operation regardless of the
+   * underlying errno, which may be a non-permission code. As with `path`,
+   * this is always populated by the real core; `undefined` only guards a
+   * malformed boundary shape.
+   */
+  readonly permission?: string;
+
+  /**
+   * The underlying OS errno code (e.g. `'ENOENT'`, `'EACCES'`), when the
+   * Node host bridge was able to supply one. `undefined` when no code was
+   * available — never fabricated.
+   */
+  readonly code: string | undefined;
+
+  constructor(
+    message: string,
+    path: string | undefined,
+    permission: string | undefined,
+    code: string | undefined,
+  ) {
+    super(message);
+    this.name = 'FilesystemError';
+    if (path !== undefined) {
+      this.path = path;
+    }
+    if (permission !== undefined) {
+      this.permission = permission;
+    }
+    this.code = code;
+  }
+}
+
+/**
  * Thrown when a JWE string is invalid or cannot be processed — structurally
  * malformed, decryption failure (wrong key, tampered ciphertext), or a
  * decrypted payload that does not match the expected claims schema.
@@ -187,6 +241,8 @@ interface WasmErrorShape {
   canRefresh?: boolean;
   path?: string;
   reason?: string;
+  permission?: string;
+  code?: string;
 }
 
 function isWasmErrorShape(value: unknown): value is WasmErrorShape {
@@ -225,6 +281,15 @@ export function mapWasmError(thrown: unknown): VaultError {
         return new SecretNotFoundError(message);
       case 'decryption':
         return new DecryptionError(message, thrown.path);
+      case 'filesystem':
+        // A `filesystem`-coded thrown value is still more informative as a
+        // `FilesystemError` with undefined `path`/`permission` than a
+        // downgrade to the generic `VaultError` base class, which would
+        // hide `code` and the fact that this was a filesystem failure at
+        // all. Pass `path`/`permission` through as-is — never fabricate a
+        // fallback value — mirroring how `decryption`'s `path` is handled
+        // above.
+        return new FilesystemError(message, thrown.path, thrown.permission, thrown.code);
       case 'invalid-token':
         return new InvalidTokenError(message);
       case 'token-expired':

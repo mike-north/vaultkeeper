@@ -12,6 +12,45 @@ import { dirname, join } from 'node:path';
 import type { WasmHostPlatform } from './types.js';
 
 /**
+ * The structured failure contract `readFile`/`writeFile`/`deleteFile`/
+ * `fileExists` reject with.
+ *
+ * `JsHostPlatform` (crates/vaultkeeper-wasm/src/wasm_impl.rs,
+ * `fs_rejection_to_vault_error`) reads `code`, `message`, and `path` back off
+ * the rejected value via `Reflect::get` to build a typed
+ * `VaultError::Filesystem` instead of collapsing every rejection into a
+ * generic error — this class *is* that wire contract, not an incidental
+ * detail of how Node happens to shape `fs` errors today. `code` mirrors
+ * Node's `NodeJS.ErrnoException.code` (e.g. `'ENOENT'`, `'EACCES'`) when the
+ * underlying failure exposed one; it is `undefined`, never fabricated,
+ * otherwise. `path` is preferred over the path argument the Rust call was
+ * made with: `writeFile`'s `mkdir` sub-step can fail on a different, more
+ * precise directory path than the file path it was nominally about.
+ */
+class HostFilesystemError extends Error {
+  readonly path: string;
+  readonly code: string | undefined;
+
+  constructor(message: string, path: string, code: string | undefined) {
+    super(message);
+    this.name = 'HostFilesystemError';
+    this.path = path;
+    this.code = code;
+  }
+}
+
+function isErrnoException(err: unknown): err is NodeJS.ErrnoException {
+  return err instanceof Error && 'code' in err;
+}
+
+/** Wrap a caught `fs` failure into the {@link HostFilesystemError} contract. */
+function toHostFilesystemError(err: unknown, path: string): HostFilesystemError {
+  const message = err instanceof Error ? err.message : String(err);
+  const code = isErrnoException(err) && typeof err.code === 'string' ? err.code : undefined;
+  return new HostFilesystemError(message, path, code);
+}
+
+/**
  * Create a Node.js host platform for the WASM module.
  *
  * Uses the standard vaultkeeper config directory:
@@ -46,20 +85,32 @@ export function createNodeHost(configDirOverride?: string): WasmHostPlatform {
     },
 
     async readFile(path: string): Promise<Uint8Array> {
-      const buf = await readFile(path);
-      return new Uint8Array(buf);
+      try {
+        const buf = await readFile(path);
+        return new Uint8Array(buf);
+      } catch (err) {
+        throw toHostFilesystemError(err, path);
+      }
     },
 
     async writeFile(path: string, content: Uint8Array, mode: number): Promise<void> {
       // Ensure parent directory exists (use path.dirname for cross-platform support)
       const dir = dirname(path);
       if (dir && dir !== '.') {
-        await mkdir(dir, { recursive: true });
+        try {
+          await mkdir(dir, { recursive: true });
+        } catch (err) {
+          throw toHostFilesystemError(err, dir);
+        }
       }
-      await writeFile(path, content);
-      // chmod is a no-op on Windows; skip to avoid errors
-      if (osPlatform() !== 'win32') {
-        await chmod(path, mode);
+      try {
+        await writeFile(path, content);
+        // chmod is a no-op on Windows; skip to avoid errors
+        if (osPlatform() !== 'win32') {
+          await chmod(path, mode);
+        }
+      } catch (err) {
+        throw toHostFilesystemError(err, path);
       }
     },
 
@@ -67,13 +118,24 @@ export function createNodeHost(configDirOverride?: string): WasmHostPlatform {
       try {
         await access(path);
         return true;
-      } catch {
-        return false;
+      } catch (err) {
+        // Mirror the native host's `file_exists` (crates/vaultkeeper-cli/src/host.rs):
+        // only a genuine "does not exist" collapses to `false`. Any other
+        // failure (e.g. EACCES resolving a parent directory) must surface as
+        // a typed error rather than masquerade as "not found".
+        if (isErrnoException(err) && err.code === 'ENOENT') {
+          return false;
+        }
+        throw toHostFilesystemError(err, path);
       }
     },
 
     async deleteFile(path: string): Promise<void> {
-      await unlink(path);
+      try {
+        await unlink(path);
+      } catch (err) {
+        throw toHostFilesystemError(err, path);
+      }
     },
 
     async listDir(path: string): Promise<string[]> {

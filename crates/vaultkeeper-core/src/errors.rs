@@ -129,14 +129,25 @@ pub enum VaultError {
         dependency: String,
     },
 
-    /// A filesystem operation failed due to permissions.
+    /// A filesystem operation failed. Permission or access problems (e.g. the
+    /// config directory is not writable) are a common cause, but the
+    /// underlying failure may be any OS errno condition (e.g. the disk is
+    /// full). Inspect `code` for the specific errno when one is available.
     #[error("{message}")]
     Filesystem {
         message: String,
         /// The absolute path that caused the error.
         path: String,
-        /// The required permission level (e.g. `"read"`, `"write"`).
+        /// The file operation that was being attempted, e.g. `"read"` or
+        /// `"write"`. Despite the field name, this does not imply the
+        /// failure was itself a permission problem — it names the attempted
+        /// operation regardless of the underlying errno, which may be a
+        /// non-permission code.
         permission: String,
+        /// The underlying OS errno code (e.g. `"ENOENT"`, `"EACCES"`), when
+        /// the host platform was able to supply one. `None` when the host
+        /// does not expose a machine-readable code.
+        code: Option<String>,
     },
 
     /// A key rotation was requested while a previous rotation is still in its grace period.

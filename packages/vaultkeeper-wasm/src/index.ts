@@ -48,6 +48,7 @@ export {
   VaultError,
   SecretNotFoundError,
   DecryptionError,
+  FilesystemError,
   InvalidTokenError,
   TokenExpiredError,
   KeyRotatedError,

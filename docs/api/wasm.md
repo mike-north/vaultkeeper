@@ -77,6 +77,17 @@ Mirrors the pure-TypeScript `vaultkeeper` library's `ExecutableTrustRequiredErro
 </td></tr>
 <tr><td>
 
+[FilesystemError](./wasm.filesystemerror.md)
+
+
+</td><td>
+
+Thrown when a filesystem operation fails while reading, writing, or deleting a stored secret entry. Common causes include a permission or access problem, but the underlying failure may be any OS errno condition — inspect [FilesystemError.code](./wasm.filesystemerror.code.md) for the specific errno when one is available. Mirrors the pure-TypeScript `vaultkeeper` library's `FilesystemError` field names (`path`<!-- -->, `permission`<!-- -->, `code`<!-- -->).
+
+
+</td></tr>
+<tr><td>
+
 [InvalidTokenError](./wasm.invalidtokenerror.md)
 
 
