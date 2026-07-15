@@ -77,16 +77,39 @@ function extractRemediationCommand(output: string): string {
 }
 
 /**
+ * The env vars that pin a subprocess's platform-default config dir to an
+ * isolated `home`, cross-platform: `HOME` on POSIX, `APPDATA`/`USERPROFILE`
+ * on Windows (`getPlatformDefaultConfigDir` reads `APPDATA` there, falling
+ * back to `USERPROFILE`/homedir). Pointing all three at `home` keeps the
+ * "no default-location config was created" assertion honest on every OS.
+ */
+function isolatedHomeEnv(home: string): Record<string, string> {
+  return { HOME: home, APPDATA: home, USERPROFILE: home }
+}
+
+/**
+ * The platform-default config dir a subprocess would resolve when its home
+ * env is pinned to `home` via {@link isolatedHomeEnv} — mirrors the library's
+ * `getPlatformDefaultConfigDir` so the assertion matches the env actually set.
+ */
+function platformDefaultConfigDir(home: string): string {
+  return process.platform === 'win32'
+    ? path.join(home, 'vaultkeeper')
+    : path.join(home, '.config', 'vaultkeeper')
+}
+
+/**
  * Run the LITERAL command `doctor` printed, in a fresh process with NO
  * `--config-dir` flag supplied by the harness and NO `VAULTKEEPER_CONFIG_DIR`
  * env var — only whatever the printed command itself carries. `home` isolates
- * the platform-default config dir so the test can prove nothing was written
- * there. Maps the printed `vaultkeeper` token onto the test CLI entry point.
+ * the platform-default config dir (cross-platform) so the test can prove
+ * nothing was written there. Maps the printed `vaultkeeper` token onto the
+ * test CLI entry point.
  */
 async function runPrintedCommandFresh(printedCommand: string, home: string): Promise<CliResult> {
   const argv = parseShellCommand(printedCommand)
   expect(argv[0]).toBe('vaultkeeper')
-  const runner = await createCliTestEnv({ configDirMode: 'flag', env: { HOME: home } })
+  const runner = await createCliTestEnv({ configDirMode: 'flag', env: isolatedHomeEnv(home) })
   try {
     return await runner.run(argv.slice(1))
   } finally {
@@ -226,7 +249,7 @@ describe('doctor config remediation targets the active dir and prints once (issu
 
   it('prints a working --config-dir command for a --config-dir (flag) case, and repairs the file verbatim', async () => {
     home = await fs.mkdtemp(path.join(os.tmpdir(), 'vk-home-flag-'))
-    const env = await createCliTestEnv({ configDirMode: 'flag', env: { HOME: home } })
+    const env = await createCliTestEnv({ configDirMode: 'flag', env: isolatedHomeEnv(home) })
     cleanups.push(() => env.cleanup())
 
     // Seed a broken config under the non-default (flag) dir.
@@ -249,19 +272,19 @@ describe('doctor config remediation targets the active dir and prints once (issu
     const repairedRaw = await fs.readFile(configPath, 'utf8')
     const repaired: unknown = JSON.parse(repairedRaw)
     if (typeof repaired !== 'object' || repaired === null || !('backends' in repaired)) {
-      throw new Error(`repaired config is not a config object: `)
+      throw new Error(`repaired config is not a config object: ${repairedRaw}`)
     }
     expect(Array.isArray(repaired.backends)).toBe(true)
 
     // No config was created at the platform default location as a side effect.
-    const defaultConfig = path.join(home, '.config', 'vaultkeeper', 'config.json')
+    const defaultConfig = path.join(platformDefaultConfigDir(home), 'config.json')
     await expect(fs.access(defaultConfig)).rejects.toThrow()
   })
 
   it('prints a working --config-dir command for a VAULTKEEPER_CONFIG_DIR-only case', async () => {
     home = await fs.mkdtemp(path.join(os.tmpdir(), 'vk-home-env-'))
     // env-mode: the active dir comes ONLY from VAULTKEEPER_CONFIG_DIR.
-    const env = await createCliTestEnv({ configDirMode: 'env', env: { HOME: home } })
+    const env = await createCliTestEnv({ configDirMode: 'env', env: isolatedHomeEnv(home) })
     cleanups.push(() => env.cleanup())
 
     const configPath = path.join(env.configDir, 'config.json')
@@ -283,17 +306,17 @@ describe('doctor config remediation targets the active dir and prints once (issu
     const repairedRaw = await fs.readFile(configPath, 'utf8')
     const repaired: unknown = JSON.parse(repairedRaw)
     if (typeof repaired !== 'object' || repaired === null || !('backends' in repaired)) {
-      throw new Error(`repaired config is not a config object: `)
+      throw new Error(`repaired config is not a config object: ${repairedRaw}`)
     }
     expect(Array.isArray(repaired.backends)).toBe(true)
 
-    const defaultConfig = path.join(home, '.config', 'vaultkeeper', 'config.json')
+    const defaultConfig = path.join(platformDefaultConfigDir(home), 'config.json')
     await expect(fs.access(defaultConfig)).rejects.toThrow()
   })
 
   it('prints the remediation sentence exactly once for an invalid config (issue #152)', async () => {
     home = await fs.mkdtemp(path.join(os.tmpdir(), 'vk-home-once-'))
-    const env = await createCliTestEnv({ configDirMode: 'flag', env: { HOME: home } })
+    const env = await createCliTestEnv({ configDirMode: 'flag', env: isolatedHomeEnv(home) })
     cleanups.push(() => env.cleanup())
 
     await fs.writeFile(path.join(env.configDir, 'config.json'), 'not json', 'utf8')
@@ -311,5 +334,12 @@ describe('doctor config remediation targets the active dir and prints once (issu
     const nextStepsIdx = doctor.stdout.indexOf('Next steps:')
     expect(nextStepsIdx).toBeGreaterThanOrEqual(0)
     expect(doctor.stdout.indexOf('config init --force')).toBeGreaterThan(nextStepsIdx)
+
+    // The inline ✗ config line keeps a brief pointer (not the full remediation)
+    // so the failing check is still actionable — that pointer sits BEFORE the
+    // Next steps block, and it is not the remediation command itself.
+    const pointerIdx = doctor.stdout.indexOf('see the fix under Next steps')
+    expect(pointerIdx).toBeGreaterThanOrEqual(0)
+    expect(pointerIdx).toBeLessThan(nextStepsIdx)
   })
 })

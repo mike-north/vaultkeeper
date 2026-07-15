@@ -66,11 +66,14 @@ export async function doctorCommand(args: string[], configDir: string): Promise<
       const icon = check.status === 'ok' ? '✓' : '✗'
       const version = check.version !== undefined ? ` (${check.version})` : ''
       // A check carrying structured `error` context (the `config` check on an
-      // invalid file) has its full remediation printed once under "Next
-      // steps" below, so it is deliberately omitted from this inline line to
-      // avoid the duplicate the wave-4 Next-steps block introduced (issue
-      // #152). Every other check still renders its inline `reason`.
-      const reasonText = check.error !== undefined ? undefined : check.reason
+      // invalid file) has its full remediation — now long enough to carry a
+      // `--config-dir` (issue #149) — printed once under "Next steps" below,
+      // rather than duplicated inline (issue #152). The inline line keeps a
+      // brief, actionable pointer instead of going bare, so the failing check
+      // still tells the reader where the fix is. Every other check renders its
+      // own inline `reason`.
+      const reasonText =
+        check.error !== undefined ? 'invalid; see the fix under Next steps' : check.reason
       const reason = reasonText !== undefined ? ` — ${reasonText}` : ''
       process.stdout.write(`  ${icon} ${check.name}${version}${reason}\n`)
     }
