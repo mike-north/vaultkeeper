@@ -9,19 +9,19 @@ export interface WasmHostPlatform {
     cmd: string,
     args: string[],
     stdin?: Uint8Array,
-  ): Promise<{ stdout: Uint8Array; stderr: Uint8Array; exitCode: number }>;
-  readFile(path: string): Promise<Uint8Array>;
-  writeFile(path: string, content: Uint8Array, mode: number): Promise<void>;
-  fileExists(path: string): Promise<boolean>;
-  deleteFile(path: string): Promise<void>;
-  listDir(path: string): Promise<string[]>;
-  platform(): string;
-  configDir(): string;
+  ): Promise<{ stdout: Uint8Array; stderr: Uint8Array; exitCode: number }>
+  readFile(path: string): Promise<Uint8Array>
+  writeFile(path: string, content: Uint8Array, mode: number): Promise<void>
+  fileExists(path: string): Promise<boolean>
+  deleteFile(path: string): Promise<void>
+  listDir(path: string): Promise<string[]>
+  platform(): string
+  configDir(): string
 }
 
 /** Options for creating a WasmVaultKeeper instance. */
 export interface VaultKeeperOptions {
-  skipDoctor?: boolean;
+  skipDoctor?: boolean
 }
 
 /**
@@ -33,8 +33,8 @@ export interface VaultKeeperOptions {
  * throws `ExecutableTrustRequiredError`.
  */
 export interface SetupOptions {
-  ttlMinutes?: number;
-  useLimit?: number;
+  ttlMinutes?: number
+  useLimit?: number
   /**
    * The calling executable's real path. When supplied, `setup()` hashes the
    * executable and runs trust-on-first-use verification (Sigstore →
@@ -44,13 +44,13 @@ export interface SetupOptions {
    * {@link SetupOptions.skipTrust}. The retired `'dev'` sentinel is rejected —
    * use `skipTrust: true` to skip verification instead.
    */
-  executablePath?: string;
+  executablePath?: string
   /**
    * Development-only opt-out that deliberately skips binding a real executable
    * identity, producing a `'dev'`-bound token (no executable identity bound).
    * Mutually exclusive with {@link SetupOptions.executablePath}.
    */
-  skipTrust?: boolean;
+  skipTrust?: boolean
   /**
    * Backend identifier recorded as a claim label in the minted token's `bkd`
    * claim. This is a label only: it does not select, connect to, or route
@@ -59,14 +59,14 @@ export interface SetupOptions {
    * WASM SDK's `setup()` mints the token directly from the supplied secret value
    * and never reads from a backend.
    */
-  backendType?: string;
+  backendType?: string
 }
 
 /** Trust tier classification. */
-export type TrustTier = '1' | '2' | '3';
+export type TrustTier = '1' | '2' | '3'
 
 /** Key status in the vault response. */
-export type KeyStatus = 'current' | 'previous' | 'deprecated';
+export type KeyStatus = 'current' | 'previous' | 'deprecated'
 
 /**
  * Claims embedded in a JWE token, as returned by {@link AuthorizeResult}.
@@ -76,21 +76,21 @@ export type KeyStatus = 'current' | 'previous' | 'deprecated';
  * {@link SecretAccessor} instead.
  */
 export interface VaultClaims {
-  jti: string;
-  exp: number;
-  iat: number;
-  sub: string;
-  exe: string;
-  use?: number | null;
-  tid: TrustTier;
-  bkd: string;
-  ref: string;
+  jti: string
+  exp: number
+  iat: number
+  sub: string
+  exe: string
+  use?: number | null
+  tid: TrustTier
+  bkd: string
+  ref: string
 }
 
 /** Response from token authorization. */
 export interface VaultResponse {
-  keyStatus: KeyStatus;
-  rotatedJwt?: string | null;
+  keyStatus: KeyStatus
+  rotatedJwt?: string | null
 }
 
 /**
@@ -108,10 +108,10 @@ export interface SecretAccessor {
    *
    * @throws AccessorConsumedError if called after the secret has been read.
    */
-  read<T>(fn: (secret: string) => T): T;
+  read<T>(fn: (secret: string) => T): T
 
   /** Whether the secret is still available (i.e. `read()` has not run). */
-  readonly available: boolean;
+  readonly available: boolean
 }
 
 /**
@@ -120,13 +120,13 @@ export interface SecretAccessor {
  * secret.
  */
 export interface AuthorizeResult {
-  claims: VaultClaims;
-  response: VaultResponse;
-  secret: SecretAccessor;
+  claims: VaultClaims
+  response: VaultResponse
+  secret: SecretAccessor
 }
 
 /** Preflight check status (Rust kebab-case serialization). */
-export type PreflightCheckStatus = 'ok' | 'missing' | 'version-unsupported';
+export type PreflightCheckStatus = 'ok' | 'missing' | 'version-unsupported'
 
 /**
  * Individual preflight check result. The Rust struct serializes with
@@ -139,37 +139,37 @@ export type PreflightCheckStatus = 'ok' | 'missing' | 'version-unsupported';
  * `required: false` when their backend isn't enabled (issue #116).
  */
 export interface PreflightCheck {
-  name: string;
-  status: PreflightCheckStatus;
-  version?: string | null;
-  reason?: string | null;
-  required: boolean;
+  name: string
+  status: PreflightCheckStatus
+  version?: string | null
+  reason?: string | null
+  required: boolean
 }
 
 /** Overall preflight result. */
 export interface PreflightResult {
-  ready: boolean;
-  checks: PreflightCheck[];
-  warnings: string[];
-  nextSteps: string[];
+  ready: boolean
+  checks: PreflightCheck[]
+  warnings: string[]
+  nextSteps: string[]
 }
 
 /** Vault configuration. */
 export interface VaultConfig {
-  version: number;
+  version: number
   backends: {
-    type: string;
-    enabled: boolean;
-    plugin?: boolean;
-  }[];
+    type: string
+    enabled: boolean
+    plugin?: boolean
+  }[]
   keyRotation: {
-    gracePeriodDays: number;
-  };
+    gracePeriodDays: number
+  }
   defaults: {
-    ttlMinutes: number;
-    trustTier: TrustTier;
-  };
+    ttlMinutes: number
+    trustTier: TrustTier
+  }
   developmentMode?: {
-    executables: string[];
-  } | null;
+    executables: string[]
+  } | null
 }

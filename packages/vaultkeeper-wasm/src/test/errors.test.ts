@@ -12,15 +12,15 @@
 /* eslint-disable @typescript-eslint/no-floating-promises -- node:test it() returns Promise but is not meant to be awaited inside describe() */
 /* eslint-disable n/no-unsupported-features/node-builtins -- test.describe is stable in our CI Node version */
 
-import { describe, it } from 'node:test';
-import * as assert from 'node:assert/strict';
+import { describe, it } from 'node:test'
+import * as assert from 'node:assert/strict'
 import {
   mapWasmError,
   DecryptionError,
   FilesystemError,
   IdentityMismatchError,
   VaultError,
-} from '../errors.js';
+} from '../errors.js'
 
 describe('mapWasmError — decryption code', () => {
   it('carries the path through when the boundary supplies one', () => {
@@ -28,10 +28,10 @@ describe('mapWasmError — decryption code', () => {
       vaultErrorCode: 'decryption',
       message: 'auth tag verification failed',
       path: '/config/file/deadbeef.enc',
-    });
-    assert.ok(err instanceof DecryptionError && err instanceof VaultError);
-    assert.equal(err.path, '/config/file/deadbeef.enc');
-  });
+    })
+    assert.ok(err instanceof DecryptionError && err instanceof VaultError)
+    assert.equal(err.path, '/config/file/deadbeef.enc')
+  })
 
   // Regression test for PR #135 review feedback: a missing `path` on the
   // thrown shape must surface as `undefined`, not a fabricated empty
@@ -41,12 +41,12 @@ describe('mapWasmError — decryption code', () => {
     const err = mapWasmError({
       vaultErrorCode: 'decryption',
       message: 'auth tag verification failed',
-    });
-    assert.ok(err instanceof DecryptionError && err instanceof VaultError);
-    assert.equal(err.path, undefined);
-    assert.notEqual(err.path, '', 'must not fabricate an empty-string path');
-  });
-});
+    })
+    assert.ok(err instanceof DecryptionError && err instanceof VaultError)
+    assert.equal(err.path, undefined)
+    assert.notEqual(err.path, '', 'must not fabricate an empty-string path')
+  })
+})
 
 // Regression tests for issue #138: the WASM host bridge previously erased
 // the errno on every readFile/deleteFile rejection, so `FilesystemError`
@@ -61,12 +61,12 @@ describe('mapWasmError — filesystem code (issue #138)', () => {
       path: '/config/file/deadbeef.enc',
       permission: 'read',
       code: 'EACCES',
-    });
-    assert.ok(err instanceof FilesystemError && err instanceof VaultError);
-    assert.equal(err.path, '/config/file/deadbeef.enc');
-    assert.equal(err.permission, 'read');
-    assert.equal(err.code, 'EACCES');
-  });
+    })
+    assert.ok(err instanceof FilesystemError && err instanceof VaultError)
+    assert.equal(err.path, '/config/file/deadbeef.enc')
+    assert.equal(err.permission, 'read')
+    assert.equal(err.code, 'EACCES')
+  })
 
   it('leaves code undefined, not fabricated, when the host bridge could not determine one', () => {
     const err = mapWasmError({
@@ -74,10 +74,10 @@ describe('mapWasmError — filesystem code (issue #138)', () => {
       message: 'Failed to delete /config/file/deadbeef.enc: unknown failure',
       path: '/config/file/deadbeef.enc',
       permission: 'write',
-    });
-    assert.ok(err instanceof FilesystemError && err instanceof VaultError);
-    assert.equal(err.code, undefined);
-  });
+    })
+    assert.ok(err instanceof FilesystemError && err instanceof VaultError)
+    assert.equal(err.code, undefined)
+  })
 
   // Regression test for a PR #154 review follow-up: the real WASM core
   // always supplies `path`/`permission` for a `filesystem`-coded thrown
@@ -94,15 +94,15 @@ describe('mapWasmError — filesystem code (issue #138)', () => {
       vaultErrorCode: 'filesystem',
       message: 'Failed to read: EACCES',
       code: 'EACCES',
-    });
-    assert.ok(err instanceof FilesystemError && err instanceof VaultError);
-    assert.equal(err.code, 'EACCES');
-    assert.equal(err.path, undefined);
-    assert.notEqual(err.path, '', 'must not fabricate an empty-string path');
-    assert.equal(err.permission, undefined);
-    assert.notEqual(err.permission, '', 'must not fabricate an empty-string permission');
-  });
-});
+    })
+    assert.ok(err instanceof FilesystemError && err instanceof VaultError)
+    assert.equal(err.code, 'EACCES')
+    assert.equal(err.path, undefined)
+    assert.notEqual(err.path, '', 'must not fabricate an empty-string path')
+    assert.equal(err.permission, undefined)
+    assert.notEqual(err.permission, '', 'must not fabricate an empty-string permission')
+  })
+})
 
 // Issue #166: setup()'s executable-trust verification surfaces a TOFU hash
 // conflict as an `identity-mismatch`-coded value. These pin the `mapWasmError`
@@ -114,23 +114,23 @@ describe('mapWasmError — identity-mismatch code (issue #166)', () => {
       message: 'Executable hash changed — re-approval required',
       previousHash: 'aaaa',
       currentHash: 'bbbb',
-    });
-    assert.ok(err instanceof IdentityMismatchError && err instanceof VaultError);
-    assert.equal(err.previousHash, 'aaaa');
-    assert.equal(err.currentHash, 'bbbb');
-  });
+    })
+    assert.ok(err instanceof IdentityMismatchError && err instanceof VaultError)
+    assert.equal(err.previousHash, 'aaaa')
+    assert.equal(err.currentHash, 'bbbb')
+  })
 
   it('leaves the hashes undefined, not fabricated, when the boundary omits them', () => {
     const err = mapWasmError({
       vaultErrorCode: 'identity-mismatch',
       message: 'Executable hash changed — re-approval required',
-    });
-    assert.ok(err instanceof IdentityMismatchError);
-    assert.equal(err.previousHash, undefined);
-    assert.notEqual(err.previousHash, '', 'must not fabricate an empty-string hash');
-    assert.equal(err.currentHash, undefined);
-    assert.notEqual(err.currentHash, '', 'must not fabricate an empty-string hash');
-  });
+    })
+    assert.ok(err instanceof IdentityMismatchError)
+    assert.equal(err.previousHash, undefined)
+    assert.notEqual(err.previousHash, '', 'must not fabricate an empty-string hash')
+    assert.equal(err.currentHash, undefined)
+    assert.notEqual(err.currentHash, '', 'must not fabricate an empty-string hash')
+  })
 
   it('drops non-string hashes to undefined, honoring the string | undefined contract', () => {
     // A malformed boundary shape (null / number) must not land as a non-string
@@ -140,9 +140,9 @@ describe('mapWasmError — identity-mismatch code (issue #166)', () => {
       message: 'Executable hash changed — re-approval required',
       previousHash: null,
       currentHash: 123,
-    });
-    assert.ok(err instanceof IdentityMismatchError);
-    assert.equal(err.previousHash, undefined);
-    assert.equal(err.currentHash, undefined);
-  });
-});
+    })
+    assert.ok(err instanceof IdentityMismatchError)
+    assert.equal(err.previousHash, undefined)
+    assert.equal(err.currentHash, undefined)
+  })
+})

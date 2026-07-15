@@ -5,11 +5,11 @@
  * expected host platform interface.
  */
 
-import { execFile } from 'node:child_process';
-import { access, mkdir, readdir, readFile, unlink, writeFile, chmod } from 'node:fs/promises';
-import { homedir, platform as osPlatform } from 'node:os';
-import { dirname, join } from 'node:path';
-import type { WasmHostPlatform } from './types.js';
+import { execFile } from 'node:child_process'
+import { access, mkdir, readdir, readFile, unlink, writeFile, chmod } from 'node:fs/promises'
+import { homedir, platform as osPlatform } from 'node:os'
+import { dirname, join } from 'node:path'
+import type { WasmHostPlatform } from './types.js'
 
 /**
  * The structured failure contract `readFile`/`writeFile`/`deleteFile`/
@@ -28,26 +28,26 @@ import type { WasmHostPlatform } from './types.js';
  * precise directory path than the file path it was nominally about.
  */
 class HostFilesystemError extends Error {
-  readonly path: string;
-  readonly code: string | undefined;
+  readonly path: string
+  readonly code: string | undefined
 
   constructor(message: string, path: string, code: string | undefined) {
-    super(message);
-    this.name = 'HostFilesystemError';
-    this.path = path;
-    this.code = code;
+    super(message)
+    this.name = 'HostFilesystemError'
+    this.path = path
+    this.code = code
   }
 }
 
 function isErrnoException(err: unknown): err is NodeJS.ErrnoException {
-  return err instanceof Error && 'code' in err;
+  return err instanceof Error && 'code' in err
 }
 
 /** Wrap a caught `fs` failure into the {@link HostFilesystemError} contract. */
 function toHostFilesystemError(err: unknown, path: string): HostFilesystemError {
-  const message = err instanceof Error ? err.message : String(err);
-  const code = isErrnoException(err) && typeof err.code === 'string' ? err.code : undefined;
-  return new HostFilesystemError(message, path, code);
+  const message = err instanceof Error ? err.message : String(err)
+  const code = isErrnoException(err) && typeof err.code === 'string' ? err.code : undefined
+  return new HostFilesystemError(message, path, code)
 }
 
 /**
@@ -60,7 +60,7 @@ function toHostFilesystemError(err: unknown, path: string): HostFilesystemError 
  * Override with `VAULTKEEPER_CONFIG_DIR` environment variable.
  */
 export function createNodeHost(configDirOverride?: string): WasmHostPlatform {
-  const configDir = configDirOverride ?? resolveConfigDir();
+  const configDir = configDirOverride ?? resolveConfigDir()
 
   return {
     async exec(
@@ -73,99 +73,101 @@ export function createNodeHost(configDirOverride?: string): WasmHostPlatform {
           resolve({
             stdout: new Uint8Array(stdout),
             stderr: new Uint8Array(stderr),
-            exitCode: error?.code !== undefined ? (typeof error.code === 'number' ? error.code : 1) : 0,
-          });
-        });
+            exitCode:
+              error?.code !== undefined ? (typeof error.code === 'number' ? error.code : 1) : 0,
+          })
+        })
 
         if (stdin !== undefined && child.stdin) {
-          child.stdin.write(stdin);
-          child.stdin.end();
+          child.stdin.write(stdin)
+          child.stdin.end()
         }
-      });
+      })
     },
 
     async readFile(path: string): Promise<Uint8Array> {
       try {
-        const buf = await readFile(path);
-        return new Uint8Array(buf);
+        const buf = await readFile(path)
+        return new Uint8Array(buf)
       } catch (err) {
-        throw toHostFilesystemError(err, path);
+        throw toHostFilesystemError(err, path)
       }
     },
 
     async writeFile(path: string, content: Uint8Array, mode: number): Promise<void> {
       // Ensure parent directory exists (use path.dirname for cross-platform support)
-      const dir = dirname(path);
+      const dir = dirname(path)
       if (dir && dir !== '.') {
         try {
-          await mkdir(dir, { recursive: true });
+          await mkdir(dir, { recursive: true })
         } catch (err) {
-          throw toHostFilesystemError(err, dir);
+          throw toHostFilesystemError(err, dir)
         }
       }
       try {
-        await writeFile(path, content);
+        await writeFile(path, content)
         // chmod is a no-op on Windows; skip to avoid errors
         if (osPlatform() !== 'win32') {
-          await chmod(path, mode);
+          await chmod(path, mode)
         }
       } catch (err) {
-        throw toHostFilesystemError(err, path);
+        throw toHostFilesystemError(err, path)
       }
     },
 
     async fileExists(path: string): Promise<boolean> {
       try {
-        await access(path);
-        return true;
+        await access(path)
+        return true
       } catch (err) {
         // Mirror the native host's `file_exists` (crates/vaultkeeper-cli/src/host.rs):
         // only a genuine "does not exist" collapses to `false`. Any other
         // failure (e.g. EACCES resolving a parent directory) must surface as
         // a typed error rather than masquerade as "not found".
         if (isErrnoException(err) && err.code === 'ENOENT') {
-          return false;
+          return false
         }
-        throw toHostFilesystemError(err, path);
+        throw toHostFilesystemError(err, path)
       }
     },
 
     async deleteFile(path: string): Promise<void> {
       try {
-        await unlink(path);
+        await unlink(path)
       } catch (err) {
-        throw toHostFilesystemError(err, path);
+        throw toHostFilesystemError(err, path)
       }
     },
 
     async listDir(path: string): Promise<string[]> {
       try {
-        return await readdir(path);
+        return await readdir(path)
       } catch {
-        return [];
+        return []
       }
     },
 
     platform(): string {
-      const p = osPlatform();
-      if (p === 'darwin') return 'darwin';
-      if (p === 'win32') return 'win32';
-      return 'linux';
+      const p = osPlatform()
+      if (p === 'darwin') return 'darwin'
+      if (p === 'win32') return 'win32'
+      return 'linux'
     },
 
     configDir(): string {
-      return configDir;
+      return configDir
     },
-  };
+  }
 }
 
 function resolveConfigDir(): string {
-  const envDir = process.env.VAULTKEEPER_CONFIG_DIR;
-  if (envDir) return envDir;
+  const envDir = process.env.VAULTKEEPER_CONFIG_DIR
+  if (envDir) return envDir
 
-  const p = osPlatform();
-  const home = homedir();
-  if (p === 'win32') return join(process.env.APPDATA ?? join(home, 'AppData', 'Roaming'), 'vaultkeeper');
+  const p = osPlatform()
+  const home = homedir()
+  if (p === 'win32')
+    return join(process.env.APPDATA ?? join(home, 'AppData', 'Roaming'), 'vaultkeeper')
   // macOS and Linux both use ~/.config/vaultkeeper (matching the TS SDK)
-  return join(home, '.config', 'vaultkeeper');
+  return join(home, '.config', 'vaultkeeper')
 }

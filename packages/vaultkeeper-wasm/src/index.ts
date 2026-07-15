@@ -39,9 +39,9 @@ export type {
   PreflightCheck,
   PreflightResult,
   VaultConfig,
-} from './types.js';
+} from './types.js'
 
-export { createNodeHost } from './node-host.js';
+export { createNodeHost } from './node-host.js'
 
 // Re-export the typed error hierarchy
 export {
@@ -59,8 +59,8 @@ export {
   AccessorConsumedError,
   ExecutableTrustRequiredError,
   IdentityMismatchError,
-} from './errors.js';
-export type { ExecutableTrustRequiredReason } from './errors.js';
+} from './errors.js'
+export type { ExecutableTrustRequiredReason } from './errors.js'
 
 // Lazy-load the WASM module
 import type {
@@ -72,38 +72,38 @@ import type {
   VaultConfig,
   VaultKeeperOptions,
   VaultResponse,
-} from './types.js';
+} from './types.js'
 
-import { createNodeHost } from './node-host.js';
-import { mapWasmError } from './errors.js';
+import { createNodeHost } from './node-host.js'
+import { mapWasmError } from './errors.js'
 
 // The WASM module types
-type WasmBindings = typeof import('../wasm/vaultkeeper_wasm.js');
-type WasmVaultKeeperInstance = Awaited<ReturnType<WasmBindings['createVaultKeeper']>>;
-type WasmAuthorizationInstance = ReturnType<WasmVaultKeeperInstance['authorize']>;
+type WasmBindings = typeof import('../wasm/vaultkeeper_wasm.js')
+type WasmVaultKeeperInstance = Awaited<ReturnType<WasmBindings['createVaultKeeper']>>
+type WasmAuthorizationInstance = ReturnType<WasmVaultKeeperInstance['authorize']>
 
-let wasmBindings: WasmBindings | undefined;
+let wasmBindings: WasmBindings | undefined
 
 async function loadWasm(): Promise<WasmBindings> {
-  wasmBindings ??= await import('../wasm/vaultkeeper_wasm.js');
-  return wasmBindings;
+  wasmBindings ??= await import('../wasm/vaultkeeper_wasm.js')
+  return wasmBindings
 }
 
 /** Run a synchronous WASM call, re-throwing failures as typed {@link VaultError}s. */
 function callSync<T>(fn: () => T): T {
   try {
-    return fn();
+    return fn()
   } catch (thrown) {
-    throw mapWasmError(thrown);
+    throw mapWasmError(thrown)
   }
 }
 
 /** Run an async WASM call, re-throwing failures as typed {@link VaultError}s. */
 async function callAsync<T>(fn: () => Promise<T>): Promise<T> {
   try {
-    return await fn();
+    return await fn()
   } catch (thrown) {
-    throw mapWasmError(thrown);
+    throw mapWasmError(thrown)
   }
 }
 
@@ -112,21 +112,21 @@ async function callAsync<T>(fn: () => Promise<T>): Promise<T> {
  * is held in WASM memory until `read()` moves it out exactly once.
  */
 class WasmSecretAccessor implements SecretAccessor {
-  readonly #auth: WasmAuthorizationInstance;
+  readonly #auth: WasmAuthorizationInstance
 
   constructor(auth: WasmAuthorizationInstance) {
-    this.#auth = auth;
+    this.#auth = auth
   }
 
   get available(): boolean {
-    return this.#auth.secretAvailable;
+    return this.#auth.secretAvailable
   }
 
   read<T>(fn: (secret: string) => T): T {
     // readSecret() throws an `accessor-consumed` error on the second call,
     // which callSync maps to AccessorConsumedError.
-    const secret = callSync(() => this.#auth.readSecret());
-    return fn(secret);
+    const secret = callSync(() => this.#auth.readSecret())
+    return fn(secret)
   }
 }
 
@@ -137,10 +137,10 @@ class WasmSecretAccessor implements SecretAccessor {
  * the Rust core handling all crypto, token lifecycle, and business logic.
  */
 export class VaultKeeper {
-  #inner: WasmVaultKeeperInstance;
+  #inner: WasmVaultKeeperInstance
 
   private constructor(inner: WasmVaultKeeperInstance) {
-    this.#inner = inner;
+    this.#inner = inner
   }
 
   /**
@@ -149,20 +149,17 @@ export class VaultKeeper {
    * @param options - Initialization options (e.g., `skipDoctor`)
    * @param configDir - Override the config directory (default: platform standard)
    */
-  static async create(
-    options?: VaultKeeperOptions,
-    configDir?: string,
-  ): Promise<VaultKeeper> {
-    const bindings = await loadWasm();
-    const host = createNodeHost(configDir);
-    const inner = await callAsync(() => bindings.createVaultKeeper(host, options ?? {}));
-    return new VaultKeeper(inner);
+  static async create(options?: VaultKeeperOptions, configDir?: string): Promise<VaultKeeper> {
+    const bindings = await loadWasm()
+    const host = createNodeHost(configDir)
+    const inner = await callAsync(() => bindings.createVaultKeeper(host, options ?? {}))
+    return new VaultKeeper(inner)
   }
 
   /** Run doctor preflight checks. */
   async doctor(): Promise<PreflightResult> {
     // eslint-disable-next-line @typescript-eslint/no-unsafe-return -- WASM boundary: wasm-bindgen returns untyped JsValue
-    return callAsync(() => this.#inner.doctor());
+    return callAsync(() => this.#inner.doctor())
   }
 
   /**
@@ -204,7 +201,7 @@ export class VaultKeeper {
    *   longer matches a previously approved value (TOFU conflict).
    */
   async setup(secretName: string, secretValue: string, options?: SetupOptions): Promise<string> {
-    return callAsync(() => this.#inner.setup(secretName, secretValue, options ?? {}));
+    return callAsync(() => this.#inner.setup(secretName, secretValue, options ?? {}))
   }
 
   /**
@@ -214,59 +211,59 @@ export class VaultKeeper {
    * through the one-time {@link SecretAccessor} on `result.secret`.
    */
   authorize(jwe: string): AuthorizeResult {
-    const auth = callSync(() => this.#inner.authorize(jwe));
+    const auth = callSync(() => this.#inner.authorize(jwe))
     // The claims/response getters deserialize on the WASM side and can throw,
     // so route them through callSync too — every throw from authorize() must
     // surface as a typed VaultError.
     // eslint-disable-next-line @typescript-eslint/no-unsafe-return -- WASM boundary: wasm-bindgen getter returns untyped JsValue
-    const claims = callSync<VaultClaims>(() => auth.claims);
+    const claims = callSync<VaultClaims>(() => auth.claims)
     // eslint-disable-next-line @typescript-eslint/no-unsafe-return -- WASM boundary: wasm-bindgen getter returns untyped JsValue
-    const response = callSync<VaultResponse>(() => auth.response);
+    const response = callSync<VaultResponse>(() => auth.response)
     return {
       claims,
       response,
       secret: new WasmSecretAccessor(auth),
-    };
+    }
   }
 
   /** Rotate the encryption key. */
   rotateKey(): void {
     callSync(() => {
-      this.#inner.rotateKey();
-    });
+      this.#inner.rotateKey()
+    })
   }
 
   /** Emergency key revocation — removes previous key and generates a new current key. */
   revokeKey(): void {
     callSync(() => {
-      this.#inner.revokeKey();
-    });
+      this.#inner.revokeKey()
+    })
   }
 
   /** Get the current configuration. */
   config(): VaultConfig {
     // eslint-disable-next-line @typescript-eslint/no-unsafe-return -- WASM boundary: wasm-bindgen returns untyped JsValue
-    return callSync(() => this.#inner.config());
+    return callSync(() => this.#inner.config())
   }
 
   /** Store a secret via the file backend. */
   async store(id: string, secret: string): Promise<void> {
-    await callAsync(() => this.#inner.store(id, secret));
+    await callAsync(() => this.#inner.store(id, secret))
   }
 
   /** Retrieve a secret via the file backend. */
   async retrieve(id: string): Promise<string> {
-    return callAsync(() => this.#inner.retrieve(id));
+    return callAsync(() => this.#inner.retrieve(id))
   }
 
   /** Delete a secret via the file backend. */
   async delete(id: string): Promise<void> {
-    await callAsync(() => this.#inner.delete(id));
+    await callAsync(() => this.#inner.delete(id))
   }
 
   /** Free the underlying WASM resources. */
   dispose(): void {
-    this.#inner.free();
+    this.#inner.free()
   }
 }
 
@@ -279,5 +276,5 @@ export async function createVaultKeeper(
   options?: VaultKeeperOptions,
   configDir?: string,
 ): Promise<VaultKeeper> {
-  return VaultKeeper.create(options, configDir);
+  return VaultKeeper.create(options, configDir)
 }

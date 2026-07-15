@@ -34,7 +34,7 @@ build, so there is no `require()` fallback. The snippet below is ESM and require
 ```jsonc
 // package.json
 {
-  "type": "module"
+  "type": "module",
 }
 ```
 
