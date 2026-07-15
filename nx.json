@@ -30,6 +30,11 @@
       "cache": true,
       "inputs": ["default", "^production"]
     },
+    "check:typecheck-tests": {
+      "dependsOn": ["^build"],
+      "cache": true,
+      "inputs": ["default", "^production"]
+    },
     "check:lint-ts": {
       "cache": true,
       "inputs": ["default"]

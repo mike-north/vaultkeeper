@@ -23,7 +23,8 @@ vi.mock('vaultkeeper', async (importOriginal) => {
 })
 
 function mockStdinWith(value: string): void {
-  vi.spyOn(process.stdin, Symbol.asyncIterator).mockImplementation(function* () {
+  vi.spyOn(process.stdin, Symbol.asyncIterator).mockImplementation(async function* () {
+    await Promise.resolve()
     yield Buffer.from(value)
   })
 }
