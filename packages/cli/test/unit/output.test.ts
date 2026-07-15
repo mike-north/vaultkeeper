@@ -509,6 +509,23 @@ describe('formatError renders FilesystemError without raw OS text (issue #150)',
     expect(formatted).not.toContain(`open '`)
   })
 
+  // FileBackend throws `permission: 'rwx'` when it can't create its storage
+  // directory — a permission SET, not an operation verb. It must still read
+  // as the operation that failed (created), not the generic "accessed".
+  it("renders a storage-directory creation failure (permission 'rwx') as 'created'", () => {
+    const dir = '/tmp/vk-store/secrets'
+    const err = new FilesystemError(`Failed to create storage directory: ${dir}: EACCES`, dir, 'rwx')
+
+    const formatted = formatError(err, CONFIG_DIR)
+
+    expect(formatted).toBe(
+      `FilesystemError: The file at \`${dir}\` cannot be created (permission denied). ` +
+        "Check the file's permissions and try again.",
+    )
+    expect(formatted).not.toContain('accessed')
+    expect(formatted).not.toContain('EACCES')
+  })
+
   it('falls back to a clean generic message for an unrecognized OS code', () => {
     const p = '/tmp/busy'
     const err = new FilesystemError(`Failed to read at ${p}: EBUSY: resource busy`, p, 'read')

@@ -199,6 +199,10 @@ const FS_OPERATION_VERB: Record<string, string> = {
   write: 'written',
   execute: 'executed',
   delete: 'deleted',
+  // `FileBackend` uses the permission set `'rwx'` (not an operation verb) when
+  // it fails to create its storage directory, so map it to the operation that
+  // actually failed rather than the generic "accessed" fallback.
+  rwx: 'created',
 }
 
 /**
