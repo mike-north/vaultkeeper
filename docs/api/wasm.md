@@ -47,6 +47,17 @@ Thrown when a one-time secret accessor's `read()` is called after the secret has
 </td></tr>
 <tr><td>
 
+[DecryptionError](./wasm.decryptionerror.md)
+
+
+</td><td>
+
+Thrown when a stored secret entry cannot be decrypted — the ciphertext is corrupted/truncated or the AES-GCM authentication tag failed to verify. Mirrors the pure-TypeScript `vaultkeeper` library's `DecryptionError`<!-- -->.
+
+
+</td></tr>
+<tr><td>
+
 [InvalidTokenError](./wasm.invalidtokenerror.md)
 
 

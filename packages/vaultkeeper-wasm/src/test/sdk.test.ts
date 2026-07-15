@@ -15,11 +15,12 @@ import * as assert from 'node:assert/strict';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { writeFile } from 'node:fs/promises';
+import { readFile, writeFile } from 'node:fs/promises';
 import {
   VaultKeeper,
   VaultError,
   SecretNotFoundError,
+  DecryptionError,
   InvalidTokenError,
   RotationInProgressError,
   AccessorConsumedError,
@@ -486,6 +487,29 @@ describe('@vaultkeeper/wasm security parity (issue #66)', () => {
       assert.throws(
         () => vault.authorize(parts.join('.')),
         (err: unknown) => err instanceof InvalidTokenError,
+      );
+      vault.dispose();
+    });
+  });
+
+  // Regression test for issue #134: corrupted ciphertext / a failed AES-GCM
+  // auth tag previously surfaced as an untyped error at the WASM boundary.
+  it('retrieve() of a secret with corrupted ciphertext throws a typed DecryptionError', async () => {
+    await withTempDir(async (dir) => {
+      const vault = await createTestVault(dir);
+      await vault.store('corrupt-me', 'some-value');
+
+      // Entry files are stored at `<configDir>/file/<hex(id)>.enc`.
+      const entryPath = join(dir, 'file', `${Buffer.from('corrupt-me', 'utf8').toString('hex')}.enc`);
+      const encoded = await readFile(entryPath, 'utf8');
+      // Flip the final character of the `iv:authTag:ciphertext` encoding so
+      // the AES-GCM auth tag fails to verify on retrieve.
+      const flipped = encoded.endsWith('A') ? 'B' : 'A';
+      await writeFile(entryPath, encoded.slice(0, -1) + flipped);
+
+      await assert.rejects(
+        () => vault.retrieve('corrupt-me'),
+        (err: unknown) => err instanceof DecryptionError && err instanceof VaultError,
       );
       vault.dispose();
     });

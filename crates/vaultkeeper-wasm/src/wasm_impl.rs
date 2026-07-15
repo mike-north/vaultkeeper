@@ -88,6 +88,7 @@ fn js_err(msg: &str) -> VaultError {
 fn vault_error_code(e: &VaultError) -> &'static str {
     match e {
         VaultError::SecretNotFound { .. } => "secret-not-found",
+        VaultError::Decryption { .. } => "decryption",
         VaultError::TokenExpired { .. } => "token-expired",
         VaultError::KeyRotated { .. } => "key-rotated",
         VaultError::KeyRevoked { .. } => "key-revoked",
@@ -122,6 +123,9 @@ fn vault_error_to_js(e: &VaultError) -> JsValue {
     match e {
         VaultError::TokenExpired { can_refresh, .. } => {
             set("canRefresh", &JsValue::from_bool(*can_refresh));
+        }
+        VaultError::Decryption { path, .. } => {
+            set("path", &JsValue::from_str(path));
         }
         VaultError::BackendUnavailable {
             reason, attempted, ..

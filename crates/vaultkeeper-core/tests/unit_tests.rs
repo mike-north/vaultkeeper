@@ -509,6 +509,10 @@ mod error_tests {
             VaultError::SecretNotFound {
                 message: "m".into(),
             },
+            VaultError::Decryption {
+                message: "m".into(),
+                path: "p".into(),
+            },
             VaultError::TokenExpired {
                 message: "m".into(),
                 can_refresh: true,

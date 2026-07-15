@@ -205,29 +205,38 @@ impl SecretBackend for FileBackend {
 
     async fn retrieve(&self, id: &str) -> Result<String, VaultError> {
         let entry_path = self.entry_path(id);
-        let data =
-            self.host
-                .read_file(&entry_path)
-                .await
-                .map_err(|_| VaultError::SecretNotFound {
-                    message: format!("Secret not found in file store: {id}"),
-                })?;
+
+        // Only a genuine "entry does not exist" should surface as
+        // SecretNotFound. Any other read failure (e.g. EACCES/EPERM, surfaced
+        // by the host as a typed VaultError::Filesystem) must propagate
+        // unchanged so callers can tell "missing" apart from "unreadable".
+        let data = match self.host.read_file(&entry_path).await {
+            Ok(data) => data,
+            Err(read_err) => {
+                return match self.host.file_exists(&entry_path).await {
+                    Ok(false) => Err(VaultError::SecretNotFound {
+                        message: format!("Secret not found in file store: {id}"),
+                    }),
+                    Ok(true) => Err(read_err),
+                    Err(exists_err) => Err(exists_err),
+                };
+            }
+        };
 
         let encoded = String::from_utf8(data)
             .map_err(|e| VaultError::Other(format!("Encrypted file is not valid UTF-8: {e}")))?;
 
         let key = self.get_or_create_key().await?;
-        decrypt_gcm(&key, &encoded)
+        decrypt_gcm(&key, &encoded).map_err(|e| VaultError::Decryption {
+            message: format!("Failed to decrypt secret: {e}"),
+            path: entry_path.display().to_string(),
+        })
     }
 
     async fn delete(&self, id: &str) -> Result<(), VaultError> {
         let entry_path = self.entry_path(id);
         match self.host.file_exists(&entry_path).await {
-            Ok(true) => self
-                .host
-                .delete_file(&entry_path)
-                .await
-                .map_err(|e| VaultError::Other(format!("Failed to delete secret file: {e}"))),
+            Ok(true) => self.host.delete_file(&entry_path).await,
             Ok(false) => Err(VaultError::SecretNotFound {
                 message: format!("Secret not found in file store: {id}"),
             }),
@@ -330,12 +339,19 @@ mod tests {
     }
 
     use crate::backend::{ExecOutput, Platform};
-    use std::collections::HashMap;
+    use std::collections::{HashMap, HashSet};
     use std::sync::Mutex;
 
+    /// Test double for `HostPlatform` that can simulate permission failures
+    /// distinct from "file does not exist": paths added to `deny_read` /
+    /// `deny_delete` still exist (so `file_exists` returns `true`) but their
+    /// read/delete calls fail with a `VaultError::Filesystem`, mirroring what
+    /// the real `NativeHostPlatform` produces for EACCES/EPERM.
     struct TestHost {
         files: Mutex<HashMap<PathBuf, Vec<u8>>>,
         config_dir: PathBuf,
+        deny_read: Mutex<HashSet<PathBuf>>,
+        deny_delete: Mutex<HashSet<PathBuf>>,
     }
 
     #[async_trait::async_trait]
@@ -353,6 +369,13 @@ mod tests {
             })
         }
         async fn read_file(&self, path: &Path) -> Result<Vec<u8>, VaultError> {
+            if self.deny_read.lock().unwrap().contains(path) {
+                return Err(VaultError::Filesystem {
+                    message: format!("Permission denied reading {}", path.display()),
+                    path: path.display().to_string(),
+                    permission: "read".to_string(),
+                });
+            }
             self.files
                 .lock()
                 .unwrap()
@@ -376,6 +399,13 @@ mod tests {
             Ok(self.files.lock().unwrap().contains_key(path))
         }
         async fn delete_file(&self, path: &Path) -> Result<(), VaultError> {
+            if self.deny_delete.lock().unwrap().contains(path) {
+                return Err(VaultError::Filesystem {
+                    message: format!("Permission denied deleting {}", path.display()),
+                    path: path.display().to_string(),
+                    permission: "write".to_string(),
+                });
+            }
             self.files
                 .lock()
                 .unwrap()
@@ -409,6 +439,8 @@ mod tests {
         Arc::new(TestHost {
             files: Mutex::new(HashMap::new()),
             config_dir: PathBuf::from("/test/config"),
+            deny_read: Mutex::new(HashSet::new()),
+            deny_delete: Mutex::new(HashSet::new()),
         })
     }
 
@@ -431,6 +463,95 @@ mod tests {
         let backend = FileBackend::new(host);
         let result = backend.retrieve("nonexistent").await;
         assert!(result.is_err());
+    }
+
+    // Regression tests for issue #134: FileBackend collapsed distinct failure
+    // modes into wrong or unstructured errors.
+
+    /// AC1: `retrieve` must map only a genuine "entry does not exist" to
+    /// `SecretNotFound`.
+    #[tokio::test]
+    async fn retrieve_missing_file_returns_secret_not_found() {
+        let host = make_test_host();
+        let backend = FileBackend::new(host);
+        let err = backend.retrieve("nonexistent").await.unwrap_err();
+        assert!(
+            matches!(err, VaultError::SecretNotFound { .. }),
+            "expected SecretNotFound, got {err:?}"
+        );
+    }
+
+    /// AC1: a read failure on an entry that *does* exist (e.g. EACCES/EPERM,
+    /// surfaced by the host as `VaultError::Filesystem`) must propagate
+    /// unchanged rather than being misreported as `SecretNotFound`.
+    #[tokio::test]
+    async fn retrieve_permission_denied_returns_filesystem_not_secret_not_found() {
+        let host = make_test_host();
+        let backend = FileBackend::new(host.clone());
+        backend.store("locked-secret", "value").await.unwrap();
+        let entry_path = backend.entry_path("locked-secret");
+        host.deny_read.lock().unwrap().insert(entry_path.clone());
+
+        let err = backend.retrieve("locked-secret").await.unwrap_err();
+        match err {
+            VaultError::Filesystem {
+                path, permission, ..
+            } => {
+                assert_eq!(path, entry_path.display().to_string());
+                assert_eq!(permission, "read");
+            }
+            other => panic!("expected VaultError::Filesystem, got {other:?}"),
+        }
+    }
+
+    /// AC2: `delete` must propagate the host's `VaultError::Filesystem`
+    /// instead of re-wrapping it as `VaultError::Other`, losing its fields.
+    #[tokio::test]
+    async fn delete_permission_denied_returns_filesystem() {
+        let host = make_test_host();
+        let backend = FileBackend::new(host.clone());
+        backend.store("locked-delete", "value").await.unwrap();
+        let entry_path = backend.entry_path("locked-delete");
+        host.deny_delete.lock().unwrap().insert(entry_path.clone());
+
+        let err = backend.delete("locked-delete").await.unwrap_err();
+        match err {
+            VaultError::Filesystem {
+                path, permission, ..
+            } => {
+                assert_eq!(path, entry_path.display().to_string());
+                assert_eq!(permission, "write");
+            }
+            other => panic!("expected VaultError::Filesystem, got {other:?}"),
+        }
+    }
+
+    /// AC3: corrupted ciphertext / a failed AES-GCM auth tag must surface as
+    /// a typed `VaultError::Decryption` carrying the entry path, not a
+    /// generic `VaultError::Other`.
+    #[tokio::test]
+    async fn retrieve_corrupt_ciphertext_returns_decryption_error() {
+        let host = make_test_host();
+        let backend = FileBackend::new(host.clone());
+        backend.store("corrupt-me", "value").await.unwrap();
+        let entry_path = backend.entry_path("corrupt-me");
+
+        // Flip a byte in the stored `iv:authTag:ciphertext` encoding so the
+        // AES-GCM auth tag fails to verify on retrieve.
+        {
+            let mut files = host.files.lock().unwrap();
+            let data = files.get_mut(&entry_path).expect("entry must exist");
+            let last = data.len() - 1;
+            data[last] = if data[last] == b'A' { b'B' } else { b'A' };
+        }
+
+        let err = backend.retrieve("corrupt-me").await.unwrap_err();
+        match err {
+            VaultError::Decryption { path, .. } => {
+                assert_eq!(path, entry_path.display().to_string());
+            }
+            other => panic!("expected VaultError::Decryption, got {other:?}"),
+        }
     }
 
     #[tokio::test]
