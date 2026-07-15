@@ -364,12 +364,14 @@ material.
 CLI's `vaultkeeper doctor` / WASM `doctor()` surface). Each check reports whether a dependency
 binary was found, and every result is classified **required** or **informational**:
 
-> **Why unused backends show up:** doctor deliberately probes the tooling for **all** supported
-> backends, not just the one you have enabled. So on a file-only config (and on `@vaultkeeper/wasm`,
-> which is always file-backed) you will still see entries for `security`/`op`/`ykman` — that is by
-> design, an at-a-glance inventory of what is installed, not noise. Those entries stay
-> **informational** (a failure is a warning, never a readiness failure) until you actually enable the
-> matching backend, which promotes its check to **required** (see the classification below).
+> **Why entries for backends you aren't using appear:** doctor probes the tooling for **all**
+> supported backends, not just the active one — so even with only the `file` backend enabled you'll
+> still see `security`/`op`/`ykman` entries. That's deliberate (an at-a-glance inventory of what's
+> installed), not noise. Whether a given entry actually gates readiness follows the required-vs-
+> informational split below: the plugin tools (`op`/`ykman`) stay informational until you enable
+> their backend, while the platform-native tool (`security`/`powershell`/`secret-tool`) is required
+> by default and demoted to informational only when the run is scoped to backends (as
+> `VaultKeeper.init()` does).
 
 - **Required** checks gate readiness. A required check that fails makes the overall result
   **not ready** and produces a remediation next-step. `openssl` is always required. By default —

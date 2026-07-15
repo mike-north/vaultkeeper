@@ -488,7 +488,9 @@ console.log(isValid) // true
 
 ## Doctor / preflight
 
-`VaultKeeper.init()` runs preflight checks automatically. Doctor deliberately probes the tooling for **all** supported backends, not just the active one — so on a file-only config (and on `@vaultkeeper/wasm`, which is always file-backed) you will still see `security`/`op`/`ykman` entries. That is by design (an at-a-glance inventory of what is installed), not noise: those checks stay informational — a failure is a warning, never a readiness failure — until you enable the matching backend, which promotes its check to required.
+`VaultKeeper.init()` runs preflight checks automatically. How doctor scopes those checks depends on whether it is given a backend set:
+
+By default, `VaultKeeper.doctor()` / `runDoctor()` (called with no options) treats the platform-native tooling check as **required** — `security` on macOS, `powershell` on Windows, `secret-tool` on Linux — so a missing native tool can make `result.ready` false even on a file-only config. The plugin-backend tool checks (`op`, `ykman`) are informational (warnings, never failing `ready`). When doctor is **scoped** to specific backends via `{ backends }` or `{ configDir }` (as `VaultKeeper.init()` does), only the tooling for those backends is required and the rest become informational — so `init()` on a file-only config does not fail readiness for a missing `security`/`secret-tool`.
 
 To run checks without initializing:
 
