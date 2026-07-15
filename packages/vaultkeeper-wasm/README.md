@@ -47,16 +47,23 @@ const vault = await createVaultKeeper()
 // Mint a JWE token directly from a value you already have — setup() does not
 // read from the backend (see above), so no prior store() call is needed.
 //
-// setup() requires an explicit executable-trust choice: verify and bind the
-// calling executable's identity into the token, or deliberately skip that
-// binding (development only). Omitting the choice throws
-// ExecutableTrustRequiredError. With executablePath, setup() hashes the
-// executable and runs trust-on-first-use verification, throwing
-// IdentityMismatchError if the hash changed from a previously approved value.
+// setup() requires an explicit executable-trust choice: bind the calling
+// executable's identity into the token, or deliberately skip that binding
+// (development only). Omitting the choice throws ExecutableTrustRequiredError.
+// With executablePath, setup() hashes that executable and records/checks it
+// trust-on-first-use, throwing IdentityMismatchError if the hash changed from
+// a previously approved value.
+//
+// IMPORTANT — do not point executablePath at a file you rebuild. Its content
+// hash changes on every recompile/bundle, so `process.argv[1]` (your compiled
+// entry file) throws IdentityMismatchError on the next run after any rebuild.
+// For production, bind a STABLE anchor: `process.execPath` (the Node runtime)
+// or the path to a released, unchanging binary. For local iterative dev, use
+// `{ skipTrust: true }` (below) so a rebuild loop doesn't re-throw.
 const jwe = await vault.setup('MY_API_KEY', 'my-secret-value', {
-  executablePath: process.argv[1], // production: bind to the calling executable
+  executablePath: process.execPath, // production: a stable anchor (the Node runtime)
 })
-// …or, in development/tests only:
+// …or, in development/tests only (no rebuild footgun):
 // const jwe = await vault.setup('MY_API_KEY', 'my-secret-value', { skipTrust: true })
 
 // Authorize: decrypt and validate. The result's `claims` never contain the
