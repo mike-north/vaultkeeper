@@ -66,13 +66,16 @@ pnpm add @vaultkeeper/wasm
 
 Both the native Rust CLI and the Node.js CLI share the same command surface:
 
+> [!NOTE]
+> The safe `file` default described below (a bare `config init` writing the `file` backend) currently applies to the **Node.js CLI** and the TypeScript library. The native Rust CLI's zero-config default still targets the platform-native store; converging it onto this behavior is tracked in [#75](https://github.com/mike-north/vaultkeeper/issues/75).
+
 ```sh
 # Run preflight checks
 vaultkeeper doctor
 
-# Initialize configuration. With no --backend this writes the safe, portable
-# `file` backend (never your real OS keychain). Opt into the native store
-# explicitly with --backend, e.g.:
+# Initialize configuration. With no --backend the Node CLI writes the safe,
+# portable `file` backend (never your real OS keychain). Opt into the native
+# store explicitly with --backend, e.g.:
 vaultkeeper config init                      # safe default: file backend
 vaultkeeper config init --backend keychain   # opt in to the macOS Keychain
 

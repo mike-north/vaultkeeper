@@ -429,10 +429,17 @@ describe('defaultBackendType', () => {
 
 describe('platformNativeBackendType', () => {
   it('should map the current platform to its native credential store', () => {
-    // Resolution contract (see platformNativeBackendType docs):
-    // macOS -> keychain, Windows -> dpapi, everything else -> file.
+    // Resolution contract (see platformNativeBackendType docs): macOS ->
+    // keychain, Windows -> dpapi, Linux -> secret-tool (a real shipped
+    // Secret Service backend), any other platform -> file.
     const expected =
-      process.platform === 'darwin' ? 'keychain' : process.platform === 'win32' ? 'dpapi' : 'file'
+      process.platform === 'darwin'
+        ? 'keychain'
+        : process.platform === 'win32'
+          ? 'dpapi'
+          : process.platform === 'linux'
+            ? 'secret-tool'
+            : 'file'
     expect(platformNativeBackendType()).toBe(expected)
   })
 })

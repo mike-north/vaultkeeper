@@ -118,10 +118,14 @@ export function defaultBackendType(): string {
  *
  * - **macOS** → `keychain` (macOS Keychain)
  * - **Windows** → `dpapi` (Windows DPAPI)
- * - **all other platforms** (Linux, etc.) → `file` (AES-256-GCM encrypted file)
+ * - **Linux** → `secret-tool` (Secret Service via `libsecret`; opting in
+ *   requires the `libsecret-tools` package)
+ * - **any other platform** → `file` (no built-in native store integration, so
+ *   the portable AES-256-GCM encrypted file backend is the only option)
  *
  * Use it to tell the user which native store is available on their platform, or
- * to label the opt-in. It never affects what an unconfigured vault resolves to.
+ * to label the opt-in. It never affects what an unconfigured vault resolves to
+ * — that is always {@link defaultBackendType} (`file`).
  *
  * @returns The OS-native backend type identifier for the current platform.
  * @public
@@ -133,8 +137,14 @@ export function platformNativeBackendType(): string {
   if (process.platform === 'win32') {
     return 'dpapi'
   }
-  // Linux and other Unix-like systems. Use 'file' rather than 'secret-tool'
-  // because secret-tool requires libsecret-tools, which many systems lack.
+  if (process.platform === 'linux') {
+    // The `secret-tool` backend is a real shipped built-in (Secret Service via
+    // libsecret) — the Linux OS-native store a user can opt into. It is not the
+    // zero-config default (that is `file`), so naming it here never risks a
+    // silent write: the caller must explicitly choose `--backend secret-tool`.
+    return 'secret-tool'
+  }
+  // Other platforms (e.g. the BSDs) have no built-in native-store integration.
   return 'file'
 }
 
