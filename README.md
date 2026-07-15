@@ -14,12 +14,12 @@ want working lines to copy:
 - **TypeScript library:** [TypeScript quick start](#typescript-quick-start)
 - **WASM SDK:** [WASM SDK quick start](#wasm-sdk-quick-start)
 
-Minimal TypeScript-library flow (safe `file` backend, no OS keychain touched):
+Minimal TypeScript-library flow (zero-config: safe `file` backend, no OS keychain touched; opt into keychain/DPAPI/`secret-tool` with a config file):
 
 ```ts
 import { VaultKeeper } from 'vaultkeeper'
 
-const vault = await VaultKeeper.init() // resolves to the safe `file` backend
+const vault = await VaultKeeper.init() // zero-config default: safe `file` backend when no config exists
 await vault.store('MY_API_KEY', 'my-secret-value')
 const jwe = await vault.setup('MY_API_KEY', { executablePath: process.argv[1] })
 const { token } = await vault.authorize(jwe)
