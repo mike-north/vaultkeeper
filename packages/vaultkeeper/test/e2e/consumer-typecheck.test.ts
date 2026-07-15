@@ -39,11 +39,20 @@
  * the conformance runner's `describe.skipIf` pattern) — not a silent early
  * `return`, which Vitest would otherwise report as a false pass — so local
  * runs without that setup step show honest "skipped" cells instead of
- * misleadingly green ones; CI always installs the fixtures first, so every
- * cell actually runs there.
+ * misleadingly green ones.
+ *
+ * That skip is outside-CI only. Both `ci.yml` and `release.yml` install the
+ * fixtures before running `pnpm test`, so inside CI (`process.env.CI` set) a
+ * missing pinned compiler is never treated as a skip — the cell still runs
+ * and fails with a remediation message naming the install command. This
+ * means a future workflow refactor that drops or reorders the install step
+ * is caught by a failing test rather than silently turning this gate off
+ * (#136). See `ts-version-matrix-gate.ts` for the extracted skip/fail
+ * predicate and `test/unit/ts-version-matrix-gate.test.ts` for its coverage.
  *
  * @see https://github.com/mike-north/vaultkeeper/issues/72
  * @see https://github.com/mike-north/vaultkeeper/issues/125
+ * @see https://github.com/mike-north/vaultkeeper/issues/136
  */
 
 import { describe, it, expect, afterEach } from 'vitest'
@@ -53,6 +62,7 @@ import { promisify } from 'node:util'
 import { createRequire } from 'node:module'
 import { resolve, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { shouldSkipMatrixCell, missingCompilerMessage } from './ts-version-matrix-gate.js'
 
 const execFileAsync = promisify(execFile)
 const __dirname = dirname(fileURLToPath(import.meta.url))
@@ -79,6 +89,11 @@ function resolveFixtureTypescriptRoot(packageAlias: string): string | undefined 
  * `typescriptRoot` is resolved once at module load (a synchronous
  * `require.resolve`), not inside the test body, so `it.skipIf` below can
  * make a real skip/run decision per cell before Vitest registers the test.
+ *
+ * TODO(#136): optional hardening — assert each resolved compiler's real
+ * `<typescriptRoot>/package.json` version matches its pin here, so these
+ * labels and the READMEs' "5.0.4-7.0.2" claim are verified rather than
+ * assumed. Deferred: not required by #136's acceptance criteria.
  */
 const TS_VERSIONS = [
   { label: 'TypeScript 5.0.4 (stated floor)', packageAlias: 'typescript-5-0' },
@@ -118,6 +133,11 @@ const consumerSource = [
   `export { useAccessor, useSignRequest, useVerifyRequest, useTestVault, useCliTestEnv }`,
 ].join('\n')
 
+// `process.env.CI` is read once at module load, matching how
+// `typescriptRoot` is resolved for TS_VERSIONS above — both are per-run
+// facts, not per-test state.
+const inCI = process.env.CI !== undefined
+
 describe('published .d.ts typechecks across the supported TypeScript version matrix (issue #125)', () => {
   let project: Project | undefined
 
@@ -133,12 +153,18 @@ describe('published .d.ts typechecks across the supported TypeScript version mat
     // when the pinned compiler was never actually invoked. Mirrors the
     // conformance runner's `describe.skipIf` pattern for an unavailable
     // dependency.
-    it.skipIf(!typescriptRoot)(
+    //
+    // Outside CI this skips cleanly when the fixtures haven't been
+    // installed locally. Inside CI it never skips: a missing compiler there
+    // means the fixtures-install workflow step regressed, so the cell must
+    // run and fail rather than silently disappear (#136).
+    it.skipIf(shouldSkipMatrixCell(typescriptRoot, inCI))(
       `typechecks under ${label}`,
       async () => {
-        // Narrowed by skipIf above: this branch only runs when resolved.
+        // Only reachable without a resolved compiler when running in CI —
+        // shouldSkipMatrixCell would have skipped this cell otherwise.
         if (!typescriptRoot) {
-          throw new Error(`unreachable: "${label}" should have been skipped`)
+          throw new Error(missingCompilerMessage(label))
         }
 
         project = new Project('vaultkeeper-dts-consumer', '1.0.0')

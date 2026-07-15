@@ -82,7 +82,16 @@ jobs:
       - name: Make binary executable
         run: chmod +x target/release/vaultkeeper
 
-      - name: Test (including conformance)
+      # Standalone, non-workspace install of the pinned TypeScript compiler
+      # versions used by the consumer-typecheck TS-version matrix (#125).
+      # Kept out of pnpm-workspace.yaml — see that directory's package.json
+      # for why — so it needs its own install step here. Mirrors ci.yml's
+      # step exactly: release validation must run the same matrix as CI,
+      # not silently skip it (#136).
+      - name: Install TS-version matrix compilers
+        run: pnpm --dir packages/vaultkeeper/test/e2e/ts-version-fixtures install --frozen-lockfile --ignore-workspace
+
+      - name: Test (including conformance and TS-version matrix)
         run: pnpm test
 
   release:
