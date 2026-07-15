@@ -69,7 +69,26 @@ string \| undefined
 
 </td><td>
 
-_(Optional)_ Executable path for identity binding. Use "dev" for dev mode.
+_(Optional)_ Path to the calling executable, used to bind the minted token to that executable's identity. When set, `setup()` runs trust-on-first-use (TOFU) verification: the file is hashed (SHA-256) and checked against the local trust manifest. This is the safe, production choice.
+
+
+</td></tr>
+<tr><td>
+
+[skipTrust?](./vaultkeeper.setupoptions.skiptrust.md)
+
+
+</td><td>
+
+
+</td><td>
+
+boolean \| undefined
+
+
+</td><td>
+
+_(Optional)_ Development-only escape hatch: set to `true` to deliberately skip executable-trust (TOFU) verification. The minted token carries no executable identity binding.
 
 
 </td></tr>

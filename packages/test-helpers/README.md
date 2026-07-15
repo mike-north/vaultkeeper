@@ -20,7 +20,10 @@ import { TestVault } from '@vaultkeeper/test-helpers'
 const { keeper, backend } = await TestVault.create()
 await backend.store('MY_SECRET', 'hunter2')
 
-const jwe = await keeper.setup('MY_SECRET')
+// `keeper.setup()` requires an explicit executable-trust choice; tests use the
+// development-only `skipTrust` opt-out to stay hermetic. (The `TestVault.setup()`
+// convenience method applies this default for you.)
+const jwe = await keeper.setup('MY_SECRET', { skipTrust: true })
 const { token } = await keeper.authorize(jwe)
 const { result } = await keeper.exec(token, {
   command: 'echo',

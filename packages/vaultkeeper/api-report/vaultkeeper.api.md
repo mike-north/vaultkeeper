@@ -118,6 +118,12 @@ export interface ExecResult {
 }
 
 // @public
+export class ExecutableTrustRequiredError extends VaultError {
+    constructor(message: string, reason: 'missing-choice' | 'conflicting-choice' | 'legacy-dev-sentinel');
+    readonly reason: 'missing-choice' | 'conflicting-choice' | 'legacy-dev-sentinel';
+}
+
+// @public
 export interface ExecutableTrustStatus {
     approvedHashes: readonly string[];
     hash: string;
@@ -301,6 +307,7 @@ export class SetupError extends VaultError {
 export interface SetupOptions {
     backendType?: string | undefined;
     executablePath?: string | undefined;
+    skipTrust?: boolean | undefined;
     trustTier?: TrustTier | undefined;
     ttlMinutes?: number | undefined;
     useLimit?: number | null | undefined;

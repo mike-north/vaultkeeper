@@ -61,7 +61,7 @@ describe('cross-process token reuse (criterion 2)', () => {
   it('authorizes a token minted by an earlier instance in a later instance', async () => {
     const minter = await newProcess()
     await minter.store(SECRET_NAME, SECRET_VALUE)
-    const jwe = await minter.setup(SECRET_NAME, { executablePath: 'dev' })
+    const jwe = await minter.setup(SECRET_NAME, { skipTrust: true })
 
     // A brand-new instance (fresh KeyManager) reloads the persisted keys.
     const authorizer = await newProcess()
@@ -97,7 +97,7 @@ describe('revoked-key error accuracy (criterion 4)', () => {
   it('surfaces KeyRevokedError when authorizing a token whose key was revoked', async () => {
     const minter = await newProcess()
     await minter.store(SECRET_NAME, SECRET_VALUE)
-    const jwe = await minter.setup(SECRET_NAME, { executablePath: 'dev' })
+    const jwe = await minter.setup(SECRET_NAME, { skipTrust: true })
 
     // Revoke in a second process: the minting key is discarded and replaced.
     const revoker = await newProcess()

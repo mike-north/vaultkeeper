@@ -21,6 +21,7 @@ export {
   TokenRevokedError,
   UsageLimitExceededError,
   IdentityMismatchError,
+  ExecutableTrustRequiredError,
   ExecError,
   InvalidTokenError,
   AccessorConsumedError,

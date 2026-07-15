@@ -22,7 +22,7 @@ declare class TestVault
 ```ts
 const vault = await TestVault.create()
 await vault.store('my-secret', 'hunter2')
-const jwe = await vault.keeper.setup('my-secret')
+const jwe = await vault.setup('my-secret')
 const { token } = await vault.keeper.authorize(jwe)
 ```
 
@@ -152,6 +152,20 @@ Delete a secret from the test backend.
 </td><td>
 
 Reset the test vault by clearing all stored secrets.
+
+
+</td></tr>
+<tr><td>
+
+[setup(name, options)](./test-helpers.testvault.setup.md)
+
+
+</td><td>
+
+
+</td><td>
+
+Mint a JWE for a stored secret via the wrapped keeper.
 
 
 </td></tr>

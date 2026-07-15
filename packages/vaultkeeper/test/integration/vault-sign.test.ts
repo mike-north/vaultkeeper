@@ -51,7 +51,7 @@ describe('VaultKeeper sign/verify integration', () => {
     await backend.store('signing-key', privatePem)
 
     const vault = await createVault()
-    const jwe = await vault.setup('signing-key')
+    const jwe = await vault.setup('signing-key', { skipTrust: true })
     const { token } = await vault.authorize(jwe)
 
     const data = 'gate1:abc123:1706000000'
@@ -73,7 +73,7 @@ describe('VaultKeeper sign/verify integration', () => {
     await backend.store('signing-key', privatePem)
 
     const vault = await createVault()
-    const jwe = await vault.setup('signing-key')
+    const jwe = await vault.setup('signing-key', { skipTrust: true })
     const { token } = await vault.authorize(jwe)
 
     const { result } = await vault.sign(token, { data: 'original' })
@@ -91,7 +91,7 @@ describe('VaultKeeper sign/verify integration', () => {
     await backend.store('signing-key', privatePem)
 
     const vault = await createVault()
-    const jwe = await vault.setup('signing-key')
+    const jwe = await vault.setup('signing-key', { skipTrust: true })
     const { token } = await vault.authorize(jwe)
 
     const { vaultResponse } = await vault.sign(token, { data: 'test' })

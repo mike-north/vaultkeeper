@@ -211,6 +211,42 @@ export class IdentityMismatchError extends VaultError {
   }
 }
 
+/**
+ * Thrown by {@link VaultKeeper.setup} when the caller does not make an
+ * unambiguous executable-trust decision.
+ *
+ * `setup()` deliberately has no default trust behaviour: the caller must either
+ * pass a real `executablePath` (which runs trust-on-first-use verification) or
+ * explicitly opt out with `skipTrust: true` (a development-only escape hatch).
+ * Supplying neither — or both at once — throws this error rather than silently
+ * skipping verification. Passing the retired `'dev'` sentinel as `executablePath`
+ * also throws this error. Inspect {@link ExecutableTrustRequiredError.reason} to
+ * distinguish the cases.
+ *
+ * @public
+ */
+export class ExecutableTrustRequiredError extends VaultError {
+  /**
+   * Machine-readable discriminator for why the trust choice was rejected.
+   * `'missing-choice'` means neither `executablePath` nor `skipTrust: true`
+   * was provided, so no trust decision was expressed. `'conflicting-choice'`
+   * means both `executablePath` and `skipTrust: true` were provided, which
+   * are mutually exclusive intents. `'legacy-dev-sentinel'` means
+   * `executablePath` was the retired literal `'dev'` opt-out sentinel, which is
+   * no longer supported and must be replaced with `skipTrust: true`.
+   */
+  readonly reason: 'missing-choice' | 'conflicting-choice' | 'legacy-dev-sentinel'
+
+  constructor(
+    message: string,
+    reason: 'missing-choice' | 'conflicting-choice' | 'legacy-dev-sentinel',
+  ) {
+    super(message)
+    this.name = 'ExecutableTrustRequiredError'
+    this.reason = reason
+  }
+}
+
 // --- Access Pattern Failures ---
 
 /**

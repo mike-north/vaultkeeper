@@ -13,6 +13,7 @@
  *
  * @see ../../src/identity/manifest.ts
  * @see https://github.com/mike-north/vaultkeeper/issues/57
+ * @see https://github.com/mike-north/vaultkeeper/issues/123
  */
 
 import * as crypto from 'node:crypto'
@@ -23,7 +24,9 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import {
   VaultKeeper,
   BackendRegistry,
+  VaultError,
   IdentityMismatchError,
+  ExecutableTrustRequiredError,
   FilesystemError,
   BackendUnavailableError,
 } from '../../src/index.js'
@@ -261,6 +264,171 @@ describe('exec approval recording (setup) → subsequent trust', () => {
     expect(Object.keys(entries)).toEqual([path.resolve(exe)])
     // And the executable remains trusted (matched, not recorded anew).
     expect((await vault.checkExecutableTrust(exe)).trusted).toBe(true)
+  })
+})
+
+describe('setup() requires an explicit executable-trust choice (#123)', () => {
+  async function manifestExists(): Promise<boolean> {
+    return fs
+      .access(path.join(configDir, 'trust-manifest.json'))
+      .then(() => true)
+      .catch(() => false)
+  }
+
+  // AC1 + AC5: omitting the trust choice throws a typed VaultError subclass —
+  // never a plain Error, and never a silent 'dev' fallback. Regression for #123.
+  it('throws ExecutableTrustRequiredError when neither executablePath nor skipTrust is given', async () => {
+    await backend.store('API_KEY', 's3cr3t')
+    const vault = await createVault()
+
+    const err = await vault.setup('API_KEY').then(
+      () => {
+        throw new Error('expected setup to reject')
+      },
+      (e: unknown) => e,
+    )
+
+    expect(err).toBeInstanceOf(ExecutableTrustRequiredError)
+    expect(err).toBeInstanceOf(VaultError)
+    if (!(err instanceof ExecutableTrustRequiredError)) throw new Error('unreachable')
+    expect(err.reason).toBe('missing-choice')
+    // AC1: the message must name both remediation paths.
+    expect(err.message).toContain('executablePath')
+    expect(err.message).toContain('skipTrust')
+    // No secret token is minted and no manifest fallback is recorded.
+    expect(await manifestExists()).toBe(false)
+  })
+
+  // AC5 negative test: the two contradictory intents are rejected distinctly,
+  // so a caller can tell "I forgot" from "I contradicted myself".
+  it('throws ExecutableTrustRequiredError (conflicting-choice) when both are given', async () => {
+    await backend.store('API_KEY', 's3cr3t')
+    const caller = await writeExecutable('caller', 'bytes\n')
+    const vault = await createVault()
+
+    const err = await vault.setup('API_KEY', { executablePath: caller, skipTrust: true }).then(
+      () => {
+        throw new Error('expected setup to reject')
+      },
+      (e: unknown) => e,
+    )
+
+    expect(err).toBeInstanceOf(ExecutableTrustRequiredError)
+    if (!(err instanceof ExecutableTrustRequiredError)) throw new Error('unreachable')
+    expect(err.reason).toBe('conflicting-choice')
+    expect(err.message).toContain('mutually exclusive')
+  })
+
+  // AC2 + AC5: the explicit opt-out mints a token and skips verification —
+  // proven by the trust manifest never being written.
+  it('skipTrust: true mints a token and does not touch the trust manifest', async () => {
+    await backend.store('API_KEY', 's3cr3t')
+    const vault = await createVault()
+
+    const jwe = await vault.setup('API_KEY', { skipTrust: true })
+    expect(jwe.split('.')).toHaveLength(5) // compact JWE
+
+    // Verification was skipped, so no hash was recorded.
+    expect(await manifestExists()).toBe(false)
+    // The token still authorizes and yields the secret.
+    const { token } = await vault.authorize(jwe)
+    expect(token).toBeDefined()
+  })
+
+  // Regression for PR #131 review thread 3588295526: `skipTrust: false` is
+  // not an explicit trust choice — only `skipTrust: true` opts out, and only
+  // a provided `executablePath` opts in. Without an `executablePath`,
+  // `skipTrust: false` must behave exactly like full omission: the same typed
+  // ExecutableTrustRequiredError, not a silent 'dev' fallback. (The reported
+  // bug lived in TestVault's wrapper, not here — this test locks in that
+  // VaultKeeper.setup() itself already gets this right via `=== true`.)
+  it('throws ExecutableTrustRequiredError when skipTrust: false is given without an executablePath', async () => {
+    await backend.store('API_KEY', 's3cr3t')
+    const vault = await createVault()
+
+    const err = await vault.setup('API_KEY', { skipTrust: false }).then(
+      () => {
+        throw new Error('expected setup to reject')
+      },
+      (e: unknown) => e,
+    )
+
+    expect(err).toBeInstanceOf(ExecutableTrustRequiredError)
+    if (!(err instanceof ExecutableTrustRequiredError)) throw new Error('unreachable')
+    expect(err.reason).toBe('missing-choice')
+    expect(await manifestExists()).toBe(false)
+  })
+
+  // Regression for the same thread: skipTrust: false paired with a real
+  // executablePath is not a contradiction (skipTrust is falsy) — verification
+  // must run normally and record the hash, exactly as if skipTrust had been
+  // omitted entirely.
+  it('runs verification normally when skipTrust: false is paired with an executablePath', async () => {
+    await backend.store('API_KEY', 's3cr3t')
+    const caller = await writeExecutable('caller', 'caller-bytes\n')
+    const vault = await createVault()
+
+    const jwe = await vault.setup('API_KEY', { skipTrust: false, executablePath: caller })
+    expect(jwe.split('.')).toHaveLength(5)
+
+    const entries = await readManifestEntries()
+    expect(Object.keys(entries)).toEqual([path.resolve(caller)])
+    expect((await vault.checkExecutableTrust(caller)).trusted).toBe(true)
+  })
+
+  // Regression for PR #131 review thread 3588502436 (#123): with executablePath
+  // now the primary production path, an unreadable/missing executable makes
+  // setup()'s verification hash the file via raw fs, which without wrapping
+  // throws a plain Error/TypeError. setup() must surface a typed FilesystemError
+  // (a VaultError subclass) naming the resolved path, so callers of setup()
+  // consistently receive the typed-error contract — never a bare Error.
+  it('throws a typed FilesystemError when a provided executablePath cannot be read', async () => {
+    await backend.store('API_KEY', 's3cr3t')
+    const missing = path.join(scratchDir, 'does-not-exist.sh')
+    const vault = await createVault()
+
+    const err = await vault.setup('API_KEY', { executablePath: missing }).then(
+      () => {
+        throw new Error('expected setup to reject')
+      },
+      (e: unknown) => e,
+    )
+
+    expect(err).toBeInstanceOf(FilesystemError)
+    expect(err).toBeInstanceOf(VaultError)
+    if (!(err instanceof FilesystemError)) throw new Error('unreachable')
+    expect(err.message).toContain(path.resolve(missing))
+    // No token was minted, so nothing was recorded to the manifest either.
+    expect(await manifestExists()).toBe(false)
+  })
+
+  // Regression for PR #131 review thread 3588773262 (#123): pre-explicit-trust,
+  // `executablePath: 'dev'` was THE documented opt-out sentinel. Post-#131 it is
+  // no longer special; without a guard it would be resolved as a real path
+  // (<cwd>/dev), hashed, and fail with a confusing FilesystemError. setup() must
+  // instead reject the legacy sentinel with a typed ExecutableTrustRequiredError
+  // that points migrating callers at the new `skipTrust: true` opt-out.
+  it("rejects the legacy executablePath: 'dev' sentinel with a migration hint", async () => {
+    await backend.store('API_KEY', 's3cr3t')
+    const vault = await createVault()
+
+    const err = await vault.setup('API_KEY', { executablePath: 'dev' }).then(
+      () => {
+        throw new Error('expected setup to reject')
+      },
+      (e: unknown) => e,
+    )
+
+    expect(err).toBeInstanceOf(ExecutableTrustRequiredError)
+    expect(err).toBeInstanceOf(VaultError)
+    if (!(err instanceof ExecutableTrustRequiredError)) throw new Error('unreachable')
+    expect(err.reason).toBe('legacy-dev-sentinel')
+    // The message must name the new opt-out so a migrating caller knows the fix.
+    expect(err.message).toContain('skipTrust')
+    // It must not be masked by a filesystem error about hashing "<cwd>/dev".
+    expect(err).not.toBeInstanceOf(FilesystemError)
+    // No token minted, no manifest fallback recorded.
+    expect(await manifestExists()).toBe(false)
   })
 })
 

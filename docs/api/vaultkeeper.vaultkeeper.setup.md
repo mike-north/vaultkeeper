@@ -70,3 +70,23 @@ Promise&lt;string&gt;
 
 Compact JWE string
 
+## Exceptions
+
+[ExecutableTrustRequiredError](./vaultkeeper.executabletrustrequirederror.md) If neither `executablePath` nor `skipTrust: true` is provided, if both are, or if `executablePath` is the retired legacy `'dev'` opt-out sentinel (use `skipTrust: true`<!-- -->).
+
+[IdentityMismatchError](./vaultkeeper.identitymismatcherror.md) If `executablePath`<!-- -->'s current hash no longer matches a previously approved value (TOFU conflict).
+
+[FilesystemError](./vaultkeeper.filesystemerror.md) If `executablePath` cannot be read or hashed for verification, or the trust manifest cannot be read or written while recording the executable.
+
+## Remarks
+
+`setup()` requires an explicit executable-trust decision — it has no default and never silently skips verification. Pass [SetupOptions.executablePath](./vaultkeeper.setupoptions.executablepath.md) (the calling executable's real path) to run trust-on-first-use verification, or [SetupOptions.skipTrust](./vaultkeeper.setupoptions.skiptrust.md) to deliberately skip it in development. Supplying neither, or both, throws [ExecutableTrustRequiredError](./vaultkeeper.executabletrustrequirederror.md)<!-- -->.
+
+## Example
+
+
+```ts
+// Production: bind the token to the verified calling executable.
+const jwe = await vault.setup('MY_API_KEY', { executablePath: process.argv[1] })
+```
+

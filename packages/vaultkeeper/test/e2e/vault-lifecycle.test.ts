@@ -44,7 +44,7 @@ describe('VaultKeeper e2e lifecycle', () => {
     })
 
     // Setup: create a JWE token for the secret
-    const jwe = await vault.setup('api-key', { executablePath: 'dev' })
+    const jwe = await vault.setup('api-key', { skipTrust: true })
     expect(typeof jwe).toBe('string')
 
     // Authorize: decrypt and validate the token
@@ -70,8 +70,8 @@ describe('VaultKeeper e2e lifecycle', () => {
       configDir: '/tmp/vk-e2e',
     })
 
-    const jweA = await vault.setup('secret-a', { executablePath: 'dev' })
-    const jweB = await vault.setup('secret-b', { executablePath: 'dev' })
+    const jweA = await vault.setup('secret-a', { skipTrust: true })
+    const jweB = await vault.setup('secret-b', { skipTrust: true })
 
     const { token: tokenA } = await vault.authorize(jweA)
     const { token: tokenB } = await vault.authorize(jweB)
@@ -100,7 +100,7 @@ describe('VaultKeeper e2e lifecycle', () => {
     })
 
     const jwe = await vault.setup('limited', {
-      executablePath: 'dev',
+      skipTrust: true,
       useLimit: 2,
     })
 

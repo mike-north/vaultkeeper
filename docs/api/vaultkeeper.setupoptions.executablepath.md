@@ -4,10 +4,17 @@
 
 ## SetupOptions.executablePath property
 
-Executable path for identity binding. Use "dev" for dev mode.
+Path to the calling executable, used to bind the minted token to that executable's identity. When set, `setup()` runs trust-on-first-use (TOFU) verification: the file is hashed (SHA-256) and checked against the local trust manifest. This is the safe, production choice.
 
 **Signature:**
 
 ```typescript
 executablePath?: string | undefined;
 ```
+
+## Remarks
+
+There is no default. Exactly one of [SetupOptions.executablePath](./vaultkeeper.setupoptions.executablepath.md) or [SetupOptions.skipTrust](./vaultkeeper.setupoptions.skiptrust.md) must be provided; supplying neither — or both — throws [ExecutableTrustRequiredError](./vaultkeeper.executabletrustrequirederror.md)<!-- -->. `setup()` never silently skips executable-trust verification.
+
+A path registered via [VaultKeeper.setDevelopmentMode()](./vaultkeeper.vaultkeeper.setdevelopmentmode.md) is still exempted from hashing (the established development-mode allowlist); any other path is verified.
+

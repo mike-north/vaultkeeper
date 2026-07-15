@@ -42,10 +42,10 @@ import type { RunDoctorOptions } from './doctor/runner.js'
 import {
   AuthorizationDeniedError,
   IdentityMismatchError,
+  ExecutableTrustRequiredError,
   BackendUnavailableError,
   VaultError,
   KeyRevokedError,
-  FilesystemError,
 } from './errors.js'
 
 /**
@@ -143,8 +143,39 @@ export interface SetupOptions {
   ttlMinutes?: number | undefined
   /** Usage limit (null for unlimited). */
   useLimit?: number | null | undefined
-  /** Executable path for identity binding. Use "dev" for dev mode. */
+  /**
+   * Path to the calling executable, used to bind the minted token to that
+   * executable's identity. When set, `setup()` runs trust-on-first-use (TOFU)
+   * verification: the file is hashed (SHA-256) and checked against the local
+   * trust manifest. This is the safe, production choice.
+   *
+   * @remarks
+   * There is no default. Exactly one of {@link SetupOptions.executablePath} or
+   * {@link SetupOptions.skipTrust} must be provided; supplying neither — or
+   * both — throws {@link ExecutableTrustRequiredError}. `setup()` never
+   * silently skips executable-trust verification.
+   *
+   * A path registered via {@link VaultKeeper.setDevelopmentMode} is still
+   * exempted from hashing (the established development-mode allowlist); any
+   * other path is verified.
+   */
   executablePath?: string | undefined
+  /**
+   * Development-only escape hatch: set to `true` to deliberately skip
+   * executable-trust (TOFU) verification. The minted token carries no
+   * executable identity binding.
+   *
+   * @remarks
+   * **Security warning:** a token minted with `skipTrust: true` is not bound to
+   * any calling executable, so any process that obtains the JWE can redeem it.
+   * Use this only in local development or tests — never in production. Prefer
+   * {@link SetupOptions.executablePath} so executable trust is actually
+   * enforced.
+   *
+   * Mutually exclusive with {@link SetupOptions.executablePath}: providing both
+   * throws {@link ExecutableTrustRequiredError}.
+   */
+  skipTrust?: boolean | undefined
   /** Trust tier override. */
   trustTier?: TrustTier | undefined
   /** Backend type to use. */
@@ -380,9 +411,31 @@ export class VaultKeeper {
   /**
    * Read a stored secret from the backend and mint a JWE token that encapsulates it.
    *
+   * @remarks
+   * `setup()` requires an explicit executable-trust decision — it has no
+   * default and never silently skips verification. Pass
+   * {@link SetupOptions.executablePath} (the calling executable's real path) to
+   * run trust-on-first-use verification, or {@link SetupOptions.skipTrust} to
+   * deliberately skip it in development. Supplying neither, or both, throws
+   * {@link ExecutableTrustRequiredError}.
+   *
+   * @example
+   * ```ts
+   * // Production: bind the token to the verified calling executable.
+   * const jwe = await vault.setup('MY_API_KEY', { executablePath: process.argv[1] })
+   * ```
+   *
    * @param secretName - Identifier for the secret
    * @param options - Setup options
    * @returns Compact JWE string
+   * @throws {@link ExecutableTrustRequiredError} If neither `executablePath`
+   *   nor `skipTrust: true` is provided, if both are, or if `executablePath` is
+   *   the retired legacy `'dev'` opt-out sentinel (use `skipTrust: true`).
+   * @throws {@link IdentityMismatchError} If `executablePath`'s current hash no
+   *   longer matches a previously approved value (TOFU conflict).
+   * @throws {@link FilesystemError} If `executablePath` cannot be read or hashed
+   *   for verification, or the trust manifest cannot be read or written while
+   *   recording the executable.
    */
   async setup(secretName: string, options?: SetupOptions): Promise<string> {
     VaultKeeper.#validateSecretName(secretName)
@@ -391,33 +444,12 @@ export class VaultKeeper {
     const ttlMinutes = options?.ttlMinutes ?? this.#config.defaults.ttlMinutes
     const trustTier = options?.trustTier ?? this.#config.defaults.trustTier
     const useLimit = options?.useLimit ?? null
-    const executablePath = options?.executablePath ?? 'dev'
+
+    // Resolve (and validate) the executable-trust choice before touching the
+    // backend so a malformed call fails fast without a secret read.
+    const exeIdentity = await this.#resolveExecutableIdentity(options)
 
     const secretValue = await backend.retrieve(secretName)
-
-    let exeIdentity: string
-    if (executablePath === 'dev' || this.#isDevModeExecutable(executablePath)) {
-      exeIdentity = 'dev'
-    } else {
-      // Resolve to an absolute path before verification so the manifest is
-      // keyed consistently with approveExecutable() and checkExecutableTrust(),
-      // both of which resolve. A relative path approved earlier (stored under
-      // its absolute key) therefore matches here too.
-      const trustResult = await verifyTrust(path.resolve(executablePath), {
-        configDir: this.#configDir,
-      })
-      if (trustResult.tofuConflict) {
-        // On a conflict the manifest holds at least one prior approved hash;
-        // report the most recently approved one as the previous hash.
-        const previousHash = trustResult.approvedHashes.at(-1) ?? trustResult.identity.hash
-        throw new IdentityMismatchError(
-          'Executable hash changed — re-approval required',
-          previousHash,
-          trustResult.identity.hash,
-        )
-      }
-      exeIdentity = trustResult.identity.hash
-    }
 
     const now = Math.floor(Date.now() / 1000)
     const claims: VaultClaims = {
@@ -731,7 +763,7 @@ export class VaultKeeper {
    */
   async approveExecutable(executablePath: string): Promise<ExecutableTrustStatus> {
     const resolved = path.resolve(executablePath)
-    const hash = await VaultKeeper.#hashExecutableOrThrow(resolved)
+    const hash = await hashExecutable(resolved)
     const manifest = await loadManifest(this.#configDir)
     const updated = addTrustedHash(manifest, resolved, hash)
     await saveManifest(this.#configDir, updated)
@@ -761,7 +793,7 @@ export class VaultKeeper {
    */
   async checkExecutableTrust(executablePath: string): Promise<ExecutableTrustStatus> {
     const resolved = path.resolve(executablePath)
-    const hash = await VaultKeeper.#hashExecutableOrThrow(resolved)
+    const hash = await hashExecutable(resolved)
     const manifest = await loadManifest(this.#configDir)
     const approvedHashes = manifest.get(resolved)?.hashes ?? []
 
@@ -790,23 +822,6 @@ export class VaultKeeper {
   // ---------------------------------------------------------------------------
   // Private helpers
   // ---------------------------------------------------------------------------
-
-  /**
-   * Hash the file at `resolvedPath`, converting any read failure (e.g. a
-   * missing file) into a typed {@link FilesystemError} that names the path.
-   */
-  static async #hashExecutableOrThrow(resolvedPath: string): Promise<string> {
-    try {
-      return await hashExecutable(resolvedPath)
-    } catch (err) {
-      const detail = err instanceof Error ? err.message : String(err)
-      throw new FilesystemError(
-        `Cannot read executable at ${resolvedPath}: ${detail}`,
-        resolvedPath,
-        'read',
-      )
-    }
-  }
 
   static #resolveSecrets(token: CapabilityToken | SecretTokenMap): string | Record<string, string> {
     if (token instanceof CapabilityToken) {
@@ -861,6 +876,91 @@ export class VaultKeeper {
       return false
     }
     return this.#config.developmentMode.executables.includes(executablePath)
+  }
+
+  /**
+   * Resolve the executable identity to embed in a minted token, enforcing that
+   * the caller made an explicit trust decision.
+   *
+   * Returns the sentinel `'dev'` (no executable binding) when trust is
+   * deliberately skipped or the path is on the development-mode allowlist;
+   * otherwise runs TOFU verification and returns the verified hash.
+   *
+   * @throws {ExecutableTrustRequiredError} If neither `executablePath` nor
+   *   `skipTrust: true` is provided, if both are, or if `executablePath` is the
+   *   retired legacy `'dev'` opt-out sentinel.
+   * @throws {IdentityMismatchError} On a TOFU hash conflict.
+   */
+  async #resolveExecutableIdentity(options: SetupOptions | undefined): Promise<string> {
+    const executablePath = options?.executablePath
+    const skipTrust = options?.skipTrust === true
+
+    if (skipTrust && executablePath !== undefined) {
+      throw new ExecutableTrustRequiredError(
+        'VaultKeeper.setup() received both options.executablePath and ' +
+          'options.skipTrust: true, which are mutually exclusive. Pass ' +
+          'options.executablePath to verify the calling executable, or ' +
+          'options.skipTrust: true to skip verification (development only) — not both.',
+        'conflicting-choice',
+      )
+    }
+
+    if (skipTrust) {
+      // Explicit, greppable development-only opt-out: no executable identity is
+      // bound. See the security warning on SetupOptions.skipTrust.
+      return 'dev'
+    }
+
+    if (executablePath === undefined) {
+      throw new ExecutableTrustRequiredError(
+        'VaultKeeper.setup() requires an explicit executable-trust choice and ' +
+          'no longer defaults to skipping verification. Either pass ' +
+          "options.executablePath set to the calling executable's real path " +
+          '(runs trust-on-first-use verification), or set options.skipTrust: ' +
+          'true to deliberately skip verification (development only).',
+        'missing-choice',
+      )
+    }
+
+    // Reject the retired legacy opt-out sentinel. Before explicit-trust,
+    // options.executablePath: 'dev' was the documented way to skip verification;
+    // it is no longer special and would otherwise be resolved as a real path
+    // (<cwd>/dev), hashed, and fail with a confusing "cannot read executable"
+    // FilesystemError. Point migrating callers at the dedicated opt-out instead.
+    if (executablePath === 'dev') {
+      throw new ExecutableTrustRequiredError(
+        "VaultKeeper.setup() no longer supports the legacy options.executablePath: 'dev' " +
+          'sentinel for skipping trust verification. Set options.skipTrust: true to ' +
+          'deliberately skip verification (development only), or pass ' +
+          "options.executablePath set to the calling executable's real path to verify it.",
+        'legacy-dev-sentinel',
+      )
+    }
+
+    // A real path may still be exempted via the established development-mode
+    // allowlist (setDevelopmentMode); otherwise run full TOFU verification.
+    if (this.#isDevModeExecutable(executablePath)) {
+      return 'dev'
+    }
+
+    // Resolve to an absolute path before verification so the manifest is keyed
+    // consistently with approveExecutable() and checkExecutableTrust(), both of
+    // which resolve. A relative path approved earlier (stored under its absolute
+    // key) therefore matches here too.
+    const trustResult = await verifyTrust(path.resolve(executablePath), {
+      configDir: this.#configDir,
+    })
+    if (trustResult.tofuConflict) {
+      // On a conflict the manifest holds at least one prior approved hash;
+      // report the most recently approved one as the previous hash.
+      const previousHash = trustResult.approvedHashes.at(-1) ?? trustResult.identity.hash
+      throw new IdentityMismatchError(
+        'Executable hash changed — re-approval required',
+        previousHash,
+        trustResult.identity.hash,
+      )
+    }
+    return trustResult.identity.hash
   }
 
   async #decryptWithKeyResolution(
