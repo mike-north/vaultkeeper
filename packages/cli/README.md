@@ -56,6 +56,36 @@ vaultkeeper delete --name MY_API_KEY
 Run `vaultkeeper <command> --help` for full flag reference on any subcommand — the CLI's own
 `--help` output is the source of truth for its flags.
 
+## Example config
+
+`vaultkeeper config init` (no `--backend`) writes this config — the safe-by-default `file` backend,
+not your OS credential store:
+
+```json
+{
+  "version": 1,
+  "backends": [{ "type": "file", "enabled": true }],
+  "keyRotation": { "gracePeriodDays": 7 },
+  "defaults": { "ttlMinutes": 60, "trustTier": 3 }
+}
+```
+
+`vaultkeeper config show` prints this same shape (the file if one exists, otherwise the platform
+defaults). `keyRotation.gracePeriodDays` and `defaults.trustTier` are the two fields `config show`
+and `exec` surface directly — see below for what they mean.
+
+## Key rotation and trust tiers
+
+`vaultkeeper rotate-key` replaces the active encryption key but keeps the previous one valid for
+decryption for `keyRotation.gracePeriodDays` days, so secrets minted before a rotation don't break
+immediately; after the grace period, they become permanently unreadable.
+
+`vaultkeeper exec` mints a token tagged with the config's `defaults.trustTier` (`1`, `2`, or `3`)
+as a policy label describing how the caller executable's identity was verified: `1` = Sigstore
+transparency log, `2` = registry signature, `3` = TOFU (Trust On First Use, hash stored in the
+local trust manifest — the default). `vaultkeeper approve --script <path>` pre-registers a TOFU
+hash so tier-3 executables aren't prompted on first use.
+
 ## Exit codes
 
 Every command exits with one of three codes, so scripts and CI pipelines can branch on the class
@@ -75,8 +105,10 @@ of failure without parsing stderr:
 
 ## Full documentation
 
-See the [repository README](https://github.com/mike-north/vaultkeeper#readme) for the TypeScript
-library API, access patterns, key rotation, trust tiers, and configuration reference.
+The [`vaultkeeper`](https://www.npmjs.com/package/vaultkeeper) library package's README and shipped
+`.d.ts` cover the TypeScript API and access patterns for embedding vaultkeeper programmatically. For
+narrative coverage of development mode and the full error hierarchy, see the
+[repository README](https://github.com/mike-north/vaultkeeper#readme).
 
 ## License
 

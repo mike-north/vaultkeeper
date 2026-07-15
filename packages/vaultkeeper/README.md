@@ -53,7 +53,51 @@ const { response } = await vault.fetch(token, {
 ```
 
 Other access patterns — delegated `exec()` (secret injected via env var) and controlled direct
-access via `getSecret()` (auto-zeroing buffer) — are documented in the repo README linked below.
+access via `getSecret()` (auto-zeroing buffer) — share the same `{{secret}}` placeholder substitution
+shown above; see the `SecretAccessor` and `ExecRequest` types in the package's shipped `.d.ts` for
+their full signatures.
+
+## Example config
+
+`VaultKeeper.init()` works with no config file (it resolves to the safe `file` backend). To pin
+the configuration explicitly — e.g. to set a non-default TTL or trust tier — write a config file
+matching this shape. This example is safe-by-default: it uses the portable `file` backend, not
+your OS credential store.
+
+```json
+{
+  "version": 1,
+  "backends": [{ "type": "file", "enabled": true }],
+  "keyRotation": { "gracePeriodDays": 7 },
+  "defaults": { "ttlMinutes": 60, "trustTier": 3 }
+}
+```
+
+- `backends` — ordered list of backend configs; the first one with `"enabled": true` is used. To
+  opt into an OS-native store instead, add an entry with `"type": "keychain"` (macOS), `"dpapi"`
+  (Windows), or `"secret-tool"` (Linux) — `file` must still be listed to keep it a valid fallback.
+- `keyRotation.gracePeriodDays` — how many days the previous encryption key stays valid for
+  decrypting existing tokens after `rotateKey()` runs; see [Key rotation](#key-rotation) below.
+- `defaults.ttlMinutes` / `defaults.trustTier` — applied to `setup()` when its options don't
+  override them; see [Trust tiers](#trust-tiers) below.
+
+The full field reference is documented on the `VaultConfig` interface in the package's shipped
+`.d.ts` (`vaultkeeper/dist/*.d.ts`).
+
+## Key rotation
+
+`rotateKey()` replaces the active encryption key but keeps the previous one valid for decryption
+for `keyRotation.gracePeriodDays` days, so tokens minted before a rotation don't break immediately.
+After the grace period elapses, JWEs encrypted under the old key become permanently unreadable
+(`KeyRotatedError`).
+
+## Trust tiers
+
+`trustTier` (`1`, `2`, or `3`) is a policy label attached to a token at `setup()` time, describing
+how strongly the executable's identity was verified: `1` = Sigstore transparency log, `2` =
+registry signature, `3` = TOFU (Trust On First Use, hash stored in the local trust manifest).
+`defaults.trustTier` in the config sets the value used when `setup()` doesn't pass its own
+`trustTier` option.
 
 ## Backends
 
@@ -74,8 +118,9 @@ in-memory backend with zero OS dependencies in your own test suite.
 
 ## Full documentation
 
-Access patterns, key rotation, trust tiers, development mode, configuration reference, and the
-full error hierarchy are documented in the
+The package's shipped `.d.ts` files carry the complete API reference (every type, method, and
+option, with JSDoc). For narrative coverage of development mode and the full error hierarchy
+beyond what's inlined above, see the
 [repository README](https://github.com/mike-north/vaultkeeper#readme).
 
 ## License
