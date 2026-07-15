@@ -405,10 +405,14 @@ mod tests {
         }
         async fn file_exists(&self, path: &Path) -> Result<bool, VaultError> {
             if self.deny_exists.lock().unwrap().contains(path) {
+                // `permission` stays within VaultError::Filesystem's
+                // documented "read"/"write" contract; the message text (not
+                // a synthetic permission value) is what distinguishes this
+                // from a `read_file` failure in tests.
                 return Err(VaultError::Filesystem {
                     message: format!("Permission denied checking existence of {}", path.display()),
                     path: path.display().to_string(),
-                    permission: "stat".to_string(),
+                    permission: "read".to_string(),
                 });
             }
             Ok(self.files.lock().unwrap().contains_key(path))
@@ -538,13 +542,14 @@ mod tests {
 
         let err = backend.retrieve("probe-fails").await.unwrap_err();
         match err {
-            // permission == "read" identifies this as the original read
-            // failure; the exists-probe's simulated failure uses "stat" and
-            // must never surface here.
-            VaultError::Filesystem { permission, .. } => {
-                assert_eq!(
-                    permission, "read",
-                    "must surface the original read failure, not the exists-probe failure"
+            // `permission` is "read" on both the read failure and the
+            // exists-probe failure (both are legitimately read-adjacent
+            // operations), so the message text — not `permission` — is what
+            // distinguishes which one surfaced.
+            VaultError::Filesystem { message, .. } => {
+                assert!(
+                    message.contains("reading") && !message.contains("checking existence"),
+                    "must surface the original read failure ('reading ...'), not the exists-probe failure ('checking existence ...'); got: {message}"
                 );
             }
             other => panic!("expected the original read Filesystem error, got {other:?}"),
@@ -571,10 +576,10 @@ mod tests {
 
         let err = backend.get_or_create_key().await.unwrap_err();
         match err {
-            VaultError::Filesystem { permission, .. } => {
-                assert_eq!(
-                    permission, "read",
-                    "must surface the original read failure, not the exists-probe failure"
+            VaultError::Filesystem { message, .. } => {
+                assert!(
+                    message.contains("reading") && !message.contains("checking existence"),
+                    "must surface the original read failure ('reading ...'), not the exists-probe failure ('checking existence ...'); got: {message}"
                 );
             }
             other => panic!("expected the original read Filesystem error, got {other:?}"),
