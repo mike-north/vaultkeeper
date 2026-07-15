@@ -354,7 +354,7 @@ describe('FileBackend', () => {
     // write secret file..." for what was actually a delete. Must say delete.
     it('should describe a non-ENOENT unlink failure as a delete, not a write', async () => {
       const permError = Object.assign(new Error('EPERM'), { code: 'EPERM' })
-      mockFs.unlink.mockRejectedValue(permError)
+      mockFs.unlink.mockRejectedValueOnce(permError)
 
       let caught: unknown
       try {
@@ -376,13 +376,10 @@ describe('FileBackend', () => {
       const legacyBackendForDelete = new FileBackend()
       const noFileError = Object.assign(new Error('ENOENT'), { code: 'ENOENT' })
       const permError = Object.assign(new Error('EPERM'), { code: 'EPERM' })
-      mockFs.unlink.mockImplementation((target) => {
-        const filePath = typeof target === 'string' ? target : ''
-        if (filePath.startsWith(defaultStorageDir)) {
-          return Promise.reject(noFileError)
-        }
-        return Promise.reject(permError)
-      })
+      // Two unlink attempts in order: the primary path misses (ENOENT) so the
+      // delete falls through to the legacy path, which then fails with EPERM.
+      // Scope each rejection with *Once so neither leaks into later tests.
+      mockFs.unlink.mockRejectedValueOnce(noFileError).mockRejectedValueOnce(permError)
 
       let caught: unknown
       try {
