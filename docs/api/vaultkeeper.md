@@ -601,7 +601,7 @@ A [PreflightCheck](./vaultkeeper.preflightcheck.md) scoped by whether its depend
 
 Callback-based secret accessor with auto-zeroing.
 
-The accessor is backed by a revocable Proxy. Calling `read()` passes a `Buffer` containing the secret to the callback, then zeroes the buffer after the callback returns. The accessor can only be read once; a second call throws.
+The accessor is backed by a Proxy and is single-use via an internal consumed flag. Calling `read()` passes a `Buffer` containing the secret to the callback, then zeroes the buffer after the callback returns and passes the callback's return value through. The accessor can only be read once; a second call throws.
 
 
 </td></tr>

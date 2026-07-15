@@ -274,7 +274,7 @@ export interface ScopedPreflightCheck extends PreflightCheck {
 
 // @public
 export interface SecretAccessor {
-    read(callback: (buf: Buffer_2) => void): void;
+    read<T>(callback: (buf: Buffer_2) => T): T;
 }
 
 // @public

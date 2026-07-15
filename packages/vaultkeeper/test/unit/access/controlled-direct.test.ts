@@ -53,6 +53,35 @@ describe('createSecretAccessor', () => {
     })
   })
 
+  // Regression for #168: read() must pass the callback's return value through,
+  // so the natural idiom `const v = accessor.read(buf => buf.toString())` yields
+  // the derived value instead of silently returning undefined.
+  describe('read() return value (issue #168)', () => {
+    it('returns the value the callback returns', () => {
+      const accessor = createSecretAccessor('hunter2')
+      const value = accessor.read((buf) => buf.toString('utf8'))
+      expect(value).toBe('hunter2')
+    })
+
+    it('supports deriving a non-string value (e.g. a length) from the secret', () => {
+      const accessor = createSecretAccessor('hunter2')
+      const length = accessor.read((buf) => buf.length)
+      expect(length).toBe(7)
+    })
+
+    it('still zeros the buffer after returning a derived value', () => {
+      const accessor = createSecretAccessor('secret')
+      let capturedBuf: Buffer | undefined
+      const value = accessor.read((buf) => {
+        capturedBuf = buf
+        return buf.toString('utf8')
+      })
+      expect(value).toBe('secret')
+      // The zero-copy/auto-zeroing contract is preserved even on the value path.
+      expect(capturedBuf?.every((b) => b === 0)).toBe(true)
+    })
+  })
+
   describe('double-read prevention', () => {
     it('throws a descriptive domain error (not TypeError) on second call to read()', () => {
       const accessor = createSecretAccessor('secret')

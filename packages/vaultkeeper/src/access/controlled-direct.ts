@@ -5,6 +5,7 @@
  * - Exposes a single `.read()` method
  * - Passes a Buffer containing the secret to the callback
  * - Zeros the buffer after the callback returns
+ * - Passes the callback's return value back through to the caller
  * - Prevents double-read (throws a descriptive Error on second call)
  * - Redacts itself from Node.js inspect output
  */
@@ -29,11 +30,11 @@ interface SecretAccessorInternal extends SecretAccessor {
  * - ownKeys trap includes all own keys (matches non-extensible contract)
  */
 class SecretAccessorTarget implements SecretAccessorInternal {
-  readonly read: (callback: (buf: Buffer) => void) => void
+  readonly read: <T>(callback: (buf: Buffer) => T) => T
   readonly [INSPECT_CUSTOM]: () => string
 
   constructor(
-    readImpl: (callback: (buf: Buffer) => void) => void,
+    readImpl: <T>(callback: (buf: Buffer) => T) => T,
     inspectImpl: () => string,
   ) {
     this.read = readImpl
@@ -56,8 +57,11 @@ class SecretAccessorTarget implements SecretAccessorInternal {
 export function createSecretAccessor(secretValue: string): SecretAccessor {
   let consumed = false
 
-  // Close over the actual read logic.
-  function readImpl(callback: (buf: Buffer) => void): void {
+  // Close over the actual read logic. The callback's return value is passed
+  // through so callers can derive a value (string, hash, ...) from the secret;
+  // the buffer is still zeroed in `finally` before the value is returned, so
+  // returning the raw buffer would only ever yield zeroed bytes.
+  function readImpl<T>(callback: (buf: Buffer) => T): T {
     if (consumed) {
       throw new AccessorConsumedError('SecretAccessor has already been consumed — call getSecret() again to obtain a new accessor')
     }
@@ -65,7 +69,7 @@ export function createSecretAccessor(secretValue: string): SecretAccessor {
 
     const buf = Buffer.from(secretValue, 'utf8')
     try {
-      callback(buf)
+      return callback(buf)
     } finally {
       buf.fill(0)
     }

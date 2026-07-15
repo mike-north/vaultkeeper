@@ -5,6 +5,7 @@ import { BackendRegistry } from '../../src/backend/registry.js'
 import type { SecretBackend } from '../../src/backend/types.js'
 import { clearBlocklist } from '../../src/jwe/claims.js'
 import { UsageLimitExceededError } from '../../src/errors.js'
+import * as jweTokenModule from '../../src/jwe/token.js'
 import * as delegatedFetchModule from '../../src/access/delegated-fetch.js'
 import * as delegatedExecModule from '../../src/access/delegated-exec.js'
 import * as delegatedSignModule from '../../src/access/delegated-sign.js'
@@ -146,6 +147,38 @@ describe('VaultKeeper', () => {
       })
       expect(vault.activeBackendType).toBe('unregistered-backend')
     })
+
+    // Regression for #167: with a backend injected via init({ backend }), the
+    // config-driven enabled-backend list is empty, so the getter must report
+    // the injected instance's declared `type` instead of throwing
+    // BackendUnavailableError('none-enabled').
+    it('returns the injected backend type instead of throwing (issue #167)', async () => {
+      const backend = createStatefulMockBackend() // declares type 'test'
+      const vault = await VaultKeeper.init({ backend, skipDoctor: true })
+
+      // The bug: this getter threw BackendUnavailableError before the fix.
+      expect(vault.activeBackendType).toBe('test')
+
+      // Store/retrieve still work against the same injected instance.
+      await vault.store('S', 'v')
+      expect(await backend.retrieve('S')).toBe('v')
+    })
+
+    // Edge case for #167 AC #1: an injected backend that declares an empty
+    // type falls back to the stable 'custom' sentinel rather than returning ''.
+    it('falls back to the "custom" sentinel for an injected backend with an empty type (issue #167)', async () => {
+      const backend: SecretBackend = {
+        type: '',
+        displayName: 'Anonymous Backend',
+        isAvailable: () => Promise.resolve(true),
+        store: () => Promise.resolve(),
+        retrieve: () => Promise.resolve(''),
+        delete: () => Promise.resolve(),
+        exists: () => Promise.resolve(false),
+      }
+      const vault = await VaultKeeper.init({ backend, skipDoctor: true })
+      expect(vault.activeBackendType).toBe('custom')
+    })
   })
 
   describe('init with backend option', () => {
@@ -179,6 +212,80 @@ describe('VaultKeeper', () => {
         captured = buf.toString('utf-8')
       })
       expect(captured).toBe('injected-value')
+    })
+
+    // Regression for #167 follow-up (thread 3590033605): an injected backend
+    // that declares an empty type must still mint a USABLE token. setup()
+    // derives the `bkd` claim from the same centralized hint as
+    // activeBackendType, so the empty type falls back to 'custom' — a non-empty
+    // bkd that validateClaims accepts. Before the fix, bkd was '' and
+    // authorize() threw "Invalid token: bkd must not be empty".
+    it('mints a valid token (bkd="custom") for an injected empty-type backend (issue #167)', async () => {
+      const backend: SecretBackend = {
+        type: '', // empty declared type — the documented injected edge case
+        displayName: 'Anonymous Backend',
+        isAvailable: () => Promise.resolve(true),
+        store: () => Promise.resolve(),
+        retrieve: () => Promise.resolve('injected-value'),
+        delete: () => Promise.resolve(),
+        exists: () => Promise.resolve(true),
+      }
+      const vault = await VaultKeeper.init({ backend, skipDoctor: true })
+
+      // Spy (call-through) to capture the claims actually minted, without
+      // replacing the real token so authorize() still validates end-to-end.
+      const createTokenSpy = vi.spyOn(jweTokenModule, 'createToken')
+
+      // No options.backendType: setup() must derive a non-empty bkd on its own.
+      const jwe = await vault.setup('injected-secret', { skipTrust: true })
+
+      expect(createTokenSpy).toHaveBeenCalledOnce()
+      expect(createTokenSpy.mock.calls[0]?.[1].bkd).toBe('custom')
+
+      // The token round-trips: authorize() accepts it (pre-fix it threw on the
+      // empty bkd) and the secret is recoverable.
+      const { token } = await vault.authorize(jwe)
+      const accessor = vault.getSecret(token)
+      const secret = accessor.read((buf) => buf.toString('utf8'))
+      expect(secret).toBe('injected-value')
+
+      createTokenSpy.mockRestore()
+    })
+
+    // Regression for the review thread on #resolveBackendTypeHint (comment
+    // 3590126933): a blank options.backendType override must not be treated
+    // as authoritative — honoring it would mint a token with a blank `bkd`
+    // claim that validateClaims later rejects (an unusable token). A blank
+    // override falls through to the same declared-type/'custom' derivation
+    // as no override at all. Before the fix, bkd was '  ' here.
+    it('ignores a whitespace-only options.backendType override instead of minting a blank bkd claim', async () => {
+      const backend: SecretBackend = {
+        type: 'file',
+        displayName: 'File Backend',
+        isAvailable: () => Promise.resolve(true),
+        store: () => Promise.resolve(),
+        retrieve: () => Promise.resolve('injected-value'),
+        delete: () => Promise.resolve(),
+        exists: () => Promise.resolve(true),
+      }
+      const vault = await VaultKeeper.init({ backend, skipDoctor: true })
+
+      const createTokenSpy = vi.spyOn(jweTokenModule, 'createToken')
+
+      const jwe = await vault.setup('injected-secret', {
+        skipTrust: true,
+        backendType: '  ',
+      })
+
+      expect(createTokenSpy).toHaveBeenCalledOnce()
+      expect(createTokenSpy.mock.calls[0]?.[1].bkd).toBe('file')
+
+      // The token stays usable end-to-end.
+      const { token } = await vault.authorize(jwe)
+      const accessor = vault.getSecret(token)
+      expect(accessor.read((buf) => buf.toString('utf8'))).toBe('injected-value')
+
+      createTokenSpy.mockRestore()
     })
 
     it('uses a minimal built-in default config when config is omitted', async () => {

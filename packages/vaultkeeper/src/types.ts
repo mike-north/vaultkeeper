@@ -219,10 +219,11 @@ export interface ExecResult {
 /**
  * Callback-based secret accessor with auto-zeroing.
  *
- * The accessor is backed by a revocable Proxy. Calling `read()` passes a
- * `Buffer` containing the secret to the callback, then zeroes the buffer after
- * the callback returns. The accessor can only be read once; a second call
- * throws.
+ * The accessor is backed by a Proxy and is single-use via an internal
+ * consumed flag. Calling `read()` passes a `Buffer` containing the secret to
+ * the callback, then zeroes the buffer after the callback returns and passes
+ * the callback's return value through. The accessor can only be read once; a
+ * second call throws.
  */
 export interface SecretAccessor {
   /**
@@ -232,10 +233,18 @@ export interface SecretAccessor {
    * as UTF-8. The buffer is zeroed immediately after the callback returns, so
    * callers must not store a reference to it beyond the callback scope.
    *
-   * @param callback - Function that receives the secret buffer.
+   * The callback's return value is passed through, so a caller-derived result
+   * (for example `buf.toString()` or a hash) flows out of `read()`:
+   * `const digest = accessor.read((buf) => sha256(buf))`. To preserve the
+   * zero-copy, auto-zeroing contract, derive a new value inside the callback —
+   * never return the raw `buf` itself, which is zeroed before `read()` returns.
+   *
+   * @param callback - Function that receives the secret buffer and returns a
+   *   caller-derived value.
+   * @returns Whatever the callback returns.
    * @throws {Error} If the accessor has already been consumed.
    */
-  read(callback: (buf: Buffer) => void): void
+  read<T>(callback: (buf: Buffer) => T): T
 }
 
 /**

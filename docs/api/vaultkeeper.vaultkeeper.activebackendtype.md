@@ -16,5 +16,7 @@ get activeBackendType(): string;
 
 This is a pure, side-effect-free view of the resolved configuration: it reads the type of the first enabled backend without instantiating the backend or requiring it to be registered or healthy. Reading it therefore never throws for an unavailable or unregistered backend — unlike a secret operation — so it is safe to call purely to introspect an instance.
 
+When a backend was injected via `init({ backend })`<!-- -->, config-based resolution is bypassed entirely and this reports the injected instance's declared `type` (see [SecretBackend](./vaultkeeper.secretbackend.md)<!-- -->) — or the stable sentinel `'custom'` if it declares an empty type. It never throws in the injected path.
+
 Use it to confirm which backend an instance resolved to, especially when no config file exists and the safe zero-config default applies (see [defaultBackendType()](./vaultkeeper.defaultbackendtype.md)<!-- -->). With no config this reads `file` on every platform, so secret operations never silently target the real OS credential store; opt into the native store (see [platformNativeBackendType()](./vaultkeeper.platformnativebackendtype.md)<!-- -->) via explicit config to change this.
 
