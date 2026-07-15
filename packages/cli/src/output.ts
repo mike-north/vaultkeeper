@@ -49,6 +49,23 @@ export function dim(text: string): string {
  * a case the CLI itself never hits, since it only ever validates via
  * `loadConfig`/`VaultKeeper.init`.
  */
+/**
+ * Whether `configDir` refers to the machine's platform-default config dir,
+ * compared by normalized path so a differently-spelled but equivalent form
+ * (trailing slash, relative path, and — on Windows — different casing) is
+ * still recognized as the default and doesn't wrongly leak a `--config-dir`
+ * into the default-case hint (issue #149 review). The default is the
+ * env-INDEPENDENT platform default, so a dir that came only from
+ * `VAULTKEEPER_CONFIG_DIR` is still treated as non-default.
+ */
+function isPlatformDefaultConfigDir(configDir: string): boolean {
+  const normalize = (p: string): string => {
+    const resolved = path.resolve(p)
+    return process.platform === 'win32' ? resolved.toLowerCase() : resolved
+  }
+  return normalize(configDir) === normalize(getPlatformDefaultConfigDir())
+}
+
 function configRemediation(
   configPath: string,
   detail: string | undefined,
@@ -59,12 +76,10 @@ function configRemediation(
   // config dir. When the active config dir is anything else, the pasted
   // command would create a fresh default config and leave the diagnosed file
   // corrupt (issue #149). Carry an explicit `--config-dir` so the command
-  // repairs the exact file it complained about. The comparison is against the
-  // env-INDEPENDENT platform default, so an active dir that came only from
-  // `VAULTKEEPER_CONFIG_DIR` still gets an explicit flag — a fresh shell
-  // running the pasted command won't have that env var set.
-  const dirFlag =
-    configDir === getPlatformDefaultConfigDir() ? '' : ` --config-dir ${shellQuote(configDir)}`
+  // repairs the exact file it complained about.
+  const dirFlag = isPlatformDefaultConfigDir(configDir)
+    ? ''
+    : ` --config-dir ${shellQuote(configDir)}`
   return (
     `The config at \`${configPath}\` is invalid${detailSuffix} — ` +
     `run \`vaultkeeper config init --force${dirFlag}\` to overwrite it.`

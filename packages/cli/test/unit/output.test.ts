@@ -381,6 +381,32 @@ describe('config remediation carries --config-dir for a non-default dir (issue #
     expect(formatted).not.toContain('--config-dir')
   })
 
+  // Review edge case (issue #149): the default-dir check must compare
+  // normalized paths, so a differently-spelled-but-equivalent form of the
+  // default dir is still recognized as default and stays bare.
+  it('treats a trailing-slash spelling of the default dir as default (no --config-dir)', () => {
+    const withSlash = platformDefault + path.sep
+    const configPath = path.join(platformDefault, 'config.json')
+    const error: PreflightCheckError = { kind: 'config-validation', configPath }
+
+    const formatted = formatPreflightConfigError(error, withSlash)
+
+    expect(formatted).toContain('run `vaultkeeper config init --force` to overwrite it.')
+    expect(formatted).not.toContain('--config-dir')
+  })
+
+  it('treats a non-normalized relative spelling of the default dir as default (no --config-dir)', () => {
+    // path.resolve() collapses this back to the same absolute default dir.
+    const relForm = path.relative(process.cwd(), platformDefault)
+    const configPath = path.join(platformDefault, 'config.json')
+    const error: PreflightCheckError = { kind: 'config-validation', configPath }
+
+    const formatted = formatPreflightConfigError(error, relForm)
+
+    expect(formatted).toContain('run `vaultkeeper config init --force` to overwrite it.')
+    expect(formatted).not.toContain('--config-dir')
+  })
+
   it('appends `--config-dir <dir>` when a non-default dir is active (flag case)', () => {
     const altDir = '/tmp/vk-alt'
     const configPath = path.join(altDir, 'config.json')
