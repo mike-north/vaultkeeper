@@ -96,6 +96,20 @@ pub enum VaultError {
         current_hash: String,
     },
 
+    /// `setup()` was called without an unambiguous executable-trust decision.
+    ///
+    /// Mirrors the TypeScript `vaultkeeper` library's `ExecutableTrustRequiredError`:
+    /// the caller must supply exactly one of an executable path (to bind) or an
+    /// explicit skip; supplying neither, both, or the retired `"dev"` sentinel
+    /// fails here instead of silently minting an unbound token.
+    #[error("{message}")]
+    ExecutableTrustRequired {
+        message: String,
+        /// Machine-readable discriminator for why the trust choice was rejected.
+        /// See [`ExecutableTrustRequiredReason`].
+        reason: ExecutableTrustRequiredReason,
+    },
+
     // --- Infrastructure Failures ---
     /// A disallowed signing/verification algorithm was requested.
     #[error("{message}")]
@@ -132,4 +146,35 @@ pub enum VaultError {
     /// Generic vault error for cases that don't fit a specific variant.
     #[error("{0}")]
     Other(String),
+}
+
+/// Why an executable-trust choice was rejected by `setup()`.
+///
+/// A dedicated enum keeps the discriminator invariant compile-time enforced in
+/// the Rust core; it is converted to its kebab-case string form (via
+/// [`ExecutableTrustRequiredReason::as_str`]) only at the WASM boundary, where
+/// the TypeScript SDK reconstructs the matching `ExecutableTrustRequiredError.reason`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExecutableTrustRequiredReason {
+    /// Neither an executable path nor an explicit skip was provided. An
+    /// empty or whitespace-only executable path also counts as missing.
+    MissingChoice,
+    /// Both an executable path and an explicit skip were provided — mutually
+    /// exclusive intents.
+    ConflictingChoice,
+    /// The retired literal `"dev"` opt-out sentinel was passed as the executable
+    /// path; it is no longer supported and must be replaced with an explicit skip.
+    LegacyDevSentinel,
+}
+
+impl ExecutableTrustRequiredReason {
+    /// The stable kebab-case discriminator carried across the WASM/TS boundary.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::MissingChoice => "missing-choice",
+            Self::ConflictingChoice => "conflicting-choice",
+            Self::LegacyDevSentinel => "legacy-dev-sentinel",
+        }
+    }
 }

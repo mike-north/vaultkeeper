@@ -9,7 +9,13 @@
  * import { createVaultKeeper } from '@vaultkeeper/wasm';
  *
  * const vault = await createVaultKeeper({ skipDoctor: true });
- * const token = vault.setup('my-secret', 'secret-value');
+ * // setup() requires an explicit executable-trust choice. Bind the token to
+ * // the calling executable (the safe, production choice):
+ * const token = vault.setup('my-secret', 'secret-value', {
+ *   executablePath: process.argv[1],
+ * });
+ * // In tests/development you may instead deliberately skip the binding with
+ * // `{ skipTrust: true }`.
  * const { claims, secret } = vault.authorize(token);
  * // `claims` never contains the raw secret; read it once via the accessor:
  * const first4 = secret.read((value) => value.slice(0, 4));
@@ -50,7 +56,9 @@ export {
   UsageLimitExceededError,
   RotationInProgressError,
   AccessorConsumedError,
+  ExecutableTrustRequiredError,
 } from './errors.js';
+export type { ExecutableTrustRequiredReason } from './errors.js';
 
 // Lazy-load the WASM module
 import type {
@@ -158,13 +166,32 @@ export class VaultKeeper {
   /**
    * Create a JWE token encapsulating a secret.
    *
-   * Unlike the TypeScript `vaultkeeper` library's `setup(secretName, options?)`,
-   * this method does not read from the backend — it mints the token directly
-   * from `secretValue`. It never calls {@link VaultKeeper.store} /
-   * {@link VaultKeeper.retrieve} or looks at anything already persisted under
-   * `secretName`, so a prior `store()` call has no effect on what `setup()`
-   * encapsulates. This is an intentional divergence between the two SDKs'
-   * `setup()` contracts, not a bug.
+   * @remarks
+   * **Explicit executable-trust choice required.** Like the TypeScript
+   * `vaultkeeper` library's `setup()`, this method no longer defaults to
+   * skipping the executable-identity binding. The caller must make an
+   * unambiguous decision via {@link SetupOptions}: provide exactly one of
+   * {@link SetupOptions.executablePath} (bind the calling executable's identity
+   * into the token) or {@link SetupOptions.skipTrust} (`true` — a
+   * development-only opt-out). This binding records the declared identity into
+   * the token's `exe` claim; it does not itself run TOFU/manifest verification.
+   * Supplying neither — or both — or the retired `'dev'` sentinel as
+   * `executablePath` throws {@link ExecutableTrustRequiredError} rather than
+   * silently minting an unbound `'dev'` token. Inspect the error's
+   * `reason` (`'missing-choice'` | `'conflicting-choice'` |
+   * `'legacy-dev-sentinel'`) to distinguish the cases.
+   *
+   * **Backend divergence.** Unlike the TypeScript `vaultkeeper` library's
+   * `setup(secretName, options?)`, this method does not read from the backend —
+   * it mints the token directly from `secretValue`. It never calls
+   * {@link VaultKeeper.store} / {@link VaultKeeper.retrieve} or looks at
+   * anything already persisted under `secretName`, so a prior `store()` call has
+   * no effect on what `setup()` encapsulates. This is an intentional divergence
+   * between the two SDKs' `setup()` contracts, not a bug.
+   *
+   * @throws {@link ExecutableTrustRequiredError} If neither `executablePath` nor
+   *   `skipTrust: true` is provided, if both are, or if `executablePath` is the
+   *   retired legacy `'dev'` opt-out sentinel (use `skipTrust: true`).
    */
   setup(secretName: string, secretValue: string, options?: SetupOptions): string {
     return callSync(() => this.#inner.setup(secretName, secretValue, options ?? {}));

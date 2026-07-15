@@ -7,9 +7,9 @@ use js_sys::{Function, Promise, Reflect, Uint8Array};
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::JsFuture;
 
-use vaultkeeper_core::VaultError;
 use vaultkeeper_core::backend::{ExecOutput, FileBackend, HostPlatform, Platform, SecretBackend};
 use vaultkeeper_core::vault::{SetupOptions, VaultKeeperOptions};
+use vaultkeeper_core::{ExecutableTrustRequiredReason, VaultError};
 
 // ─── JsHostPlatform ──────────────────────────────────────────────
 
@@ -104,6 +104,7 @@ fn vault_error_code(e: &VaultError) -> &'static str {
         VaultError::BackendUnavailable { .. } => "backend-unavailable",
         VaultError::PluginNotFound { .. } => "plugin-not-found",
         VaultError::IdentityMismatch { .. } => "identity-mismatch",
+        VaultError::ExecutableTrustRequired { .. } => "executable-trust-required",
         VaultError::InvalidAlgorithm { .. } => "invalid-algorithm",
         VaultError::Setup { .. } => "setup",
         VaultError::Filesystem { .. } => "filesystem",
@@ -140,9 +141,45 @@ fn vault_error_to_js(e: &VaultError) -> JsValue {
             }
             set("attempted", &arr);
         }
+        VaultError::ExecutableTrustRequired { reason, .. } => {
+            // The core carries a Rust-native message (SetupOptions.executable_path
+            // etc.) for direct Rust callers; at this JS boundary we replace it
+            // with the JS-facing wording (options.executablePath / skipTrust) so
+            // WASM SDK consumers see their own API's names.
+            set(
+                "message",
+                &JsValue::from_str(executable_trust_required_js_message(*reason)),
+            );
+            set("reason", &JsValue::from_str(reason.as_str()));
+        }
         _ => {}
     }
     obj.into()
+}
+
+/// JS-facing message for an [`ExecutableTrustRequiredReason`], phrased in the
+/// WASM SDK's own option names (`options.executablePath` / `options.skipTrust`).
+fn executable_trust_required_js_message(reason: ExecutableTrustRequiredReason) -> &'static str {
+    match reason {
+        ExecutableTrustRequiredReason::MissingChoice => {
+            "VaultKeeper.setup() requires an explicit executable-trust choice and no longer \
+             defaults to skipping it. Either pass options.executablePath set to the calling \
+             executable's real path (a non-empty path binds that identity into the token), or set \
+             options.skipTrust: true to deliberately skip the binding (development only)."
+        }
+        ExecutableTrustRequiredReason::ConflictingChoice => {
+            "VaultKeeper.setup() received both options.executablePath and options.skipTrust: true, \
+             which are mutually exclusive. Pass options.executablePath to bind the calling \
+             executable's identity, or options.skipTrust: true to skip the binding (development \
+             only) — not both."
+        }
+        ExecutableTrustRequiredReason::LegacyDevSentinel => {
+            "VaultKeeper.setup() no longer supports the legacy options.executablePath: 'dev' \
+             sentinel for skipping the identity binding. Set options.skipTrust: true to \
+             deliberately skip the binding (development only), or pass options.executablePath set \
+             to the calling executable's real path to bind it."
+        }
+    }
 }
 
 /// Build a thrown JS value for an error originating at the WASM boundary
@@ -390,6 +427,9 @@ impl WasmVaultKeeper {
             let executable_path = Reflect::get(&options, &JsValue::from_str("executablePath"))
                 .ok()
                 .and_then(|v| v.as_string());
+            let skip_trust = Reflect::get(&options, &JsValue::from_str("skipTrust"))
+                .ok()
+                .and_then(|v| v.as_bool());
             let backend_type = Reflect::get(&options, &JsValue::from_str("backendType"))
                 .ok()
                 .and_then(|v| v.as_string());
@@ -398,6 +438,7 @@ impl WasmVaultKeeper {
                 ttl_minutes: ttl,
                 use_limit,
                 executable_path,
+                skip_trust,
                 backend_type,
                 trust_tier: None,
             })

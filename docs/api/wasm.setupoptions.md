@@ -6,6 +6,8 @@
 
 Options for the setup (token creation) operation.
 
+`setup()` requires an explicit executable-trust decision: provide exactly one of [SetupOptions.executablePath](./wasm.setupoptions.executablepath.md) or [SetupOptions.skipTrust](./wasm.setupoptions.skiptrust.md)<!-- -->. Supplying neither, both, or the retired `'dev'` sentinel as `executablePath` throws `ExecutableTrustRequiredError`<!-- -->.
+
 **Signature:**
 
 ```typescript
@@ -69,7 +71,26 @@ string
 
 </td><td>
 
-_(Optional)_
+_(Optional)_ The calling executable's real path, bound into the minted token. Mutually exclusive with [SetupOptions.skipTrust](./wasm.setupoptions.skiptrust.md)<!-- -->. The retired `'dev'` sentinel is rejected — use `skipTrust: true` to skip binding a real identity instead.
+
+
+</td></tr>
+<tr><td>
+
+[skipTrust?](./wasm.setupoptions.skiptrust.md)
+
+
+</td><td>
+
+
+</td><td>
+
+boolean
+
+
+</td><td>
+
+_(Optional)_ Development-only opt-out that deliberately skips binding a real executable identity, producing a `'dev'`<!-- -->-bound token (no executable identity bound). Mutually exclusive with [SetupOptions.executablePath](./wasm.setupoptions.executablepath.md)<!-- -->.
 
 
 </td></tr>

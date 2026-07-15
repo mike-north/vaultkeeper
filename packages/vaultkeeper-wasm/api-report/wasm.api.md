@@ -32,6 +32,15 @@ export class DecryptionError extends VaultError {
 }
 
 // @public
+export class ExecutableTrustRequiredError extends VaultError {
+    constructor(message: string, reason: ExecutableTrustRequiredReason);
+    readonly reason: ExecutableTrustRequiredReason;
+}
+
+// @public
+export type ExecutableTrustRequiredReason = 'missing-choice' | 'conflicting-choice' | 'legacy-dev-sentinel';
+
+// @public
 export class InvalidTokenError extends VaultError {
     constructor(message: string);
 }
@@ -98,8 +107,8 @@ export class SecretNotFoundError extends VaultError {
 export interface SetupOptions {
     // (undocumented)
     backendType?: string;
-    // (undocumented)
     executablePath?: string;
+    skipTrust?: boolean;
     // (undocumented)
     ttlMinutes?: number;
     // (undocumented)

@@ -15,7 +15,13 @@ Uses the Rust vaultkeeper-core compiled to WebAssembly, with Node.js providing t
 import { createVaultKeeper } from '@vaultkeeper/wasm';
 
 const vault = await createVaultKeeper({ skipDoctor: true });
-const token = vault.setup('my-secret', 'secret-value');
+// setup() requires an explicit executable-trust choice. Bind the token to
+// the calling executable (the safe, production choice):
+const token = vault.setup('my-secret', 'secret-value', {
+  executablePath: process.argv[1],
+});
+// In tests/development you may instead deliberately skip the binding with
+// `{ skipTrust: true }`.
 const { claims, secret } = vault.authorize(token);
 // `claims` never contains the raw secret; read it once via the accessor:
 const first4 = secret.read((value) => value.slice(0, 4));
@@ -53,6 +59,19 @@ Thrown when a one-time secret accessor's `read()` is called after the secret has
 </td><td>
 
 Thrown when a stored secret entry cannot be decrypted — the ciphertext is corrupted/truncated or the AES-GCM authentication tag failed to verify. Mirrors the pure-TypeScript `vaultkeeper` library's `DecryptionError`<!-- -->.
+
+
+</td></tr>
+<tr><td>
+
+[ExecutableTrustRequiredError](./wasm.executabletrustrequirederror.md)
+
+
+</td><td>
+
+Thrown by `setup()` when the caller does not make an unambiguous executable-trust decision.
+
+Mirrors the pure-TypeScript `vaultkeeper` library's `ExecutableTrustRequiredError`<!-- -->: `setup()` deliberately has no default trust behaviour, so the caller must pass either a real `executablePath` or explicitly opt out with `skipTrust: true`<!-- -->. Supplying neither — or both — or the retired `'dev'` sentinel as `executablePath` throws this error rather than silently minting an unbound token. Inspect [ExecutableTrustRequiredError.reason](./wasm.executabletrustrequirederror.reason.md) to distinguish the cases.
 
 
 </td></tr>
@@ -283,6 +302,8 @@ Mirrors the `getSecret()` pattern in the TypeScript library: the plaintext secre
 
 Options for the setup (token creation) operation.
 
+`setup()` requires an explicit executable-trust decision: provide exactly one of [SetupOptions.executablePath](./wasm.setupoptions.executablepath.md) or [SetupOptions.skipTrust](./wasm.setupoptions.skiptrust.md)<!-- -->. Supplying neither, both, or the retired `'dev'` sentinel as `executablePath` throws `ExecutableTrustRequiredError`<!-- -->.
+
 
 </td></tr>
 <tr><td>
@@ -360,6 +381,17 @@ Description
 
 </th></tr></thead>
 <tbody><tr><td>
+
+[ExecutableTrustRequiredReason](./wasm.executabletrustrequiredreason.md)
+
+
+</td><td>
+
+Machine-readable discriminator for why an executable-trust choice was rejected by `setup()`<!-- -->. `'missing-choice'` means neither `executablePath` nor `skipTrust: true` was provided (an empty/whitespace `executablePath` counts as missing). `'conflicting-choice'` means both were provided, which are mutually exclusive intents. `'legacy-dev-sentinel'` means `executablePath` was the retired literal `'dev'` opt-out sentinel, which is no longer supported and must be replaced with `skipTrust: true`<!-- -->.
+
+
+</td></tr>
+<tr><td>
 
 [KeyStatus](./wasm.keystatus.md)
 
