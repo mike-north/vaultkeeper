@@ -228,8 +228,14 @@ impl SecretBackend for FileBackend {
             }
         };
 
-        let encoded = String::from_utf8(data)
-            .map_err(|e| VaultError::Other(format!("Encrypted file is not valid UTF-8: {e}")))?;
+        // A stored entry is always `iv:authTag:ciphertext` UTF-8 text (see
+        // module docs); invalid UTF-8 means the on-disk entry is corrupted,
+        // the same class of failure as a bad auth tag below — type it the
+        // same way rather than as a generic `Other`.
+        let encoded = String::from_utf8(data).map_err(|e| VaultError::Decryption {
+            message: format!("Encrypted file is not valid UTF-8: {e}"),
+            path: entry_path.display().to_string(),
+        })?;
 
         let key = self.get_or_create_key().await?;
         decrypt_gcm(&key, &encoded).map_err(|e| VaultError::Decryption {
@@ -628,6 +634,33 @@ mod tests {
         }
 
         let err = backend.retrieve("corrupt-me").await.unwrap_err();
+        match err {
+            VaultError::Decryption { path, .. } => {
+                assert_eq!(path, entry_path.display().to_string());
+            }
+            other => panic!("expected VaultError::Decryption, got {other:?}"),
+        }
+    }
+
+    /// Regression test for PR #135 review feedback: an on-disk entry that
+    /// isn't even valid UTF-8 (the stored `iv:authTag:ciphertext` encoding is
+    /// always UTF-8 text) is the same class of corruption as a bad auth tag
+    /// and must surface as `VaultError::Decryption`, not a generic `Other`.
+    #[tokio::test]
+    async fn retrieve_non_utf8_entry_returns_decryption_error() {
+        let host = make_test_host();
+        let backend = FileBackend::new(host.clone());
+        backend.store("garbled", "value").await.unwrap();
+        let entry_path = backend.entry_path("garbled");
+
+        // Overwrite with raw bytes that are not valid UTF-8 at all (0xFF is
+        // never a valid UTF-8 lead or continuation byte).
+        host.files
+            .lock()
+            .unwrap()
+            .insert(entry_path.clone(), vec![0xFF, 0xFE, 0xFD]);
+
+        let err = backend.retrieve("garbled").await.unwrap_err();
         match err {
             VaultError::Decryption { path, .. } => {
                 assert_eq!(path, entry_path.display().to_string());

@@ -515,6 +515,26 @@ describe('@vaultkeeper/wasm security parity (issue #66)', () => {
     });
   });
 
+  // Regression test for PR #135 review feedback: an on-disk entry that isn't
+  // even valid UTF-8 is the same class of corruption as a bad auth tag and
+  // must also surface as a typed DecryptionError, not an untyped error.
+  it('retrieve() of a non-UTF-8 entry throws a typed DecryptionError', async () => {
+    await withTempDir(async (dir) => {
+      const vault = await createTestVault(dir);
+      await vault.store('garbled', 'some-value');
+
+      const entryPath = join(dir, 'file', `${Buffer.from('garbled', 'utf8').toString('hex')}.enc`);
+      // 0xFF is never a valid UTF-8 lead or continuation byte.
+      await writeFile(entryPath, Buffer.from([0xff, 0xfe, 0xfd]));
+
+      await assert.rejects(
+        () => vault.retrieve('garbled'),
+        (err: unknown) => err instanceof DecryptionError && err instanceof VaultError,
+      );
+      vault.dispose();
+    });
+  });
+
   it('double key rotation throws a typed RotationInProgressError', async () => {
     await withTempDir(async (dir) => {
       const vault = await createTestVault(dir);
