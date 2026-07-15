@@ -104,7 +104,10 @@ export function execCommandFull(
           ),
         )
       } else {
-        reject(error)
+        // Any other spawn failure (EACCES on the binary, EMFILE, ...) must
+        // surface typed, not as the raw Node error — the last plain-error
+        // escape on this utility's failure paths.
+        reject(new ExecError(`Failed to spawn '${command}': ${error.message}`, command))
       }
     })
   })

@@ -1,4 +1,7 @@
 import { describe, it, expect, vi } from 'vitest'
+import * as fs from 'node:fs/promises'
+import * as os from 'node:os'
+import * as path from 'node:path'
 import { execCommand, execCommandFull } from '../../../src/util/exec.js'
 import { PluginNotFoundError, ExecError } from '../../../src/errors.js'
 
@@ -82,6 +85,32 @@ describe('execCommandFull', () => {
       execCommandFull('this-binary-absolutely-does-not-exist-anywhere', ['--version']),
     ).rejects.toThrow(PluginNotFoundError)
   })
+
+  // Regression (review thread 3591242590): non-ENOENT spawn failures (EACCES
+  // on the target, EMFILE, ...) previously rejected with the raw Node error —
+  // the last plain-error escape on this utility's failure paths. Spawning a
+  // non-executable file yields EACCES deterministically on POSIX.
+  it.skipIf(process.platform === 'win32')(
+    'wraps a non-ENOENT spawn failure (EACCES) in a typed ExecError',
+    async () => {
+      const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'vk-exec-eacces-'))
+      const target = path.join(dir, 'not-executable.sh')
+      try {
+        await fs.writeFile(target, '#!/bin/sh\necho hi\n', { mode: 0o644 })
+
+        const caught = await execCommandFull(target, []).then(
+          () => undefined,
+          (err: unknown) => err,
+        )
+        expect(caught).toBeInstanceOf(ExecError)
+        if (caught instanceof ExecError) {
+          expect(caught.command).toBe(target)
+        }
+      } finally {
+        await fs.rm(dir, { recursive: true, force: true })
+      }
+    },
+  )
 
   // Regression: PR #164 review (issue #127) — the timeout timer was never
   // cleared when the process closed before it fired. Left pending, it kept
