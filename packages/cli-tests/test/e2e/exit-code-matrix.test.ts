@@ -35,6 +35,7 @@ describe('exit-code matrix (issue #118)', () => {
     env = await createCliTestEnv()
     const result = await env.run([])
     expect(result.exitCode).toBe(0)
+    expect(result.stdout).toContain('Usage: vaultkeeper [--config-dir <path>] <command>')
   })
 
   it('a misspelled/unknown subcommand exits 2, unlike a bare invocation', async () => {
