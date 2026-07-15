@@ -4,6 +4,8 @@
 
 ## SetupOptions.backendType property
 
+Backend identifier recorded as a claim label in the minted token's `bkd` claim. This is a label only, mirroring the claim-label nature of [SetupOptions.executablePath](./wasm.setupoptions.executablepath.md)<!-- -->: it does not select, connect to, or route through a functional backend. Setting `'keychain'`<!-- -->, for example, records the string `'keychain'` in the token without performing any keychain access. This WASM SDK's `setup()` mints the token directly from the supplied secret value and never reads from a backend.
+
 **Signature:**
 
 ```typescript
