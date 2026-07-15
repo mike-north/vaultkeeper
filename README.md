@@ -232,8 +232,9 @@ const apiKey = result.secret.read((value) => value)
 // store()/retrieve() are a separate, independent file-backend API — useful
 // when you want the WASM SDK to persist a secret for later retrieval, but
 // note that setup() above will not read what you stored here.
-await vault.store('MY_API_KEY', 'my-secret-value')
-console.log(await vault.retrieve('MY_API_KEY'))
+await vault.store('MY_API_KEY', apiKey)
+const retrieved = await vault.retrieve('MY_API_KEY')
+console.log(retrieved === apiKey) // true — same value, via the independent store()/retrieve() path
 
 // Rotate or revoke keys
 vault.rotateKey()
