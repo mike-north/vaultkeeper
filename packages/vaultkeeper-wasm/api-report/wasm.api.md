@@ -50,6 +50,8 @@ export interface PreflightCheck {
     // (undocumented)
     reason?: string | null;
     // (undocumented)
+    required: boolean;
+    // (undocumented)
     status: PreflightCheckStatus;
     // (undocumented)
     version?: string | null;

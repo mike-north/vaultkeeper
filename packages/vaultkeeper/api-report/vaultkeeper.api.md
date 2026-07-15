@@ -218,7 +218,7 @@ export type PreflightCheckStatus = 'ok' | 'missing' | 'version-unsupported' | 'i
 
 // @public
 export interface PreflightResult {
-    checks: PreflightCheck[];
+    checks: ScopedPreflightCheck[];
     nextSteps: string[];
     ready: boolean;
     warnings: string[];
@@ -237,6 +237,11 @@ export interface RunDoctorOptions {
     backends?: BackendConfig[];
     configDir?: string;
     platform?: Platform;
+}
+
+// @public
+export interface ScopedPreflightCheck extends PreflightCheck {
+    required: boolean;
 }
 
 // @public

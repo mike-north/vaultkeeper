@@ -227,23 +227,37 @@ async fn cmd_doctor() -> i32 {
     };
     let result = vaultkeeper_core::doctor::run_doctor(host.as_ref(), backends.as_deref()).await;
 
-    for check in &result.checks {
-        let icon = if check.status == vaultkeeper_core::PreflightCheckStatus::Ok {
+    // A check that is not required for the active/configured backend(s)
+    // (e.g. `ykman`/`op` when no plugin backend is enabled) is informational,
+    // not a failure — rendering it with a ✗ alongside genuine failures made a
+    // safe, file-default first run look broken (issue #116). Checks that are
+    // both optional and unsatisfied are left out of the pass/fail list; they
+    // still surface, without the failure icon, in the "Warnings" section
+    // below — that's the visual separation between "checks for your active
+    // backend" and "optional plugin backends (not configured)".
+    let primary_checks = result.checks.iter().filter(|check| {
+        check.required || check.check.status == vaultkeeper_core::PreflightCheckStatus::Ok
+    });
+
+    for check in primary_checks {
+        let icon = if check.check.status == vaultkeeper_core::PreflightCheckStatus::Ok {
             "\u{2713}"
         } else {
             "\u{2717}"
         };
         let version = check
+            .check
             .version
             .as_ref()
             .map(|v| format!(" ({v})"))
             .unwrap_or_default();
         let reason = check
+            .check
             .reason
             .as_ref()
             .map(|r| format!(" \u{2014} {r}"))
             .unwrap_or_default();
-        println!("  {icon} {}{version}{reason}", check.name);
+        println!("  {icon} {}{version}{reason}", check.check.name);
     }
 
     if !result.warnings.is_empty() {
