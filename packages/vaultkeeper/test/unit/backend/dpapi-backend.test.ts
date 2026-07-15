@@ -171,11 +171,18 @@ describe('DpapiBackend', () => {
       }
     })
 
-    it('should rethrow non-ENOENT errors', async () => {
+    it('wraps an EPERM unlink failure as a typed FilesystemError (never a raw rethrow)', async () => {
       const permError = Object.assign(new Error('EPERM'), { code: 'EPERM' })
-      mockFs.unlink.mockRejectedValue(permError)
+      mockFs.unlink.mockRejectedValueOnce(permError)
 
-      await expect(backend.delete('protected')).rejects.toThrow('EPERM')
+      const caught = await backend.delete('protected').then(
+        () => undefined,
+        (err: unknown) => err,
+      )
+      expect(caught).toBeInstanceOf(FilesystemError)
+      if (caught instanceof FilesystemError) {
+        expect(caught.code).toBe('EPERM')
+      }
     })
   })
 

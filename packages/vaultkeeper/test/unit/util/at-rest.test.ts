@@ -49,6 +49,19 @@ describe('encryptGcm / decryptGcm', () => {
     bytes[0] = (bytes[0] ?? 0) ^ 0xff
     const tampered = [parts[0], parts[1], bytes.toString('base64')].join(':')
 
-    expect(() => decryptGcm(KEY, tampered, '/entries/a.enc')).toThrow()
+    // Regression (review thread 3591176966): decipher.final()'s native crypto
+    // Error on GCM auth-tag failure must be wrapped — the documented
+    // @throws {DecryptionError} contract has to hold on the auth-failure
+    // path, not just the malformed-envelope paths.
+    let caught: unknown
+    try {
+      decryptGcm(KEY, tampered, '/entries/a.enc')
+    } catch (err) {
+      caught = err
+    }
+    expect(caught).toBeInstanceOf(DecryptionError)
+    if (caught instanceof DecryptionError) {
+      expect(caught.path).toBe('/entries/a.enc')
+    }
   })
 })
