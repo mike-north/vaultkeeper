@@ -95,7 +95,9 @@ export async function deleteCommand(args: string[], configDir: string): Promise<
       // secret being deleted between any check and this call (issue #118
       // review), which a pre-check alone cannot.
       if (deleteErr instanceof SecretNotFoundError) {
-        throw new SecretNotFoundError(secretNotFoundMessage(values.name, vault.activeBackendType))
+        throw new SecretNotFoundError(
+          secretNotFoundMessage(values.name, vault.activeBackendType, 'delete'),
+        )
       }
       throw deleteErr
     }

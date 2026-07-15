@@ -115,10 +115,15 @@ describe('deleteCommand', () => {
   // SecretNotFoundError wording ("Secret not found in file store: x"),
   // different from exec's ("Secret "x" not found in file backend") and with
   // no recovery hint. delete now catches whatever SecretNotFoundError the
-  // backend's delete() throws and rethrows it with the same wording + hint
-  // exec.ts uses.
-  describe('when vault.delete() throws SecretNotFoundError (issue #118)', () => {
-    it('should return 1 and report a consistent SecretNotFoundError with a recovery hint', async () => {
+  // backend's delete() throws and rethrows it with the normalized wording.
+  //
+  // Regression: issue #183 — that normalized wording used to append exec's
+  // "Run `vaultkeeper store …` to create it" hint, which is nonsensical on
+  // the delete path (the user is removing, not creating). delete now passes
+  // the 'delete' context so the shared diagnostic line is kept but the hint
+  // is neutral and never suggests creating the secret being deleted.
+  describe('when vault.delete() throws SecretNotFoundError (issues #118, #183)', () => {
+    it('should return 1 and report a consistent SecretNotFoundError with a delete-appropriate hint', async () => {
       mockDeleteFn.mockRejectedValue(new SecretNotFoundError('Secret not found in file store: x'))
       mockInit.mockResolvedValue(existingSecretVault())
       const { deleteCommand } = await import('../../../src/commands/delete.js')
@@ -126,7 +131,10 @@ describe('deleteCommand', () => {
       expect(code).toBe(1)
       expect(stderrOutput).toContain('SecretNotFoundError')
       expect(stderrOutput).toContain('Secret "missing-secret" not found in the "file" backend')
-      expect(stderrOutput).toContain("Run `vaultkeeper store --name 'missing-secret'` to create it")
+      // Never suggest creating the secret being deleted.
+      expect(stderrOutput).not.toContain('to create it')
+      expect(stderrOutput).not.toContain('vaultkeeper store --name')
+      expect(stderrOutput).toContain('may have already been deleted, or the name may be misspelled')
     })
 
     // Review follow-up on issue #118: an upfront secretExists() pre-check
@@ -146,7 +154,8 @@ describe('deleteCommand', () => {
       const code = await deleteCommand(['--name', 'race-secret'], configDir)
       expect(code).toBe(1)
       expect(stderrOutput).toContain('Secret "race-secret" not found in the "keychain" backend')
-      expect(stderrOutput).toContain("Run `vaultkeeper store --name 'race-secret'` to create it")
+      expect(stderrOutput).toContain('may have already been deleted, or the name may be misspelled')
+      expect(stderrOutput).not.toContain('to create it')
       expect(stderrOutput).not.toContain('macOS Keychain')
     })
   })

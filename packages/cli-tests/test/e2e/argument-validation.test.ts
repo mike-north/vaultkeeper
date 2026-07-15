@@ -67,6 +67,18 @@ describe('argument validation', () => {
     expect(result.stderr).toContain('Must provide command after --')
   })
 
+  // Issue #183: exec's required-flags validation error omitted the `Usage:`
+  // line that every sibling validation error prints, so a user who forgot a
+  // flag saw only which flags were missing, not the invocation shape. It must
+  // exit 2 (usage error) AND include the Usage: line, like its siblings.
+  it('exec should exit 2 with a Usage: line when required flags are missing', async () => {
+    env = await createCliTestEnv()
+    const result = await env.run(['exec', '--', 'echo', 'hi'])
+    expect(result.exitCode).toBe(2)
+    expect(result.stderr).toContain('--secret, --env, and --caller are required')
+    expect(result.stderr).toContain('Usage: vaultkeeper exec --secret <name> --env <VAR> --caller')
+  })
+
   it('dev-mode should exit 2 without proper arguments', async () => {
     env = await createCliTestEnv()
     const result = await env.run(['dev-mode'])
