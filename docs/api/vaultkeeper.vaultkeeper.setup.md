@@ -72,7 +72,7 @@ Compact JWE string
 
 ## Exceptions
 
-[ExecutableTrustRequiredError](./vaultkeeper.executabletrustrequirederror.md) If neither `executablePath` nor `skipTrust: true` is provided (or both are).
+[ExecutableTrustRequiredError](./vaultkeeper.executabletrustrequirederror.md) If neither `executablePath` nor `skipTrust: true` is provided, if both are, or if `executablePath` is the retired legacy `'dev'` opt-out sentinel (use `skipTrust: true`<!-- -->).
 
 [IdentityMismatchError](./vaultkeeper.identitymismatcherror.md) If `executablePath`<!-- -->'s current hash no longer matches a previously approved value (TOFU conflict).
 

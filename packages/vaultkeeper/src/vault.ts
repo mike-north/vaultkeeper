@@ -429,7 +429,8 @@ export class VaultKeeper {
    * @param options - Setup options
    * @returns Compact JWE string
    * @throws {@link ExecutableTrustRequiredError} If neither `executablePath`
-   *   nor `skipTrust: true` is provided (or both are).
+   *   nor `skipTrust: true` is provided, if both are, or if `executablePath` is
+   *   the retired legacy `'dev'` opt-out sentinel (use `skipTrust: true`).
    * @throws {@link IdentityMismatchError} If `executablePath`'s current hash no
    *   longer matches a previously approved value (TOFU conflict).
    * @throws {@link FilesystemError} If `executablePath` cannot be read or hashed
@@ -886,7 +887,8 @@ export class VaultKeeper {
    * otherwise runs TOFU verification and returns the verified hash.
    *
    * @throws {ExecutableTrustRequiredError} If neither `executablePath` nor
-   *   `skipTrust: true` is provided, or if both are.
+   *   `skipTrust: true` is provided, if both are, or if `executablePath` is the
+   *   retired legacy `'dev'` opt-out sentinel.
    * @throws {IdentityMismatchError} On a TOFU hash conflict.
    */
   async #resolveExecutableIdentity(options: SetupOptions | undefined): Promise<string> {
@@ -917,6 +919,21 @@ export class VaultKeeper {
           '(runs trust-on-first-use verification), or set options.skipTrust: ' +
           'true to deliberately skip verification (development only).',
         'missing-choice',
+      )
+    }
+
+    // Reject the retired legacy opt-out sentinel. Before explicit-trust,
+    // options.executablePath: 'dev' was the documented way to skip verification;
+    // it is no longer special and would otherwise be resolved as a real path
+    // (<cwd>/dev), hashed, and fail with a confusing "cannot read executable"
+    // FilesystemError. Point migrating callers at the dedicated opt-out instead.
+    if (executablePath === 'dev') {
+      throw new ExecutableTrustRequiredError(
+        "VaultKeeper.setup() no longer supports the legacy options.executablePath: 'dev' " +
+          'sentinel for skipping trust verification. Set options.skipTrust: true to ' +
+          'deliberately skip verification (development only), or pass ' +
+          "options.executablePath set to the calling executable's real path to verify it.",
+        'legacy-dev-sentinel',
       )
     }
 

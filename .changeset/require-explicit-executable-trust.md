@@ -29,7 +29,7 @@ await vault.setup('MY_API_KEY', { executablePath: process.argv[1] })
 await vault.setup('MY_API_KEY', { skipTrust: true })
 ```
 
-Callers that previously passed the `'dev'` sentinel should switch to the dedicated opt-out:
+Callers that previously passed the `'dev'` sentinel must switch to the dedicated opt-out — the legacy `'dev'` sentinel is no longer supported and is now rejected at runtime with an `ExecutableTrustRequiredError` (`reason: 'legacy-dev-sentinel'`) instead of being resolved as a real path:
 
 ```ts
 // Before:

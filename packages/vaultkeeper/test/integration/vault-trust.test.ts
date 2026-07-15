@@ -401,6 +401,35 @@ describe('setup() requires an explicit executable-trust choice (#123)', () => {
     // No token was minted, so nothing was recorded to the manifest either.
     expect(await manifestExists()).toBe(false)
   })
+
+  // Regression for PR #131 review thread 3588773262 (#123): pre-explicit-trust,
+  // `executablePath: 'dev'` was THE documented opt-out sentinel. Post-#131 it is
+  // no longer special; without a guard it would be resolved as a real path
+  // (<cwd>/dev), hashed, and fail with a confusing FilesystemError. setup() must
+  // instead reject the legacy sentinel with a typed ExecutableTrustRequiredError
+  // that points migrating callers at the new `skipTrust: true` opt-out.
+  it("rejects the legacy executablePath: 'dev' sentinel with a migration hint", async () => {
+    await backend.store('API_KEY', 's3cr3t')
+    const vault = await createVault()
+
+    const err = await vault.setup('API_KEY', { executablePath: 'dev' }).then(
+      () => {
+        throw new Error('expected setup to reject')
+      },
+      (e: unknown) => e,
+    )
+
+    expect(err).toBeInstanceOf(ExecutableTrustRequiredError)
+    expect(err).toBeInstanceOf(VaultError)
+    if (!(err instanceof ExecutableTrustRequiredError)) throw new Error('unreachable')
+    expect(err.reason).toBe('legacy-dev-sentinel')
+    // The message must name the new opt-out so a migrating caller knows the fix.
+    expect(err.message).toContain('skipTrust')
+    // It must not be masked by a filesystem error about hashing "<cwd>/dev".
+    expect(err).not.toBeInstanceOf(FilesystemError)
+    // No token minted, no manifest fallback recorded.
+    expect(await manifestExists()).toBe(false)
+  })
 })
 
 describe('trust-only operations without a healthy backend (review thread 3582165455)', () => {

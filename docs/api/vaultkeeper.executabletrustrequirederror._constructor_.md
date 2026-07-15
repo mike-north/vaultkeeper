@@ -9,7 +9,7 @@ Constructs a new instance of the `ExecutableTrustRequiredError` class
 **Signature:**
 
 ```typescript
-constructor(message: string, reason: 'missing-choice' | 'conflicting-choice');
+constructor(message: string, reason: 'missing-choice' | 'conflicting-choice' | 'legacy-dev-sentinel');
 ```
 
 ## Parameters
@@ -51,7 +51,7 @@ reason
 
 </td><td>
 
-'missing-choice' \| 'conflicting-choice'
+'missing-choice' \| 'conflicting-choice' \| 'legacy-dev-sentinel'
 
 
 </td><td>

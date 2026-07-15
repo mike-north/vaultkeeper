@@ -142,7 +142,7 @@ Thrown when a delegated `exec()` call fails due to an invalid request (e.g. a `{
 
 Thrown by [VaultKeeper.setup()](./vaultkeeper.vaultkeeper.setup.md) when the caller does not make an unambiguous executable-trust decision.
 
-`setup()` deliberately has no default trust behaviour: the caller must either pass a real `executablePath` (which runs trust-on-first-use verification) or explicitly opt out with `skipTrust: true` (a development-only escape hatch). Supplying neither — or both at once — throws this error rather than silently skipping verification. Inspect [ExecutableTrustRequiredError.reason](./vaultkeeper.executabletrustrequirederror.reason.md) to distinguish the two cases.
+`setup()` deliberately has no default trust behaviour: the caller must either pass a real `executablePath` (which runs trust-on-first-use verification) or explicitly opt out with `skipTrust: true` (a development-only escape hatch). Supplying neither — or both at once — throws this error rather than silently skipping verification. Passing the retired `'dev'` sentinel as `executablePath` also throws this error. Inspect [ExecutableTrustRequiredError.reason](./vaultkeeper.executabletrustrequirederror.reason.md) to distinguish the cases.
 
 
 </td></tr>

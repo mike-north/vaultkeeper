@@ -4,10 +4,10 @@
 
 ## ExecutableTrustRequiredError.reason property
 
-Machine-readable discriminator for why the trust choice was rejected. `'missing-choice'` means neither `executablePath` nor `skipTrust: true` was provided, so no trust decision was expressed. `'conflicting-choice'` means both `executablePath` and `skipTrust: true` were provided, which are mutually exclusive intents.
+Machine-readable discriminator for why the trust choice was rejected. `'missing-choice'` means neither `executablePath` nor `skipTrust: true` was provided, so no trust decision was expressed. `'conflicting-choice'` means both `executablePath` and `skipTrust: true` were provided, which are mutually exclusive intents. `'legacy-dev-sentinel'` means `executablePath` was the retired literal `'dev'` opt-out sentinel, which is no longer supported and must be replaced with `skipTrust: true`<!-- -->.
 
 **Signature:**
 
 ```typescript
-readonly reason: 'missing-choice' | 'conflicting-choice';
+readonly reason: 'missing-choice' | 'conflicting-choice' | 'legacy-dev-sentinel';
 ```

@@ -113,8 +113,8 @@ export interface ExecResult {
 
 // @public
 export class ExecutableTrustRequiredError extends VaultError {
-    constructor(message: string, reason: 'missing-choice' | 'conflicting-choice');
-    readonly reason: 'missing-choice' | 'conflicting-choice';
+    constructor(message: string, reason: 'missing-choice' | 'conflicting-choice' | 'legacy-dev-sentinel');
+    readonly reason: 'missing-choice' | 'conflicting-choice' | 'legacy-dev-sentinel';
 }
 
 // @public
