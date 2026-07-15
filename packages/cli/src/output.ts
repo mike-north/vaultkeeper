@@ -70,9 +70,10 @@ function formatConfigError(
 }
 
 /**
- * True when `err` is the `FilesystemError` `loadConfig` throws for an
- * unreadable `config.json` (e.g. `EACCES`/`EPERM`) — as opposed to any other
- * filesystem failure. `FileBackend` secret reads never live at
+ * True when `err` is the `FilesystemError` `loadConfig` throws for a failed
+ * read of `config.json` — any errno (`EACCES`/`EPERM`/`EISDIR`/etc.), not
+ * only permission failures; `formatConfigReadError` picks the actual wording
+ * from `err.code`. `FileBackend` secret reads never live at
  * `configDir/config.json`, so this check can't collide with a backend read
  * failure (issue #137).
  */
@@ -85,6 +86,15 @@ function isUnreadableConfigFile(err: unknown, configDir: string): err is Filesys
 }
 
 /**
+ * Errno codes handled by `isUnreadableConfigFile` that are actually
+ * permission problems. `undefined` (no errno code recovered — see
+ * `FilesystemError.code`'s docs) is treated the same way, conservatively:
+ * it's the pre-#141 shape, and a permissions hint is still broadly correct
+ * for a read failure of unknown cause.
+ */
+const PERMISSION_ERROR_CODES = new Set(['EACCES', 'EPERM'])
+
+/**
  * Build the CLI-native remediation for an unreadable `config.json`.
  *
  * Regression: issue #114 fixed this wrong-audience remediation for parse and
@@ -92,9 +102,11 @@ function isUnreadableConfigFile(err: unknown, configDir: string): err is Filesys
  * EACCES/EPERM `config.json`, e.g. a root-owned or chmod'd file) still fell
  * through to `formatError`'s generic `Error` branch, printing the library's
  * own message — which still names `install @vaultkeeper/cli` (issue #137).
- * The remediation here deliberately does NOT suggest `config init --force`:
- * that command would hit the exact same permission error trying to write the
- * replacement file, so it's a dead end for this failure mode.
+ * The remediation here deliberately does NOT suggest `config init --force`
+ * for any variant below: that command would either hit the exact same read
+ * failure trying to write the replacement file (a permission problem) or be
+ * the wrong fix entirely (e.g. overwriting a directory doesn't make it a
+ * file) — a dead end either way.
  *
  * Review follow-up (issue #137, PR #158): an earlier draft suggested running
  * `ls -l <path>` as an example command. That's POSIX-only — confusing on
@@ -102,12 +114,27 @@ function isUnreadableConfigFile(err: unknown, configDir: string): err is Filesys
  * path unquoted, which breaks if it contains spaces/metacharacters (e.g. a
  * user-supplied `--config-dir`). Platform-neutral prose avoids both problems
  * without introducing platform-branching for a single message.
+ *
+ * Review follow-up (issue #137, PR #158): `isUnreadableConfigFile` matches
+ * *any* read-path `FilesystemError` on `config.json`, not only permission
+ * failures — `EISDIR`, `ENOSPC`-adjacent codes, etc. can also reach here, and
+ * asserting "the current user cannot read it" would be an outright wrong
+ * diagnosis for those. `FilesystemError.code` (added in #141) lets this
+ * branch on the actual errno rather than assume permissions: a genuine
+ * permission code (or no code at all, conservatively) keeps the permissions
+ * wording; any other code gets an honest, code-naming message instead.
  */
 function formatConfigReadError(err: FilesystemError): string {
+  if (err.code === undefined || PERMISSION_ERROR_CODES.has(err.code)) {
+    return (
+      `${err.name}: The config at \`${err.path}\` could not be read — ` +
+      "check the file's permissions and ownership, and that it exists — the " +
+      'current user cannot read it. Then try again.'
+    )
+  }
   return (
-    `${err.name}: The config at \`${err.path}\` could not be read — ` +
-    "check the file's permissions and ownership, and that it exists — the " +
-    'current user cannot read it. Then try again.'
+    `${err.name}: The config at \`${err.path}\` could not be read (${err.code}) — ` +
+    'check that the path is a regular, readable file, then try again.'
   )
 }
 

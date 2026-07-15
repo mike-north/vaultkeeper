@@ -90,6 +90,11 @@ describe('formatError', () => {
     })
   })
 
+  /** Build a Node.js-shaped filesystem error with a `code` (e.g. 'EACCES'). */
+  function fsError(code: string, message: string): NodeJS.ErrnoException {
+    return Object.assign(new Error(message), { code })
+  }
+
   // Issue #137: an unreadable config.json (EACCES/EPERM) throws
   // FilesystemError, not ConfigParseError/ConfigValidationError, so #129/#114's
   // fix didn't cover it — formatError fell through to the generic `Error`
@@ -99,7 +104,7 @@ describe('formatError', () => {
   // hit the same permission error trying to write the replacement file), and
   // points at checking permissions instead.
   describe('unreadable config.json gets a CLI-native remediation (issue #137)', () => {
-    it('rewrites a read-permission FilesystemError on config.json to a CLI-native message', () => {
+    it('rewrites a read FilesystemError with no errno code (pre-#141 shape) to permissions wording, conservatively', () => {
       const configPath = path.join(CONFIG_DIR, 'config.json')
       const err = new FilesystemError(
         `Cannot read config file at ${configPath}: permission denied. ` +
@@ -116,6 +121,51 @@ describe('formatError', () => {
       expect(formatted).not.toContain('install @vaultkeeper/cli')
       expect(formatted).not.toContain('config init --force')
       expect(formatted.toLowerCase()).toContain('permission')
+    })
+
+    // Review follow-up (issue #137, PR #158): FilesystemError.code (added in
+    // #141) lets the CLI distinguish an actual permission failure (EACCES,
+    // EPERM) from any other read errno — a genuine permission code keeps the
+    // permissions wording.
+    it('rewrites an EACCES-coded FilesystemError to permissions wording', () => {
+      const configPath = path.join(CONFIG_DIR, 'config.json')
+      const err = new FilesystemError(
+        `Cannot read config file at ${configPath}: permission denied.`,
+        configPath,
+        'read',
+        fsError('EACCES', 'permission denied'),
+      )
+
+      const formatted = formatError(err, CONFIG_DIR)
+
+      expect(formatted).toContain(configPath)
+      expect(formatted.toLowerCase()).toContain('permission')
+      expect(formatted).not.toContain('install @vaultkeeper/cli')
+      expect(formatted).not.toContain('config init --force')
+    })
+
+    // Review follow-up (issue #137, PR #158): isUnreadableConfigFile matches
+    // *any* read-path FilesystemError on config.json, including non-permission
+    // failures like EISDIR (e.g. config.json is actually a directory). The
+    // old unconditional "the current user cannot read it" wording would be a
+    // wrong diagnosis here — the message must instead name the actual errno
+    // and avoid the permissions claim it can't back up.
+    it('rewrites an EISDIR-coded FilesystemError to honest, code-naming wording (not a permissions claim)', () => {
+      const configPath = path.join(CONFIG_DIR, 'config.json')
+      const err = new FilesystemError(
+        `Cannot read config file at ${configPath}: EISDIR.`,
+        configPath,
+        'read',
+        fsError('EISDIR', 'illegal operation on a directory'),
+      )
+
+      const formatted = formatError(err, CONFIG_DIR)
+
+      expect(formatted).toContain(configPath)
+      expect(formatted).toContain('EISDIR')
+      expect(formatted.toLowerCase()).not.toContain('permission')
+      expect(formatted).not.toContain('install @vaultkeeper/cli')
+      expect(formatted).not.toContain('config init --force')
     })
 
     // Review follow-up (PR #158): an earlier draft suggested `ls -l <path>`
