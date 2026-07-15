@@ -1,5 +1,5 @@
 ---
-'vaultkeeper': patch
+'vaultkeeper': minor
 '@vaultkeeper/cli': patch
 ---
 
