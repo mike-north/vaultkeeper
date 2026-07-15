@@ -52,9 +52,9 @@ pnpm add vaultkeeper
 pnpm add -D @types/node
 ```
 
-**Supported TypeScript version:** 5.x. This isn't a `peerDependencies` entry — `typescript` isn't a runtime dependency of anything that imports this package, only your own `tsc`/typecheck step needs it. The shipped `.d.ts` output relies on `verbatimModuleSyntax`, which requires TypeScript >= 5.0; a bare `npm install -D typescript` on a fresh project installs the current major, which satisfies this floor.
+**Supported TypeScript version:** requires TypeScript 5.x to typecheck against the shipped `.d.ts` files — the output relies on `verbatimModuleSyntax`, which requires TypeScript >= 5.0. A bare `npm install -D typescript` on a fresh project installs the current major, which satisfies this floor.
 
-The package ships both ESM (`import`) and CommonJS (`require()`) builds via its `exports` map, so it works whether your project has `"type": "module"` set or not — see the [TypeScript quick start](#typescript-quick-start) below for both forms.
+The package ships both ESM (`import`) and CommonJS (`require()`) builds. The `exports` map selects the correct build automatically, but consumers still need the standard ESM/CJS project setup (e.g. `"type": "module"` for ESM) — see the [TypeScript quick start](#typescript-quick-start) below for both forms.
 
 ### WASM SDK
 

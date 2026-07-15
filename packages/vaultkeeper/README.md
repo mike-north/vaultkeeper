@@ -16,14 +16,14 @@ secret never appears in a return value.
 pnpm add vaultkeeper
 ```
 
-**Requirements:** Node >= 20, TypeScript 5.x (if you typecheck against the shipped `.d.ts` files;
-`verbatimModuleSyntax`-era output needs TypeScript >= 5.0). This isn't a `peerDependencies` entry —
-`typescript` only matters if your own project runs `tsc` against this package.
+**Requirements:** Node >= 20. Typechecking against the shipped `.d.ts` files requires TypeScript
+5.x — the output relies on `verbatimModuleSyntax`, which requires TypeScript >= 5.0.
 
 ## Quick start
 
-The package ships both ESM and CommonJS builds, selected automatically via `exports` based on how
-you import it — no extra configuration needed either way.
+The package ships both ESM and CommonJS builds. The `exports` map selects the correct build
+automatically, but consumers still need the standard ESM/CJS project setup (e.g.
+`"type": "module"` for ESM) — see the two forms below.
 
 **ESM** (`import`) — requires `"type": "module"` in your `package.json` (or an ESM-capable
 loader/bundler); a default `npm init -y` project is CommonJS and needs that field added first:
@@ -197,8 +197,8 @@ generically, or catch a specific subclass for targeted handling. The most common
 | `AccessorConsumedError` | `SecretAccessor.read()` called after it was already consumed                                              |
 | `InvalidAlgorithmError` | Signing/verifying with a disallowed algorithm (see [Signing and verification](#signing-and-verification)) |
 
-The full hierarchy (23 classes covering backend, config, key-rotation, and filesystem failures too)
-is documented on each class's JSDoc in the package's shipped `.d.ts`, and enumerated in the
+The full hierarchy — covering backend, config, key-rotation, and filesystem failures too — is
+documented on each class's JSDoc in the package's shipped `.d.ts`, and enumerated in the
 [repository README](https://github.com/mike-north/vaultkeeper#readme).
 
 ## Testing against this library

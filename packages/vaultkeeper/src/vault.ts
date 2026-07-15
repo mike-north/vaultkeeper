@@ -615,7 +615,7 @@ export class VaultKeeper {
   /**
    * Verify a signature using a public key.
    *
-   * This is a static, **synchronous** method — it returns `boolean`, not
+   * This is a static, synchronous method — it returns `boolean`, not
    * `Promise<boolean>`, and no VaultKeeper instance, secrets, or capability
    * tokens are required. It is safe to call from CI or any context that has
    * access to public key material.
