@@ -74,7 +74,7 @@ describe('TestVault', () => {
   })
 
   it('should store and retrieve secrets through the full vault flow', async () => {
-    await vault.backend.store('test-secret', 'my-secret-value')
+    await vault.store('test-secret', 'my-secret-value')
     const jwe = await vault.keeper.setup('test-secret')
     expect(typeof jwe).toBe('string')
     expect(jwe.length).toBeGreaterThan(0)
@@ -98,5 +98,33 @@ describe('TestVault', () => {
 
   it('should fail to setup with nonexistent secret', async () => {
     await expect(vault.keeper.setup('nonexistent')).rejects.toThrow()
+  })
+
+  describe('store() convenience method', () => {
+    it('stores a secret accessible through the full vault flow', async () => {
+      await vault.store('conv-secret', 'conv-value')
+      const jwe = await vault.keeper.setup('conv-secret')
+      const { token, vaultResponse } = await vault.keeper.authorize(jwe)
+      expect(token).toBeDefined()
+      expect(vaultResponse.keyStatus).toBe('current')
+    })
+
+    it('delegates to backend.store()', async () => {
+      await vault.store('delegate-test', 'some-value')
+      expect(await vault.backend.retrieve('delegate-test')).toBe('some-value')
+    })
+  })
+
+  describe('delete() convenience method', () => {
+    it('removes a previously stored secret', async () => {
+      await vault.store('to-delete', 'val')
+      expect(await vault.backend.exists('to-delete')).toBe(true)
+      await vault.delete('to-delete')
+      expect(await vault.backend.exists('to-delete')).toBe(false)
+    })
+
+    it('does not throw when deleting a nonexistent secret', async () => {
+      await expect(vault.delete('nonexistent')).resolves.toBeUndefined()
+    })
   })
 })
