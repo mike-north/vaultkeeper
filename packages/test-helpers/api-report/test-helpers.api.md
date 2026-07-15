@@ -33,8 +33,10 @@ export class InMemoryBackend implements ListableBackend {
 export class TestVault {
     readonly backend: InMemoryBackend;
     static create(options?: TestVaultOptions): Promise<TestVault>;
+    delete(name: string): Promise<void>;
     readonly keeper: VaultKeeper;
     reset(): void;
+    store(name: string, value: string): Promise<void>;
 }
 
 // @public
