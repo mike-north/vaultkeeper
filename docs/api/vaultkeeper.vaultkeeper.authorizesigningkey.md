@@ -44,7 +44,7 @@ string
 
 </td><td>
 
-Caller-facing signing key name.
+Caller-facing signing key name. Must not contain `':'`<!-- -->.
 
 
 </td></tr>
@@ -61,4 +61,6 @@ An opaque [CapabilityToken](./vaultkeeper.capabilitytoken.md) usable with `sign(
 {<!-- -->SigningNotSupportedError<!-- -->} If the active backend cannot sign.
 
 {<!-- -->SigningKeyNotFoundError<!-- -->} If no signing key exists under `name`<!-- -->.
+
+{<!-- -->VaultError<!-- -->} If `name` is empty or contains `':'`<!-- -->.
 

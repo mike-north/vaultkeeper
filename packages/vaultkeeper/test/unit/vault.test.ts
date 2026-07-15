@@ -9,6 +9,7 @@ import {
   AuthorizationDeniedError,
   SigningNotSupportedError,
   InvalidKeyMaterialError,
+  VaultError,
 } from '../../src/errors.js'
 import * as jweTokenModule from '../../src/jwe/token.js'
 import * as delegatedFetchModule from '../../src/access/delegated-fetch.js'
@@ -671,6 +672,46 @@ describe('VaultKeeper', () => {
       await expect(
         VaultKeeper.verify({ payload: 'x', jws, publicKey: privatePem }),
       ).rejects.toBeInstanceOf(InvalidKeyMaterialError)
+    })
+  })
+
+  describe('reserved-namespace integrity (the signing-key: prefix)', () => {
+    // A library caller must not be able to store a secret whose name lands in
+    // the reserved signing-key namespace — that would breach the documented
+    // "a secret and a signing key can never collide under one name" guarantee.
+    // Name-creating/binding paths reject ':'; read/delete paths stay permissive
+    // so a legacy ':' secret remains reachable.
+    it('store rejects a name containing ":" with a typed error naming the reserved namespace', async () => {
+      const vault = await initVault()
+      await expect(vault.store('signing-key:foo', 'v')).rejects.toBeInstanceOf(VaultError)
+      await expect(vault.store('signing-key:foo', 'v')).rejects.toThrow(
+        /reserved internal namespace/,
+      )
+    })
+
+    it('setup rejects a name containing ":"', async () => {
+      const vault = await initVault()
+      await expect(vault.setup('signing-key:foo', { skipTrust: true })).rejects.toThrow(
+        /must not contain ':'/,
+      )
+    })
+
+    it('createSigningKey cannot escape its prefix via a crafted ":" name', async () => {
+      // The name check runs before the signing backend is even resolved, so a
+      // ':' name is rejected outright — a crafted name cannot reshape the
+      // signing-key:<name> id it is prefixed into.
+      const vault = await initVault()
+      await expect(vault.createSigningKey('foo:bar', 'EdDSA')).rejects.toThrow(
+        /must not contain ':'/,
+      )
+    })
+
+    it('delete and secretExists stay permissive for a legacy ":" secret name', async () => {
+      // Seed a legacy secret whose name contains ':' directly through the
+      // backend (simulating data written before this rule existed).
+      const vault = await initVault({ 'signing-key:legacy': 'legacy-value' })
+      await expect(vault.secretExists('signing-key:legacy')).resolves.toBe(true)
+      await expect(vault.delete('signing-key:legacy')).resolves.toBeUndefined()
     })
   })
 

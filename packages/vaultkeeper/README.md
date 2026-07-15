@@ -339,6 +339,13 @@ Signing keys are a distinct resource from secrets. A signing key's private half 
 key, exposes only its public half, and performs each signature itself, so the key never leaves the
 backend. Signatures are detached-payload Compact JWS values verifiable by any JOSE library.
 
+**Name rule.** Signing keys live under a reserved internal `signing-key:<name>` namespace, so a
+secret name and a signing-key name can never collide. To keep that guarantee, name-creating and
+name-binding calls — `store()`, `setup()`, `createSigningKey()`, `exportPublicKey()`,
+`authorizeSigningKey()` — reject a `name` containing `':'` with a `VaultError`. Read/delete/existence
+calls (`delete()`, `secretExists()`) stay permissive, so a legacy secret whose name happens to
+contain `':'` remains reachable for inspection and cleanup.
+
 ```ts
 // 1. Enroll a signing key (backend-side; the `file` backend supports this today)
 const { publicKeyPem, kid } = await vault.createSigningKey('approval-signing-key', 'EdDSA')
@@ -453,16 +460,16 @@ read-only properties for machine-readable context.
 
 **Access patterns**
 
-| Class                     | When thrown                                                                                                                                                                       |
-| ------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `FetchError`                   | Delegated `fetch()` failed before a `Response` (malformed URL, network failure) (field: `url`).                                                                                   |
-| `ExecError`                    | `exec()` request was invalid, or the command could not be started (field: `command`).                                                                                             |
-| `AccessorConsumedError`        | `SecretAccessor.read()` called after it was already consumed.                                                                                                                     |
+| Class                          | When thrown                                                                                                                                                                                       |
+| ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `FetchError`                   | Delegated `fetch()` failed before a `Response` (malformed URL, network failure) (field: `url`).                                                                                                   |
+| `ExecError`                    | `exec()` request was invalid, or the command could not be started (field: `command`).                                                                                                             |
+| `AccessorConsumedError`        | `SecretAccessor.read()` called after it was already consumed.                                                                                                                                     |
 | `SigningKeyNotFoundError`      | A named signing key does not exist (field: `keyName`); distinct from `SecretNotFoundError` — signing keys occupy their own namespace (see [Signing and verification](#signing-and-verification)). |
-| `SigningKeyAlreadyExistsError` | Enrolling a signing key whose name already exists (field: `keyName`); enrollment never overwrites (that would break pinned public keys).                                            |
-| `SigningNotSupportedError`     | The active backend does not implement the signing contract; names the backends that do (fields: `backendType`, `supportedBackends`).                                              |
-| `InvalidAlgorithmError`        | `createSigningKey()` with an unsupported signing algorithm — strict JOSE identifiers, only `EdDSA` today (fields: `algorithm`, `allowed`).                                          |
-| `InvalidKeyMaterialError`      | `verify()` given an unparseable public key, or a corrupt/tampered stored signing key — an operational fault, distinct from a signature that simply does not verify.                |
+| `SigningKeyAlreadyExistsError` | Enrolling a signing key whose name already exists (field: `keyName`); enrollment never overwrites (that would break pinned public keys).                                                          |
+| `SigningNotSupportedError`     | The active backend does not implement the signing contract; names the backends that do (fields: `backendType`, `supportedBackends`).                                                              |
+| `InvalidAlgorithmError`        | `createSigningKey()` with an unsupported signing algorithm — strict JOSE identifiers, only `EdDSA` today (fields: `algorithm`, `allowed`).                                                        |
+| `InvalidKeyMaterialError`      | `verify()` given an unparseable public key, or a corrupt/tampered stored signing key — an operational fault, distinct from a signature that simply does not verify.                               |
 
 **Config, filesystem & key rotation**
 

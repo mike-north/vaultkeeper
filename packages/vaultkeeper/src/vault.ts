@@ -439,8 +439,11 @@ export class VaultKeeper {
    * `store()` method. If a secret with the same name already exists, it is
    * overwritten.
    *
-   * @param name - Identifier for the secret.
+   * @param name - Identifier for the secret. Must not contain `':'` — that
+   *   character is reserved for the internal `signing-key:` namespace, so a
+   *   secret name can never collide with a signing key.
    * @param value - The secret value to store.
+   * @throws {VaultError} If `name` is empty or contains `':'`.
    * @public
    */
   async store(name: string, value: string): Promise<void> {
@@ -459,7 +462,8 @@ export class VaultKeeper {
    * @public
    */
   async delete(name: string): Promise<void> {
-    VaultKeeper.#validateName(name, 'secret')
+    // Permissive: a legacy secret whose name contains ':' must remain deletable.
+    VaultKeeper.#validateName(name, 'secret', false)
     const backend = this.#requireBackend()
     await backend.delete(name)
   }
@@ -479,7 +483,8 @@ export class VaultKeeper {
    * @public
    */
   async secretExists(name: string): Promise<boolean> {
-    VaultKeeper.#validateName(name, 'secret')
+    // Permissive: a legacy secret whose name contains ':' must remain checkable.
+    VaultKeeper.#validateName(name, 'secret', false)
     const backend = this.#requireBackend()
     return backend.exists(name)
   }
@@ -510,10 +515,12 @@ export class VaultKeeper {
    * const devJwe = await vault.setup('MY_API_KEY', { skipTrust: true })
    * ```
    *
-   * @param secretName - Identifier for the secret
+   * @param secretName - Identifier for the secret. Must not contain `':'` (the
+   *   reserved `signing-key:` namespace separator).
    * @param options - Setup options; must carry exactly one of `executablePath`
    *   or `skipTrust: true`
    * @returns Compact JWE string
+   * @throws {VaultError} If `secretName` is empty or contains `':'`.
    * @throws {@link ExecutableTrustRequiredError} If neither `executablePath`
    *   nor `skipTrust: true` is provided, if both are, or if `executablePath` is
    *   the retired legacy `'dev'` opt-out sentinel (use `skipTrust: true`).
@@ -725,12 +732,14 @@ export class VaultKeeper {
    * distinct from secrets, so a signing key and a secret can share a name
    * without colliding, and a signing key can never be read as a secret.
    *
-   * @param name - Caller-facing signing key name.
+   * @param name - Caller-facing signing key name. Must not contain `':'` (the
+   *   `signing-key:` namespace separator).
    * @param algorithm - The JOSE signing algorithm (currently only `'EdDSA'`).
    * @returns The public half of the newly enrolled key.
    * @throws {SigningNotSupportedError} If the active backend cannot sign.
    * @throws {InvalidAlgorithmError} If `algorithm` is not supported.
-   * @throws {VaultError} If a signing key already exists under `name`.
+   * @throws {VaultError} If `name` is empty or contains `':'`, or a signing key
+   *   already exists under `name`.
    * @public
    */
   async createSigningKey(name: string, algorithm: SigningAlgorithm): Promise<SigningPublicKey> {
@@ -746,10 +755,11 @@ export class VaultKeeper {
   /**
    * Export the SPKI PEM public key for the signing key named `name`.
    *
-   * @param name - Caller-facing signing key name.
+   * @param name - Caller-facing signing key name. Must not contain `':'`.
    * @returns The public key material (SPKI PEM, algorithm, kid).
    * @throws {SigningNotSupportedError} If the active backend cannot sign.
    * @throws {SigningKeyNotFoundError} If no signing key exists under `name`.
+   * @throws {VaultError} If `name` is empty or contains `':'`.
    * @public
    */
   async exportPublicKey(name: string): Promise<SigningPublicKey> {
@@ -765,10 +775,11 @@ export class VaultKeeper {
    * — never any key material — and is accepted only by {@link VaultKeeper.sign}.
    * Passing it to `getSecret`/`fetch`/`exec` is rejected.
    *
-   * @param name - Caller-facing signing key name.
+   * @param name - Caller-facing signing key name. Must not contain `':'`.
    * @returns An opaque {@link CapabilityToken} usable with `sign()`.
    * @throws {SigningNotSupportedError} If the active backend cannot sign.
    * @throws {SigningKeyNotFoundError} If no signing key exists under `name`.
+   * @throws {VaultError} If `name` is empty or contains `':'`.
    * @public
    */
   async authorizeSigningKey(name: string): Promise<CapabilityToken> {
@@ -1055,11 +1066,28 @@ export class VaultKeeper {
   /**
    * Validate a caller-supplied resource name. `kind` names the resource in the
    * error so a signing-key caller is not told about a "secret".
+   *
+   * When `enforceReserved` is true (the default, used by name-creating/binding
+   * paths — `store`/`setup` and every signing-key operation), the name may not
+   * contain `':'`. The `signing-key:<name>` prefix is a reserved internal
+   * namespace, so forbidding `':'` at creation time is what actually enforces
+   * the documented guarantee that a secret and a signing key can never collide
+   * under one name — the CLI's name pattern already forbids `':'`, and this
+   * closes the same hole for direct library callers. Read/delete/existence
+   * paths pass `false` so a legacy secret whose name contains `':'` (stored
+   * before this rule, or seeded directly through a backend) stays reachable for
+   * inspection and cleanup.
    */
-  static #validateName(name: string, kind: 'secret' | 'signing key'): void {
+  static #validateName(name: string, kind: 'secret' | 'signing key', enforceReserved = true): void {
+    const noun = kind === 'secret' ? 'Secret' : 'Signing key'
     if (name.trim() === '') {
-      const noun = kind === 'secret' ? 'Secret' : 'Signing key'
       throw new VaultError(`${noun} name must not be empty`)
+    }
+    if (enforceReserved && name.includes(':')) {
+      throw new VaultError(
+        `${noun} name must not contain ':'. The 'signing-key:' prefix is a reserved internal ` +
+          'namespace, so a secret and a signing key can never collide under one name.',
+      )
     }
   }
 
