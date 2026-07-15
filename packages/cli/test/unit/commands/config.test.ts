@@ -90,6 +90,10 @@ describe('configCommand', () => {
     it('should overwrite an existing config with --force and return 0', async () => {
       const { configCommand } = await import('../../../src/commands/config.js')
       await configCommand(['init'], configDir)
+      // Reset the captured buffer so this assertion validates only the
+      // forced init's own output, not output accumulated from the first
+      // (unforced) init above.
+      stdoutOutput = ''
       const code = await configCommand(['init', '--force'], configDir)
       expect(code).toBe(0)
       expect(stdoutOutput).toContain('Config created at')
