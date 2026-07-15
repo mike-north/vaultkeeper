@@ -79,13 +79,16 @@ describe('README access-pattern names resolve to real exports', () => {
   })
 
   it('the "Which package should I use?" delegated-access-patterns list names only real VaultKeeper methods', () => {
-    const match = /delegated access patterns \(([^)]*)\)/.exec(README)
+    // Match the backtick-delimited items themselves (`fetch`, `exec`,
+    // `getSecret()`, ...) rather than stopping at the segment's first `)` —
+    // a naive `\(([^)]*)\)` capture stops inside `getSecret()`'s own parens,
+    // truncating the list before it reaches the real closing paren.
+    const match = /delegated access patterns \(((?:`[^`]+`,?\s*)+)\)/.exec(README)
     expect(match, 'expected to find the delegated access patterns list in README.md').not.toBeNull()
 
-    const names = (match?.[1] ?? '')
-      .split(',')
-      .map((s) => s.replace(/[`()]/g, '').trim())
-      .filter((s) => s.length > 0)
+    const names = [...(match?.[1] ?? '').matchAll(/`([^`]+)`/g)]
+      .map(([, name]) => name?.replace(/\(\)$/, '').trim())
+      .filter((s): s is string => s !== undefined && s.length > 0)
     expect(names.length).toBeGreaterThan(0)
 
     const unknown = names.filter((n) => !methods.has(n) && !publicExports.has(n))
@@ -128,8 +131,20 @@ describe('README default-backend statement is internally consistent (issue #102)
     expect(noteDefaultClause).not.toMatch(/keychain|dpapi|native credential store/i)
   })
 
-  it('does not contain a stale [!WARNING] block warning that a bare init targets the real credential store', () => {
-    expect(README.includes('[!WARNING]')).toBe(false)
+  it('no [!WARNING] block claims a bare zero-config init targets the real/native credential store', () => {
+    // Narrowly targets the specific stale claim this issue is about (see the
+    // pre-#108 text: "a bare `VaultKeeper.init()` ... targets your **real OS
+    // credential store**"), not the mere presence of a [!WARNING] block —
+    // an unrelated warning added later must not trip this check.
+    const badClaim =
+      /bare\s+(`vaultkeeper config init`|`VaultKeeper\.init\(\)`)[\s\S]{0,200}?(targets?|resolves? to)[\s\S]{0,80}?(real|platform-native)[\s\S]{0,40}?(credential store|keychain|dpapi)/i
+    const warningBlocks = [...README.matchAll(/> \[!WARNING\][\s\S]*?(?=\n\n)/g)].map((m) => m[0])
+    for (const block of warningBlocks) {
+      expect(
+        block,
+        `[!WARNING] block reintroduces the stale claim that a zero-config init targets the native store:\n${block}`,
+      ).not.toMatch(badClaim)
+    }
   })
 })
 
