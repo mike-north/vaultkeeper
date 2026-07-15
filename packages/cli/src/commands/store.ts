@@ -4,14 +4,15 @@ import { shouldSkipDoctor } from '../skip-doctor.js'
 import { formatError } from '../output.js'
 import { CONFIG_DIR_HELP_OPTION, CONFIG_DIR_HELP_ENV } from '../config-dir.js'
 import { configFileExists, noConfigMessage } from '../config-status.js'
-import { SECRET_NAME_PATTERN } from '../secret-name.js'
+import { SECRET_NAME_PATTERN, SECRET_NAME_RULE } from '../secret-name.js'
 
 function printStoreHelp(): void {
   process.stdout.write(
     'Usage: echo "secret" | vaultkeeper store --name <name>\n\n' +
       'Options:\n' +
-      '  --name <name>      Name to store the secret under. Must be non-empty\n' +
-      '                     and contain only letters, digits, and . _ - /\n' +
+      // Derived from SECRET_NAME_RULE (the single source of truth for the
+      // pattern's human description) so help and validation can't drift.
+      `  --name <name>      Name to store the secret under; ${SECRET_NAME_RULE}\n` +
       '  --skip-doctor      Skip doctor preflight checks\n' +
       CONFIG_DIR_HELP_OPTION +
       '  -h, --help         Show this help message\n\n' +
@@ -62,9 +63,7 @@ export async function storeCommand(args: string[], configDir: string): Promise<n
   // `store --name ""` reached VaultKeeper.store(), which threw a generic
   // VaultError with exit 1 instead of a usage error (issue #69).
   if (!SECRET_NAME_PATTERN.test(values.name)) {
-    process.stderr.write(
-      'Error: --name must be non-empty and contain only letters, digits, and . _ - /\n',
-    )
+    process.stderr.write(`Error: --name ${SECRET_NAME_RULE}\n`)
     process.stderr.write('Usage: echo "secret" | vaultkeeper store --name <name>\n')
     // Exit code 2: usage error (invalid flag value)
     return 2

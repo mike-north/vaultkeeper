@@ -444,7 +444,7 @@ export class VaultKeeper {
    * @public
    */
   async store(name: string, value: string): Promise<void> {
-    VaultKeeper.#validateSecretName(name)
+    VaultKeeper.#validateName(name, 'secret')
     const backend = this.#requireBackend()
     await backend.store(name, value)
   }
@@ -459,7 +459,7 @@ export class VaultKeeper {
    * @public
    */
   async delete(name: string): Promise<void> {
-    VaultKeeper.#validateSecretName(name)
+    VaultKeeper.#validateName(name, 'secret')
     const backend = this.#requireBackend()
     await backend.delete(name)
   }
@@ -479,7 +479,7 @@ export class VaultKeeper {
    * @public
    */
   async secretExists(name: string): Promise<boolean> {
-    VaultKeeper.#validateSecretName(name)
+    VaultKeeper.#validateName(name, 'secret')
     const backend = this.#requireBackend()
     return backend.exists(name)
   }
@@ -524,7 +524,7 @@ export class VaultKeeper {
    *   recording the executable.
    */
   async setup(secretName: string, options: SetupOptions): Promise<string> {
-    VaultKeeper.#validateSecretName(secretName)
+    VaultKeeper.#validateName(secretName, 'secret')
     const backend = this.#requireBackend()
 
     // Resolve (and validate) the executable-trust choice first — before reading
@@ -733,7 +733,7 @@ export class VaultKeeper {
    * @public
    */
   async createSigningKey(name: string, algorithm: SigningAlgorithm): Promise<SigningPublicKey> {
-    VaultKeeper.#validateSecretName(name)
+    VaultKeeper.#validateName(name, 'signing key')
     const backend = this.#requireSigningBackend()
     const id = VaultKeeper.#signingKeyId(name)
     // The backend validates the algorithm (throws InvalidAlgorithmError) — it is
@@ -752,7 +752,7 @@ export class VaultKeeper {
    * @public
    */
   async exportPublicKey(name: string): Promise<SigningPublicKey> {
-    VaultKeeper.#validateSecretName(name)
+    VaultKeeper.#validateName(name, 'signing key')
     const backend = this.#requireSigningBackend()
     return backend.getPublicKey(VaultKeeper.#signingKeyId(name))
   }
@@ -771,7 +771,7 @@ export class VaultKeeper {
    * @public
    */
   async authorizeSigningKey(name: string): Promise<CapabilityToken> {
-    VaultKeeper.#validateSecretName(name)
+    VaultKeeper.#validateName(name, 'signing key')
     const backend = this.#requireSigningBackend()
     const id = VaultKeeper.#signingKeyId(name)
     // getPublicKey validates the key exists (throws SigningKeyNotFoundError).
@@ -1051,9 +1051,14 @@ export class VaultKeeper {
     return claims
   }
 
-  static #validateSecretName(name: string): void {
+  /**
+   * Validate a caller-supplied resource name. `kind` names the resource in the
+   * error so a signing-key caller is not told about a "secret".
+   */
+  static #validateName(name: string, kind: 'secret' | 'signing key'): void {
     if (name.trim() === '') {
-      throw new VaultError('Secret name must not be empty')
+      const noun = kind === 'secret' ? 'Secret' : 'Signing key'
+      throw new VaultError(`${noun} name must not be empty`)
     }
   }
 

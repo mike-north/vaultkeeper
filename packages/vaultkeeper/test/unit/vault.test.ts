@@ -581,6 +581,31 @@ describe('VaultKeeper', () => {
     })
   })
 
+  describe('signing-key name validation names the signing-key resource', () => {
+    // The error must name what the caller actually passed — a bad signing-key
+    // name must not be reported as a "secret" name.
+    it('createSigningKey rejects an empty name with a signing-key message', async () => {
+      const vault = await initVault()
+      await expect(vault.createSigningKey('', 'EdDSA')).rejects.toThrow(
+        'Signing key name must not be empty',
+      )
+    })
+
+    it('exportPublicKey rejects a whitespace-only name with a signing-key message', async () => {
+      const vault = await initVault()
+      await expect(vault.exportPublicKey('   ')).rejects.toThrow(
+        'Signing key name must not be empty',
+      )
+    })
+
+    it('authorizeSigningKey rejects an empty name with a signing-key message', async () => {
+      const vault = await initVault()
+      await expect(vault.authorizeSigningKey('')).rejects.toThrow(
+        'Signing key name must not be empty',
+      )
+    })
+  })
+
   describe('sign rejects a non-signing token', () => {
     // AC3 defense in depth: sign() requires a signing-key capability token.
     // An ordinary secret token (from authorize()) must be rejected before any
