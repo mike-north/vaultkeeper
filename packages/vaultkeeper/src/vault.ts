@@ -1085,8 +1085,7 @@ export class VaultKeeper {
     }
     if (enforceReserved && name.includes(':')) {
       throw new VaultError(
-        `${noun} name must not contain ':'. The 'signing-key:' prefix is a reserved internal ` +
-          'namespace, so a secret and a signing key can never collide under one name.',
+        `${noun} name must not contain ':'. The 'signing-key:' prefix is a reserved internal namespace, so a secret and a signing key can never collide under one name.`,
       )
     }
   }
