@@ -4,12 +4,14 @@
 
 import * as crypto from 'node:crypto'
 import * as fs from 'node:fs'
+import { FilesystemError } from '../errors.js'
 
 /**
  * Compute the SHA-256 digest of the file at `filePath`.
  *
  * @param filePath - Absolute or relative path to the binary to hash.
  * @returns Hex-encoded SHA-256 digest string.
+ * @throws {@link FilesystemError} If the file does not exist or cannot be read.
  * @internal
  */
 export function hashExecutable(filePath: string): Promise<string> {
@@ -26,7 +28,13 @@ export function hashExecutable(filePath: string): Promise<string> {
     })
 
     stream.on('error', (err: Error) => {
-      reject(err)
+      reject(
+        new FilesystemError(
+          `Cannot read executable at ${filePath}: ${err.message}`,
+          filePath,
+          'read',
+        ),
+      )
     })
   })
 }

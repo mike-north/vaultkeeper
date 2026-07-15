@@ -76,6 +76,8 @@ Compact JWE string
 
 [IdentityMismatchError](./vaultkeeper.identitymismatcherror.md) If `executablePath`<!-- -->'s current hash no longer matches a previously approved value (TOFU conflict).
 
+[FilesystemError](./vaultkeeper.filesystemerror.md) If `executablePath` cannot be read or hashed for verification, or the trust manifest cannot be read or written while recording the executable.
+
 ## Remarks
 
 `setup()` requires an explicit executable-trust decision — it has no default and never silently skips verification. Pass [SetupOptions.executablePath](./vaultkeeper.setupoptions.executablepath.md) (the calling executable's real path) to run trust-on-first-use verification, or [SetupOptions.skipTrust](./vaultkeeper.setupoptions.skiptrust.md) to deliberately skip it in development. Supplying neither, or both, throws [ExecutableTrustRequiredError](./vaultkeeper.executabletrustrequirederror.md)<!-- -->.

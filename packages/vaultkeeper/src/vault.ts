@@ -433,6 +433,9 @@ export class VaultKeeper {
    *   nor `skipTrust: true` is provided (or both are).
    * @throws {@link IdentityMismatchError} If `executablePath`'s current hash no
    *   longer matches a previously approved value (TOFU conflict).
+   * @throws {@link FilesystemError} If `executablePath` cannot be read or hashed
+   *   for verification, or the trust manifest cannot be read or written while
+   *   recording the executable.
    */
   async setup(secretName: string, options?: SetupOptions): Promise<string> {
     VaultKeeper.#validateSecretName(secretName)

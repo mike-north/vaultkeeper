@@ -375,6 +375,32 @@ describe('setup() requires an explicit executable-trust choice (#123)', () => {
     expect(Object.keys(entries)).toEqual([path.resolve(caller)])
     expect((await vault.checkExecutableTrust(caller)).trusted).toBe(true)
   })
+
+  // Regression for PR #131 review thread 3588502436 (#123): with executablePath
+  // now the primary production path, an unreadable/missing executable makes
+  // setup()'s verification hash the file via raw fs, which without wrapping
+  // throws a plain Error/TypeError. setup() must surface a typed FilesystemError
+  // (a VaultError subclass) naming the resolved path, so callers of setup()
+  // consistently receive the typed-error contract — never a bare Error.
+  it('throws a typed FilesystemError when a provided executablePath cannot be read', async () => {
+    await backend.store('API_KEY', 's3cr3t')
+    const missing = path.join(scratchDir, 'does-not-exist.sh')
+    const vault = await createVault()
+
+    const err = await vault.setup('API_KEY', { executablePath: missing }).then(
+      () => {
+        throw new Error('expected setup to reject')
+      },
+      (e: unknown) => e,
+    )
+
+    expect(err).toBeInstanceOf(FilesystemError)
+    expect(err).toBeInstanceOf(VaultError)
+    if (!(err instanceof FilesystemError)) throw new Error('unreachable')
+    expect(err.message).toContain(path.resolve(missing))
+    // No token was minted, so nothing was recorded to the manifest either.
+    expect(await manifestExists()).toBe(false)
+  })
 })
 
 describe('trust-only operations without a healthy backend (review thread 3582165455)', () => {
