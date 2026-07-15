@@ -245,6 +245,14 @@ export class VaultKeeper {
    */
   readonly #persistKeys: boolean
   #backend: SecretBackend | undefined
+  /**
+   * Whether {@link #backend} was injected via `init({ backend })` rather than
+   * lazily resolved from `#config.backends`. Distinguishes the two so that
+   * {@link activeBackendType} reports the injected instance directly instead of
+   * consulting the (empty) config backend list. Stays correct after a lazy
+   * resolution populates {@link #backend} in the config-driven path.
+   */
+  readonly #backendInjected: boolean
 
   private constructor(
     config: VaultConfig,
@@ -258,6 +266,7 @@ export class VaultKeeper {
     this.#configDir = configDir
     this.#persistKeys = persistKeys
     this.#backend = backend
+    this.#backendInjected = backend !== undefined
   }
 
   /**
@@ -332,6 +341,12 @@ export class VaultKeeper {
    * never throws for an unavailable or unregistered backend — unlike a secret
    * operation — so it is safe to call purely to introspect an instance.
    *
+   * When a backend was injected via `init({ backend })`, config-based
+   * resolution is bypassed entirely and this reports the injected instance's
+   * declared `type` (see {@link SecretBackend}) — or the stable sentinel
+   * `'custom'` if it declares an empty type. It never throws in the injected
+   * path.
+   *
    * Use it to confirm which backend an instance resolved to, especially when
    * no config file exists and the safe zero-config default applies (see
    * {@link defaultBackendType}). With no config this reads `file` on every
@@ -341,10 +356,17 @@ export class VaultKeeper {
    *
    * @throws A {@link BackendUnavailableError} only when the configuration has
    * no enabled backend at all (a configuration error, not a backend fault).
+   * This can only happen in the config-driven path; an injected backend never
+   * throws here.
    *
    * @public
    */
   get activeBackendType(): string {
+    if (this.#backendInjected && this.#backend !== undefined) {
+      // An injected backend wins over config resolution (see init()); report
+      // its declared type, falling back to a stable sentinel if it declares none.
+      return this.#backend.type === '' ? 'custom' : this.#backend.type
+    }
     const firstEnabled = this.#config.backends.find((b) => b.enabled)
     if (firstEnabled === undefined) {
       throw new BackendUnavailableError(

@@ -113,6 +113,19 @@ const consumerSource = [
   `  })`,
   `}`,
   ``,
+  // Issue #168: read() passes the callback's return value through, so the
+  // consumer can capture a caller-derived value. This annotation fails to
+  // compile if read()'s return type regresses to `void` (TS2322).
+  `function useAccessorReturn(accessor: SecretAccessor): string {`,
+  `  return accessor.read((buf) => buf.toString('utf8'))`,
+  `}`,
+  ``,
+  // The generic return type must be inferred from the callback, not widened to
+  // a fixed type — deriving a number flows out as a number.
+  `function useAccessorReturnNumber(accessor: SecretAccessor): number {`,
+  `  return accessor.read((buf) => buf.length)`,
+  `}`,
+  ``,
   `function useSignRequest(req: SignRequest): string | Buffer {`,
   `  return req.data`,
   `}`,
@@ -130,7 +143,7 @@ const consumerSource = [
   `  await env.cleanup()`,
   `}`,
   ``,
-  `export { useAccessor, useSignRequest, useVerifyRequest, useTestVault, useCliTestEnv }`,
+  `export { useAccessor, useAccessorReturn, useAccessorReturnNumber, useSignRequest, useVerifyRequest, useTestVault, useCliTestEnv }`,
 ].join('\n')
 
 // `process.env.CI` is read once at module load, matching how

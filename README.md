@@ -192,12 +192,12 @@ const { result } = await vault.exec(token, {
   env: { MY_API_TOKEN: '{{secret}}' },
 })
 
-// 5c. Controlled direct access — buffer is zeroed after the callback returns
+// 5c. Controlled direct access — buffer is zeroed after the callback returns.
+// read() passes the callback's return value through, so you can derive a value
+// (e.g. a header string or a hash) inside the callback and capture it. Never
+// return the raw `buf` itself — it is zeroed before read() returns.
 const accessor = vault.getSecret(token)
-accessor.read((buf) => {
-  // Use buf here. Do not store a reference beyond this callback.
-  doSomethingWith(buf.toString('utf8'))
-})
+const authHeader = accessor.read((buf) => `Bearer ${buf.toString('utf8')}`)
 ```
 
 ## Storing secrets

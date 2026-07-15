@@ -146,6 +146,38 @@ describe('VaultKeeper', () => {
       })
       expect(vault.activeBackendType).toBe('unregistered-backend')
     })
+
+    // Regression for #167: with a backend injected via init({ backend }), the
+    // config-driven enabled-backend list is empty, so the getter must report
+    // the injected instance's declared `type` instead of throwing
+    // BackendUnavailableError('none-enabled').
+    it('returns the injected backend type instead of throwing (issue #167)', async () => {
+      const backend = createStatefulMockBackend() // declares type 'test'
+      const vault = await VaultKeeper.init({ backend, skipDoctor: true })
+
+      // The bug: this getter threw BackendUnavailableError before the fix.
+      expect(vault.activeBackendType).toBe('test')
+
+      // Store/retrieve still work against the same injected instance.
+      await vault.store('S', 'v')
+      expect(await backend.retrieve('S')).toBe('v')
+    })
+
+    // Edge case for #167 AC #1: an injected backend that declares an empty
+    // type falls back to the stable 'custom' sentinel rather than returning ''.
+    it('falls back to the "custom" sentinel for an injected backend with an empty type (issue #167)', async () => {
+      const backend: SecretBackend = {
+        type: '',
+        displayName: 'Anonymous Backend',
+        isAvailable: () => Promise.resolve(true),
+        store: () => Promise.resolve(),
+        retrieve: () => Promise.resolve(''),
+        delete: () => Promise.resolve(),
+        exists: () => Promise.resolve(false),
+      }
+      const vault = await VaultKeeper.init({ backend, skipDoctor: true })
+      expect(vault.activeBackendType).toBe('custom')
+    })
   })
 
   describe('init with backend option', () => {
