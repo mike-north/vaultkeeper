@@ -6,6 +6,7 @@
 
 import * as path from 'node:path'
 import { ConfigParseError, ConfigValidationError } from 'vaultkeeper'
+import type { PreflightCheckError } from 'vaultkeeper'
 
 /** Check if stdout is a TTY at call time (not module load time). */
 function isTTY(): boolean {
@@ -38,6 +39,14 @@ export function dim(text: string): string {
  * value rather than a loaded file — a case the CLI itself never hits, since
  * it only ever validates via `loadConfig`/`VaultKeeper.init`.
  */
+function configRemediation(configPath: string, location: string | undefined): string {
+  const locationSuffix = location !== undefined ? ` (at ${location})` : ''
+  return (
+    `The config at \`${configPath}\` is invalid${locationSuffix} — ` +
+    'run `vaultkeeper config init --force` to overwrite it.'
+  )
+}
+
 function formatConfigError(
   err: ConfigParseError | ConfigValidationError,
   configDir: string,
@@ -46,12 +55,20 @@ function formatConfigError(
     err instanceof ConfigParseError
       ? err.path
       : (err.configFilePath ?? path.join(configDir, 'config.json'))
-  const locationSuffix =
-    err instanceof ConfigParseError && err.location !== undefined ? ` (at ${err.location})` : ''
-  return (
-    `${err.name}: The config at \`${configPath}\` is invalid${locationSuffix} — ` +
-    'run `vaultkeeper config init --force` to overwrite it.'
-  )
+  const location = err instanceof ConfigParseError ? err.location : undefined
+  return `${err.name}: ${configRemediation(configPath, location)}`
+}
+
+/**
+ * Build the CLI-native remediation for a doctor `config` preflight failure
+ * from its structured, remediation-free {@link PreflightCheckError}. Shares
+ * the exact wording of {@link formatError}'s config-error message so `doctor`
+ * and every other command speak with one voice — and, like it, never repeats
+ * the library's "install @vaultkeeper/cli" text to a user already running
+ * the CLI.
+ */
+export function formatPreflightConfigError(error: PreflightCheckError): string {
+  return configRemediation(error.configPath, error.location)
 }
 
 /** Format an error for display on stderr. */

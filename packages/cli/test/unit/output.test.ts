@@ -1,7 +1,8 @@
 import { describe, it, expect } from 'vitest'
 import * as path from 'node:path'
 import { ConfigParseError, ConfigValidationError } from 'vaultkeeper'
-import { formatError } from '../../src/output.js'
+import { formatError, formatPreflightConfigError } from '../../src/output.js'
+import type { PreflightCheckError } from 'vaultkeeper'
 
 const CONFIG_DIR = '/home/user/.config/vaultkeeper'
 
@@ -82,5 +83,52 @@ describe('formatError', () => {
       expect(formatted).toContain(path.join(CONFIG_DIR, 'config.json'))
       expect(formatted).toContain('vaultkeeper config init --force')
     })
+  })
+})
+
+// Issue #130: `doctor`'s config preflight check carries structured error
+// context (PreflightCheckError) rather than only prose, so the CLI builds the
+// same CLI-native remediation for doctor that formatError builds for every
+// other command — never the library's "install @vaultkeeper/cli" text.
+describe('formatPreflightConfigError', () => {
+  const configPath = '/home/user/.config/vaultkeeper/config.json'
+
+  it('builds a CLI-native remediation with the path and parse location for a config-parse failure', () => {
+    const error: PreflightCheckError = {
+      kind: 'config-parse',
+      configPath,
+      location: 'line 3, column 12',
+    }
+
+    const formatted = formatPreflightConfigError(error)
+
+    expect(formatted).toContain(configPath)
+    expect(formatted).toContain('(at line 3, column 12)')
+    expect(formatted).toContain('vaultkeeper config init --force')
+    expect(formatted).not.toContain('install @vaultkeeper/cli')
+  })
+
+  it('omits the location suffix for a config-validation failure', () => {
+    const error: PreflightCheckError = { kind: 'config-validation', configPath }
+
+    const formatted = formatPreflightConfigError(error)
+
+    expect(formatted).toContain(configPath)
+    expect(formatted).not.toContain('(at ')
+    expect(formatted).toContain('vaultkeeper config init --force')
+    expect(formatted).not.toContain('install @vaultkeeper/cli')
+  })
+
+  it('shares the exact remediation wording with formatError (one voice across commands)', () => {
+    const err = new ConfigValidationError(
+      `Invalid config at ${configPath}: bad. install @vaultkeeper/cli and run ...`,
+      'version',
+      configPath,
+    )
+    // formatError prefixes the error name; the core sentence must match.
+    const errorPath = formatError(err, CONFIG_DIR)
+    const doctorPath = formatPreflightConfigError({ kind: 'config-validation', configPath })
+
+    expect(errorPath).toBe(`ConfigValidationError: ${doctorPath}`)
   })
 })
