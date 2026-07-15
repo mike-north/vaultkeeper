@@ -108,9 +108,11 @@ export class TestVault {
    * Convenience shorthand for `vault.keeper.setup(name, options)` that defaults
    * to the development-only `skipTrust: true` opt-out, so tests stay hermetic
    * (there is no real calling executable to hash). Pass `executablePath`
-   * explicitly to exercise real TOFU verification instead — when either
-   * `executablePath` or `skipTrust` is supplied, the caller's choice is passed
-   * through unchanged.
+   * explicitly to exercise real TOFU verification instead. Mirroring
+   * `VaultKeeper`'s own semantics, only `executablePath` or `skipTrust: true`
+   * count as an explicit trust choice — `skipTrust: false` is not a choice, so
+   * it is treated the same as omitting the option entirely and still receives
+   * the convenience default.
    *
    * @param name - The secret identifier.
    * @param options - Optional setup options; the trust choice defaults to
@@ -119,7 +121,7 @@ export class TestVault {
    * @public
    */
   setup(name: string, options?: SetupOptions): Promise<string> {
-    const hasTrustChoice = options?.executablePath !== undefined || options?.skipTrust !== undefined
+    const hasTrustChoice = options?.executablePath !== undefined || options?.skipTrust === true
     return this.keeper.setup(name, hasTrustChoice ? options : { ...options, skipTrust: true })
   }
 

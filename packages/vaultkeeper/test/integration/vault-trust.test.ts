@@ -334,6 +334,47 @@ describe('setup() requires an explicit executable-trust choice (#123)', () => {
     const { token } = await vault.authorize(jwe)
     expect(token).toBeDefined()
   })
+
+  // Regression for PR #131 review thread 3588295526: `skipTrust: false` is
+  // not an explicit trust choice — only `skipTrust: true` opts out, and only
+  // a provided `executablePath` opts in. Without an `executablePath`,
+  // `skipTrust: false` must behave exactly like full omission: the same typed
+  // ExecutableTrustRequiredError, not a silent 'dev' fallback. (The reported
+  // bug lived in TestVault's wrapper, not here — this test locks in that
+  // VaultKeeper.setup() itself already gets this right via `=== true`.)
+  it('throws ExecutableTrustRequiredError when skipTrust: false is given without an executablePath', async () => {
+    await backend.store('API_KEY', 's3cr3t')
+    const vault = await createVault()
+
+    const err = await vault.setup('API_KEY', { skipTrust: false }).then(
+      () => {
+        throw new Error('expected setup to reject')
+      },
+      (e: unknown) => e,
+    )
+
+    expect(err).toBeInstanceOf(ExecutableTrustRequiredError)
+    if (!(err instanceof ExecutableTrustRequiredError)) throw new Error('unreachable')
+    expect(err.reason).toBe('missing-choice')
+    expect(await manifestExists()).toBe(false)
+  })
+
+  // Regression for the same thread: skipTrust: false paired with a real
+  // executablePath is not a contradiction (skipTrust is falsy) — verification
+  // must run normally and record the hash, exactly as if skipTrust had been
+  // omitted entirely.
+  it('runs verification normally when skipTrust: false is paired with an executablePath', async () => {
+    await backend.store('API_KEY', 's3cr3t')
+    const caller = await writeExecutable('caller', 'caller-bytes\n')
+    const vault = await createVault()
+
+    const jwe = await vault.setup('API_KEY', { skipTrust: false, executablePath: caller })
+    expect(jwe.split('.')).toHaveLength(5)
+
+    const entries = await readManifestEntries()
+    expect(Object.keys(entries)).toEqual([path.resolve(caller)])
+    expect((await vault.checkExecutableTrust(caller)).trusted).toBe(true)
+  })
 })
 
 describe('trust-only operations without a healthy backend (review thread 3582165455)', () => {

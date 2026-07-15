@@ -72,5 +72,5 @@ The minted compact JWE string.
 
 ## Remarks
 
-Convenience shorthand for `vault.keeper.setup(name, options)` that defaults to the development-only `skipTrust: true` opt-out, so tests stay hermetic (there is no real calling executable to hash). Pass `executablePath` explicitly to exercise real TOFU verification instead — when either `executablePath` or `skipTrust` is supplied, the caller's choice is passed through unchanged.
+Convenience shorthand for `vault.keeper.setup(name, options)` that defaults to the development-only `skipTrust: true` opt-out, so tests stay hermetic (there is no real calling executable to hash). Pass `executablePath` explicitly to exercise real TOFU verification instead. Mirroring `VaultKeeper`<!-- -->'s own semantics, only `executablePath` or `skipTrust: true` count as an explicit trust choice — `skipTrust: false` is not a choice, so it is treated the same as omitting the option entirely and still receives the convenience default.
 

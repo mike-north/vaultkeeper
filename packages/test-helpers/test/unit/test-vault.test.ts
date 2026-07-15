@@ -116,6 +116,34 @@ describe('TestVault', () => {
       const jwe = await vault.setup('conv-secret', { skipTrust: true, ttlMinutes: 1 })
       expect(typeof jwe).toBe('string')
     })
+
+    // Regression for PR #131 review thread 3588295526: `skipTrust: false` is
+    // not an explicit trust choice — VaultKeeper only treats `skipTrust ===
+    // true` as one. Previously `options?.skipTrust !== undefined` treated the
+    // presence of the key (even when `false`) as "the caller chose", so this
+    // call skipped the convenience default and forwarded `{ skipTrust: false }`
+    // unchanged, which made the keeper throw ExecutableTrustRequiredError
+    // instead of minting a token like full omission does.
+    it('treats skipTrust: false as no choice, applying the convenience default like omission', async () => {
+      await vault.store('conv-secret', 'conv-value')
+      const jwe = await vault.setup('conv-secret', { skipTrust: false })
+      expect(jwe.split('.')).toHaveLength(5)
+      const { token } = await vault.keeper.authorize(jwe)
+      expect(token).toBeDefined()
+    })
+
+    // Regression for the same thread: when an executablePath IS supplied
+    // alongside skipTrust: false, that is a real choice and must be passed
+    // through unchanged so verification runs normally (not silently skipped).
+    it('runs verification normally when skipTrust: false is paired with an executablePath', async () => {
+      await vault.store('conv-secret', 'conv-value')
+      await expect(
+        vault.setup('conv-secret', {
+          skipTrust: false,
+          executablePath: '/nonexistent/dev-only-tool',
+        }),
+      ).rejects.toThrow()
+    })
   })
 
   describe('store() convenience method', () => {
