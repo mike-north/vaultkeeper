@@ -65,8 +65,12 @@ export async function doctorCommand(args: string[], configDir: string): Promise<
     for (const check of primaryChecks) {
       const icon = check.status === 'ok' ? '✓' : '✗'
       const version = check.version !== undefined ? ` (${check.version})` : ''
-      const reasonText =
-        check.error !== undefined ? formatPreflightConfigError(check.error) : check.reason
+      // A check carrying structured `error` context (the `config` check on an
+      // invalid file) has its full remediation printed once under "Next
+      // steps" below, so it is deliberately omitted from this inline line to
+      // avoid the duplicate the wave-4 Next-steps block introduced (issue
+      // #152). Every other check still renders its inline `reason`.
+      const reasonText = check.error !== undefined ? undefined : check.reason
       const reason = reasonText !== undefined ? ` — ${reasonText}` : ''
       process.stdout.write(`  ${icon} ${check.name}${version}${reason}\n`)
     }
@@ -94,7 +98,7 @@ export async function doctorCommand(args: string[], configDir: string): Promise<
     const nextSteps =
       invalidConfig?.error !== undefined
         ? [
-            formatPreflightConfigError(invalidConfig.error),
+            formatPreflightConfigError(invalidConfig.error, configDir),
             ...result.nextSteps.filter(
               (step) => step !== (invalidConfig.reason ?? 'Config file is invalid.'),
             ),

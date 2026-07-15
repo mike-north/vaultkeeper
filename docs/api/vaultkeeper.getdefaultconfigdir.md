@@ -6,7 +6,7 @@
 
 Return the platform-appropriate default config directory.
 
-Resolution order: the `VAULTKEEPER_CONFIG_DIR` environment variable, then the platform default (`%APPDATA%/vaultkeeper` on Windows, `~/.config/vaultkeeper` elsewhere). Consumers that also support a higher-precedence override (e.g. a CLI flag) should check that first and only fall back to this function when no override was supplied.
+Resolution order: the `VAULTKEEPER_CONFIG_DIR` environment variable, then the platform default (see `getPlatformDefaultConfigDir`<!-- -->). Consumers that also support a higher-precedence override (e.g. a CLI flag) should check that first and only fall back to this function when no override was supplied.
 
 **Signature:**
 

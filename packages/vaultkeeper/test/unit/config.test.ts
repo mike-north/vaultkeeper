@@ -5,6 +5,7 @@ import {
   validateConfig,
   loadConfig,
   getDefaultConfigDir,
+  getPlatformDefaultConfigDir,
   defaultBackendType,
   platformNativeBackendType,
 } from '../../src/config.js'
@@ -298,6 +299,44 @@ describe('getDefaultConfigDir', () => {
     const result = getDefaultConfigDir()
     expect(result).toContain('vaultkeeper')
     expect(result).not.toBe('')
+  })
+
+  it('should delegate to the platform default when no env override is set', () => {
+    delete process.env.VAULTKEEPER_CONFIG_DIR
+    expect(getDefaultConfigDir()).toBe(getPlatformDefaultConfigDir())
+  })
+})
+
+// ---------------------------------------------------------------------------
+// getPlatformDefaultConfigDir (issue #149)
+// ---------------------------------------------------------------------------
+
+describe('getPlatformDefaultConfigDir', () => {
+  let savedEnv: string | undefined
+
+  beforeEach(() => {
+    savedEnv = process.env.VAULTKEEPER_CONFIG_DIR
+  })
+
+  afterEach(() => {
+    if (savedEnv === undefined) {
+      delete process.env.VAULTKEEPER_CONFIG_DIR
+    } else {
+      process.env.VAULTKEEPER_CONFIG_DIR = savedEnv
+    }
+  })
+
+  it('should include vaultkeeper in the path', () => {
+    expect(getPlatformDefaultConfigDir()).toContain('vaultkeeper')
+  })
+
+  // The whole point of this helper (vs getDefaultConfigDir): it is the
+  // machine default, so a remediation hint can tell whether an active dir
+  // that came from the env var differs from what a fresh shell would use.
+  it('should IGNORE VAULTKEEPER_CONFIG_DIR (env-independent)', () => {
+    process.env.VAULTKEEPER_CONFIG_DIR = '/tmp/env-override-vaultkeeper'
+    expect(getPlatformDefaultConfigDir()).not.toBe('/tmp/env-override-vaultkeeper')
+    expect(getPlatformDefaultConfigDir()).toContain('vaultkeeper')
   })
 })
 

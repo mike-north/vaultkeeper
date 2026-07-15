@@ -5,7 +5,12 @@
  */
 
 import * as path from 'node:path'
-import { ConfigParseError, ConfigValidationError, FilesystemError } from 'vaultkeeper'
+import {
+  ConfigParseError,
+  ConfigValidationError,
+  FilesystemError,
+  getPlatformDefaultConfigDir,
+} from 'vaultkeeper'
 import type { PreflightCheckError } from 'vaultkeeper'
 import { shellQuote } from './shell-quote.js'
 
@@ -44,11 +49,25 @@ export function dim(text: string): string {
  * a case the CLI itself never hits, since it only ever validates via
  * `loadConfig`/`VaultKeeper.init`.
  */
-function configRemediation(configPath: string, detail: string | undefined): string {
+function configRemediation(
+  configPath: string,
+  detail: string | undefined,
+  configDir: string,
+): string {
   const detailSuffix = detail !== undefined ? ` (${detail})` : ''
+  // A bare `config init --force` writes to the machine's platform-default
+  // config dir. When the active config dir is anything else, the pasted
+  // command would create a fresh default config and leave the diagnosed file
+  // corrupt (issue #149). Carry an explicit `--config-dir` so the command
+  // repairs the exact file it complained about. The comparison is against the
+  // env-INDEPENDENT platform default, so an active dir that came only from
+  // `VAULTKEEPER_CONFIG_DIR` still gets an explicit flag — a fresh shell
+  // running the pasted command won't have that env var set.
+  const dirFlag =
+    configDir === getPlatformDefaultConfigDir() ? '' : ` --config-dir ${shellQuote(configDir)}`
   return (
     `The config at \`${configPath}\` is invalid${detailSuffix} — ` +
-    'run `vaultkeeper config init --force` to overwrite it.'
+    `run \`vaultkeeper config init --force${dirFlag}\` to overwrite it.`
   )
 }
 
@@ -66,7 +85,7 @@ function formatConfigError(
         ? `at ${err.location}`
         : undefined
       : `\`${err.field}\``
-  return `${err.name}: ${configRemediation(configPath, detail)}`
+  return `${err.name}: ${configRemediation(configPath, detail, configDir)}`
 }
 
 /**
@@ -146,9 +165,55 @@ function formatConfigReadError(err: FilesystemError): string {
  * the library's "install @vaultkeeper/cli" text to a user already running
  * the CLI.
  */
-export function formatPreflightConfigError(error: PreflightCheckError): string {
+export function formatPreflightConfigError(
+  error: PreflightCheckError,
+  configDir: string,
+): string {
   const detail = error.location !== undefined ? `at ${error.location}` : undefined
-  return configRemediation(error.configPath, detail)
+  return configRemediation(error.configPath, detail, configDir)
+}
+
+/**
+ * Past-tense description of the filesystem operation a {@link FilesystemError}
+ * was attempting, keyed by its `permission` field, for use in a human-facing
+ * "cannot be <verb>" sentence.
+ */
+const FS_OPERATION_VERB: Record<string, string> = {
+  read: 'read',
+  write: 'written',
+  execute: 'executed',
+  delete: 'deleted',
+}
+
+/**
+ * Build a human-facing message for a {@link FilesystemError} from its typed
+ * `path`/`permission` fields plus the OS error code parsed out of its
+ * `.message`, without ever echoing the raw Node `ENOENT: … open '<path>'`
+ * text — which leaks an implementation detail and carries no next step
+ * (issue #150). Mirrors the fix-oriented shape of the config-error and
+ * identity-mismatch messages.
+ */
+function formatFilesystemError(err: FilesystemError): string {
+  const quotedPath = `\`${err.path}\``
+  if (/\bENOENT\b/.test(err.message)) {
+    return (
+      `${err.name}: The file at ${quotedPath} does not exist. ` +
+      'Check that the path is correct and the file exists, then try again.'
+    )
+  }
+  const verb = FS_OPERATION_VERB[err.permission] ?? 'accessed'
+  if (/\b(?:EACCES|EPERM)\b/.test(err.message)) {
+    return (
+      `${err.name}: The file at ${quotedPath} cannot be ${verb} (permission denied). ` +
+      "Check the file's permissions and try again."
+    )
+  }
+  // Any other filesystem failure: still avoid leaking the raw OS text, but
+  // keep the operation context carried by the typed `permission` field.
+  return (
+    `${err.name}: The file at ${quotedPath} could not be ${verb}. ` +
+    "Check the path and the file's permissions, then try again."
+  )
 }
 
 /**
@@ -192,8 +257,14 @@ export function formatError(err: unknown, configDir: string): string {
   if (err instanceof ConfigParseError || err instanceof ConfigValidationError) {
     return formatConfigError(err, configDir)
   }
+  // The specific unreadable-`config.json` case gets config-oriented wording
+  // (issue #137); every other FilesystemError (e.g. an unreadable executable
+  // on the `approve` path) gets the general polished message (issue #150).
   if (isUnreadableConfigFile(err, configDir)) {
     return formatConfigReadError(err)
+  }
+  if (err instanceof FilesystemError) {
+    return formatFilesystemError(err)
   }
   if (err instanceof Error) {
     return `${err.name}: ${err.message}`

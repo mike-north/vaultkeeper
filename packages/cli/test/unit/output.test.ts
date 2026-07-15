@@ -5,6 +5,7 @@ import {
   ConfigValidationError,
   FilesystemError,
   SecretNotFoundError,
+  getPlatformDefaultConfigDir,
 } from 'vaultkeeper'
 import { formatError, formatPreflightConfigError, secretNotFoundMessage } from '../../src/output.js'
 import type { PreflightCheckError } from 'vaultkeeper'
@@ -276,7 +277,8 @@ describe('formatError', () => {
 // same CLI-native remediation for doctor that formatError builds for every
 // other command — never the library's "install @vaultkeeper/cli" text.
 describe('formatPreflightConfigError', () => {
-  const configPath = '/home/user/.config/vaultkeeper/config.json'
+  const configDir = '/home/user/.config/vaultkeeper'
+  const configPath = path.join(configDir, 'config.json')
 
   it('builds a CLI-native remediation with the path and parse location for a config-parse failure', () => {
     const error: PreflightCheckError = {
@@ -285,7 +287,7 @@ describe('formatPreflightConfigError', () => {
       location: 'line 3, column 12',
     }
 
-    const formatted = formatPreflightConfigError(error)
+    const formatted = formatPreflightConfigError(error, configDir)
 
     expect(formatted).toContain(configPath)
     expect(formatted).toContain('(at line 3, column 12)')
@@ -296,7 +298,7 @@ describe('formatPreflightConfigError', () => {
   it('omits the location suffix for a config-validation failure', () => {
     const error: PreflightCheckError = { kind: 'config-validation', configPath }
 
-    const formatted = formatPreflightConfigError(error)
+    const formatted = formatPreflightConfigError(error, configDir)
 
     expect(formatted).toContain(configPath)
     expect(formatted).not.toContain('(at ')
@@ -312,12 +314,17 @@ describe('formatPreflightConfigError', () => {
       'line 3, column 12',
     )
     // formatError prefixes the error name; the core sentence must match.
+    // Both surfaces get the same active dir, so any --config-dir suffix is
+    // identical on both sides and the equality still holds.
     const errorPath = formatError(err, CONFIG_DIR)
-    const doctorPath = formatPreflightConfigError({
-      kind: 'config-parse',
-      configPath,
-      location: 'line 3, column 12',
-    })
+    const doctorPath = formatPreflightConfigError(
+      {
+        kind: 'config-parse',
+        configPath,
+        location: 'line 3, column 12',
+      },
+      CONFIG_DIR,
+    )
 
     expect(errorPath).toBe(`ConfigParseError: ${doctorPath}`)
   })
@@ -334,8 +341,15 @@ describe('formatPreflightConfigError', () => {
       'version',
       configPath,
     )
-    const errorPath = formatError(err, CONFIG_DIR)
-    const doctorPath = formatPreflightConfigError({ kind: 'config-validation', configPath })
+    // Pass the platform-default dir so the recovery command stays bare here —
+    // this test's focus is the field detail (#137), while the --config-dir
+    // behavior (#149) is covered by its own dedicated cases below.
+    const defaultDir = getPlatformDefaultConfigDir()
+    const errorPath = formatError(err, defaultDir)
+    const doctorPath = formatPreflightConfigError(
+      { kind: 'config-validation', configPath },
+      defaultDir,
+    )
 
     expect(errorPath).toBe(
       `ConfigValidationError: The config at \`${configPath}\` is invalid (\`version\`) — ` +
@@ -344,5 +358,129 @@ describe('formatPreflightConfigError', () => {
     expect(doctorPath).toBe(
       `The config at \`${configPath}\` is invalid — run \`vaultkeeper config init --force\` to overwrite it.`,
     )
+  })
+})
+
+// Issue #149: when a non-default config dir is active, the printed recovery
+// command must carry an explicit `--config-dir` so a copy-paste into a fresh
+// shell repairs the exact diagnosed file rather than writing a fresh config to
+// the platform default and leaving the corrupt file untouched. Keyed off the
+// env-INDEPENDENT platform default so a dir that came only from
+// VAULTKEEPER_CONFIG_DIR still gets an explicit flag.
+describe('config remediation carries --config-dir for a non-default dir (issue #149)', () => {
+  const platformDefault = getPlatformDefaultConfigDir()
+
+  it('emits a bare `config init --force` when the active dir IS the platform default', () => {
+    const configPath = path.join(platformDefault, 'config.json')
+    const error: PreflightCheckError = { kind: 'config-validation', configPath }
+
+    const formatted = formatPreflightConfigError(error, platformDefault)
+
+    expect(formatted).toContain('run `vaultkeeper config init --force` to overwrite it.')
+    // The default-dir case must never leak a path into the command.
+    expect(formatted).not.toContain('--config-dir')
+  })
+
+  it('appends `--config-dir <dir>` when a non-default dir is active (flag case)', () => {
+    const altDir = '/tmp/vk-alt'
+    const configPath = path.join(altDir, 'config.json')
+    const error: PreflightCheckError = { kind: 'config-validation', configPath }
+
+    const formatted = formatPreflightConfigError(error, altDir)
+
+    expect(formatted).toContain(
+      "run `vaultkeeper config init --force --config-dir '/tmp/vk-alt'` to overwrite it.",
+    )
+  })
+
+  it('shell-quotes a non-default dir containing spaces/metacharacters', () => {
+    const altDir = "/tmp/weird dir/it's"
+    const configPath = path.join(altDir, 'config.json')
+    const error: PreflightCheckError = { kind: 'config-validation', configPath }
+
+    const formatted = formatPreflightConfigError(error, altDir)
+
+    // shellQuote wraps in single quotes and escapes an embedded quote as '\''.
+    expect(formatted).toContain("--config-dir '/tmp/weird dir/it'\\''s'")
+  })
+
+  it('also appends --config-dir on the formatError (config-parse) path', () => {
+    const altDir = '/tmp/vk-alt'
+    const configPath = path.join(altDir, 'config.json')
+    const err = new ConfigParseError('parse failed', configPath, 'line 1, column 1')
+
+    const formatted = formatError(err, altDir)
+
+    expect(formatted).toContain("--config-dir '/tmp/vk-alt'")
+    expect(formatted).toContain('(at line 1, column 1)')
+  })
+})
+
+// Issue #150: FilesystemError must render a human message from its typed
+// fields — plainly stating missing vs permission-denied plus a next step —
+// and must never echo the raw Node `ENOENT: … open '<path>'` fragment.
+describe('formatError renders FilesystemError without raw OS text (issue #150)', () => {
+  it('renders a missing file (ENOENT) as a plain does-not-exist message with a next step', () => {
+    const p = '/nonexistent/path/to/tool'
+    const err = new FilesystemError(
+      `Cannot read executable at ${p}: ENOENT: no such file or directory, open '${p}'`,
+      p,
+      'read',
+    )
+
+    const formatted = formatError(err, CONFIG_DIR)
+
+    expect(formatted).toBe(
+      `FilesystemError: The file at \`${p}\` does not exist. ` +
+        'Check that the path is correct and the file exists, then try again.',
+    )
+    // No raw Node fragment leaks through.
+    expect(formatted).not.toContain('ENOENT')
+    expect(formatted).not.toContain(`open '`)
+  })
+
+  it('renders a permission-denied file (EACCES) as a plain permission message with a next step', () => {
+    const p = '/tmp/noperm'
+    const err = new FilesystemError(
+      `Cannot read executable at ${p}: EACCES: permission denied, open '${p}'`,
+      p,
+      'read',
+    )
+
+    const formatted = formatError(err, CONFIG_DIR)
+
+    expect(formatted).toBe(
+      `FilesystemError: The file at \`${p}\` cannot be read (permission denied). ` +
+        "Check the file's permissions and try again.",
+    )
+    expect(formatted).not.toContain('EACCES')
+    expect(formatted).not.toContain(`open '`)
+  })
+
+  it('uses the past-tense operation verb from the permission field for a write EACCES', () => {
+    const p = '/tmp/readonly/secret.json'
+    const err = new FilesystemError(
+      `Failed to write secret file at ${p}: EACCES: permission denied, open '${p}'`,
+      p,
+      'write',
+    )
+
+    const formatted = formatError(err, CONFIG_DIR)
+
+    expect(formatted).toContain('cannot be written (permission denied)')
+    expect(formatted).not.toContain(`open '`)
+  })
+
+  it('falls back to a clean generic message for an unrecognized OS code', () => {
+    const p = '/tmp/busy'
+    const err = new FilesystemError(`Failed to read at ${p}: EBUSY: resource busy`, p, 'read')
+
+    const formatted = formatError(err, CONFIG_DIR)
+
+    expect(formatted).toBe(
+      `FilesystemError: The file at \`${p}\` could not be read. ` +
+        "Check the path and the file's permissions, then try again.",
+    )
+    expect(formatted).not.toContain('EBUSY')
   })
 })

@@ -106,4 +106,41 @@ describe('approve command', () => {
     // No manifest is written for a failed approval.
     await expect(readManifest(env.configDir)).rejects.toThrow()
   })
+
+  // Issue #150: a FilesystemError must render a human message from its typed
+  // fields with a next step, never the raw Node `ENOENT: … open '<path>'`
+  // fragment.
+  it('renders a polished missing-file message with no raw OS text (issue #150)', async () => {
+    env = await createCliTestEnv()
+    const missing = path.join(env.configDir, 'nope.sh')
+
+    const result = await env.run(['approve', '--script', missing])
+    expect(result.exitCode).not.toBe(0)
+    expect(result.stderr).toContain('does not exist')
+    expect(result.stderr).toMatch(/try again/i)
+    // The raw Node fs fragment must not leak.
+    expect(result.stderr).not.toContain('ENOENT')
+    expect(result.stderr).not.toContain("open '")
+  })
+
+  // Issue #150: same for a permission-denied (EACCES) file. Skipped on
+  // Windows (POSIX mode bits) and when running as root (root bypasses the
+  // permission check, so the read would succeed).
+  const canTestPermissions = process.platform !== 'win32' && process.getuid?.() !== 0
+  it.skipIf(!canTestPermissions)(
+    'renders a polished permission-denied message with no raw OS text (issue #150)',
+    async () => {
+      env = await createCliTestEnv()
+      const noperm = path.join(env.configDir, 'noperm.sh')
+      await fs.writeFile(noperm, '#!/bin/sh\n', { mode: 0o000 })
+      await fs.chmod(noperm, 0o000)
+
+      const result = await env.run(['approve', '--script', noperm])
+      expect(result.exitCode).not.toBe(0)
+      expect(result.stderr).toContain('permission denied')
+      expect(result.stderr).toMatch(/permissions/i)
+      expect(result.stderr).not.toContain('EACCES')
+      expect(result.stderr).not.toContain("open '")
+    },
+  )
 })
