@@ -31,12 +31,15 @@ function runCli(args: string[]): Promise<CliResult> {
 }
 
 describe('bin.ts entry point', () => {
-  it('should print help and exit 0 when no arguments are given', async () => {
+  // Regression: issue #151 — a bare invocation previously printed help to
+  // stdout and exited 0, which let `vaultkeeper && next_step` proceed as if a
+  // command had succeeded. It is now a usage error: usage on stderr, exit 2.
+  it('should print usage to stderr and exit 2 when no arguments are given', async () => {
     const result = await runCli([])
-    expect(result.exitCode).toBe(0)
-    expect(result.stdout).toContain('Usage: vaultkeeper [--config-dir <path>] <command>')
-    expect(result.stdout).toContain('exec')
-    expect(result.stdout).toContain('doctor')
+    expect(result.exitCode).toBe(2)
+    expect(result.stderr).toContain('Usage: vaultkeeper [--config-dir <path>] <command>')
+    expect(result.stderr).toContain('exec')
+    expect(result.stderr).toContain('doctor')
   })
 
   it('should print help and exit 0 for --help', async () => {
