@@ -36,7 +36,7 @@ import {
   ExecError,
   defaultBackendType,
 } from 'vaultkeeper'
-import { promptApproval } from '../approval.js'
+import { promptApproval, NonInteractiveApprovalError } from '../approval.js'
 import { readCachedToken, writeCachedToken, invalidateCache } from '../cache.js'
 import { RedactingStream } from '../redact.js'
 import { shouldSkipDoctor } from '../skip-doctor.js'
@@ -84,8 +84,9 @@ type TrustGateOutcome = 'trusted' | 'approved' | 'denied'
  *   or `denied` (user declined).
  * @throws {IdentityMismatchError} When the caller's hash changed from a
  *   previously approved value.
- * @throws When approval is required but cannot be obtained (non-TTY stdin
- *   without `--yes`), or when the caller path cannot be read for hashing.
+ * @throws {NonInteractiveApprovalError} When approval is required but cannot
+ *   be obtained (non-TTY stdin without `--yes`).
+ * @throws When the caller path cannot be read for hashing.
  */
 async function enforceTrustGate(
   vault: VaultKeeper,
@@ -127,7 +128,7 @@ async function enforceTrustGate(
   // caller path is shell-quoted so the suggested command is copy-paste safe.
   // isTTY is `true` only on a real terminal; `undefined`/`false` means non-TTY.
   if (!process.stdin.isTTY) {
-    throw new Error(
+    throw new NonInteractiveApprovalError(
       `Secret access for ${callerPath} requires approval, but stdin is not a TTY, ` +
         `so no interactive prompt can be shown.\n` +
         `To approve non-interactively, either:\n` +

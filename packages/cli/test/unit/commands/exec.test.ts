@@ -7,6 +7,23 @@ const configDir = '/tmp/vaultkeeper-test-config-dir'
 
 const mockInit = vi.hoisted(() => vi.fn())
 
+// Records every error formatError() is asked to render, so tests can assert
+// on the thrown error's *type* (e.g. instanceof NonInteractiveApprovalError)
+// even though execCommand's top-level catch only ever surfaces a stringified
+// message and an exit code — issue #127.
+const capturedFormatErrorCalls = vi.hoisted((): unknown[] => [])
+
+vi.mock('../../../src/output.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../../src/output.js')>()
+  return {
+    ...actual,
+    formatError: (err: unknown, dir: string) => {
+      capturedFormatErrorCalls.push(err)
+      return actual.formatError(err, dir)
+    },
+  }
+})
+
 // A real IdentityMismatchError subclass so `.name`/`.message` format exactly as
 // the CLI expects when it constructs and formats the mismatch error. Defined
 // via vi.hoisted so it is initialized before the hoisted vi.mock factory runs.
@@ -39,10 +56,17 @@ vi.mock('vaultkeeper', async (importOriginal) => {
   })
 })
 
-// Prevent any real approval prompts from blocking tests
-vi.mock('../../../src/approval.js', () => ({
-  promptApproval: vi.fn().mockResolvedValue(false),
-}))
+// Prevent any real approval prompts from blocking tests. Keeps the real
+// NonInteractiveApprovalError export (needed by commands/exec.ts's own
+// `throw new NonInteractiveApprovalError(...)` for the non-TTY trust-gate
+// path — issue #127) alongside the mocked entry point this suite controls.
+vi.mock('../../../src/approval.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../../src/approval.js')>()
+  return {
+    ...actual,
+    promptApproval: vi.fn().mockResolvedValue(false),
+  }
+})
 
 vi.mock('../../../src/cache.js', () => ({
   readCachedToken: vi.fn().mockResolvedValue(undefined),
@@ -110,6 +134,7 @@ describe('execCommand', () => {
     stderrOutput = ''
     stdoutOutput = ''
     IdentityMismatchError.instances.length = 0
+    capturedFormatErrorCalls.length = 0
     vi.spyOn(process.stderr, 'write').mockImplementation((chunk) => {
       stderrOutput += String(chunk)
       return true
@@ -680,6 +705,28 @@ describe('execCommand', () => {
         expect(stderrOutput).toContain("vaultkeeper approve --script '/path/to/script.sh'")
         expect(stderrOutput).toContain('--yes')
         expect(stderrOutput).toContain('VAULTKEEPER_YES=1')
+      } finally {
+        restoreTTY()
+      }
+    })
+
+    // Regression: issue #127 — this previously threw a plain `Error`,
+    // breaking instanceof-based handling. It must now throw a typed
+    // NonInteractiveApprovalError (the exit code and stderr message are
+    // unchanged, since NonInteractiveApprovalError doesn't override `.name`
+    // any differently than the native Error it replaces).
+    it('rejects with a typed NonInteractiveApprovalError for an untrusted caller on non-TTY stdin', async () => {
+      const restoreTTY = forceStdinTTY(false)
+      try {
+        const vault = pendingVaultMock()
+        mockInit.mockResolvedValue(vault)
+
+        const code = await execCommand(EXEC_ARGS, configDir)
+
+        expect(code).toBe(1)
+        const { NonInteractiveApprovalError } = await import('../../../src/approval.js')
+        expect(capturedFormatErrorCalls).toHaveLength(1)
+        expect(capturedFormatErrorCalls[0]).toBeInstanceOf(NonInteractiveApprovalError)
       } finally {
         restoreTTY()
       }

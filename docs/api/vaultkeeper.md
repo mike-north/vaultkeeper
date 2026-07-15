@@ -140,7 +140,9 @@ Thrown when a hardware device (e.g. YubiKey or smart card) required for authenti
 
 </td><td>
 
-Thrown when a delegated `exec()` call fails due to an invalid request (e.g. a `{{secret}}` placeholder in the `command` field) or a process-level error (e.g. the command binary is not found or cannot be spawned).
+Thrown when spawning or running a subprocess fails.
+
+This covers a delegated `exec()` call failing due to an invalid request (e.g. a `{{secret}}` placeholder in the `command` field) or a process-level error (e.g. the command binary is not found or cannot be spawned) — and also vaultkeeper's own internal tool invocations (doctor version probes, the keychain/secret-tool/dpapi/yubikey credential helpers), which run through the same subprocess utility. Callers that need to handle only delegated-exec failures should scope their `catch` to the code paths that call `exec()`<!-- -->, not discriminate on this type alone.
 
 
 </td></tr>

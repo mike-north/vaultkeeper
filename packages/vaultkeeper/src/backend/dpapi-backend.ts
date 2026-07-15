@@ -10,7 +10,7 @@ import * as fs from 'node:fs/promises'
 import * as path from 'node:path'
 import * as os from 'node:os'
 import { execCommand, execCommandFull } from '../util/exec.js'
-import { SecretNotFoundError } from '../errors.js'
+import { SecretNotFoundError, toFilesystemError } from '../errors.js'
 import type { ListableBackend } from './types.js'
 
 /**
@@ -124,7 +124,9 @@ export class DpapiBackend implements ListableBackend {
       if (err instanceof Error && 'code' in err && err.code === 'ENOENT') {
         throw new SecretNotFoundError(`Secret not found in Windows DPAPI store: ${id}`)
       }
-      throw err
+      // Same contract as FileBackend.delete (#126): a non-ENOENT unlink
+      // failure surfaces as a typed FilesystemError, never a raw Node error.
+      throw toFilesystemError(err, 'secret file', entryPath, 'delete')
     }
   }
 

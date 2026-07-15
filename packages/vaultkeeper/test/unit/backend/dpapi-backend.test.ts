@@ -17,7 +17,7 @@ vi.mock('node:fs/promises', () => ({
 import * as fs from 'node:fs/promises'
 import { execCommand, execCommandFull } from '../../../src/util/exec.js'
 import { DpapiBackend } from '../../../src/backend/dpapi-backend.js'
-import { SecretNotFoundError } from '../../../src/errors.js'
+import { SecretNotFoundError, FilesystemError } from '../../../src/errors.js'
 
 const mockExecCommand = vi.mocked(execCommand)
 const mockExecCommandFull = vi.mocked(execCommandFull)
@@ -152,11 +152,37 @@ describe('DpapiBackend', () => {
       await expect(backend.delete('missing')).rejects.toBeInstanceOf(SecretNotFoundError)
     })
 
-    it('should rethrow non-ENOENT errors', async () => {
-      const permError = Object.assign(new Error('EPERM'), { code: 'EPERM' })
-      mockFs.unlink.mockRejectedValue(permError)
+    // Regression for the #127/#164 review: a non-ENOENT unlink failure
+    // previously rethrew the raw Node error, escaping the VaultError
+    // hierarchy — the same contract gap #126 fixed in FileBackend.delete.
+    it('wraps a non-ENOENT unlink failure (e.g. EACCES) as a typed FilesystemError', async () => {
+      const fsError = Object.assign(new Error('EACCES: permission denied'), { code: 'EACCES' })
+      mockFs.unlink.mockRejectedValueOnce(fsError)
 
-      await expect(backend.delete('protected')).rejects.toThrow('EPERM')
+      const caught = await backend.delete('protected').then(
+        () => undefined,
+        (err: unknown) => err,
+      )
+      expect(caught).toBeInstanceOf(FilesystemError)
+      if (caught instanceof FilesystemError) {
+        expect(caught.permission).toBe('delete')
+        expect(caught.code).toBe('EACCES')
+        expect(caught.cause).toBe(fsError)
+      }
+    })
+
+    it('wraps an EPERM unlink failure as a typed FilesystemError (never a raw rethrow)', async () => {
+      const permError = Object.assign(new Error('EPERM'), { code: 'EPERM' })
+      mockFs.unlink.mockRejectedValueOnce(permError)
+
+      const caught = await backend.delete('protected').then(
+        () => undefined,
+        (err: unknown) => err,
+      )
+      expect(caught).toBeInstanceOf(FilesystemError)
+      if (caught instanceof FilesystemError) {
+        expect(caught.code).toBe('EPERM')
+      }
     })
   })
 

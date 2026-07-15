@@ -18,7 +18,14 @@ import * as path from 'node:path'
 import * as os from 'node:os'
 import * as crypto from 'node:crypto'
 import { execCommandFull } from '../util/exec.js'
-import { SecretNotFoundError, PluginNotFoundError, DeviceNotPresentError } from '../errors.js'
+import {
+  SecretNotFoundError,
+  PluginNotFoundError,
+  DeviceNotPresentError,
+  DecryptionError,
+  SetupError,
+  ExecError,
+} from '../errors.js'
 import type { ListableBackend } from './types.js'
 
 const YKMAN_INSTALL_URL = 'https://developers.yubico.com/yubikey-manager/'
@@ -109,8 +116,9 @@ const HMAC_RESPONSE_RE = /^[0-9a-fA-F]{40}$/
 function deriveKey(hmacResponse: string, id: string): Buffer {
   const trimmed = hmacResponse.trim()
   if (!HMAC_RESPONSE_RE.test(trimmed)) {
-    throw new Error(
+    throw new SetupError(
       `Invalid YubiKey HMAC response: expected exactly ${String(HMAC_RESPONSE_HEX_LENGTH)} hex characters (20 bytes), got ${String(trimmed.length)} characters`,
+      'ykman',
     )
   }
   // The ykman response is a hex string; convert to raw bytes as the IKM.
@@ -167,8 +175,11 @@ function encryptGcm(key: Buffer, plaintext: string): string {
  *
  * The key buffer is always zeroed in a finally block, guaranteeing cleanup even
  * if `createDecipheriv` or `setAuthTag` throws before the decrypt attempt.
+ *
+ * @param path - The path of the encrypted entry, for attribution on a thrown
+ * {@link DecryptionError}.
  */
-function decryptGcm(key: Buffer, encoded: string): string {
+function decryptGcm(key: Buffer, encoded: string, path: string): string {
   const parts = encoded.split(':')
   const versionSegment = parts[0] ?? ''
 
@@ -179,33 +190,36 @@ function decryptGcm(key: Buffer, encoded: string): string {
   if (!isNumericVersion) {
     // No recognisable version prefix — treat as legacy CBC or corrupt file.
     key.fill(0)
-    throw new Error(
+    throw new DecryptionError(
       'Encrypted file uses a legacy format (AES-256-CBC). ' +
         'Delete the secret and re-store it to migrate to AES-256-GCM.',
+      path,
     )
   }
 
   if (versionSegment !== FORMAT_VERSION) {
     // A future format version this binary does not know how to decode.
     key.fill(0)
-    throw new Error(
+    throw new DecryptionError(
       `Unsupported encrypted file version: ${versionSegment}. ` +
         `This vaultkeeper build only supports version ${FORMAT_VERSION}. ` +
         'Upgrade vaultkeeper to read this secret.',
+      path,
     )
   }
 
   if (parts.length !== 4) {
     key.fill(0)
-    throw new Error(
+    throw new DecryptionError(
       `Invalid encrypted file format: expected ${FORMAT_VERSION}:iv:authTag:ciphertext`,
+      path,
     )
   }
 
   const [_version, ivB64, authTagB64, ciphertextB64] = parts
   if (ivB64 === undefined || authTagB64 === undefined || ciphertextB64 === undefined) {
     key.fill(0)
-    throw new Error('Invalid encrypted file format: missing part')
+    throw new DecryptionError('Invalid encrypted file format: missing part', path)
   }
 
   let decrypted: Buffer | undefined
@@ -214,16 +228,20 @@ function decryptGcm(key: Buffer, encoded: string): string {
     const authTag = Buffer.from(authTagB64, 'base64')
     const ciphertext = Buffer.from(ciphertextB64, 'base64')
 
-    const decipher = crypto.createDecipheriv('aes-256-gcm', key, iv, {
-      authTagLength: GCM_TAG_LENGTH_BITS / 8,
-    })
-    decipher.setAuthTag(authTag)
-
+    // createDecipheriv/setAuthTag sit inside this try too: the iv and
+    // authTag lengths come from the on-disk file, so a truncated/corrupt
+    // entry can throw a native RangeError/TypeError before decryption even
+    // starts — every native crypto failure must wrap as DecryptionError.
     try {
+      const decipher = crypto.createDecipheriv('aes-256-gcm', key, iv, {
+        authTagLength: GCM_TAG_LENGTH_BITS / 8,
+      })
+      decipher.setAuthTag(authTag)
       decrypted = Buffer.concat([decipher.update(ciphertext), decipher.final()])
     } catch (err) {
-      throw new Error(
-        `GCM authentication failed — ciphertext may be tampered: ${err instanceof Error ? err.message : String(err)}`,
+      throw new DecryptionError(
+        `GCM authentication failed — ciphertext may be tampered or corrupt: ${err instanceof Error ? err.message : String(err)}`,
+        path,
       )
     }
 
@@ -298,7 +316,7 @@ export class YubikeyBackend implements ListableBackend {
     const challenge = Buffer.from(`vaultkeeper:${id}`, 'utf8').toString('hex')
     const responseResult = await execCommandFull('ykman', ['otp', 'calculate', '2', challenge])
     if (responseResult.exitCode !== 0) {
-      throw new Error(`YubiKey challenge-response failed: ${responseResult.stderr}`)
+      throw new ExecError(`YubiKey challenge-response failed: ${responseResult.stderr}`, 'ykman')
     }
     return responseResult.stdout.trim()
   }
@@ -337,7 +355,7 @@ export class YubikeyBackend implements ListableBackend {
     const hmacResponse = await this.challengeResponse(id)
     const key = deriveKey(hmacResponse, id)
 
-    return decryptGcm(key, encoded)
+    return decryptGcm(key, encoded, entryPath)
   }
 
   async delete(id: string): Promise<void> {

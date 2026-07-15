@@ -2,17 +2,29 @@ import * as readline from 'node:readline'
 import type { ApprovalInfo } from './types.js'
 
 /**
+ * Thrown when interactive approval is required (a caller is not yet trusted)
+ * but stdin is not a TTY, so no approval prompt can be shown. Follows the
+ * same locally-scoped-`Error`-subclass pattern as `ConfigDirFlagError`
+ * (`config-dir.ts`): this is a CLI presentation-layer concern (there is no
+ * concept of an interactive terminal in the `vaultkeeper` library), so it
+ * does not extend the library's `VaultError` hierarchy.
+ *
+ * @internal
+ */
+export class NonInteractiveApprovalError extends Error {}
+
+/**
  * Display an interactive approval prompt on the TTY.
  *
  * @param info - The access request details to display.
  * @returns `true` if the user approves, `false` otherwise.
- * @throws If stdin is not a TTY.
+ * @throws {NonInteractiveApprovalError} If stdin is not a TTY.
  *
  * @internal
  */
 export async function promptApproval(info: ApprovalInfo): Promise<boolean> {
   if (!process.stdin.isTTY) {
-    throw new Error(
+    throw new NonInteractiveApprovalError(
       'Secret access requires interactive approval. Run this command in a terminal.',
     )
   }

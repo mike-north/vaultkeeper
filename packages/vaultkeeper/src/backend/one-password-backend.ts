@@ -21,6 +21,7 @@ import {
   BackendLockedError,
   BackendUnavailableError,
   AuthorizationDeniedError,
+  ConfigValidationError,
 } from '../errors.js'
 import type { ListableBackend } from './types.js'
 
@@ -117,13 +118,15 @@ export class OnePasswordBackend implements ListableBackend {
 
   constructor(options: OnePasswordBackendOptions) {
     if (options.accessMode === 'per-access' && options.serviceAccountToken !== undefined) {
-      throw new Error(
+      throw new ConfigValidationError(
         'per-access mode requires desktop biometric authentication and cannot be used with a service account token',
+        'options.accessMode',
       )
     }
     if (options.account !== undefined && options.serviceAccountToken !== undefined) {
-      throw new Error(
+      throw new ConfigValidationError(
         'account and serviceAccountToken are mutually exclusive — provide one or the other, not both',
+        'options.serviceAccountToken',
       )
     }
     this.vaultId = options.vault
@@ -366,7 +369,13 @@ export class OnePasswordBackend implements ListableBackend {
         if (raw === '') {
           const stderr = Buffer.concat(stderrChunks).toString('utf8').trim()
           const detail = stderr !== '' ? stderr : `exit code ${String(code)}`
-          reject(new Error(`1Password per-access worker crashed for secret ${id}: ${detail}`))
+          reject(
+            new BackendUnavailableError(
+              `1Password per-access worker crashed for secret ${id}: ${detail}`,
+              'worker-crashed',
+              ['1password'],
+            ),
+          )
           return
         }
 
@@ -422,7 +431,11 @@ export class OnePasswordBackend implements ListableBackend {
 
       child.on('error', (err) => {
         reject(
-          new Error(`Failed to spawn 1Password per-access worker at ${workerPath}: ${String(err)}`),
+          new BackendUnavailableError(
+            `Failed to spawn 1Password per-access worker at ${workerPath}: ${String(err)}`,
+            'worker-spawn-failed',
+            ['1password'],
+          ),
         )
       })
     })

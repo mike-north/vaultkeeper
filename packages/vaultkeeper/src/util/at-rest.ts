@@ -17,7 +17,7 @@
 
 import * as fs from 'node:fs/promises'
 import * as crypto from 'node:crypto'
-import { toFilesystemError } from '../errors.js'
+import { toFilesystemError, DecryptionError } from '../errors.js'
 
 const GCM_IV_BYTES = 12
 const GCM_KEY_BYTES = 32
@@ -46,29 +46,45 @@ export function encryptGcm(key: Buffer, plaintext: string): string {
  *
  * @param key - The same 32-byte AES-256 wrapping key used to encrypt.
  * @param encoded - The colon-separated envelope.
+ * @param path - The path of the encrypted entry being decrypted, for
+ * attribution on a thrown {@link DecryptionError}. Callers that don't yet
+ * have a path (e.g. an in-memory envelope) may omit it.
  * @returns The decrypted UTF-8 plaintext.
- * @throws {Error} If the envelope is malformed or authentication fails.
+ * @throws {DecryptionError} If the envelope is malformed or authentication fails.
  * @internal
  */
-export function decryptGcm(key: Buffer, encoded: string): string {
+export function decryptGcm(key: Buffer, encoded: string, path = ''): string {
   const parts = encoded.split(':')
   if (parts.length !== 3) {
-    throw new Error('Invalid encrypted envelope: expected iv:authTag:ciphertext')
+    throw new DecryptionError('Invalid encrypted envelope: expected iv:authTag:ciphertext', path)
   }
   const [ivB64, authTagB64, ciphertextB64] = parts
   if (ivB64 === undefined || authTagB64 === undefined || ciphertextB64 === undefined) {
-    throw new Error('Invalid encrypted envelope: missing part')
+    throw new DecryptionError('Invalid encrypted envelope: missing part', path)
   }
   const iv = Buffer.from(ivB64, 'base64')
   const authTag = Buffer.from(authTagB64, 'base64')
   const ciphertext = Buffer.from(ciphertextB64, 'base64')
 
-  const decipher = crypto.createDecipheriv('aes-256-gcm', key, iv, {
-    authTagLength: GCM_TAG_LENGTH_BITS / 8,
-  })
-  decipher.setAuthTag(authTag)
-  const decrypted = Buffer.concat([decipher.update(ciphertext), decipher.final()])
-  return decrypted.toString('utf8')
+  try {
+    // Inside the try from createDecipheriv onward: the iv and authTag lengths
+    // come from the on-disk envelope, so a truncated/corrupt entry can make
+    // createDecipheriv or setAuthTag throw a native RangeError/TypeError —
+    // not just decipher.final()'s auth-tag failure.
+    const decipher = crypto.createDecipheriv('aes-256-gcm', key, iv, {
+      authTagLength: GCM_TAG_LENGTH_BITS / 8,
+    })
+    decipher.setAuthTag(authTag)
+    const decrypted = Buffer.concat([decipher.update(ciphertext), decipher.final()])
+    return decrypted.toString('utf8')
+  } catch (err) {
+    // Wrap every native crypto failure so the documented
+    // @throws {DecryptionError} contract holds on every path.
+    throw new DecryptionError(
+      `Failed to decrypt envelope: ${err instanceof Error ? err.message : String(err)}`,
+      path,
+    )
+  }
 }
 
 /**

@@ -3,7 +3,7 @@
  */
 
 import { spawn } from 'node:child_process'
-import { PluginNotFoundError } from '../errors.js'
+import { PluginNotFoundError, ExecError } from '../errors.js'
 
 /** Options for command execution. */
 export interface ExecCommandOptions {
@@ -22,7 +22,10 @@ export interface ExecCommandResult {
 
 /**
  * Execute a command and return stdout.
- * @throws Error if the command exits with a non-zero code.
+ * @throws {ExecError} if the command exits with a non-zero code, or if the
+ *   process cannot be spawned for any reason other than the binary being
+ *   missing (e.g. `EACCES`).
+ * @throws {PluginNotFoundError} if the command binary is not found (`ENOENT`).
  */
 export async function execCommand(
   command: string,
@@ -31,7 +34,10 @@ export async function execCommand(
 ): Promise<string> {
   const result = await execCommandFull(command, args, options)
   if (result.exitCode !== 0) {
-    throw new Error(`Command failed with exit code ${String(result.exitCode)}: ${result.stderr}`)
+    throw new ExecError(
+      `Command failed with exit code ${String(result.exitCode)}: ${result.stderr}`,
+      command,
+    )
   }
   return result.stdout.trim()
 }
@@ -50,6 +56,12 @@ export function execCommandFull(
     })
     let stdout = ''
     let stderr = ''
+    // Undefined when no timeoutMs was given, or once the timer has fired.
+    // Tracked so 'close'/'error' can clear it — otherwise an already-settled
+    // promise still leaves the timer pending, which keeps the event loop
+    // alive until it fires and calls proc.kill() on an already-exited
+    // process (regression: PR #164 review, issue #127).
+    let timeoutHandle: ReturnType<typeof setTimeout> | undefined
 
     proc.stdout?.on('data', (data: Buffer) => {
       stdout += data.toString()
@@ -65,17 +77,27 @@ export function execCommandFull(
     }
 
     if (options?.timeoutMs !== undefined) {
-      setTimeout(() => {
+      timeoutHandle = setTimeout(() => {
+        // The timer has already fired, so there is nothing left to clear —
+        // reset to undefined so the later 'close'/'error' handler's guard
+        // matches reality instead of calling clearTimeout on a stale handle.
+        timeoutHandle = undefined
         proc.kill('SIGTERM')
-        reject(new Error(`Command timed out after ${String(options.timeoutMs)}ms`))
+        reject(new ExecError(`Command timed out after ${String(options.timeoutMs)}ms`, command))
       }, options.timeoutMs)
     }
 
     proc.on('close', (code) => {
+      if (timeoutHandle !== undefined) {
+        clearTimeout(timeoutHandle)
+      }
       resolve({ stdout, stderr, exitCode: code ?? 1 })
     })
 
     proc.on('error', (error) => {
+      if (timeoutHandle !== undefined) {
+        clearTimeout(timeoutHandle)
+      }
       if ('code' in error && error.code === 'ENOENT') {
         reject(
           new PluginNotFoundError(
@@ -85,7 +107,10 @@ export function execCommandFull(
           ),
         )
       } else {
-        reject(error)
+        // Any other spawn failure (EACCES on the binary, EMFILE, ...) must
+        // surface typed, not as the raw Node error — the last plain-error
+        // escape on this utility's failure paths.
+        reject(new ExecError(`Failed to spawn '${command}': ${error.message}`, command))
       }
     })
   })
