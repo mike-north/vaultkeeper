@@ -179,7 +179,9 @@ export class OnePasswordBackend implements ListableBackend {
     let timerId: ReturnType<typeof setTimeout> | undefined
     const timeoutPromise = new Promise<never>((_resolve, reject) => {
       timerId = setTimeout(() => {
-        reject(new BackendLockedError('1Password session timed out waiting for authentication', true))
+        reject(
+          new BackendLockedError('1Password session timed out waiting for authentication', true),
+        )
       }, this.sessionTimeoutMs)
     })
 
@@ -198,14 +200,9 @@ export class OnePasswordBackend implements ListableBackend {
         throw err
       }
       if (err instanceof sdk.DesktopSessionExpiredError) {
-        throw new BackendLockedError(
-          '1Password session has expired. Please unlock the app.',
-          true,
-        )
+        throw new BackendLockedError('1Password session has expired. Please unlock the app.', true)
       }
-      throw new AuthorizationDeniedError(
-        `1Password authentication failed: ${String(err)}`,
-      )
+      throw new AuthorizationDeniedError(`1Password authentication failed: ${String(err)}`)
     } finally {
       if (timerId !== undefined) {
         clearTimeout(timerId)
@@ -227,10 +224,7 @@ export class OnePasswordBackend implements ListableBackend {
    * List all items in the vault tagged "vaultkeeper" and find one with the
    * matching title (= secret ID). Returns `undefined` if not found.
    */
-  private async findItemOverview(
-    client: Client,
-    id: string,
-  ): Promise<ItemOverview | undefined> {
+  private async findItemOverview(client: Client, id: string): Promise<ItemOverview | undefined> {
     const overviews = await client.items.list(this.vaultId)
     for (const overview of overviews) {
       if (overview.title === id && overview.tags.includes(TAG)) {
@@ -258,9 +252,7 @@ export class OnePasswordBackend implements ListableBackend {
         return field.value
       }
     }
-    throw new SecretNotFoundError(
-      `Secret found in 1Password but missing password field: ${id}`,
-    )
+    throw new SecretNotFoundError(`Secret found in 1Password but missing password field: ${id}`)
   }
 
   // ---- SecretBackend / ListableBackend implementation ----
@@ -331,17 +323,12 @@ export class OnePasswordBackend implements ListableBackend {
    */
   private retrieveViaWorker(id: string): Promise<string> {
     return new Promise((resolve, reject) => {
-      const workerPath = join(
-        dirname(fileURLToPath(import.meta.url)),
-        'one-password-worker.js',
-      )
+      const workerPath = join(dirname(fileURLToPath(import.meta.url)), 'one-password-worker.js')
 
       const accountArg = this.account ?? ''
-      const child = spawn(
-        process.execPath,
-        [workerPath, accountArg, this.vaultId, id],
-        { stdio: ['ignore', 'pipe', 'pipe'] },
-      )
+      const child = spawn(process.execPath, [workerPath, accountArg, this.vaultId, id], {
+        stdio: ['ignore', 'pipe', 'pipe'],
+      })
 
       const stdoutChunks: Buffer[] = []
       const stderrChunks: Buffer[] = []
@@ -371,13 +358,24 @@ export class OnePasswordBackend implements ListableBackend {
           return
         }
         if (!isWorkerResponse(parsed)) {
-          reject(new SecretNotFoundError(`Worker returned unexpected response shape for secret: ${id}`))
+          reject(
+            new SecretNotFoundError(`Worker returned unexpected response shape for secret: ${id}`),
+          )
           return
         }
         if (isWorkerSuccess(parsed)) {
           resolve(parsed.value)
         } else {
           switch (parsed.code) {
+            case 'PLUGIN_NOT_FOUND':
+              reject(
+                new PluginNotFoundError(
+                  '1Password SDK (@1password/sdk) is not available. Install it to use this backend.',
+                  '@1password/sdk',
+                  SDK_INSTALL_URL,
+                ),
+              )
+              break
             case 'NOT_FOUND':
               reject(new SecretNotFoundError(`Secret not found in 1Password: ${id}`))
               break
@@ -394,9 +392,9 @@ export class OnePasswordBackend implements ListableBackend {
       })
 
       child.on('error', (err) => {
-        reject(new Error(
-          `Failed to spawn 1Password per-access worker at ${workerPath}: ${String(err)}`,
-        ))
+        reject(
+          new Error(`Failed to spawn 1Password per-access worker at ${workerPath}: ${String(err)}`),
+        )
       })
     })
   }

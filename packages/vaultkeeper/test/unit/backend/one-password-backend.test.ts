@@ -95,6 +95,7 @@ import {
   SecretNotFoundError,
   BackendLockedError,
   AuthorizationDeniedError,
+  PluginNotFoundError,
 } from '../../../src/errors.js'
 
 // ---- Test helpers ----
@@ -214,9 +215,8 @@ interface WorkerProcessOptions {
  * Set up a mock child process whose stdout/stderr emit `data` and then fires `close`.
  */
 function makeWorkerProcess(stdoutDataOrOptions: string | WorkerProcessOptions): MockChildProcess {
-  const opts: WorkerProcessOptions = typeof stdoutDataOrOptions === 'string'
-    ? { stdout: stdoutDataOrOptions }
-    : stdoutDataOrOptions
+  const opts: WorkerProcessOptions =
+    typeof stdoutDataOrOptions === 'string' ? { stdout: stdoutDataOrOptions } : stdoutDataOrOptions
   const stdoutData = opts.stdout ?? ''
   const stderrData = opts.stderr ?? ''
   const exitCode = opts.exitCode ?? 0
@@ -456,9 +456,14 @@ describe('OnePasswordBackend', () => {
       const putArg: unknown = mockPut.mock.calls[0]?.[0]
       expect(putArg).toMatchObject({ id: 'item-1' })
       // Verify the password field was updated — check fields independently to avoid nested matchers
-      const putFields: unknown = putArg !== null && typeof putArg === 'object' && 'fields' in putArg ? putArg.fields : undefined
+      const putFields: unknown =
+        putArg !== null && typeof putArg === 'object' && 'fields' in putArg
+          ? putArg.fields
+          : undefined
       expect(putFields).toEqual(
-        expect.arrayContaining([expect.objectContaining({ title: 'password', value: 'new-value' })]),
+        expect.arrayContaining([
+          expect.objectContaining({ title: 'password', value: 'new-value' }),
+        ]),
       )
     })
 
@@ -480,9 +485,18 @@ describe('OnePasswordBackend', () => {
 
       expect(mockPut).toHaveBeenCalledTimes(1)
       const putArg: unknown = mockPut.mock.calls[0]?.[0]
-      const putFields: unknown = putArg !== null && typeof putArg === 'object' && 'fields' in putArg ? putArg.fields : undefined
+      const putFields: unknown =
+        putArg !== null && typeof putArg === 'object' && 'fields' in putArg
+          ? putArg.fields
+          : undefined
       expect(putFields).toEqual(
-        expect.arrayContaining([expect.objectContaining({ title: 'password', value: 'new-value', fieldType: 'Concealed' })]),
+        expect.arrayContaining([
+          expect.objectContaining({
+            title: 'password',
+            value: 'new-value',
+            fieldType: 'Concealed',
+          }),
+        ]),
       )
     })
 
@@ -653,7 +667,9 @@ describe('OnePasswordBackend', () => {
       const proc = makeWorkerErrorProcess(new Error('spawn ENOENT'))
       mockSpawn.mockReturnValue(proc)
 
-      await expect(backend.retrieve('my-secret')).rejects.toThrow('Failed to spawn 1Password per-access worker')
+      await expect(backend.retrieve('my-secret')).rejects.toThrow(
+        'Failed to spawn 1Password per-access worker',
+      )
     })
 
     it('should throw SecretNotFoundError when worker returns unparseable output', async () => {
@@ -674,10 +690,16 @@ describe('OnePasswordBackend', () => {
 
     it('should throw Error with stderr when worker crashes with no stdout', async () => {
       const backend = makePerAccessBackend()
-      const proc = makeWorkerProcess({ stdout: '', stderr: 'Error: Cannot find module @1password/sdk', exitCode: 1 })
+      const proc = makeWorkerProcess({
+        stdout: '',
+        stderr: 'Error: Cannot find module @1password/sdk',
+        exitCode: 1,
+      })
       mockSpawn.mockReturnValue(proc)
 
-      await expect(backend.retrieve('my-secret')).rejects.toThrow('Cannot find module @1password/sdk')
+      await expect(backend.retrieve('my-secret')).rejects.toThrow(
+        'Cannot find module @1password/sdk',
+      )
     })
 
     it('should throw Error with exit code when worker crashes with no stdout or stderr', async () => {
@@ -686,6 +708,25 @@ describe('OnePasswordBackend', () => {
       mockSpawn.mockReturnValue(proc)
 
       await expect(backend.retrieve('my-secret')).rejects.toThrow('exit code 137')
+    })
+
+    // Regression for https://github.com/mike-north/vaultkeeper/issues/113: when
+    // the optional @1password/sdk peer is absent, the per-access worker reports
+    // a PLUGIN_NOT_FOUND code that the backend must surface as a typed
+    // PluginNotFoundError naming the missing dependency — not a raw crash.
+    it('should throw PluginNotFoundError when worker reports the SDK is missing', async () => {
+      const backend = makePerAccessBackend()
+      const proc = makeWorkerProcess(
+        JSON.stringify({
+          error: '1Password SDK (@1password/sdk) is not installed',
+          code: 'PLUGIN_NOT_FOUND',
+        }),
+      )
+      mockSpawn.mockReturnValue(proc)
+
+      const error = await backend.retrieve('my-secret').catch((err: unknown) => err)
+      expect(error).toBeInstanceOf(PluginNotFoundError)
+      expect(error).toMatchObject({ plugin: '@1password/sdk' })
     })
   })
 
@@ -791,24 +832,24 @@ describe('OnePasswordBackend', () => {
   // ---- createClient timeout ----
 
   describe('session timeout', () => {
-    it(
-      'should throw BackendLockedError when createClient hangs beyond the session timeout',
-      async () => {
-        // createClient never resolves — simulates the known beta SDK hang
-        mockCreateClient.mockReturnValue(new Promise<never>(() => { /* intentionally pending */ }))
+    it('should throw BackendLockedError when createClient hangs beyond the session timeout', async () => {
+      // createClient never resolves — simulates the known beta SDK hang
+      mockCreateClient.mockReturnValue(
+        new Promise<never>(() => {
+          /* intentionally pending */
+        }),
+      )
 
-        // Use a very short timeout (10ms) so the test runs in real time without fake timers
-        const backend = new OnePasswordBackend({
-          vault: VAULT_ID,
-          account: ACCOUNT_NAME,
-          sessionTimeoutMs: 10,
-        })
+      // Use a very short timeout (10ms) so the test runs in real time without fake timers
+      const backend = new OnePasswordBackend({
+        vault: VAULT_ID,
+        account: ACCOUNT_NAME,
+        sessionTimeoutMs: 10,
+      })
 
-        await expect(backend.store('any-key', 'any-val')).rejects.toBeInstanceOf(BackendLockedError)
-      },
-      // Give this test 2s to avoid the global 5s default being a problem
-      2000,
-    )
+      await expect(backend.store('any-key', 'any-val')).rejects.toBeInstanceOf(BackendLockedError)
+    }, // Give this test 2s to avoid the global 5s default being a problem
+    2000)
   })
 
   // ---- vault scoping ----

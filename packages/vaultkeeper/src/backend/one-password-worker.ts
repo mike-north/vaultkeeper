@@ -14,8 +14,6 @@
  * stdout on failure: `{ "error": "<message>", "code": "<code>" }`
  */
 
-import { createClient, DesktopAuth, DesktopSessionExpiredError } from '@1password/sdk'
-
 const TAG = 'vaultkeeper'
 const PASSWORD_FIELD_TITLE = 'password'
 import { INTEGRATION_NAME, getIntegrationVersion } from './one-password-constants.js'
@@ -46,6 +44,18 @@ async function main(): Promise<void> {
     writeFailure('Worker invoked with missing arguments', 'INTERNAL')
     process.exit(1)
   }
+
+  // The SDK is an optional peer dependency, loaded lazily so the worker only
+  // requires it when a per-access retrieval actually runs. Report its absence
+  // with a distinct code the parent maps to a typed PluginNotFoundError.
+  let sdk
+  try {
+    sdk = await import('@1password/sdk')
+  } catch {
+    writeFailure('1Password SDK (@1password/sdk) is not installed', 'PLUGIN_NOT_FOUND')
+    process.exit(1)
+  }
+  const { createClient, DesktopAuth, DesktopSessionExpiredError } = sdk
 
   let client
   try {

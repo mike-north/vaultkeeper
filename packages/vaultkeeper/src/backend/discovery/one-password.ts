@@ -4,13 +4,38 @@
  * @internal
  */
 
-import { createClient, DesktopAuth } from '@1password/sdk'
-import type { Client, VaultOverview } from '@1password/sdk'
-import { SetupError } from '../../errors.js'
+import { PluginNotFoundError, SetupError } from '../../errors.js'
 import type { SetupChoice, SetupQuestion, SetupResult } from '../setup-types.js'
 import { INTEGRATION_NAME, getIntegrationVersion } from '../one-password-constants.js'
 
+// SDK types are referenced type-only; the module itself is loaded lazily via
+// dynamic import() so the optional `@1password/sdk` peer dependency is never
+// required just to import this setup helper.
+type Client = import('@1password/sdk').Client
+type VaultOverview = import('@1password/sdk').VaultOverview
+
+const SDK_PACKAGE = '@1password/sdk'
+const SDK_INSTALL_URL = 'https://developer.1password.com/docs/sdks/'
+
+/**
+ * Dynamically import the 1Password SDK, throwing a typed
+ * {@link PluginNotFoundError} that names the missing peer dependency when it is
+ * not installed.
+ */
+async function loadSdk(): Promise<typeof import('@1password/sdk')> {
+  try {
+    return await import('@1password/sdk')
+  } catch {
+    throw new PluginNotFoundError(
+      '1Password SDK (@1password/sdk) is not installed. Install it to set up the 1Password backend.',
+      SDK_PACKAGE,
+      SDK_INSTALL_URL,
+    )
+  }
+}
+
 async function createSdkClient(accountName: string): Promise<Client> {
+  const { createClient, DesktopAuth } = await loadSdk()
   try {
     return await createClient({
       auth: new DesktopAuth(accountName),
@@ -31,10 +56,7 @@ async function listVaultsFromClient(client: Client): Promise<VaultOverview[]> {
     return await client.vaults.list()
   } catch (error: unknown) {
     const detail = error instanceof Error ? error.message : String(error)
-    throw new SetupError(
-      `Could not list vaults from 1Password: ${detail}`,
-      '1Password SDK',
-    )
+    throw new SetupError(`Could not list vaults from 1Password: ${detail}`, '1Password SDK')
   }
 }
 
@@ -57,7 +79,11 @@ async function listVaultsFromClient(client: Client): Promise<VaultOverview[]> {
  *
  * @internal
  */
-export async function* createOnePasswordSetup(): AsyncGenerator<SetupQuestion, SetupResult, string> {
+export async function* createOnePasswordSetup(): AsyncGenerator<
+  SetupQuestion,
+  SetupResult,
+  string
+> {
   const accountQuestion: SetupQuestion = {
     key: 'account',
     prompt: 'Enter your 1Password account name',
