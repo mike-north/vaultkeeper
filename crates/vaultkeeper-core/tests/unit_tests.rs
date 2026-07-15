@@ -966,6 +966,67 @@ mod doctor_scoping {
         );
     }
 
+    // Issue #116: `checks[].required` must reflect scoping so the CLI can
+    // avoid rendering a failing icon for plugin-backend checks (op/ykman)
+    // that aren't configured — the file backend needs neither.
+    #[tokio::test]
+    async fn file_only_backend_marks_op_and_ykman_as_not_required() {
+        let host = DoctorTestHost {
+            plat: Platform::Linux,
+        };
+        let backends = vec![BackendConfig {
+            backend_type: "file".to_string(),
+            enabled: true,
+            plugin: None,
+            path: None,
+            options: None,
+        }];
+        let result = vaultkeeper_core::doctor::run_doctor(&host, Some(&backends)).await;
+
+        let op = result
+            .checks
+            .iter()
+            .find(|c| c.check.name == "op")
+            .expect("op check present");
+        let ykman = result
+            .checks
+            .iter()
+            .find(|c| c.check.name == "ykman")
+            .expect("ykman check present");
+        assert!(!op.required, "op should not be required for file backend");
+        assert!(
+            !ykman.required,
+            "ykman should not be required for file backend"
+        );
+    }
+
+    // Issue #116, acceptance criterion 3: the yubikey backend promotes
+    // ykman back to required.
+    #[tokio::test]
+    async fn yubikey_backend_marks_ykman_as_required() {
+        let host = DoctorTestHost {
+            plat: Platform::Linux,
+        };
+        let backends = vec![BackendConfig {
+            backend_type: "yubikey".to_string(),
+            enabled: true,
+            plugin: Some(true),
+            path: None,
+            options: None,
+        }];
+        let result = vaultkeeper_core::doctor::run_doctor(&host, Some(&backends)).await;
+
+        let ykman = result
+            .checks
+            .iter()
+            .find(|c| c.check.name == "ykman")
+            .expect("ykman check present");
+        assert!(
+            ykman.required,
+            "ykman should be required when yubikey backend is enabled"
+        );
+    }
+
     #[tokio::test]
     async fn disabled_backend_does_not_require_its_tool() {
         let host = DoctorTestHost {

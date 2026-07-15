@@ -37,7 +37,7 @@ export interface TestVaultOptions {
  * @example
  * ```ts
  * const vault = await TestVault.create()
- * await vault.backend.store('my-secret', 'hunter2')
+ * await vault.store('my-secret', 'hunter2')
  * const jwe = await vault.keeper.setup('my-secret')
  * const { token } = await vault.keeper.authorize(jwe)
  * ```
@@ -84,6 +84,36 @@ export class TestVault {
     })
 
     return new TestVault(keeper, backend)
+  }
+
+  /**
+   * Store a secret in the test backend.
+   *
+   * @remarks
+   * Convenience shorthand for `vault.backend.store(name, value)`.
+   *
+   * @param name - The secret identifier.
+   * @param value - The secret value.
+   * @returns A promise that resolves when the secret has been written.
+   * @public
+   */
+  store(name: string, value: string): Promise<void> {
+    return this.backend.store(name, value)
+  }
+
+  /**
+   * Delete a secret from the test backend.
+   *
+   * @remarks
+   * Convenience shorthand for `vault.backend.delete(name)`. Resolves without
+   * error if the secret does not exist.
+   *
+   * @param name - The secret identifier.
+   * @returns A promise that resolves when the secret has been removed.
+   * @public
+   */
+  delete(name: string): Promise<void> {
+    return this.backend.delete(name)
   }
 
   /**

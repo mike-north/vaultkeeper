@@ -131,6 +131,60 @@ mod doctor {
             || stdout.contains("Next steps");
         assert!(has_output, "expected doctor output: {stdout}");
     }
+
+    // Issue #116: a fresh doctor run whose resolved backend is `file` (the
+    // post-#98 default) must not show a failing check for an unused plugin
+    // backend (ykman/op) — the file backend needs neither. Before the fix,
+    // doctor always rendered every non-Ok check with ✗ regardless of
+    // whether it was required, so a brand-new file-default install looked
+    // broken on the very first command.
+    //
+    // This asserts specifically on the unused plugin-backend lines, not on
+    // overall success/exit code: doctor can legitimately exit 1 (and show a
+    // ✗) for a genuinely missing *core* tool like openssl on some hosts, and
+    // that's an unrelated, orthogonal failure mode this test must not flake
+    // on. The CLI renders each check as `  {icon} {name}...`, so the icon is
+    // immediately followed by the check name.
+    #[test]
+    fn does_not_show_a_failing_check_for_unused_plugin_backends_on_a_fresh_file_default_run() {
+        let (mut cmd, _dir) = cli_test_env();
+        let output = cmd.arg("doctor").output().expect("failed to run");
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            !stdout.contains("\u{2717} ykman"),
+            "expected no failing ykman check: {stdout}"
+        );
+        assert!(
+            !stdout.contains("\u{2717} op"),
+            "expected no failing op check: {stdout}"
+        );
+    }
+
+    // Issue #116, acceptance criterion 3: opt-in backends still get their
+    // dependency checks when actually configured — the yubikey backend
+    // promotes the ykman check back to required, so it's surfaced (most
+    // CI/dev machines don't have ykman installed).
+    #[test]
+    fn surfaces_the_ykman_check_when_the_yubikey_backend_is_configured() {
+        let dir = TempDir::new().expect("failed to create temp dir");
+        let config = serde_json::json!({
+            "version": 1,
+            "backends": [{ "type": "yubikey", "enabled": true, "plugin": true }],
+            "keyRotation": { "gracePeriodDays": 7 },
+            "defaults": { "ttlMinutes": 60, "trustTier": "3" }
+        });
+        fs::write(
+            dir.path().join("config.json"),
+            serde_json::to_string_pretty(&config).unwrap() + "\n",
+        )
+        .expect("failed to write config");
+
+        let mut cmd = Command::cargo_bin("vaultkeeper").expect("binary not found");
+        cmd.env("VAULTKEEPER_CONFIG_DIR", dir.path());
+        cmd.arg("doctor")
+            .assert()
+            .stdout(predicate::str::contains("ykman"));
+    }
 }
 
 // ─── Store and delete lifecycle ──────────────────────────────────

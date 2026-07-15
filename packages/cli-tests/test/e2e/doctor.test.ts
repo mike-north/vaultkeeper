@@ -73,4 +73,40 @@ describe('doctor command', () => {
     expect(result.stderr).toContain('using the default backend (file)')
     expect(result.stderr).toContain('vaultkeeper config init --backend file')
   })
+
+  // Issue #116: a fresh doctor run whose resolved backend is `file` (the
+  // post-#98 default) must not show a failing check for an unused plugin
+  // backend (ykman/op) — the file backend needs neither. Before the fix,
+  // doctor always rendered every non-'ok' check with ✗ regardless of
+  // whether it was required, so a brand-new file-default install looked
+  // broken on the very first command.
+  //
+  // This asserts specifically on the unused plugin-backend lines, not on
+  // overall success/exit code: doctor can legitimately exit 1 (and show a
+  // ✗) for a genuinely missing *core* tool like openssl on some hosts, and
+  // that's an unrelated, orthogonal failure mode this test must not flake
+  // on.
+  it('should not show a failing check for unused plugin backends on a fresh file-default run', async () => {
+    env = await createCliTestEnv() // DEFAULT_CONFIG: file backend only
+    const result = await env.run(['doctor'])
+    expect(result.stdout).not.toMatch(/✗\s*ykman/)
+    expect(result.stdout).not.toMatch(/✗\s*op\b/)
+  })
+
+  // Issue #116, acceptance criterion 3: opt-in backends still get their
+  // dependency checks when actually configured — the yubikey backend
+  // promotes the ykman check back to required, so its absence surfaces as
+  // a failing check (most CI/dev machines don't have ykman installed).
+  it('should surface the ykman check when the yubikey backend is configured', async () => {
+    env = await createCliTestEnv({
+      config: {
+        version: 1,
+        backends: [{ type: 'yubikey', enabled: true, plugin: true }],
+        keyRotation: { gracePeriodDays: 7 },
+        defaults: { ttlMinutes: 60, trustTier: 3 },
+      },
+    })
+    const result = await env.run(['doctor'])
+    expect(result.stdout).toContain('ykman')
+  })
 })

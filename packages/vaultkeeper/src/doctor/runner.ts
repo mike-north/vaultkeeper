@@ -14,7 +14,12 @@ import {
 } from './checks.js'
 import { currentPlatform } from '../util/platform.js'
 import { loadConfig } from '../config.js'
-import type { BackendConfig, PreflightCheck, PreflightResult } from '../types.js'
+import type {
+  BackendConfig,
+  PreflightCheck,
+  PreflightResult,
+  ScopedPreflightCheck,
+} from '../types.js'
 import type { Platform } from '../util/platform.js'
 
 /**
@@ -86,18 +91,19 @@ export async function runDoctor(options?: RunDoctorOptions): Promise<PreflightRe
   // doctor loads and validates the config itself so an invalid config file
   // surfaces as a failing check instead of being invisible to doctor.
   let backends = options?.backends
-  let configCheck: PreflightCheck | undefined
+  let configCheck: ScopedPreflightCheck | undefined
   if (backends === undefined && options?.configDir !== undefined) {
     const configPath = path.join(options.configDir, 'config.json')
     try {
       const config = await loadConfig(options.configDir)
       backends = config.backends
-      configCheck = { name: 'config', status: 'ok', version: configPath }
+      configCheck = { name: 'config', status: 'ok', version: configPath, required: true }
     } catch (err) {
       configCheck = {
         name: 'config',
         status: 'invalid',
         reason: err instanceof Error ? err.message : String(err),
+        required: true,
       }
     }
   }
@@ -149,9 +155,9 @@ export async function runDoctor(options?: RunDoctorOptions): Promise<PreflightRe
     }
   }
 
-  const checks = [
+  const checks: ScopedPreflightCheck[] = [
     ...(configCheck !== undefined ? [configCheck] : []),
-    ...resolved.map(({ result }) => result),
+    ...resolved.map(({ required, result }) => ({ ...result, required })),
   ]
 
   return { checks, ready, warnings, nextSteps }

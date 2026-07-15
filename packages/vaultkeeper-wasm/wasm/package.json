@@ -1,11 +1,11 @@
 {
   "name": "vaultkeeper-wasm",
   "description": "WASM bindings for vaultkeeper — used by the npm package",
-  "version": "0.1.0",
+  "version": "0.2.1",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/user/vaultkeeper"
+    "url": "https://github.com/mike-north/vaultkeeper"
   },
   "files": [
     "vaultkeeper_wasm_bg.wasm",

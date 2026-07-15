@@ -39,6 +39,7 @@ export type {
   KeyStatus,
   PreflightCheckStatus,
   PreflightCheck,
+  ScopedPreflightCheck,
   PreflightResult,
   VaultResponse,
   FetchRequest,

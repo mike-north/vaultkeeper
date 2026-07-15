@@ -98,12 +98,22 @@ export interface AuthorizeResult {
 /** Preflight check status (Rust kebab-case serialization). */
 export type PreflightCheckStatus = 'ok' | 'missing' | 'version-unsupported';
 
-/** Individual preflight check result (Rust snake_case field names). */
+/**
+ * Individual preflight check result. The Rust struct serializes with
+ * `#[serde(rename_all = "camelCase")]`, so the wire/JSON field names here
+ * are camelCase (matching this interface), not the Rust source's
+ * snake_case.
+ *
+ * `required` reflects whether this dependency is required for the
+ * active/configured backend(s); plugin-backend checks (`op`, `ykman`) are
+ * `required: false` when their backend isn't enabled (issue #116).
+ */
 export interface PreflightCheck {
   name: string;
   status: PreflightCheckStatus;
   version?: string | null;
   reason?: string | null;
+  required: boolean;
 }
 
 /** Overall preflight result. */

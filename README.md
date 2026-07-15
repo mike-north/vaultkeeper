@@ -221,9 +221,9 @@ await backend.store('MY_API_KEY', 'my-secret-value')
 ```ts
 import { TestVault } from '@vaultkeeper/test-helpers'
 
-const { keeper, backend } = await TestVault.create()
-await backend.store('MY_API_KEY', 'my-secret-value')
-const jwe = await keeper.setup('MY_API_KEY')
+const vault = await TestVault.create()
+await vault.store('MY_API_KEY', 'my-secret-value')
+const jwe = await vault.keeper.setup('MY_API_KEY')
 ```
 
 ## WASM SDK quick start
@@ -457,12 +457,12 @@ pnpm add -D @vaultkeeper/test-helpers
 ```ts
 import { TestVault } from '@vaultkeeper/test-helpers'
 
-const { keeper, backend } = await TestVault.create()
-await backend.store('MY_SECRET', 'hunter2')
+const vault = await TestVault.create()
+await vault.store('MY_SECRET', 'hunter2')
 
-const jwe = await keeper.setup('MY_SECRET')
-const { token } = await keeper.authorize(jwe)
-const { result } = await keeper.exec(token, {
+const jwe = await vault.keeper.setup('MY_SECRET')
+const { token } = await vault.keeper.authorize(jwe)
+const { result } = await vault.keeper.exec(token, {
   command: 'echo',
   args: ['done'],
   env: { SECRET: '{{secret}}' },
