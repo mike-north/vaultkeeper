@@ -9,5 +9,5 @@ The detached payload bytes that were signed. Strings are treated as UTF-8.
 **Signature:**
 
 ```typescript
-payload: string | Buffer$1;
+payload: string | Buffer;
 ```

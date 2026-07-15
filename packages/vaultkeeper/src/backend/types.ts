@@ -2,6 +2,12 @@
  * Backend abstraction layer types for vaultkeeper.
  */
 
+// Import Buffer from node:buffer (rather than relying on the ambient global) so
+// the API Extractor rollup sees a single Buffer symbol shared with types.ts —
+// otherwise it disambiguates them as `Buffer` / `Buffer$1` in the generated
+// .d.ts and docs.
+import type { Buffer } from 'node:buffer'
+
 /**
  * Factory function for creating a SecretBackend instance.
  *

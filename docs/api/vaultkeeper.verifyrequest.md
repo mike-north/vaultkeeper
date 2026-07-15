@@ -66,7 +66,7 @@ The detached-payload compact JWS produced by [SignResult.jws](./vaultkeeper.sign
 
 </td><td>
 
-string \| Buffer$1
+string \| Buffer
 
 
 </td><td>

@@ -47,7 +47,7 @@ Description
 
 </td><td>
 
-string \| Buffer$1
+string \| Buffer
 
 
 </td><td>

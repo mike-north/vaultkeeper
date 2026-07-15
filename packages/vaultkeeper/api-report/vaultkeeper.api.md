@@ -354,7 +354,7 @@ export type SigningAlgorithm = 'EdDSA';
 export interface SigningBackend extends SecretBackend {
     generateSigningKey(id: string, algorithm: SigningAlgorithm): Promise<void>;
     getPublicKey(id: string): Promise<SigningPublicKey>;
-    signWithKey(id: string, data: Buffer): Promise<Buffer>;
+    signWithKey(id: string, data: Buffer_2): Promise<Buffer_2>;
 }
 
 // @public
