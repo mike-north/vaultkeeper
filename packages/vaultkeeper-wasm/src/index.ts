@@ -58,6 +58,7 @@ export {
   RotationInProgressError,
   AccessorConsumedError,
   ExecutableTrustRequiredError,
+  IdentityMismatchError,
 } from './errors.js';
 export type { ExecutableTrustRequiredReason } from './errors.js';
 
@@ -172,15 +173,21 @@ export class VaultKeeper {
    * `vaultkeeper` library's `setup()`, this method no longer defaults to
    * skipping the executable-identity binding. The caller must make an
    * unambiguous decision via {@link SetupOptions}: provide exactly one of
-   * {@link SetupOptions.executablePath} (bind the calling executable's identity
-   * into the token) or {@link SetupOptions.skipTrust} (`true` — a
-   * development-only opt-out). This binding records the declared identity into
-   * the token's `exe` claim; it does not itself run TOFU/manifest verification.
-   * Supplying neither — or both — or the retired `'dev'` sentinel as
-   * `executablePath` throws {@link ExecutableTrustRequiredError} rather than
-   * silently minting an unbound `'dev'` token. Inspect the error's
-   * `reason` (`'missing-choice'` | `'conflicting-choice'` |
-   * `'legacy-dev-sentinel'`) to distinguish the cases.
+   * {@link SetupOptions.executablePath} (verify and bind the calling
+   * executable's identity into the token) or {@link SetupOptions.skipTrust}
+   * (`true` — a development-only opt-out). Supplying neither — or both — or the
+   * retired `'dev'` sentinel as `executablePath` throws
+   * {@link ExecutableTrustRequiredError} rather than silently minting an unbound
+   * `'dev'` token. Inspect the error's `reason` (`'missing-choice'` |
+   * `'conflicting-choice'` | `'legacy-dev-sentinel'`) to distinguish the cases.
+   *
+   * **Executable-trust verification.** When `executablePath` is supplied, the
+   * executable is hashed and run through trust verification (Sigstore →
+   * trust-manifest match → TOFU first-encounter), and the verified hash is bound
+   * into the token's `exe` claim. A hash that conflicts with a previously
+   * approved value throws {@link IdentityMismatchError}. The first-encounter
+   * TOFU record is persisted only after the token has been minted, so a failed
+   * `setup()` never leaves a premature trust record behind.
    *
    * **Backend divergence.** Unlike the TypeScript `vaultkeeper` library's
    * `setup(secretName, options?)`, this method does not read from the backend —
@@ -193,9 +200,11 @@ export class VaultKeeper {
    * @throws {@link ExecutableTrustRequiredError} If neither `executablePath` nor
    *   `skipTrust: true` is provided, if both are, or if `executablePath` is the
    *   retired legacy `'dev'` opt-out sentinel (use `skipTrust: true`).
+   * @throws {@link IdentityMismatchError} If `executablePath`'s current hash no
+   *   longer matches a previously approved value (TOFU conflict).
    */
-  setup(secretName: string, secretValue: string, options?: SetupOptions): string {
-    return callSync(() => this.#inner.setup(secretName, secretValue, options ?? {}));
+  async setup(secretName: string, secretValue: string, options?: SetupOptions): Promise<string> {
+    return callAsync(() => this.#inner.setup(secretName, secretValue, options ?? {}));
   }
 
   /**

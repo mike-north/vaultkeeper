@@ -234,15 +234,73 @@ export class ExecutableTrustRequiredError extends VaultError {
   }
 }
 
+/**
+ * Thrown by `setup()` when the executable at `executablePath` has a hash that
+ * conflicts with a value previously approved for it under trust-on-first-use.
+ *
+ * Mirrors the pure-TypeScript `vaultkeeper` library's `IdentityMismatchError`:
+ * the first encounter with an executable records its hash, and a later hash
+ * change (a rebuilt or substituted binary) surfaces here rather than silently
+ * re-approving. Re-approval is required before the executable can be bound
+ * again. Inspect {@link IdentityMismatchError.previousHash} and
+ * {@link IdentityMismatchError.currentHash} to see what changed.
+ */
+export class IdentityMismatchError extends VaultError {
+  /**
+   * The hash recorded at approval time (most-recently approved value).
+   * `undefined` only if the WASM boundary did not supply one — never
+   * fabricated, so its absence is distinguishable from a genuine hash.
+   */
+  readonly previousHash?: string;
+
+  /**
+   * The hash computed from the current executable. `undefined` only if the
+   * WASM boundary did not supply one — never fabricated.
+   */
+  readonly currentHash?: string;
+
+  constructor(message: string, previousHash?: string, currentHash?: string) {
+    super(message);
+    this.name = 'IdentityMismatchError';
+    if (previousHash !== undefined) {
+      this.previousHash = previousHash;
+    }
+    if (currentHash !== undefined) {
+      this.currentHash = currentHash;
+    }
+  }
+}
+
 /** Shape of the tagged error value thrown across the WASM boundary. */
 interface WasmErrorShape {
   vaultErrorCode: string;
   message: string;
-  canRefresh?: boolean;
-  path?: string;
-  reason?: string;
-  permission?: string;
-  code?: string;
+  // Only `vaultErrorCode` and `message` are validated by isWasmErrorShape;
+  // the rest are typed `unknown` so consumers are forced to narrow through
+  // optionalString/optionalBoolean instead of trusting a malformed boundary
+  // value to honor the field types.
+  canRefresh?: unknown;
+  path?: unknown;
+  reason?: unknown;
+  permission?: unknown;
+  code?: unknown;
+  previousHash?: unknown;
+  currentHash?: unknown;
+}
+
+/**
+ * Narrow an unvalidated boundary field to `string | undefined` — non-string
+ * values (including `null`) become `undefined`, never a fabricated string,
+ * so the typed errors' documented `string | undefined` contracts hold even
+ * for malformed boundary shapes.
+ */
+function optionalString(value: unknown): string | undefined {
+  return typeof value === 'string' ? value : undefined;
+}
+
+/** Boolean analogue of {@link optionalString}: non-booleans become `undefined`. */
+function optionalBoolean(value: unknown): boolean | undefined {
+  return typeof value === 'boolean' ? value : undefined;
 }
 
 function isWasmErrorShape(value: unknown): value is WasmErrorShape {
@@ -256,7 +314,7 @@ function isWasmErrorShape(value: unknown): value is WasmErrorShape {
  * Falls back to `'missing-choice'` for any unrecognized value so the typed
  * error is always constructible.
  */
-function toTrustRequiredReason(reason: string | undefined): ExecutableTrustRequiredReason {
+function toTrustRequiredReason(reason: unknown): ExecutableTrustRequiredReason {
   switch (reason) {
     case 'conflicting-choice':
     case 'legacy-dev-sentinel':
@@ -280,7 +338,7 @@ export function mapWasmError(thrown: unknown): VaultError {
       case 'secret-not-found':
         return new SecretNotFoundError(message);
       case 'decryption':
-        return new DecryptionError(message, thrown.path);
+        return new DecryptionError(message, optionalString(thrown.path));
       case 'filesystem':
         // A `filesystem`-coded thrown value is still more informative as a
         // `FilesystemError` with undefined `path`/`permission` than a
@@ -289,11 +347,16 @@ export function mapWasmError(thrown: unknown): VaultError {
         // all. Pass `path`/`permission` through as-is — never fabricate a
         // fallback value — mirroring how `decryption`'s `path` is handled
         // above.
-        return new FilesystemError(message, thrown.path, thrown.permission, thrown.code);
+        return new FilesystemError(
+          message,
+          optionalString(thrown.path),
+          optionalString(thrown.permission),
+          optionalString(thrown.code),
+        );
       case 'invalid-token':
         return new InvalidTokenError(message);
       case 'token-expired':
-        return new TokenExpiredError(message, thrown.canRefresh ?? false);
+        return new TokenExpiredError(message, optionalBoolean(thrown.canRefresh) ?? false);
       case 'key-rotated':
         return new KeyRotatedError(message);
       case 'key-revoked':
@@ -308,6 +371,16 @@ export function mapWasmError(thrown: unknown): VaultError {
         return new AccessorConsumedError(message);
       case 'executable-trust-required':
         return new ExecutableTrustRequiredError(message, toTrustRequiredReason(thrown.reason));
+      case 'identity-mismatch':
+        // Sanitize the hashes: a malformed boundary value (e.g. `null`) must not
+        // land as a non-string field and violate IdentityMismatchError's
+        // documented `string | undefined` contract — leave it honestly
+        // undefined, exactly as every other pass-through field above.
+        return new IdentityMismatchError(
+          message,
+          optionalString(thrown.previousHash),
+          optionalString(thrown.currentHash),
+        );
       default:
         return new VaultError(message);
     }

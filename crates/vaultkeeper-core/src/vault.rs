@@ -136,13 +136,25 @@ impl VaultKeeper {
     ///
     /// The caller must make an explicit executable-trust decision via
     /// [`SetupOptions`]: supply exactly one of
-    /// [`SetupOptions::executable_path`] (bind the token to a real executable)
-    /// or [`SetupOptions::skip_trust`] (a development-only opt-out). Supplying
-    /// neither, both, or the retired `"dev"` sentinel as `executable_path`
-    /// returns [`VaultError::ExecutableTrustRequired`] rather than silently
-    /// minting an unverified `"dev"`-bound token.
-    pub fn setup(
+    /// [`SetupOptions::executable_path`] (verify and bind the calling
+    /// executable) or [`SetupOptions::skip_trust`] (a development-only opt-out).
+    /// Supplying neither, both, or the retired `"dev"` sentinel as
+    /// `executable_path` returns [`VaultError::ExecutableTrustRequired`] rather
+    /// than silently minting an unverified `"dev"`-bound token.
+    ///
+    /// When an `executable_path` is supplied, the executable is hashed and run
+    /// through trust verification ([`crate::identity::trust`]): Sigstore →
+    /// trust-manifest match → TOFU first-encounter. A hash that conflicts with a
+    /// previously approved value returns [`VaultError::IdentityMismatch`]. The
+    /// verified hash is bound into the token's `exe` claim.
+    ///
+    /// **Ordering (issue #148):** shape validation fails fast before any side
+    /// effect, and a first-encounter TOFU manifest write is committed only after
+    /// the token has successfully minted — so a failed `setup()` never leaves a
+    /// premature trust record behind.
+    pub async fn setup(
         &self,
+        host: &dyn HostPlatform,
         secret_name: &str,
         secret_value: &str,
         options: Option<&SetupOptions>,
@@ -151,7 +163,9 @@ impl VaultKeeper {
             .and_then(|o| o.ttl_minutes)
             .unwrap_or(self.config.defaults.ttl_minutes);
         let use_limit = options.and_then(|o| o.use_limit);
-        let exe = Self::resolve_executable_identity(options)?;
+        // Verify phase: validates the trust choice and computes the identity to
+        // bind, but defers any manifest write to `pending_trust.commit()` below.
+        let (exe, pending_trust) = Self::resolve_executable_identity(host, options).await?;
         let trust_tier = options
             .and_then(|o| o.trust_tier)
             .unwrap_or(self.config.defaults.trust_tier);
@@ -176,27 +190,45 @@ impl VaultKeeper {
         };
 
         let current_key = self.key_manager.get_current_key()?;
-        create_token(
+        let token = create_token(
             &current_key.key,
             &claims,
             &CreateTokenOptions {
                 kid: Some(current_key.id.clone()),
             },
-        )
+        )?;
+
+        // Commit the deferred TOFU manifest write only now that the token has
+        // minted successfully. A failure anywhere above leaves the manifest
+        // untouched (issue #148). A no-op when there is nothing to record
+        // (skip_trust, a manifest/Sigstore match, or a conflict).
+        if let Some(pending) = pending_trust {
+            pending.commit(host).await?;
+        }
+
+        Ok(token)
     }
 
     /// Resolve the executable identity to bind into a token, requiring an
     /// explicit trust decision from the caller.
     ///
-    /// Returns the sentinel `"dev"` (no executable binding) when trust is
-    /// deliberately skipped; otherwise returns the caller-supplied executable
-    /// path, which is bound into the token's `exe` claim. This binding records
-    /// the caller's declared identity — it does not itself run TOFU/manifest
-    /// verification (that lives in `identity::trust::verify_trust`). Returns
-    /// [`VaultError::ExecutableTrustRequired`] when the caller makes no
+    /// Returns the sentinel `"dev"` (no executable binding, nothing to commit)
+    /// when trust is deliberately skipped; otherwise hashes the supplied
+    /// executable and runs it through trust verification
+    /// ([`crate::identity::trust::verify_trust_pending`]) — Sigstore →
+    /// trust-manifest match → TOFU first-encounter — returning the verified hash
+    /// to bind into the token's `exe` claim, together with any deferred manifest
+    /// write for the caller to commit after the token mints (issue #148).
+    ///
+    /// Returns [`VaultError::ExecutableTrustRequired`] when the caller makes no
     /// unambiguous choice — mirroring the TypeScript library's
-    /// `ExecutableTrustRequiredError` (message + `reason` discriminator).
-    fn resolve_executable_identity(options: Option<&SetupOptions>) -> Result<String, VaultError> {
+    /// `ExecutableTrustRequiredError` (message + `reason` discriminator) — or
+    /// [`VaultError::IdentityMismatch`] when the executable's current hash
+    /// conflicts with a previously approved value (TOFU conflict).
+    async fn resolve_executable_identity(
+        host: &dyn HostPlatform,
+        options: Option<&SetupOptions>,
+    ) -> Result<(String, Option<crate::identity::trust::PendingTrust>), VaultError> {
         let executable_path = options.and_then(|o| o.executable_path.as_deref());
         let skip_trust = options.and_then(|o| o.skip_trust).unwrap_or(false);
 
@@ -214,47 +246,75 @@ impl VaultKeeper {
 
         if skip_trust {
             // Explicit, greppable development-only opt-out: no executable identity
-            // is bound.
-            return Ok("dev".to_string());
+            // is bound and nothing is recorded.
+            return Ok(("dev".to_string(), None));
         }
 
-        match executable_path {
-            None => Err(VaultError::ExecutableTrustRequired {
-                message: "VaultKeeper::setup() requires an explicit executable-trust choice and \
-                          no longer defaults to skipping it. Either set \
-                          SetupOptions.executable_path to the calling executable's real path \
-                          (binds that identity into the token), or set SetupOptions.skip_trust: \
-                          Some(true) to deliberately skip the binding (development only)."
-                    .to_string(),
-                reason: ExecutableTrustRequiredReason::MissingChoice,
-            }),
+        let path = match executable_path {
+            None => {
+                return Err(VaultError::ExecutableTrustRequired {
+                    message:
+                        "VaultKeeper::setup() requires an explicit executable-trust choice and \
+                              no longer defaults to skipping it. Either set \
+                              SetupOptions.executable_path to the calling executable's real path \
+                              (verifies and binds that identity into the token), or set \
+                              SetupOptions.skip_trust: Some(true) to deliberately skip the binding \
+                              (development only)."
+                            .to_string(),
+                    reason: ExecutableTrustRequiredReason::MissingChoice,
+                });
+            }
             // Reject the retired legacy opt-out sentinel. Before explicit-trust,
             // executable_path: "dev" was the documented way to skip the identity
             // binding; point migrating callers at the dedicated opt-out.
-            Some("dev") => Err(VaultError::ExecutableTrustRequired {
-                message: "VaultKeeper::setup() no longer supports the legacy SetupOptions.executable_path: \
-                          \"dev\" sentinel for skipping the identity binding. Set SetupOptions.skip_trust: \
-                          Some(true) to deliberately skip the binding (development only), or set \
-                          SetupOptions.executable_path to the calling executable's real path to bind it."
-                    .to_string(),
-                reason: ExecutableTrustRequiredReason::LegacyDevSentinel,
-            }),
+            Some("dev") => {
+                return Err(VaultError::ExecutableTrustRequired {
+                    message: "VaultKeeper::setup() no longer supports the legacy SetupOptions.executable_path: \
+                              \"dev\" sentinel for skipping the identity binding. Set SetupOptions.skip_trust: \
+                              Some(true) to deliberately skip the binding (development only), or set \
+                              SetupOptions.executable_path to the calling executable's real path to bind it."
+                        .to_string(),
+                    reason: ExecutableTrustRequiredReason::LegacyDevSentinel,
+                });
+            }
             // An empty or whitespace-only executable path is not a real trust
             // choice: it would mint a token whose `exe` claim fails the
             // not-empty invariant in validate_claims(), so authorize() would
             // later reject it as an unusable token. Reject it up front as a
-            // missing choice rather than minting the bad token.
-            Some(path) if path.trim().is_empty() => Err(VaultError::ExecutableTrustRequired {
-                message: "VaultKeeper::setup() received an empty SetupOptions.executable_path, which \
-                          is not a valid executable-trust choice. Set SetupOptions.executable_path to \
-                          the calling executable's real path (binds that identity into the token), \
-                          or set SetupOptions.skip_trust: Some(true) to deliberately skip the binding \
-                          (development only)."
-                    .to_string(),
-                reason: ExecutableTrustRequiredReason::MissingChoice,
-            }),
-            Some(path) => Ok(path.to_string()),
+            // missing choice rather than hashing and minting the bad token.
+            Some(path) if path.trim().is_empty() => {
+                return Err(VaultError::ExecutableTrustRequired {
+                    message: "VaultKeeper::setup() received an empty SetupOptions.executable_path, which \
+                              is not a valid executable-trust choice. Set SetupOptions.executable_path to \
+                              the calling executable's real path (verifies and binds that identity into the \
+                              token), or set SetupOptions.skip_trust: Some(true) to deliberately skip the \
+                              binding (development only)."
+                        .to_string(),
+                    reason: ExecutableTrustRequiredReason::MissingChoice,
+                });
+            }
+            Some(path) => path,
+        };
+
+        // Verify phase (no side effect yet): hash + manifest consultation.
+        let pending = crate::identity::trust::verify_trust_pending(host, path, None).await?;
+
+        if pending.tofu_conflict {
+            // Mirror the TypeScript library's `#resolveExecutableIdentity`: on a
+            // conflict report the most-recently approved hash as the previous one.
+            let previous_hash = pending
+                .approved_hashes
+                .last()
+                .cloned()
+                .unwrap_or_else(|| pending.identity.hash.clone());
+            return Err(VaultError::IdentityMismatch {
+                message: "Executable hash changed — re-approval required".to_string(),
+                previous_hash,
+                current_hash: pending.identity.hash.clone(),
+            });
         }
+
+        Ok((pending.identity.hash.clone(), Some(pending)))
     }
 
     /// Decrypt a JWE token, validate its claims, and return the claims

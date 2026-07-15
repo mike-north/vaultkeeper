@@ -598,6 +598,15 @@ mod vault_keeper {
                 config_dir,
             }
         }
+
+        /// Seed an in-memory file (e.g. a fake executable to hash for trust
+        /// verification).
+        fn add_file(&self, path: &str, content: &[u8]) {
+            self.files
+                .lock()
+                .unwrap()
+                .insert(PathBuf::from(path), content.to_vec());
+        }
     }
 
     #[async_trait::async_trait]
@@ -699,6 +708,7 @@ mod vault_keeper {
 
         let token = vault
             .setup(
+                &host,
                 "my-secret",
                 "s3cret-value",
                 Some(&vaultkeeper_core::vault::SetupOptions {
@@ -706,6 +716,7 @@ mod vault_keeper {
                     ..Default::default()
                 }),
             )
+            .await
             .unwrap();
 
         // JWE compact serialization has 5 dot-separated parts
@@ -714,9 +725,9 @@ mod vault_keeper {
 
     // --- Explicit executable-trust contract (parity with #123/#131) ---
 
-    async fn dev_vault() -> VaultKeeper {
+    async fn dev_vault() -> (TestHost, VaultKeeper) {
         let host = TestHost::with_config();
-        VaultKeeper::init(
+        let vault = VaultKeeper::init(
             &host,
             Some(VaultKeeperOptions {
                 skip_doctor: true,
@@ -724,15 +735,50 @@ mod vault_keeper {
             }),
         )
         .await
-        .unwrap()
+        .unwrap();
+        (host, vault)
     }
+
+    /// Load the on-disk trust manifest for a `TestHost` as a JSON value, or
+    /// `None` when no manifest has been written. Lets trust tests assert on the
+    /// manifest without depending on core-internal manifest types.
+    fn read_trust_manifest(host: &TestHost) -> Option<serde_json::Value> {
+        let path = host.config_dir().join("trust-manifest.json");
+        let bytes = host.files.lock().unwrap().get(&path).cloned()?;
+        Some(serde_json::from_slice(&bytes).expect("trust manifest is valid JSON"))
+    }
+
+    /// True when `hash` appears among the approved hashes for `namespace` in the
+    /// written trust manifest.
+    fn manifest_has_hash(host: &TestHost, namespace: &str, hash: &str) -> bool {
+        let Some(manifest) = read_trust_manifest(host) else {
+            return false;
+        };
+        manifest
+            .get("entries")
+            .and_then(|e| e.get(namespace))
+            .and_then(|entry| entry.get("hashes"))
+            .and_then(|h| h.as_array())
+            .is_some_and(|hashes| hashes.iter().any(|h| h.as_str() == Some(hash)))
+    }
+
+    // SHA-256 hex digests of the fake executable bytes used by the trust tests,
+    // computed independently (`printf '<bytes>' | shasum -a 256`) so assertions
+    // are spec-derived, not read back from the implementation.
+    // @see RFC 6234 (SHA-256)
+    const HASH_APP_BINARY_BYTES: &str =
+        "b6bfaadaaa3dc2d0024335b614af5360df7492b3f28dd7d5bb8c17019624cfc7";
+    const HASH_ORIGINAL_BYTES: &str =
+        "8e338be649868e7c9e053212037e4bb0965ba7653e81b974bab76578bd59c80a";
+    const HASH_TAMPERED_BYTES: &str =
+        "dd7046110708421cd0c00f2c1ebcb4e5b4c3790cbd821377e3b9bf0274f7c0ed";
 
     /// #147: setup() with no options must not silently mint an unverified token —
     /// it requires an explicit executable-trust choice (missing-choice).
     #[tokio::test]
     async fn setup_without_options_rejects_missing_choice() {
-        let vault = dev_vault().await;
-        let err = vault.setup("s", "v", None).unwrap_err();
+        let (host, vault) = dev_vault().await;
+        let err = vault.setup(&host, "s", "v", None).await.unwrap_err();
         match err {
             VaultError::ExecutableTrustRequired { reason, .. } => {
                 assert_eq!(reason, ExecutableTrustRequiredReason::MissingChoice);
@@ -745,9 +791,9 @@ mod vault_keeper {
     /// missing choice, not a silent default to "dev".
     #[tokio::test]
     async fn setup_with_empty_options_rejects_missing_choice() {
-        let vault = dev_vault().await;
+        let (host, vault) = dev_vault().await;
         let opts = vaultkeeper_core::vault::SetupOptions::default();
-        let err = vault.setup("s", "v", Some(&opts)).unwrap_err();
+        let err = vault.setup(&host, "s", "v", Some(&opts)).await.unwrap_err();
         match err {
             VaultError::ExecutableTrustRequired { reason, .. } => {
                 assert_eq!(reason, ExecutableTrustRequiredReason::MissingChoice);
@@ -760,13 +806,13 @@ mod vault_keeper {
     /// (mutually exclusive) choice.
     #[tokio::test]
     async fn setup_with_conflicting_choice_rejects() {
-        let vault = dev_vault().await;
+        let (host, vault) = dev_vault().await;
         let opts = vaultkeeper_core::vault::SetupOptions {
             executable_path: Some("/usr/bin/node".to_string()),
             skip_trust: Some(true),
             ..Default::default()
         };
-        let err = vault.setup("s", "v", Some(&opts)).unwrap_err();
+        let err = vault.setup(&host, "s", "v", Some(&opts)).await.unwrap_err();
         match err {
             VaultError::ExecutableTrustRequired { reason, .. } => {
                 assert_eq!(reason, ExecutableTrustRequiredReason::ConflictingChoice);
@@ -779,12 +825,12 @@ mod vault_keeper {
     /// pointing migrating callers at skip_trust.
     #[tokio::test]
     async fn setup_with_legacy_dev_sentinel_rejects() {
-        let vault = dev_vault().await;
+        let (host, vault) = dev_vault().await;
         let opts = vaultkeeper_core::vault::SetupOptions {
             executable_path: Some("dev".to_string()),
             ..Default::default()
         };
-        let err = vault.setup("s", "v", Some(&opts)).unwrap_err();
+        let err = vault.setup(&host, "s", "v", Some(&opts)).await.unwrap_err();
         match err {
             VaultError::ExecutableTrustRequired { reason, .. } => {
                 assert_eq!(reason, ExecutableTrustRequiredReason::LegacyDevSentinel);
@@ -797,41 +843,131 @@ mod vault_keeper {
     /// "dev" sentinel identity.
     #[tokio::test]
     async fn setup_with_skip_trust_binds_dev_identity() {
-        let mut vault = dev_vault().await;
+        let (host, mut vault) = dev_vault().await;
         let opts = vaultkeeper_core::vault::SetupOptions {
             skip_trust: Some(true),
             ..Default::default()
         };
-        let token = vault.setup("s", "v", Some(&opts)).unwrap();
+        let token = vault.setup(&host, "s", "v", Some(&opts)).await.unwrap();
         let (claims, _) = vault.authorize(&token).unwrap();
         assert_eq!(claims.exe, "dev");
     }
 
-    /// #147: an explicit executable_path binds that path into the token.
+    /// #166: an explicit executable_path is verified (hashed + TOFU-recorded) and
+    /// the *verified hash* — not the raw path — is bound into the token's `exe`
+    /// claim. A first encounter records the hash in the trust manifest.
     #[tokio::test]
-    async fn setup_with_executable_path_binds_it() {
-        let mut vault = dev_vault().await;
+    async fn setup_with_executable_path_verifies_and_records_hash() {
+        let (host, mut vault) = dev_vault().await;
+        host.add_file("/usr/bin/app", b"app-binary-bytes");
+
         let opts = vaultkeeper_core::vault::SetupOptions {
-            executable_path: Some("/usr/bin/node".to_string()),
+            executable_path: Some("/usr/bin/app".to_string()),
             ..Default::default()
         };
-        let token = vault.setup("s", "v", Some(&opts)).unwrap();
+        let token = vault.setup(&host, "s", "v", Some(&opts)).await.unwrap();
         let (claims, _) = vault.authorize(&token).unwrap();
-        assert_eq!(claims.exe, "/usr/bin/node");
+
+        // exe claim holds the verified hash (mirrors the TS library), not the path.
+        assert_eq!(claims.exe, HASH_APP_BINARY_BYTES);
+        // First encounter recorded the hash under the executable's namespace.
+        assert!(manifest_has_hash(
+            &host,
+            "/usr/bin/app",
+            HASH_APP_BINARY_BYTES
+        ));
+    }
+
+    /// #166: a second setup for the same unchanged executable matches the
+    /// recorded hash (registry tier) and succeeds, binding the same hash.
+    #[tokio::test]
+    async fn setup_with_executable_path_matching_hash_passes() {
+        let (host, mut vault) = dev_vault().await;
+        host.add_file("/usr/bin/app", b"app-binary-bytes");
+        let opts = vaultkeeper_core::vault::SetupOptions {
+            executable_path: Some("/usr/bin/app".to_string()),
+            ..Default::default()
+        };
+
+        // First encounter records the hash.
+        vault.setup(&host, "s", "v", Some(&opts)).await.unwrap();
+        // Second setup finds the matching hash and still binds it.
+        let token = vault.setup(&host, "s", "v", Some(&opts)).await.unwrap();
+        let (claims, _) = vault.authorize(&token).unwrap();
+        assert_eq!(claims.exe, HASH_APP_BINARY_BYTES);
+    }
+
+    /// #166 / #148: when the executable's hash changes from a previously approved
+    /// value, setup() fails with IdentityMismatch and the conflicting (new) hash
+    /// is never written to the manifest — the failed setup leaves it unchanged.
+    #[tokio::test]
+    async fn setup_with_executable_path_conflicting_hash_errors_and_records_nothing() {
+        let (host, vault) = dev_vault().await;
+        host.add_file("/usr/bin/app", b"original-bytes");
+        let opts = vaultkeeper_core::vault::SetupOptions {
+            executable_path: Some("/usr/bin/app".to_string()),
+            ..Default::default()
+        };
+
+        // First encounter records the original hash.
+        vault.setup(&host, "s", "v", Some(&opts)).await.unwrap();
+
+        // Tamper with the executable so its hash changes.
+        host.add_file("/usr/bin/app", b"tampered-bytes");
+        let err = vault.setup(&host, "s", "v", Some(&opts)).await.unwrap_err();
+        match err {
+            VaultError::IdentityMismatch {
+                previous_hash,
+                current_hash,
+                ..
+            } => {
+                assert_eq!(previous_hash, HASH_ORIGINAL_BYTES);
+                assert_eq!(current_hash, HASH_TAMPERED_BYTES);
+            }
+            other => panic!("expected IdentityMismatch, got {other:?}"),
+        }
+
+        // The failed setup wrote nothing new: only the original hash remains.
+        assert!(manifest_has_hash(
+            &host,
+            "/usr/bin/app",
+            HASH_ORIGINAL_BYTES
+        ));
+        assert!(!manifest_has_hash(
+            &host,
+            "/usr/bin/app",
+            HASH_TAMPERED_BYTES
+        ));
+    }
+
+    /// #166 / #148: a setup that fails during verification (the executable
+    /// cannot be read/hashed) leaves the trust manifest entirely unwritten.
+    #[tokio::test]
+    async fn setup_with_unreadable_executable_leaves_manifest_unwritten() {
+        let (host, vault) = dev_vault().await;
+        // Note: no file seeded at this path, so hashing fails.
+        let opts = vaultkeeper_core::vault::SetupOptions {
+            executable_path: Some("/usr/bin/missing".to_string()),
+            ..Default::default()
+        };
+        let err = vault.setup(&host, "s", "v", Some(&opts)).await.unwrap_err();
+        // Verification failed before any token minted; nothing was recorded.
+        assert!(!matches!(err, VaultError::ExecutableTrustRequired { .. }));
+        assert!(read_trust_manifest(&host).is_none());
     }
 
     /// #147 (review): an empty or whitespace-only executable_path is not a valid
-    /// trust choice — it must be rejected up front, not minted into a token
-    /// whose empty `exe` claim authorize() would later reject as unusable.
+    /// trust choice — it must be rejected up front, not hashed or minted into a
+    /// token whose empty `exe` claim authorize() would later reject as unusable.
     #[tokio::test]
     async fn setup_with_empty_executable_path_rejects_missing_choice() {
         for bad in ["", "   ", "\t"] {
-            let vault = dev_vault().await;
+            let (host, vault) = dev_vault().await;
             let opts = vaultkeeper_core::vault::SetupOptions {
                 executable_path: Some(bad.to_string()),
                 ..Default::default()
             };
-            let err = vault.setup("s", "v", Some(&opts)).unwrap_err();
+            let err = vault.setup(&host, "s", "v", Some(&opts)).await.unwrap_err();
             match err {
                 VaultError::ExecutableTrustRequired { reason, .. } => {
                     assert_eq!(
@@ -860,6 +996,7 @@ mod vault_keeper {
 
         let token = vault
             .setup(
+                &host,
                 "db-password",
                 "hunter2",
                 Some(&vaultkeeper_core::vault::SetupOptions {
@@ -867,6 +1004,7 @@ mod vault_keeper {
                     ..Default::default()
                 }),
             )
+            .await
             .unwrap();
         let (claims, response) = vault.authorize(&token).unwrap();
 
@@ -894,6 +1032,7 @@ mod vault_keeper {
         // Create token with initial key
         let token = vault
             .setup(
+                &host,
                 "api-key",
                 "abc123",
                 Some(&vaultkeeper_core::vault::SetupOptions {
@@ -901,6 +1040,7 @@ mod vault_keeper {
                     ..Default::default()
                 }),
             )
+            .await
             .unwrap();
 
         // Rotate the key
@@ -936,6 +1076,7 @@ mod vault_keeper {
 
         let token = vault
             .setup(
+                &host,
                 "key",
                 "val",
                 Some(&vaultkeeper_core::vault::SetupOptions {
@@ -943,6 +1084,7 @@ mod vault_keeper {
                     ..Default::default()
                 }),
             )
+            .await
             .unwrap();
 
         // Revoke all keys — generates a completely new key
@@ -971,7 +1113,7 @@ mod vault_keeper {
             skip_trust: Some(true),
             ..Default::default()
         };
-        let token = vault.setup("key", "val", Some(&opts)).unwrap();
+        let token = vault.setup(&host, "key", "val", Some(&opts)).await.unwrap();
         let (claims, _) = vault.authorize(&token).unwrap();
 
         // Token should expire in ~5 minutes
@@ -1025,7 +1167,10 @@ mod vault_keeper {
             skip_trust: Some(true),
             ..Default::default()
         };
-        let token = vault.setup("limited", "val", Some(&opts)).unwrap();
+        let token = vault
+            .setup(&host, "limited", "val", Some(&opts))
+            .await
+            .unwrap();
 
         // First two authorizations succeed
         let (claims, _) = vault.authorize(&token).unwrap();

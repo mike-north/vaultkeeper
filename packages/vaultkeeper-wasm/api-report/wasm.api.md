@@ -49,6 +49,13 @@ export class FilesystemError extends VaultError {
 }
 
 // @public
+export class IdentityMismatchError extends VaultError {
+    constructor(message: string, previousHash?: string, currentHash?: string);
+    readonly currentHash?: string;
+    readonly previousHash?: string;
+}
+
+// @public
 export class InvalidTokenError extends VaultError {
     constructor(message: string);
 }
@@ -204,7 +211,7 @@ export class VaultKeeper {
     retrieve(id: string): Promise<string>;
     revokeKey(): void;
     rotateKey(): void;
-    setup(secretName: string, secretValue: string, options?: SetupOptions): string;
+    setup(secretName: string, secretValue: string, options?: SetupOptions): Promise<string>;
     store(id: string, secret: string): Promise<void>;
 }
 

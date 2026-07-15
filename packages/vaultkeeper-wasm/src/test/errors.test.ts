@@ -14,7 +14,13 @@
 
 import { describe, it } from 'node:test';
 import * as assert from 'node:assert/strict';
-import { mapWasmError, DecryptionError, FilesystemError, VaultError } from '../errors.js';
+import {
+  mapWasmError,
+  DecryptionError,
+  FilesystemError,
+  IdentityMismatchError,
+  VaultError,
+} from '../errors.js';
 
 describe('mapWasmError — decryption code', () => {
   it('carries the path through when the boundary supplies one', () => {
@@ -95,5 +101,48 @@ describe('mapWasmError — filesystem code (issue #138)', () => {
     assert.notEqual(err.path, '', 'must not fabricate an empty-string path');
     assert.equal(err.permission, undefined);
     assert.notEqual(err.permission, '', 'must not fabricate an empty-string permission');
+  });
+});
+
+// Issue #166: setup()'s executable-trust verification surfaces a TOFU hash
+// conflict as an `identity-mismatch`-coded value. These pin the `mapWasmError`
+// side of that contract — the reconstructed typed error must carry the hashes.
+describe('mapWasmError — identity-mismatch code (issue #166)', () => {
+  it('reconstructs a typed IdentityMismatchError carrying previous and current hashes', () => {
+    const err = mapWasmError({
+      vaultErrorCode: 'identity-mismatch',
+      message: 'Executable hash changed — re-approval required',
+      previousHash: 'aaaa',
+      currentHash: 'bbbb',
+    });
+    assert.ok(err instanceof IdentityMismatchError && err instanceof VaultError);
+    assert.equal(err.previousHash, 'aaaa');
+    assert.equal(err.currentHash, 'bbbb');
+  });
+
+  it('leaves the hashes undefined, not fabricated, when the boundary omits them', () => {
+    const err = mapWasmError({
+      vaultErrorCode: 'identity-mismatch',
+      message: 'Executable hash changed — re-approval required',
+    });
+    assert.ok(err instanceof IdentityMismatchError);
+    assert.equal(err.previousHash, undefined);
+    assert.notEqual(err.previousHash, '', 'must not fabricate an empty-string hash');
+    assert.equal(err.currentHash, undefined);
+    assert.notEqual(err.currentHash, '', 'must not fabricate an empty-string hash');
+  });
+
+  it('drops non-string hashes to undefined, honoring the string | undefined contract', () => {
+    // A malformed boundary shape (null / number) must not land as a non-string
+    // field on the typed error.
+    const err = mapWasmError({
+      vaultErrorCode: 'identity-mismatch',
+      message: 'Executable hash changed — re-approval required',
+      previousHash: null,
+      currentHash: 123,
+    });
+    assert.ok(err instanceof IdentityMismatchError);
+    assert.equal(err.previousHash, undefined);
+    assert.equal(err.currentHash, undefined);
   });
 });
