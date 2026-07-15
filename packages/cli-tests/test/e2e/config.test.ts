@@ -176,6 +176,15 @@ describe('config command', () => {
   // Repro from issue #68: a syntactically invalid config.json must never be
   // dumped verbatim with exit 0 — it must fail with the parse error, the
   // file path, a parse location, and a remediation hint.
+  //
+  // Issue #114: the remediation hint must be CLI-native ("run `vaultkeeper
+  // config init --force`"), not the library's "install @vaultkeeper/cli"
+  // text — a user running this CLI already has it installed. The library's
+  // own field-level validation reason (e.g. "version must be 1") is no
+  // longer echoed verbatim, since it travels only inside the library's
+  // message alongside that wrong remediation (issue #100); the CLI instead
+  // builds its own message from the error's structured, remediation-free
+  // fields (path, and — for a parse error — its line/column location).
   it('should exit non-zero with path, parse location, and remediation hint for corrupt config.json (issue #68 repro)', async () => {
     env = await createCliTestEnv()
     await fs.writeFile(path.join(env.configDir, 'config.json'), '{ bad json', 'utf8')
@@ -184,7 +193,8 @@ describe('config command', () => {
     expect(result.stdout).toBe('')
     expect(result.stderr).toContain(path.join(env.configDir, 'config.json'))
     expect(result.stderr).toMatch(/line \d+, column \d+/)
-    expect(result.stderr).toContain('vaultkeeper config init')
+    expect(result.stderr).toContain('vaultkeeper config init --force')
+    expect(result.stderr).not.toContain('install @vaultkeeper/cli')
   })
 
   it('should exit non-zero with path and remediation hint for a structurally invalid config.json', async () => {
@@ -197,8 +207,8 @@ describe('config command', () => {
     const result = await env.run(['config', 'show'])
     expect(result.exitCode).not.toBe(0)
     expect(result.stderr).toContain(path.join(env.configDir, 'config.json'))
-    expect(result.stderr).toContain('version must be 1')
-    expect(result.stderr).toContain('vaultkeeper config init')
+    expect(result.stderr).toContain('vaultkeeper config init --force')
+    expect(result.stderr).not.toContain('install @vaultkeeper/cli')
   })
 
   it('should exit 2 for config with no subcommand', async () => {

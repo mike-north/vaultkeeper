@@ -49,7 +49,7 @@ export async function rotateKeyCommand(args: string[], configDir: string): Promi
     process.stdout.write('Key rotated successfully.\n')
     return 0
   } catch (err) {
-    process.stderr.write(`${formatError(err)}\n`)
+    process.stderr.write(`${formatError(err, configDir)}\n`)
     return 1
   }
 }

@@ -8,13 +8,20 @@ const configDir = '/tmp/vaultkeeper-test-config-dir'
 const mockDoctor = vi.fn()
 const mockLoadConfig = vi.fn()
 
-vi.mock('vaultkeeper', () => ({
-  VaultKeeper: {
-    doctor: mockDoctor,
-  },
-  loadConfig: mockLoadConfig,
-  defaultBackendType: vi.fn().mockReturnValue('file'),
-}))
+// Partial mock: keep real exports (e.g. ConfigParseError/ConfigValidationError,
+// needed by formatError's instanceof checks — issue #114) alongside the
+// mocked entry points this suite controls.
+vi.mock('vaultkeeper', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('vaultkeeper')>()
+  return {
+    ...actual,
+    VaultKeeper: {
+      doctor: mockDoctor,
+    },
+    loadConfig: mockLoadConfig,
+    defaultBackendType: vi.fn().mockReturnValue('file'),
+  }
+})
 
 describe('doctorCommand', () => {
   let stderrOutput: string

@@ -18,6 +18,44 @@ export type KeyStatus = 'current' | 'previous' | 'deprecated'
  */
 export type PreflightCheckStatus = 'ok' | 'missing' | 'version-unsupported' | 'invalid'
 
+/**
+ * The kind of error that made a preflight check fail, as a stable
+ * machine-readable discriminant. `'config-parse'` means the config file
+ * could not be parsed as JSON; `'config-validation'` means it parsed but
+ * failed schema validation.
+ */
+export type PreflightCheckErrorKind = 'config-parse' | 'config-validation'
+
+/**
+ * Structured, remediation-free error context for a failed preflight check.
+ *
+ * This carries the machine-readable facts a caller needs to build its own
+ * audience-appropriate remediation message, so a consumer never has to parse
+ * the human-readable `reason` prose. It is currently populated only for the
+ * `config` check when the config file is present but invalid.
+ *
+ * The `reason` field intentionally keeps the library's own remediation text
+ * (which points a library consumer at installing the CLI); a consumer that
+ * ships its own CLI should read this structured field instead and phrase the
+ * remediation itself.
+ */
+export interface PreflightCheckError {
+  /** The kind of failure, as a stable machine-readable discriminant. */
+  kind: PreflightCheckErrorKind
+  /**
+   * Path to the config file that failed to parse or validate, as derived from
+   * the doctor call's `configDir`. Not guaranteed to be absolute — it is
+   * `configDir` joined with `config.json` exactly as given, so it is relative
+   * when `configDir` is relative.
+   */
+  configPath: string
+  /**
+   * Human-readable parse location within the config file (for example
+   * `line 3, column 12`), present only for a `'config-parse'` failure.
+   */
+  location?: string | undefined
+}
+
 /** Result of a preflight check for a single dependency. */
 export interface PreflightCheck {
   /** Human-readable name of the dependency being checked. */
@@ -28,6 +66,13 @@ export interface PreflightCheck {
   version?: string | undefined
   /** Human-readable explanation of why the status is not `'ok'`. */
   reason?: string | undefined
+  /**
+   * Structured, remediation-free error context when this check failed with a
+   * recognized error, so a caller can build its own remediation message
+   * instead of parsing the `reason` prose. Populated only for the `config`
+   * check when the config file is present but invalid.
+   */
+  error?: PreflightCheckError | undefined
 }
 
 /**

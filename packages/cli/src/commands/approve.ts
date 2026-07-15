@@ -65,7 +65,7 @@ export async function approveCommand(args: string[], configDir: string): Promise
     process.stdout.write(`Approved ${scriptPath} (hash: ${status.hash})\n`)
     return 0
   } catch (err) {
-    process.stderr.write(`${formatError(err)}\n`)
+    process.stderr.write(`${formatError(err, configDir)}\n`)
     // Exit code 1: runtime error (e.g. missing script, unwritable manifest)
     return 1
   }

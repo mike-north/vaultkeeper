@@ -35,6 +35,11 @@ describe('doctor command', () => {
   // never touched the config and reported "System ready." with exit 0. It
   // must now report a failing "config" check with the parse error and file
   // path, and exit non-zero.
+  //
+  // Issue #130: doctor's config remediation is the CLI-native message built
+  // from the check's structured error, so it names `config init --force` and
+  // never tells a user already running the CLI to "install @vaultkeeper/cli"
+  // (the last surface still carrying the library's multi-audience text).
   it('should report a failing config check and exit non-zero for corrupt config.json (issue #68 repro)', async () => {
     env = await createCliTestEnv()
     await fs.writeFile(path.join(env.configDir, 'config.json'), '{ bad json', 'utf8')
@@ -44,11 +49,12 @@ describe('doctor command', () => {
     expect(result.stdout).toContain('config')
     expect(result.stdout).toContain(path.join(env.configDir, 'config.json'))
     expect(result.stdout).toMatch(/line \d+, column \d+/)
-    expect(result.stdout).toContain('vaultkeeper config init')
+    expect(result.stdout).toContain('vaultkeeper config init --force')
+    expect(result.stdout).not.toContain('install @vaultkeeper/cli')
     expect(result.stdout).not.toContain('System ready.')
   })
 
-  it('should report a failing config check for a structurally invalid config.json', async () => {
+  it('should report a CLI-native remediation for a structurally invalid config.json (issue #130)', async () => {
     env = await createCliTestEnv()
     await fs.writeFile(
       path.join(env.configDir, 'config.json'),
@@ -58,7 +64,13 @@ describe('doctor command', () => {
     const result = await env.run(['doctor'])
     expect(result.exitCode).not.toBe(0)
     expect(result.stdout).toContain('config')
-    expect(result.stdout).toContain('version must be 1')
+    expect(result.stdout).toContain(path.join(env.configDir, 'config.json'))
+    expect(result.stdout).toContain('vaultkeeper config init --force')
+    // A schema-validation failure has no parse location, so the CLI-native
+    // message must not carry a "(at line N, column N)" suffix.
+    expect(result.stdout).not.toMatch(/\(at line \d+, column \d+\)/)
+    expect(result.stdout).not.toContain('install @vaultkeeper/cli')
+    expect(result.stdout).not.toContain('System ready.')
   })
 
   // No-config story (issue #68): doctor falls back to the default backend and

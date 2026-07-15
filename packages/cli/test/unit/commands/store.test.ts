@@ -8,16 +8,23 @@ const mockStore = vi.hoisted(() => vi.fn().mockResolvedValue(undefined))
 const mockGetTypes = vi.hoisted(() => vi.fn().mockReturnValue(['file']))
 const mockCreate = vi.hoisted(() => vi.fn())
 
-vi.mock('vaultkeeper', () => ({
-  VaultKeeper: {
-    init: mockInit,
-  },
-  BackendRegistry: {
-    getTypes: mockGetTypes,
-    create: mockCreate,
-  },
-  defaultBackendType: vi.fn().mockReturnValue('file'),
-}))
+// Partial mock: keep real exports (e.g. ConfigParseError/ConfigValidationError,
+// needed by formatError's instanceof checks — issue #114) alongside the
+// mocked entry points this suite controls.
+vi.mock('vaultkeeper', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('vaultkeeper')>()
+  return {
+    ...actual,
+    VaultKeeper: {
+      init: mockInit,
+    },
+    BackendRegistry: {
+      getTypes: mockGetTypes,
+      create: mockCreate,
+    },
+    defaultBackendType: vi.fn().mockReturnValue('file'),
+  }
+})
 
 function mockStdinWith(value: string): void {
   vi.spyOn(process.stdin, Symbol.asyncIterator).mockImplementation(function* () {

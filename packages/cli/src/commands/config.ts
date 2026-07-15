@@ -222,7 +222,7 @@ async function configInit(rest: string[], configDir: string): Promise<number> {
     }
     return 0
   } catch (err) {
-    process.stderr.write(`${formatError(err)}\n`)
+    process.stderr.write(`${formatError(err, configDir)}\n`)
     return 1
   }
 }
@@ -282,7 +282,7 @@ async function configShow(rest: string[], configDir: string): Promise<number> {
     }
     return 0
   } catch (err) {
-    process.stderr.write(`${formatError(err)}\n`)
+    process.stderr.write(`${formatError(err, configDir)}\n`)
     return 1
   }
 }

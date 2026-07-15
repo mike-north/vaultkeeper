@@ -14,7 +14,7 @@ vi.mock('node:fs/promises', () => ({
 import * as fs from 'node:fs/promises'
 import { FileBackend } from '../../../src/backend/file-backend.js'
 import { getDefaultConfigDir } from '../../../src/config.js'
-import { SecretNotFoundError } from '../../../src/errors.js'
+import { SecretNotFoundError, FilesystemError, DecryptionError } from '../../../src/errors.js'
 
 const mockFs = vi.mocked(fs)
 
@@ -106,6 +106,52 @@ describe('FileBackend', () => {
       expect(encryptedWriteCall?.[0]).toEqual(expect.stringContaining(customDir))
       // Default config-dir-relative location must never be touched.
       expect(mockFs.mkdir).not.toHaveBeenCalledWith(defaultStorageDir, expect.anything())
+    })
+
+    // Regression: issue #115 — a permission failure writing the encrypted
+    // entry previously propagated as the raw Node EACCES error instead of a
+    // typed VaultError subclass.
+    it('should surface an EACCES write failure as a typed FilesystemError', async () => {
+      mockFs.mkdir.mockResolvedValueOnce(undefined)
+      const keyBuffer = Buffer.alloc(32, 0xcd)
+      mockFs.readFile.mockResolvedValueOnce(keyBuffer) // key exists
+      const permError = Object.assign(new Error('permission denied'), { code: 'EACCES' })
+      mockFs.writeFile.mockRejectedValueOnce(permError)
+
+      let caught: unknown
+      try {
+        await backend.store('my-secret', 'secret-value')
+      } catch (err) {
+        caught = err
+      }
+
+      expect(caught).toBeInstanceOf(FilesystemError)
+      if (caught instanceof FilesystemError) {
+        expect(caught.message).toContain('permission denied')
+      }
+    })
+
+    // Regression: PR #126 review — getOrCreateWrapKey() (util/at-rest.ts),
+    // used to read/create the `.key` wrapping-key file, still rethrew a raw
+    // Node error on a non-ENOENT readFile failure, so an EACCES on the key
+    // file (as opposed to the entry file) bypassed the typed-error wrapping
+    // added for the entry read/write/delete paths.
+    it('should surface an EACCES failure reading the wrapping key file as a typed FilesystemError', async () => {
+      mockFs.mkdir.mockResolvedValueOnce(undefined)
+      const permError = Object.assign(new Error('permission denied'), { code: 'EACCES' })
+      mockFs.readFile.mockRejectedValueOnce(permError) // key file read fails
+
+      let caught: unknown
+      try {
+        await backend.store('my-secret', 'secret-value')
+      } catch (err) {
+        caught = err
+      }
+
+      expect(caught).toBeInstanceOf(FilesystemError)
+      if (caught instanceof FilesystemError) {
+        expect(caught.message).toContain('permission denied')
+      }
     })
   })
 
@@ -207,7 +253,7 @@ describe('FileBackend', () => {
       await expect(backend.retrieve('missing')).rejects.toBeInstanceOf(SecretNotFoundError)
     })
 
-    it('should throw Error when decryption fails (bad auth tag)', async () => {
+    it('should throw a typed DecryptionError when decryption fails (bad auth tag)', async () => {
       // Provide a malformed encoded string that will fail decryption
       mockFs.mkdir.mockResolvedValue(undefined)
       const badEncoded = 'AAAA:BBBB:CCCC' // wrong base64 format for GCM
@@ -215,7 +261,55 @@ describe('FileBackend', () => {
       mockFs.readFile.mockResolvedValueOnce(badEncoded)
       mockFs.readFile.mockResolvedValueOnce(keyBuffer)
 
+      await expect(backend.retrieve('corrupted')).rejects.toBeInstanceOf(DecryptionError)
+      mockFs.readFile.mockResolvedValueOnce(badEncoded)
+      mockFs.readFile.mockResolvedValueOnce(keyBuffer)
       await expect(backend.retrieve('corrupted')).rejects.toThrow('Failed to decrypt secret')
+    })
+
+    // Regression: issue #115 — a non-ENOENT read error (e.g. EACCES) reading
+    // the encrypted entry previously propagated as the raw Node error instead
+    // of a typed VaultError subclass.
+    it('should surface an EACCES read failure as a typed FilesystemError', async () => {
+      mockFs.mkdir.mockResolvedValueOnce(undefined)
+      const permError = Object.assign(new Error('permission denied'), { code: 'EACCES' })
+      mockFs.readFile.mockRejectedValueOnce(permError)
+
+      let caught: unknown
+      try {
+        await backend.retrieve('protected')
+      } catch (err) {
+        caught = err
+      }
+
+      expect(caught).toBeInstanceOf(FilesystemError)
+      if (caught instanceof FilesystemError) {
+        expect(caught.message).toContain('permission denied')
+      }
+    })
+
+    // Regression: PR #126 review — an EACCES reading the `.key` wrapping-key
+    // file (as opposed to the entry file) went through
+    // getOrCreateWrapKey() (util/at-rest.ts), which still rethrew the raw
+    // Node error rather than a typed FilesystemError.
+    it('should surface an EACCES failure reading the wrapping key file as a typed FilesystemError', async () => {
+      mockFs.mkdir.mockResolvedValueOnce(undefined)
+      const permError = Object.assign(new Error('permission denied'), { code: 'EACCES' })
+      // First readFile call (entry) succeeds; second (key file) fails.
+      mockFs.readFile.mockResolvedValueOnce('AAAA:BBBB:CCCC')
+      mockFs.readFile.mockRejectedValueOnce(permError)
+
+      let caught: unknown
+      try {
+        await backend.retrieve('protected')
+      } catch (err) {
+        caught = err
+      }
+
+      expect(caught).toBeInstanceOf(FilesystemError)
+      if (caught instanceof FilesystemError) {
+        expect(caught.message).toContain('permission denied')
+      }
     })
   })
 
@@ -235,11 +329,70 @@ describe('FileBackend', () => {
       await expect(backend.delete('missing')).rejects.toBeInstanceOf(SecretNotFoundError)
     })
 
-    it('should rethrow non-ENOENT filesystem errors', async () => {
+    // Regression: issue #115 — a non-ENOENT unlink error (e.g. EPERM/EACCES)
+    // previously propagated as the raw Node error instead of a typed
+    // VaultError subclass.
+    it('should rethrow non-ENOENT filesystem errors as a typed FilesystemError', async () => {
       const permError = Object.assign(new Error('EPERM'), { code: 'EPERM' })
-      mockFs.unlink.mockRejectedValue(permError)
+      mockFs.unlink.mockRejectedValueOnce(permError)
 
-      await expect(backend.delete('protected')).rejects.toThrow('EPERM')
+      let caught: unknown
+      try {
+        await backend.delete('protected')
+      } catch (err) {
+        caught = err
+      }
+
+      expect(caught).toBeInstanceOf(FilesystemError)
+      if (caught instanceof FilesystemError) {
+        expect(caught.message).toContain('EPERM')
+      }
+    })
+
+    // Regression: PR #126 review — the delete path wrapped unlink failures
+    // with the 'write' operation label, so the message read "Failed to
+    // write secret file..." for what was actually a delete. Must say delete.
+    it('should describe a non-ENOENT unlink failure as a delete, not a write', async () => {
+      const permError = Object.assign(new Error('EPERM'), { code: 'EPERM' })
+      mockFs.unlink.mockRejectedValueOnce(permError)
+
+      let caught: unknown
+      try {
+        await backend.delete('protected')
+      } catch (err) {
+        caught = err
+      }
+
+      expect(caught).toBeInstanceOf(FilesystemError)
+      if (caught instanceof FilesystemError) {
+        expect(caught.permission).toBe('delete')
+        expect(caught.message).toContain('Failed to delete secret file')
+        expect(caught.message).not.toContain('Failed to write secret file')
+      }
+    })
+
+    // Same operation-label bug on the legacy-location delete path.
+    it('should describe a non-ENOENT unlink failure on the legacy path as a delete', async () => {
+      const legacyBackendForDelete = new FileBackend()
+      const noFileError = Object.assign(new Error('ENOENT'), { code: 'ENOENT' })
+      const permError = Object.assign(new Error('EPERM'), { code: 'EPERM' })
+      // Two unlink attempts in order: the primary path misses (ENOENT) so the
+      // delete falls through to the legacy path, which then fails with EPERM.
+      // Scope each rejection with *Once so neither leaks into later tests.
+      mockFs.unlink.mockRejectedValueOnce(noFileError).mockRejectedValueOnce(permError)
+
+      let caught: unknown
+      try {
+        await legacyBackendForDelete.delete('protected')
+      } catch (err) {
+        caught = err
+      }
+
+      expect(caught).toBeInstanceOf(FilesystemError)
+      if (caught instanceof FilesystemError) {
+        expect(caught.permission).toBe('delete')
+        expect(caught.message).toContain('Failed to delete secret file')
+      }
     })
   })
 

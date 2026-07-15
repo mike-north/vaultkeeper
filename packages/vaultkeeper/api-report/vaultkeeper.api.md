@@ -82,6 +82,12 @@ export class ConfigValidationError extends VaultError {
 }
 
 // @public
+export class DecryptionError extends VaultError {
+    constructor(message: string, path: string);
+    readonly path: string;
+}
+
+// @public
 export function defaultBackendType(): string;
 
 // @public
@@ -213,11 +219,22 @@ export class PluginNotFoundError extends VaultError {
 
 // @public
 export interface PreflightCheck {
+    error?: PreflightCheckError | undefined;
     name: string;
     reason?: string | undefined;
     status: PreflightCheckStatus;
     version?: string | undefined;
 }
+
+// @public
+export interface PreflightCheckError {
+    configPath: string;
+    kind: PreflightCheckErrorKind;
+    location?: string | undefined;
+}
+
+// @public
+export type PreflightCheckErrorKind = 'config-parse' | 'config-validation';
 
 // @public
 export type PreflightCheckStatus = 'ok' | 'missing' | 'version-unsupported' | 'invalid';

@@ -14,9 +14,11 @@ import {
 } from './checks.js'
 import { currentPlatform } from '../util/platform.js'
 import { loadConfig } from '../config.js'
+import { ConfigParseError, ConfigValidationError } from '../errors.js'
 import type {
   BackendConfig,
   PreflightCheck,
+  PreflightCheckError,
   PreflightResult,
   ScopedPreflightCheck,
 } from '../types.js'
@@ -103,6 +105,7 @@ export async function runDoctor(options?: RunDoctorOptions): Promise<PreflightRe
         name: 'config',
         status: 'invalid',
         reason: err instanceof Error ? err.message : String(err),
+        error: toPreflightConfigError(err, configPath),
         required: true,
       }
     }
@@ -161,6 +164,21 @@ export async function runDoctor(options?: RunDoctorOptions): Promise<PreflightRe
   ]
 
   return { checks, ready, warnings, nextSteps }
+}
+
+/**
+ * Map a config load failure to structured, remediation-free error context
+ * for the `config` preflight check. Returns `undefined` for an unrecognized
+ * error, in which case only the human-readable `reason` is available.
+ */
+function toPreflightConfigError(err: unknown, configPath: string): PreflightCheckError | undefined {
+  if (err instanceof ConfigParseError) {
+    return { kind: 'config-parse', configPath: err.path, location: err.location }
+  }
+  if (err instanceof ConfigValidationError) {
+    return { kind: 'config-validation', configPath: err.configFilePath ?? configPath }
+  }
+  return undefined
 }
 
 /**
