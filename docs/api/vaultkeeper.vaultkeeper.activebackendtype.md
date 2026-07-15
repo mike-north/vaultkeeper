@@ -16,5 +16,5 @@ get activeBackendType(): string;
 
 This is a pure, side-effect-free view of the resolved configuration: it reads the type of the first enabled backend without instantiating the backend or requiring it to be registered or healthy. Reading it therefore never throws for an unavailable or unregistered backend — unlike a secret operation — so it is safe to call purely to introspect an instance.
 
-Use it to confirm which backend an instance resolved to, especially when no config file exists and the platform default applies (see [platformDefaultBackendType()](./vaultkeeper.platformdefaultbackendtype.md)<!-- -->). On macOS this reads `keychain` by default, meaning secret operations target the real OS Keychain.
+Use it to confirm which backend an instance resolved to, especially when no config file exists and the safe zero-config default applies (see [defaultBackendType()](./vaultkeeper.defaultbackendtype.md)<!-- -->). With no config this reads `file` on every platform, so secret operations never silently target the real OS credential store; opt into the native store (see [platformNativeBackendType()](./vaultkeeper.platformnativebackendtype.md)<!-- -->) via explicit config to change this.
 

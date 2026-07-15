@@ -1,8 +1,10 @@
 # vaultkeeper
 
-Unified, policy-enforced secret storage across OS credential backends. Secrets are stored in the
-native credential store for the current platform and accessed through short-lived JWE tokens — the
-raw secret never appears in a return value.
+Unified, policy-enforced secret storage across OS credential backends. By default secrets are stored
+in a portable, self-contained AES-256-GCM encrypted `file` backend — a bare `VaultKeeper.init()`
+never silently writes to your real OS credential store; the platform-native store (macOS Keychain,
+Windows DPAPI) is an explicit opt-in. Secrets are accessed through short-lived JWE tokens — the raw
+secret never appears in a return value.
 
 ## Installation
 
@@ -17,7 +19,11 @@ pnpm add vaultkeeper
 ```ts
 import { VaultKeeper } from 'vaultkeeper'
 
-// 1. Initialize (runs doctor preflight checks)
+// 1. Initialize (runs doctor preflight checks). With no config file, the
+//    backend resolves to the safe `file` backend on every platform — never
+//    your real OS credential store. `vault.activeBackendType` is "file".
+//    To opt into the native store, pass an explicit config with
+//    `{ type: 'keychain' }` (macOS) / `{ type: 'dpapi' }` (Windows).
 const vault = await VaultKeeper.init()
 
 // 2. Store a secret in the configured backend
@@ -41,9 +47,11 @@ access via `getSecret()` (auto-zeroing buffer) — are documented in the repo RE
 
 ## Backends
 
-The first enabled backend in the configuration is used: `keychain` (macOS), `dpapi` (Windows),
-`secret-tool` (Linux, via `libsecret`), or `file` (AES-256-GCM encrypted file, all platforms, no
-system dependencies). Plugin backends for 1Password and YubiKey are also available.
+The first enabled backend in the configuration is used. With no config file, that is the safe
+`file` backend (AES-256-GCM encrypted file, all platforms, no system dependencies) — the zero-config
+default on every platform. Configure a different backend explicitly to opt in: `keychain` (macOS),
+`dpapi` (Windows), or `secret-tool` (Linux, via `libsecret`). Plugin backends for 1Password and
+YubiKey are also available.
 
 With no explicit `path`, the `file` backend stores secrets under `<configDir>/file/` — the same
 resolved config directory (`~/.config/vaultkeeper` by default) that holds `config.json` and key

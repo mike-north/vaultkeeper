@@ -1,5 +1,5 @@
 import { parseArgs } from 'node:util'
-import { VaultKeeper, platformDefaultBackendType } from 'vaultkeeper'
+import { VaultKeeper, defaultBackendType } from 'vaultkeeper'
 import { shouldSkipDoctor } from '../skip-doctor.js'
 import { formatError } from '../output.js'
 import { CONFIG_DIR_HELP_OPTION, CONFIG_DIR_HELP_ENV } from '../config-dir.js'
@@ -77,7 +77,7 @@ export async function deleteCommand(args: string[], configDir: string): Promise<
     // (issue #68): fall back to platform defaults and say so, rather than
     // silently defaulting.
     if (!(await configFileExists(configDir))) {
-      process.stderr.write(noConfigMessage(platformDefaultBackendType()))
+      process.stderr.write(noConfigMessage(defaultBackendType()))
     }
 
     // Delete via VaultKeeper, which resolves the first enabled backend from the

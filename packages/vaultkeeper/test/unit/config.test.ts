@@ -3,7 +3,8 @@ import {
   validateConfig,
   loadConfig,
   getDefaultConfigDir,
-  platformDefaultBackendType,
+  defaultBackendType,
+  platformNativeBackendType,
 } from '../../src/config.js'
 import { ConfigValidationError, ConfigParseError, FilesystemError } from '../../src/errors.js'
 
@@ -367,11 +368,20 @@ describe('loadConfig', () => {
     }
   })
 
-  it('should resolve the platform-default backend when no config file exists', async () => {
+  // Issue #98: a missing config must resolve to the safe zero-config default
+  // (the `file` backend), never the OS-native store — copy-pasting the first
+  // documented example can never silently write to the real keychain.
+  it('should resolve the safe file backend when no config file exists', async () => {
     vi.mocked(readFile).mockRejectedValue(fsError('ENOENT', 'no such file or directory'))
     const config = await loadConfig('/nonexistent')
     const firstBackend = config.backends[0]
-    expect(firstBackend?.type).toBe(platformDefaultBackendType())
+    expect(firstBackend?.type).toBe('file')
+    expect(firstBackend?.type).toBe(defaultBackendType())
+    // Regardless of platform, the default is never the native credential store
+    // on macOS/Windows (issue #98).
+    if (platformNativeBackendType() !== 'file') {
+      expect(firstBackend?.type).not.toBe(platformNativeBackendType())
+    }
   })
 
   // Regression test for issue #68's loadConfig hardening (folded in from #92's
@@ -402,15 +412,27 @@ describe('loadConfig', () => {
 })
 
 // ---------------------------------------------------------------------------
-// platformDefaultBackendType
+// defaultBackendType
 // ---------------------------------------------------------------------------
 
-describe('platformDefaultBackendType', () => {
+describe('defaultBackendType', () => {
+  it('should always be the file backend, on every platform (issue #98)', () => {
+    // The zero-config default is platform-independent: `file` everywhere, so a
+    // missing config never silently targets the OS-native credential store.
+    expect(defaultBackendType()).toBe('file')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// platformNativeBackendType
+// ---------------------------------------------------------------------------
+
+describe('platformNativeBackendType', () => {
   it('should map the current platform to its native credential store', () => {
-    // Resolution contract (see platformDefaultBackendType docs):
+    // Resolution contract (see platformNativeBackendType docs):
     // macOS -> keychain, Windows -> dpapi, everything else -> file.
     const expected =
       process.platform === 'darwin' ? 'keychain' : process.platform === 'win32' ? 'dpapi' : 'file'
-    expect(platformDefaultBackendType()).toBe(expected)
+    expect(platformNativeBackendType()).toBe(expected)
   })
 })

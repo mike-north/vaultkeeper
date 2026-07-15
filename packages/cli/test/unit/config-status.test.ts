@@ -47,8 +47,17 @@ describe('configFileExists', () => {
 
 describe('noConfigMessage', () => {
   it('names the resolved backend and points at config init', () => {
-    const message = noConfigMessage('keychain')
-    expect(message).toContain('keychain')
+    const message = noConfigMessage('file')
+    expect(message).toContain('file')
     expect(message).toContain('vaultkeeper config init')
+  })
+
+  // Issue #98 acceptance criterion 2: the remediation hint must spell out
+  // `--backend <type>` explicitly (never a bare `config init`), and the type it
+  // names must be the same backend the fallback just reported — so following it
+  // verbatim can never silently persist a different (e.g. OS-native) backend.
+  it('spells out --backend with the resolved backend type, never a bare config init (issue #98)', () => {
+    const message = noConfigMessage('file')
+    expect(message).toContain('vaultkeeper config init --backend file')
   })
 })

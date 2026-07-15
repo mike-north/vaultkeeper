@@ -95,12 +95,15 @@ function createDefaultInjectedBackendConfig(): VaultConfig {
  *
  * @remarks
  * When neither `config` nor a config file (at `configDir`) is present, and
- * {@link VaultKeeperOptions.backend} is not set, the active backend falls
- * back to the platform default resolved by {@link platformDefaultBackendType}
- * — `keychain` on macOS, `dpapi` on Windows, `file` elsewhere. Inspect
- * {@link VaultKeeper.activeBackendType} after `init()` to confirm which
- * backend a given instance resolved to. When `backend` is set instead, see
- * that option's own JSDoc for the fallback config used in its place.
+ * {@link VaultKeeperOptions.backend} is not set, the active backend falls back
+ * to the safe zero-config default resolved by {@link defaultBackendType} — the
+ * `file` backend, on every platform, so a missing config never silently
+ * targets the real OS credential store. Inspect
+ * {@link VaultKeeper.activeBackendType} after `init()` to confirm which backend
+ * a given instance resolved to. To use the OS-native store instead, opt in via
+ * an explicit config or `vaultkeeper config init --backend <type>` (see
+ * {@link platformNativeBackendType}). When `backend` is set instead, see that
+ * option's own JSDoc for the fallback config used in its place.
  */
 export interface VaultKeeperOptions {
   /** Override the config directory. */
@@ -298,9 +301,11 @@ export class VaultKeeper {
    * operation — so it is safe to call purely to introspect an instance.
    *
    * Use it to confirm which backend an instance resolved to, especially when
-   * no config file exists and the platform default applies (see
-   * {@link platformDefaultBackendType}). On macOS this reads `keychain` by
-   * default, meaning secret operations target the real OS Keychain.
+   * no config file exists and the safe zero-config default applies (see
+   * {@link defaultBackendType}). With no config this reads `file` on every
+   * platform, so secret operations never silently target the real OS
+   * credential store; opt into the native store (see
+   * {@link platformNativeBackendType}) via explicit config to change this.
    *
    * @throws A {@link BackendUnavailableError} only when the configuration has
    * no enabled backend at all (a configuration error, not a backend fault).

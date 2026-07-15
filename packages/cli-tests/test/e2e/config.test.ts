@@ -13,9 +13,13 @@ import * as path from 'node:path'
 import { createCliTestEnv } from '@vaultkeeper/cli-test-helpers'
 import type { CliTestEnv } from '@vaultkeeper/cli-test-helpers'
 
-/** The backend type config init writes by default on the current platform. */
-const platformDefaultBackend =
-  process.platform === 'darwin' ? 'keychain' : process.platform === 'win32' ? 'dpapi' : 'file'
+/**
+ * The backend type `config init` writes when no `--backend` is given. Issue
+ * #98: this is the safe `file` backend on every platform — never the OS-native
+ * store — so a copy-pasted `config init` can't silently target the real
+ * keychain.
+ */
+const defaultBackend = 'file'
 
 describe('config command', () => {
   let env: CliTestEnv | undefined
@@ -65,13 +69,14 @@ describe('config command', () => {
     expect(parsed).toHaveProperty('version', 1)
   })
 
-  // Criterion 3: without --backend, keep the platform default.
-  it('should generate platform-appropriate defaults for config init', async () => {
+  // Criterion 3 (issue #98): without --backend, config init writes the safe
+  // file default — never the OS-native store — on every platform.
+  it('should generate the safe file default for config init with no --backend', async () => {
     env = await freshEnv()
     const result = await env.run(['config', 'init'])
     expect(result.exitCode).toBe(0)
     const parsed = await readConfig(env.configDir)
-    expect(parsed).toHaveProperty('backends[0].type', platformDefaultBackend)
+    expect(parsed).toHaveProperty('backends[0].type', defaultBackend)
   })
 
   // Criterion 3: init states which backend was configured and how to change it.
@@ -79,7 +84,7 @@ describe('config command', () => {
     env = await freshEnv()
     const result = await env.run(['config', 'init'])
     expect(result.exitCode).toBe(0)
-    expect(result.stdout).toContain(`Backend: ${platformDefaultBackend}`)
+    expect(result.stdout).toContain(`Backend: ${defaultBackend}`)
     // Every default-init message points the user at the override flag.
     expect(result.stdout).toContain('--backend')
   })
@@ -162,10 +167,10 @@ describe('config command', () => {
     expect(result.exitCode).toBe(0)
     const parsed: unknown = JSON.parse(result.stdout)
     expect(parsed).toHaveProperty('version', 1)
-    expect(parsed).toHaveProperty('backends[0].type', platformDefaultBackend)
+    expect(parsed).toHaveProperty('backends[0].type', defaultBackend)
     expect(result.stderr).toContain('No config file found')
-    expect(result.stderr).toContain('using platform defaults')
-    expect(result.stderr).toContain('vaultkeeper config init')
+    expect(result.stderr).toContain('using the default backend (file)')
+    expect(result.stderr).toContain('vaultkeeper config init --backend file')
   })
 
   // Repro from issue #68: a syntactically invalid config.json must never be
@@ -243,16 +248,10 @@ describe('config command', () => {
       const before = await readConfig(env.configDir)
       expect(before).toHaveProperty('backends[0].type', 'file')
 
-      const result = await env.run([
-        'config',
-        'init',
-        '--force',
-        '--backend',
-        platformDefaultBackend,
-      ])
+      const result = await env.run(['config', 'init', '--force', '--backend', defaultBackend])
       expect(result.exitCode).toBe(0)
       const after = await readConfig(env.configDir)
-      expect(after).toHaveProperty('backends[0].type', platformDefaultBackend)
+      expect(after).toHaveProperty('backends[0].type', defaultBackend)
     })
 
     // Criterion 4: --backend interaction is preserved under --force.

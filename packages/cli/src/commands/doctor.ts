@@ -1,5 +1,5 @@
 import { parseArgs } from 'node:util'
-import { VaultKeeper, platformDefaultBackendType } from 'vaultkeeper'
+import { VaultKeeper, defaultBackendType } from 'vaultkeeper'
 import { formatError } from '../output.js'
 import { CONFIG_DIR_HELP_OPTION, CONFIG_DIR_HELP_ENV } from '../config-dir.js'
 import { configFileExists, noConfigMessage } from '../config-status.js'
@@ -43,7 +43,7 @@ export async function doctorCommand(args: string[], configDir: string): Promise<
     // file surfaces as a failing "config" check rather than being silently
     // skipped or crashing doctor outright (issue #68).
     if (!(await configFileExists(configDir))) {
-      process.stderr.write(noConfigMessage(platformDefaultBackendType()))
+      process.stderr.write(noConfigMessage(defaultBackendType()))
     }
     const result = await VaultKeeper.doctor({ configDir })
 
