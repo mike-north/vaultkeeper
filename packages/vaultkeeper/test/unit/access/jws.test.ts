@@ -132,6 +132,30 @@ describe('verifyDetachedJws', () => {
     ).resolves.toBe(false)
   })
 
+  // RFC 7515 §4.1.11: a verifier must reject a JWS whose `crit` lists any
+  // extension it does not understand. We understand only `b64`, so `crit` must
+  // be exactly ["b64"] — these two failure shapes verify to `false`, not an
+  // accepted signature.
+  it('returns false when crit carries an un-understood extension (["b64","x"])', async () => {
+    const { publicKeyPem } = makeEd25519()
+    const header = Buffer.from(
+      JSON.stringify({ alg: 'EdDSA', b64: false, crit: ['b64', 'x'] }),
+    ).toString('base64url')
+    await expect(
+      verifyDetachedJws({ payload: 'p', jws: `${header}..AAAA`, publicKey: publicKeyPem }),
+    ).resolves.toBe(false)
+  })
+
+  it('returns false when crit does not contain b64 (["x"])', async () => {
+    const { publicKeyPem } = makeEd25519()
+    const header = Buffer.from(JSON.stringify({ alg: 'EdDSA', b64: false, crit: ['x'] })).toString(
+      'base64url',
+    )
+    await expect(
+      verifyDetachedJws({ payload: 'p', jws: `${header}..AAAA`, publicKey: publicKeyPem }),
+    ).resolves.toBe(false)
+  })
+
   it('throws InvalidKeyMaterialError for an unparseable public key', async () => {
     const { privateKey } = makeEd25519()
     const jws = await createDetachedJws(KID, 'p', edSigner(privateKey))

@@ -62,6 +62,11 @@ export async function createDetachedJws(
 /**
  * Shape of the protected header we require for a valid detached JWS. Anything
  * that does not match is treated as a non-verifying signature (not an error).
+ *
+ * Per RFC 7515 §4.1.11, a verifier MUST reject a JWS whose `crit` lists any
+ * extension it does not understand. This verifier understands only the RFC 7797
+ * `b64` extension, so `crit` must be exactly `["b64"]` — a `crit` carrying any
+ * additional (un-understood) parameter, e.g. `["b64","x"]`, is rejected.
  */
 function hasExpectedHeader(header: unknown): boolean {
   if (typeof header !== 'object' || header === null) {
@@ -70,7 +75,11 @@ function hasExpectedHeader(header: unknown): boolean {
   const record: Record<string, unknown> = { ...header }
   const crit = record.crit
   return (
-    record.alg === JWS_ALG && record.b64 === false && Array.isArray(crit) && crit.includes('b64')
+    record.alg === JWS_ALG &&
+    record.b64 === false &&
+    Array.isArray(crit) &&
+    crit.length === 1 &&
+    crit[0] === 'b64'
   )
 }
 
