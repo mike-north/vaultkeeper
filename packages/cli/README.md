@@ -101,6 +101,25 @@ persisted in the config's `developmentMode.executables` list — use
 development only; a production caller should stay on TOFU verification so a tampered or swapped
 binary is still caught.
 
+## Doctor / preflight checks
+
+`vaultkeeper doctor` lists a dependency check per backend tool and marks each present or missing.
+Two things are easy to misread:
+
+- **A checkmark means the binary was found on `PATH`, not that a backend is active.** A green `op`
+  means the 1Password CLI is installed — not that a 1Password backend is enabled. Secrets only
+  route through a backend that is enabled in your config (`vaultkeeper config show`).
+- **Plugin-backend checks (`op`, `ykman`) are informational only while their backend isn't
+  enabled.** They're always listed — even with just the default `file` backend — and a missing one
+  is a **warning** that doesn't make `doctor` fail. But enabling the corresponding backend
+  (`1password` → `op`, `yubikey` → `ykman`) **promotes that check to required**, so a missing tool
+  then makes `doctor` report "not ready" and exit non-zero. The same promotion applies to the
+  native credential tool (`security`/`powershell`/`secret-tool`): required when its backend is the
+  enabled one, informational otherwise. `openssl` is always required.
+
+The native Rust CLI's `doctor` and the WASM SDK's `doctor()` apply the same required-vs-informational
+rules.
+
 ## Exit codes
 
 Every command exits with one of three codes, so scripts and CI pipelines can branch on the class
@@ -121,9 +140,10 @@ of failure without parsing stderr:
 ## Full documentation
 
 The [`vaultkeeper`](https://www.npmjs.com/package/vaultkeeper) library package's README and shipped
-`.d.ts` cover the TypeScript API and access patterns for embedding vaultkeeper programmatically. For
-narrative coverage of development mode and the full error hierarchy, see the
-[repository README](https://github.com/mike-north/vaultkeeper#readme).
+`.d.ts` cover the TypeScript API and access patterns for embedding vaultkeeper programmatically —
+including the complete error hierarchy and full `VaultConfig` reference, shipped inline in that
+package's README. The [repository README](https://github.com/mike-north/vaultkeeper#readme) mirrors
+the same content online as a supplement.
 
 ## License
 
