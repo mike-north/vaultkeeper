@@ -113,7 +113,6 @@ export class SecretNotFoundError extends VaultError {
 
 // @public
 export interface SetupOptions {
-    // (undocumented)
     backendType?: string;
     executablePath?: string;
     skipTrust?: boolean;

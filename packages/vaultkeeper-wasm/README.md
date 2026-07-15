@@ -25,6 +25,19 @@ pnpm add @vaultkeeper/wasm
 
 ## Quick start
 
+This package is **ESM-only** — it ships an `import`-only `exports` map and no CommonJS
+build, so there is no `require()` fallback. The snippet below is ESM and requires
+`"type": "module"` in your `package.json` (or an ESM-capable loader/bundler). A default
+`npm init -y` project is CommonJS, so add that field first — otherwise Node rejects the
+`import` line with `SyntaxError: Cannot use import statement outside a module`:
+
+```jsonc
+// package.json
+{
+  "type": "module"
+}
+```
+
 ```ts
 import { createVaultKeeper } from '@vaultkeeper/wasm'
 

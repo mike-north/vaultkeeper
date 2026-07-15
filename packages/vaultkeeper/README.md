@@ -123,9 +123,12 @@ longer be decrypted.
 
 ## Trust tiers
 
-Executable identity verification against a local trust-on-first-use (TOFU) manifest runs
-when `setup()` is given a real `executablePath`. **`setup()` requires an explicit executable-trust
-choice — it has no default and never silently skips verification.** Pass the caller's real path to
+In this TypeScript library, executable identity verification against a local trust-on-first-use
+(TOFU) manifest runs when `VaultKeeper.setup()` is given a real `executablePath`. **This library's
+`setup()` requires an explicit executable-trust choice — it has no default and never silently skips
+verification.** (The separate [`@vaultkeeper/wasm`](https://www.npmjs.com/package/@vaultkeeper/wasm)
+SDK also requires the explicit choice, but records `executablePath` as a claim label without running
+TOFU verification — see that package's API reference.) Pass the caller's real path to
 protect a production caller: `vault.setup('MY_API_KEY', { executablePath: '/usr/local/bin/my-tool'
 })`. To deliberately skip verification during development, pass the explicit, greppable opt-out
 `vault.setup('MY_API_KEY', { skipTrust: true })` instead — a token minted this way carries no
