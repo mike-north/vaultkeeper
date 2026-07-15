@@ -22,7 +22,9 @@
     "vaultkeeper": "./dist/bin.js"
   },
   "files": [
-    "dist"
+    "dist",
+    "LICENSE",
+    "README.md"
   ],
   "engines": {
     "node": ">=20.0.0"

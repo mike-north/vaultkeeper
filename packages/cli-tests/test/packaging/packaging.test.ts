@@ -200,6 +200,18 @@ describe.each(publishablePackageDirs)('packaging: packages/%s', (packageDir) => 
     expect(filePaths).toContain('README.md')
   })
 
+  it('includes LICENSE in the published tarball', async () => {
+    // Regression guard for https://github.com/mike-north/vaultkeeper/issues/184:
+    // each publishable package must carry its own LICENSE. A root-only LICENSE
+    // is not packed — npm pack only considers files under the package's own
+    // directory — so without a per-package LICENSE the published tarball would
+    // ship no license text. This fails against the pre-fix state (root LICENSE
+    // only, no per-package copy).
+    const pack = await runNpmPackDryRun(packageDir)
+    const filePaths = pack.files.map((f) => f.path)
+    expect(filePaths).toContain('LICENSE')
+  })
+
   it('sets repository (with directory), homepage, and bugs in package.json', async () => {
     const pkg = await readPackageJson(packageDir)
 
