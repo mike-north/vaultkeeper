@@ -30,26 +30,6 @@ export function dim(text: string): string {
 }
 
 /**
- * Build a CLI-native remediation message for a config parse/validation
- * error, from the errors' structured fields rather than their `.message`.
- *
- * The library's own message points a reader at installing `@vaultkeeper/cli`
- * — correct advice for a library consumer that doesn't have a CLI installed
- * (issue #100), but wrong for a user who is already running this CLI
- * (issue #114). Only structured fields that are safe to depend on are used
- * (the file path, and — for a parse error, its line/column location; for a
- * validation error, its `field`); the library-internal validation *reason*
- * text (e.g. "must be a non-empty string") lives only in `.message`
- * alongside the wrong remediation, so it is deliberately not reused here —
- * but `field` (the dotted/bracketed path to the offending field, e.g.
- * `version`) is itself a structured, remediation-free field and safe to
- * surface (issue #137). `configDir` is a fallback for
- * `ConfigValidationError.configFilePath`, which is `undefined` when the
- * error came from validating an in-memory value rather than a loaded file —
- * a case the CLI itself never hits, since it only ever validates via
- * `loadConfig`/`VaultKeeper.init`.
- */
-/**
  * Whether `configDir` refers to the machine's platform-default config dir,
  * compared by normalized path so a differently-spelled but equivalent form
  * (trailing slash, relative path, and — on Windows — different casing) is
@@ -66,6 +46,27 @@ function isPlatformDefaultConfigDir(configDir: string): boolean {
   return normalize(configDir) === normalize(getPlatformDefaultConfigDir())
 }
 
+/**
+ * Build a CLI-native remediation message for a config parse/validation
+ * error, from the errors' structured fields rather than their `.message`.
+ *
+ * The library's own message points a reader at installing `@vaultkeeper/cli`
+ * — correct advice for a library consumer that doesn't have a CLI installed
+ * (issue #100), but wrong for a user who is already running this CLI
+ * (issue #114). Only structured fields that are safe to depend on are used
+ * (the file path, and — for a parse error, its line/column location; for a
+ * validation error, its `field`); the library-internal validation *reason*
+ * text (e.g. "must be a non-empty string") lives only in `.message`
+ * alongside the wrong remediation, so it is deliberately not reused here —
+ * but `field` (the dotted/bracketed path to the offending field, e.g.
+ * `version`) is itself a structured, remediation-free field and safe to
+ * surface (issue #137). `configDir` is used both as a fallback for
+ * `ConfigValidationError.configFilePath` (`undefined` when the error came
+ * from validating an in-memory value rather than a loaded file — a case the
+ * CLI itself never hits, since it only ever validates via
+ * `loadConfig`/`VaultKeeper.init`) and to decide whether the printed recovery
+ * command needs an explicit `--config-dir` (issue #149).
+ */
 function configRemediation(
   configPath: string,
   detail: string | undefined,

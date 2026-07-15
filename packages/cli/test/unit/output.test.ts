@@ -188,10 +188,11 @@ describe('formatError', () => {
       expect(formatted).not.toContain('`ls')
     })
 
-    it('does not intercept a FilesystemError for a write failure on config.json', () => {
+    it('does not route a write failure on config.json through the config-read remediation', () => {
       // Only a 'read' permission failure on config.json is the config-read
-      // path; other permissions (or other paths) fall through to the
-      // generic Error branch unchanged.
+      // path; a 'write' failure is not intercepted by isUnreadableConfigFile.
+      // It still gets the general polished FilesystemError message (#150) —
+      // never the config-read wording and never raw OS text.
       const configPath = path.join(CONFIG_DIR, 'config.json')
       const err = new FilesystemError(
         `Cannot write config file at ${configPath}: EACCES`,
@@ -201,13 +202,21 @@ describe('formatError', () => {
 
       const formatted = formatError(err, CONFIG_DIR)
 
-      expect(formatted).toBe(`FilesystemError: Cannot write config file at ${configPath}: EACCES`)
+      expect(formatted).toBe(
+        `FilesystemError: The file at \`${configPath}\` cannot be written (permission denied). ` +
+          "Check the file's permissions and try again.",
+      )
+      // Not the config-read remediation, and no raw OS fragment leaks through.
+      expect(formatted).not.toContain('ownership')
+      expect(formatted).not.toContain('EACCES')
     })
 
-    it('does not intercept a read-permission FilesystemError for a different path (e.g. a backend secret file)', () => {
+    it('does not route a read-permission FilesystemError for a different path (e.g. a backend secret file) through the config-read remediation', () => {
       // FileBackend secret reads never live at configDir/config.json, but
       // guard the boundary explicitly so a future refactor can't silently
-      // widen this to swallow unrelated read failures.
+      // widen the config-read branch to swallow unrelated read failures. Such
+      // an error still gets the general polished FilesystemError message
+      // (#150), not raw OS text and not the config-read wording.
       const secretPath = path.join(CONFIG_DIR, 'secrets', 'db-password.json')
       const err = new FilesystemError(
         `Cannot read secret file at ${secretPath}: permission denied.`,
@@ -218,8 +227,11 @@ describe('formatError', () => {
       const formatted = formatError(err, CONFIG_DIR)
 
       expect(formatted).toBe(
-        `FilesystemError: Cannot read secret file at ${secretPath}: permission denied.`,
+        `FilesystemError: The file at \`${secretPath}\` could not be read. ` +
+          "Check the path and the file's permissions, then try again.",
       )
+      // Not the config-read remediation (its "ownership" wording is unique).
+      expect(formatted).not.toContain('ownership')
     })
   })
 
