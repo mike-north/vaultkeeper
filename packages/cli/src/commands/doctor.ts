@@ -58,15 +58,18 @@ export async function doctorCommand(args: string[], configDir: string): Promise<
     const primaryChecks = result.checks.filter((check) => check.required || check.status === 'ok')
 
     // A check carrying structured `error` context (currently only the
-    // `config` check on an invalid config file) is rendered with the
-    // CLI-native remediation built from that structured field — never the
-    // library's `reason` prose, which points a user already running this CLI
-    // at installing it (issue #130). All other checks render their `reason`.
+    // `config` check on an invalid config file) renders a brief inline pointer
+    // here — never the library's `reason` prose, which tells a user already
+    // running this CLI to install it (issue #130). Its full CLI-native
+    // remediation (now long enough to carry a `--config-dir`, issue #149) is
+    // printed once under "Next steps" below rather than duplicated inline
+    // (issue #152); the inline pointer keeps the failing check actionable
+    // without going bare. All other checks render their own inline `reason`.
     for (const check of primaryChecks) {
       const icon = check.status === 'ok' ? '✓' : '✗'
       const version = check.version !== undefined ? ` (${check.version})` : ''
       const reasonText =
-        check.error !== undefined ? formatPreflightConfigError(check.error) : check.reason
+        check.error !== undefined ? 'invalid; see the fix under Next steps' : check.reason
       const reason = reasonText !== undefined ? ` — ${reasonText}` : ''
       process.stdout.write(`  ${icon} ${check.name}${version}${reason}\n`)
     }
@@ -94,7 +97,7 @@ export async function doctorCommand(args: string[], configDir: string): Promise<
     const nextSteps =
       invalidConfig?.error !== undefined
         ? [
-            formatPreflightConfigError(invalidConfig.error),
+            formatPreflightConfigError(invalidConfig.error, configDir),
             ...result.nextSteps.filter(
               (step) => step !== (invalidConfig.reason ?? 'Config file is invalid.'),
             ),

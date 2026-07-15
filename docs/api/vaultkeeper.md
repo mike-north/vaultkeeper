@@ -381,7 +381,22 @@ The backend type vaultkeeper uses by default when no backend is explicitly confi
 
 Return the platform-appropriate default config directory.
 
-Resolution order: the `VAULTKEEPER_CONFIG_DIR` environment variable, then the platform default (`%APPDATA%/vaultkeeper` on Windows, `~/.config/vaultkeeper` elsewhere). Consumers that also support a higher-precedence override (e.g. a CLI flag) should check that first and only fall back to this function when no override was supplied.
+Resolution order: the `VAULTKEEPER_CONFIG_DIR` environment variable, then the platform default (see `getPlatformDefaultConfigDir`<!-- -->). Consumers that also support a higher-precedence override (e.g. a CLI flag) should check that first and only fall back to this function when no override was supplied.
+
+
+</td></tr>
+<tr><td>
+
+[getPlatformDefaultConfigDir()](./vaultkeeper.getplatformdefaultconfigdir.md)
+
+
+</td><td>
+
+Return the platform-appropriate default config directory, ignoring the `VAULTKEEPER_CONFIG_DIR` environment variable.
+
+This is the location vaultkeeper falls back to when neither a CLI `--config-dir` flag nor the `VAULTKEEPER_CONFIG_DIR` environment variable is set: `%APPDATA%/vaultkeeper` on Windows, `~/.config/vaultkeeper` elsewhere.
+
+Unlike `getDefaultConfigDir`<!-- -->, this deliberately does not consult `VAULTKEEPER_CONFIG_DIR`<!-- -->, so a caller can tell whether an active config directory differs from the machine default even when that difference came from the environment variable — for example, to decide whether a printed remediation command must carry an explicit `--config-dir` so it still targets the right file in a fresh shell that does not have the environment variable set.
 
 
 </td></tr>

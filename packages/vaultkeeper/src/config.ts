@@ -61,21 +61,25 @@ function describeJsonSyntaxLocation(err: unknown, raw: string): string | undefin
 }
 
 /**
- * Return the platform-appropriate default config directory.
+ * Return the platform-appropriate default config directory, ignoring the
+ * `VAULTKEEPER_CONFIG_DIR` environment variable.
  *
- * Resolution order: the `VAULTKEEPER_CONFIG_DIR` environment variable, then
- * the platform default (`%APPDATA%/vaultkeeper` on Windows,
- * `~/.config/vaultkeeper` elsewhere). Consumers that also support a
- * higher-precedence override (e.g. a CLI flag) should check that first and
- * only fall back to this function when no override was supplied.
+ * This is the location vaultkeeper falls back to when neither a CLI
+ * `--config-dir` flag nor the `VAULTKEEPER_CONFIG_DIR` environment variable
+ * is set: `%APPDATA%/vaultkeeper` on Windows, `~/.config/vaultkeeper`
+ * elsewhere.
+ *
+ * Unlike `getDefaultConfigDir`, this deliberately does not consult
+ * `VAULTKEEPER_CONFIG_DIR`, so a caller can tell whether an active config
+ * directory differs from the machine default even when that difference came
+ * from the environment variable — for example, to decide whether a printed
+ * remediation command must carry an explicit `--config-dir` so it still
+ * targets the right file in a fresh shell that does not have the environment
+ * variable set.
  *
  * @public
  */
-export function getDefaultConfigDir(): string {
-  const envOverride = process.env.VAULTKEEPER_CONFIG_DIR
-  if (envOverride !== undefined && envOverride !== '') {
-    return envOverride
-  }
+export function getPlatformDefaultConfigDir(): string {
   if (process.platform === 'win32') {
     const appData = process.env.APPDATA
     if (appData !== undefined) {
@@ -84,6 +88,25 @@ export function getDefaultConfigDir(): string {
     return path.join(os.homedir(), 'AppData', 'Roaming', 'vaultkeeper')
   }
   return path.join(os.homedir(), '.config', 'vaultkeeper')
+}
+
+/**
+ * Return the platform-appropriate default config directory.
+ *
+ * Resolution order: the `VAULTKEEPER_CONFIG_DIR` environment variable, then
+ * the platform default (see `getPlatformDefaultConfigDir`). Consumers that
+ * also support a higher-precedence override (e.g. a CLI flag) should check
+ * that first and only fall back to this function when no override was
+ * supplied.
+ *
+ * @public
+ */
+export function getDefaultConfigDir(): string {
+  const envOverride = process.env.VAULTKEEPER_CONFIG_DIR
+  if (envOverride !== undefined && envOverride !== '') {
+    return envOverride
+  }
+  return getPlatformDefaultConfigDir()
 }
 
 /**

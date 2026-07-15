@@ -158,6 +158,9 @@ export class FilesystemError extends VaultError {
 export function getDefaultConfigDir(): string;
 
 // @public
+export function getPlatformDefaultConfigDir(): string;
+
+// @public
 export class IdentityMismatchError extends VaultError {
     constructor(message: string, previousHash: string, currentHash: string);
     readonly currentHash: string;

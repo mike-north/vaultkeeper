@@ -5,7 +5,12 @@
  */
 
 import * as path from 'node:path'
-import { ConfigParseError, ConfigValidationError, FilesystemError } from 'vaultkeeper'
+import {
+  ConfigParseError,
+  ConfigValidationError,
+  FilesystemError,
+  getPlatformDefaultConfigDir,
+} from 'vaultkeeper'
 import type { PreflightCheckError } from 'vaultkeeper'
 import { shellQuote } from './shell-quote.js'
 
@@ -25,6 +30,23 @@ export function dim(text: string): string {
 }
 
 /**
+ * Whether `configDir` refers to the machine's platform-default config dir,
+ * compared by normalized path so a differently-spelled but equivalent form
+ * (trailing slash, relative path, and — on Windows — different casing) is
+ * still recognized as the default and doesn't wrongly leak a `--config-dir`
+ * into the default-case hint (issue #149 review). The default is the
+ * env-INDEPENDENT platform default, so a dir that came only from
+ * `VAULTKEEPER_CONFIG_DIR` is still treated as non-default.
+ */
+function isPlatformDefaultConfigDir(configDir: string): boolean {
+  const normalize = (p: string): string => {
+    const resolved = path.resolve(p)
+    return process.platform === 'win32' ? resolved.toLowerCase() : resolved
+  }
+  return normalize(configDir) === normalize(getPlatformDefaultConfigDir())
+}
+
+/**
  * Build a CLI-native remediation message for a config parse/validation
  * error, from the errors' structured fields rather than their `.message`.
  *
@@ -38,17 +60,30 @@ export function dim(text: string): string {
  * alongside the wrong remediation, so it is deliberately not reused here —
  * but `field` (the dotted/bracketed path to the offending field, e.g.
  * `version`) is itself a structured, remediation-free field and safe to
- * surface (issue #137). `configDir` is a fallback for
- * `ConfigValidationError.configFilePath`, which is `undefined` when the
- * error came from validating an in-memory value rather than a loaded file —
- * a case the CLI itself never hits, since it only ever validates via
- * `loadConfig`/`VaultKeeper.init`.
+ * surface (issue #137). `configDir` is used both as a fallback for
+ * `ConfigValidationError.configFilePath` (`undefined` when the error came
+ * from validating an in-memory value rather than a loaded file — a case the
+ * CLI itself never hits, since it only ever validates via
+ * `loadConfig`/`VaultKeeper.init`) and to decide whether the printed recovery
+ * command needs an explicit `--config-dir` (issue #149).
  */
-function configRemediation(configPath: string, detail: string | undefined): string {
+function configRemediation(
+  configPath: string,
+  detail: string | undefined,
+  configDir: string,
+): string {
   const detailSuffix = detail !== undefined ? ` (${detail})` : ''
+  // A bare `config init --force` writes to the machine's platform-default
+  // config dir. When the active config dir is anything else, the pasted
+  // command would create a fresh default config and leave the diagnosed file
+  // corrupt (issue #149). Carry an explicit `--config-dir` so the command
+  // repairs the exact file it complained about.
+  const dirFlag = isPlatformDefaultConfigDir(configDir)
+    ? ''
+    : ` --config-dir ${shellQuote(configDir)}`
   return (
     `The config at \`${configPath}\` is invalid${detailSuffix} — ` +
-    'run `vaultkeeper config init --force` to overwrite it.'
+    `run \`vaultkeeper config init --force${dirFlag}\` to overwrite it.`
   )
 }
 
@@ -66,7 +101,7 @@ function formatConfigError(
         ? `at ${err.location}`
         : undefined
       : `\`${err.field}\``
-  return `${err.name}: ${configRemediation(configPath, detail)}`
+  return `${err.name}: ${configRemediation(configPath, detail, configDir)}`
 }
 
 /**
@@ -146,9 +181,91 @@ function formatConfigReadError(err: FilesystemError): string {
  * the library's "install @vaultkeeper/cli" text to a user already running
  * the CLI.
  */
-export function formatPreflightConfigError(error: PreflightCheckError): string {
+export function formatPreflightConfigError(
+  error: PreflightCheckError,
+  configDir: string,
+): string {
   const detail = error.location !== undefined ? `at ${error.location}` : undefined
-  return configRemediation(error.configPath, detail)
+  return configRemediation(error.configPath, detail, configDir)
+}
+
+/**
+ * Past-tense description of the filesystem operation a {@link FilesystemError}
+ * was attempting, keyed by its `permission` field, for use in a human-facing
+ * "cannot be <verb>" sentence.
+ */
+const FS_OPERATION_VERB: Record<string, string> = {
+  read: 'read',
+  write: 'written',
+  execute: 'executed',
+  delete: 'deleted',
+  // `FileBackend` uses the permission set `'rwx'` (not an operation verb) when
+  // it fails to create its storage directory, so map it to the operation that
+  // actually failed rather than the generic "accessed" fallback.
+  rwx: 'created',
+}
+
+/**
+ * Classify a {@link FilesystemError} as `'missing'` (ENOENT), `'denied'`
+ * (EACCES/EPERM), or `'other'`, to pick the human-facing wording.
+ *
+ * Prefers the typed, machine-readable `err.code` — its documented contract
+ * (see `FilesystemError.code`) says to prefer it over parsing the message,
+ * which is not a contractual format and could misclassify if a path happens
+ * to contain one of these tokens. Falls back to a conservative message-regex
+ * only when `code` is `undefined` (a legacy or hand-constructed error with no
+ * underlying cause, e.g. some unit fixtures).
+ */
+function classifyFilesystemError(err: FilesystemError): 'missing' | 'denied' | 'other' {
+  const code = err.code
+  if (code !== undefined) {
+    if (code === 'ENOENT') {
+      return 'missing'
+    }
+    if (code === 'EACCES' || code === 'EPERM') {
+      return 'denied'
+    }
+    return 'other'
+  }
+  // No typed code — fall back to the (non-contractual) message text.
+  if (/\bENOENT\b/.test(err.message)) {
+    return 'missing'
+  }
+  if (/\b(?:EACCES|EPERM)\b/.test(err.message)) {
+    return 'denied'
+  }
+  return 'other'
+}
+
+/**
+ * Build a human-facing message for a {@link FilesystemError} from its typed
+ * `path`/`permission`/`code` fields, without ever echoing the raw Node
+ * `ENOENT: … open '<path>'` text — which leaks an implementation detail and
+ * carries no next step (issue #150). Mirrors the fix-oriented shape of the
+ * config-error and identity-mismatch messages.
+ */
+function formatFilesystemError(err: FilesystemError): string {
+  const quotedPath = `\`${err.path}\``
+  const kind = classifyFilesystemError(err)
+  if (kind === 'missing') {
+    return (
+      `${err.name}: The file at ${quotedPath} does not exist. ` +
+      'Check that the path is correct and the file exists, then try again.'
+    )
+  }
+  const verb = FS_OPERATION_VERB[err.permission] ?? 'accessed'
+  if (kind === 'denied') {
+    return (
+      `${err.name}: The file at ${quotedPath} cannot be ${verb} (permission denied). ` +
+      "Check the file's permissions and try again."
+    )
+  }
+  // Any other filesystem failure: still avoid leaking the raw OS text, but
+  // keep the operation context carried by the typed `permission` field.
+  return (
+    `${err.name}: The file at ${quotedPath} could not be ${verb}. ` +
+    "Check the path and the file's permissions, then try again."
+  )
 }
 
 /**
@@ -192,8 +309,14 @@ export function formatError(err: unknown, configDir: string): string {
   if (err instanceof ConfigParseError || err instanceof ConfigValidationError) {
     return formatConfigError(err, configDir)
   }
+  // The specific unreadable-`config.json` case gets config-oriented wording
+  // (issue #137); every other FilesystemError (e.g. an unreadable executable
+  // on the `approve` path) gets the general polished message (issue #150).
   if (isUnreadableConfigFile(err, configDir)) {
     return formatConfigReadError(err)
+  }
+  if (err instanceof FilesystemError) {
+    return formatFilesystemError(err)
   }
   if (err instanceof Error) {
     return `${err.name}: ${err.message}`

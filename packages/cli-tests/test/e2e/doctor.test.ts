@@ -6,9 +6,116 @@
  */
 import { describe, it, expect, afterEach } from 'vitest'
 import * as fs from 'node:fs/promises'
+import * as os from 'node:os'
 import * as path from 'node:path'
 import { createCliTestEnv } from '@vaultkeeper/cli-test-helpers'
-import type { CliTestEnv } from '@vaultkeeper/cli-test-helpers'
+import type { CliResult, CliTestEnv } from '@vaultkeeper/cli-test-helpers'
+
+/**
+ * Tokenize a POSIX shell command into argv, honoring the exact quoting
+ * `shellQuote` produces (whole values wrapped in single quotes, an embedded
+ * single quote escaped as `'\''`). Used to run the LITERAL command `doctor`
+ * prints — parsing its real output rather than re-deriving the args — so the
+ * UAT proves the printed string works verbatim (issue #149).
+ */
+function parseShellCommand(cmd: string): string[] {
+  const tokens: string[] = []
+  let cur = ''
+  let hasCur = false
+  let i = 0
+  while (i < cmd.length) {
+    const c = cmd[i]
+    if (c === undefined) {
+      break
+    }
+    if (c === ' ' || c === '\t') {
+      if (hasCur) {
+        tokens.push(cur)
+        cur = ''
+        hasCur = false
+      }
+      i++
+      continue
+    }
+    if (c === "'") {
+      hasCur = true
+      i++
+      for (let q = cmd[i]; q !== undefined && q !== "'"; q = cmd[i]) {
+        cur += q
+        i++
+      }
+      i++ // skip the closing quote
+      continue
+    }
+    if (c === '\\') {
+      hasCur = true
+      i++
+      const escaped = cmd[i]
+      if (escaped !== undefined) {
+        cur += escaped
+        i++
+      }
+      continue
+    }
+    hasCur = true
+    cur += c
+    i++
+  }
+  if (hasCur) {
+    tokens.push(cur)
+  }
+  return tokens
+}
+
+/** Extract the copy-pasteable recovery command from a remediation sentence. */
+function extractRemediationCommand(output: string): string {
+  const match = /run `([^`]+)` to overwrite it/.exec(output)
+  if (match?.[1] === undefined) {
+    throw new Error(`No remediation command found in output:\n${output}`)
+  }
+  return match[1]
+}
+
+/**
+ * The env vars that pin a subprocess's platform-default config dir to an
+ * isolated `home`, cross-platform: `HOME` on POSIX, `APPDATA`/`USERPROFILE`
+ * on Windows (`getPlatformDefaultConfigDir` reads `APPDATA` there, falling
+ * back to `USERPROFILE`/homedir). Pointing all three at `home` keeps the
+ * "no default-location config was created" assertion honest on every OS.
+ */
+function isolatedHomeEnv(home: string): Record<string, string> {
+  return { HOME: home, APPDATA: home, USERPROFILE: home }
+}
+
+/**
+ * The platform-default config dir a subprocess would resolve when its home
+ * env is pinned to `home` via {@link isolatedHomeEnv} — mirrors the library's
+ * `getPlatformDefaultConfigDir` so the assertion matches the env actually set.
+ */
+function platformDefaultConfigDir(home: string): string {
+  return process.platform === 'win32'
+    ? path.join(home, 'vaultkeeper')
+    : path.join(home, '.config', 'vaultkeeper')
+}
+
+/**
+ * Run the LITERAL command `doctor` printed, in a fresh process with NO
+ * `--config-dir` flag supplied by the harness and NO `VAULTKEEPER_CONFIG_DIR`
+ * env var — only whatever the printed command itself carries. `home` isolates
+ * the platform-default config dir (cross-platform) so the test can prove
+ * nothing was written there. Maps the printed `vaultkeeper` token onto the
+ * test CLI entry point.
+ */
+async function runPrintedCommandFresh(printedCommand: string, home: string): Promise<CliResult> {
+  const argv = parseShellCommand(printedCommand)
+  expect(argv[0]).toBe('vaultkeeper')
+  const runner = await createCliTestEnv({ configDirMode: 'flag', env: isolatedHomeEnv(home) })
+  try {
+    return await runner.run(argv.slice(1))
+  } finally {
+    await runner.cleanup()
+  }
+}
 
 describe('doctor command', () => {
   let env: CliTestEnv | undefined
@@ -120,5 +227,119 @@ describe('doctor command', () => {
     })
     const result = await env.run(['doctor'])
     expect(result.stdout).toContain('ykman')
+  })
+})
+
+// Issue #149: the printed recovery command must repair the exact diagnosed
+// file even when a non-default config dir is active. Issue #152: it must be
+// printed exactly once. Both share the same doctor output surface.
+describe('doctor config remediation targets the active dir and prints once (issues #149, #152)', () => {
+  let home: string | undefined
+  const cleanups: (() => Promise<void>)[] = []
+
+  afterEach(async () => {
+    for (const c of cleanups.splice(0)) {
+      await c()
+    }
+    if (home !== undefined) {
+      await fs.rm(home, { recursive: true, force: true })
+      home = undefined
+    }
+  })
+
+  it('prints a working --config-dir command for a --config-dir (flag) case, and repairs the file verbatim', async () => {
+    home = await fs.mkdtemp(path.join(os.tmpdir(), 'vk-home-flag-'))
+    const env = await createCliTestEnv({ configDirMode: 'flag', env: isolatedHomeEnv(home) })
+    cleanups.push(() => env.cleanup())
+
+    // Seed a broken config under the non-default (flag) dir.
+    const configPath = path.join(env.configDir, 'config.json')
+    await fs.writeFile(configPath, 'not json', 'utf8')
+
+    const doctor = await env.run(['doctor', '--config-dir', env.configDir])
+    expect(doctor.exitCode).not.toBe(0)
+
+    // The printed command must carry an explicit --config-dir for the
+    // diagnosed dir (bare `config init --force` would target the default).
+    const command = extractRemediationCommand(doctor.stdout)
+    expect(command).toContain(`--config-dir '${env.configDir}'`)
+
+    // Run the LITERAL printed command in a fresh process with no flag/env.
+    const fix = await runPrintedCommandFresh(command, home)
+    expect(fix.exitCode).toBe(0)
+
+    // The diagnosed file is now valid JSON with a real config shape.
+    const repairedRaw = await fs.readFile(configPath, 'utf8')
+    const repaired: unknown = JSON.parse(repairedRaw)
+    if (typeof repaired !== 'object' || repaired === null || !('backends' in repaired)) {
+      throw new Error(`repaired config is not a config object: ${repairedRaw}`)
+    }
+    expect(Array.isArray(repaired.backends)).toBe(true)
+
+    // No config was created at the platform default location as a side effect.
+    const defaultConfig = path.join(platformDefaultConfigDir(home), 'config.json')
+    await expect(fs.access(defaultConfig)).rejects.toThrow()
+  })
+
+  it('prints a working --config-dir command for a VAULTKEEPER_CONFIG_DIR-only case', async () => {
+    home = await fs.mkdtemp(path.join(os.tmpdir(), 'vk-home-env-'))
+    // env-mode: the active dir comes ONLY from VAULTKEEPER_CONFIG_DIR.
+    const env = await createCliTestEnv({ configDirMode: 'env', env: isolatedHomeEnv(home) })
+    cleanups.push(() => env.cleanup())
+
+    const configPath = path.join(env.configDir, 'config.json')
+    await fs.writeFile(configPath, 'not json', 'utf8')
+
+    const doctor = await env.run(['doctor'])
+    expect(doctor.exitCode).not.toBe(0)
+
+    // Even though the dir came from the env var, the printed command must
+    // carry --config-dir so a fresh shell (which won't have the env var set)
+    // still repairs the right file.
+    const command = extractRemediationCommand(doctor.stdout)
+    expect(command).toContain(`--config-dir '${env.configDir}'`)
+
+    // Fresh process: no VAULTKEEPER_CONFIG_DIR, only the printed --config-dir.
+    const fix = await runPrintedCommandFresh(command, home)
+    expect(fix.exitCode).toBe(0)
+
+    const repairedRaw = await fs.readFile(configPath, 'utf8')
+    const repaired: unknown = JSON.parse(repairedRaw)
+    if (typeof repaired !== 'object' || repaired === null || !('backends' in repaired)) {
+      throw new Error(`repaired config is not a config object: ${repairedRaw}`)
+    }
+    expect(Array.isArray(repaired.backends)).toBe(true)
+
+    const defaultConfig = path.join(platformDefaultConfigDir(home), 'config.json')
+    await expect(fs.access(defaultConfig)).rejects.toThrow()
+  })
+
+  it('prints the remediation sentence exactly once for an invalid config (issue #152)', async () => {
+    home = await fs.mkdtemp(path.join(os.tmpdir(), 'vk-home-once-'))
+    const env = await createCliTestEnv({ configDirMode: 'flag', env: isolatedHomeEnv(home) })
+    cleanups.push(() => env.cleanup())
+
+    await fs.writeFile(path.join(env.configDir, 'config.json'), 'not json', 'utf8')
+
+    const doctor = await env.run(['doctor', '--config-dir', env.configDir])
+    expect(doctor.exitCode).not.toBe(0)
+
+    // The remediation (both the sentence stem and its command) appears once.
+    const sentences = doctor.stdout.split('The config at').length - 1
+    expect(sentences).toBe(1)
+    const commands = doctor.stdout.split('config init --force').length - 1
+    expect(commands).toBe(1)
+
+    // ...and it lives under "Next steps", not inline on the ✗ config check.
+    const nextStepsIdx = doctor.stdout.indexOf('Next steps:')
+    expect(nextStepsIdx).toBeGreaterThanOrEqual(0)
+    expect(doctor.stdout.indexOf('config init --force')).toBeGreaterThan(nextStepsIdx)
+
+    // The inline ✗ config line keeps a brief pointer (not the full remediation)
+    // so the failing check is still actionable — that pointer sits BEFORE the
+    // Next steps block, and it is not the remediation command itself.
+    const pointerIdx = doctor.stdout.indexOf('see the fix under Next steps')
+    expect(pointerIdx).toBeGreaterThanOrEqual(0)
+    expect(pointerIdx).toBeLessThan(nextStepsIdx)
   })
 })
