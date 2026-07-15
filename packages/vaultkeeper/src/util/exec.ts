@@ -75,6 +75,10 @@ export function execCommandFull(
 
     if (options?.timeoutMs !== undefined) {
       timeoutHandle = setTimeout(() => {
+        // The timer has already fired, so there is nothing left to clear —
+        // reset to undefined so the later 'close'/'error' handler's guard
+        // matches reality instead of calling clearTimeout on a stale handle.
+        timeoutHandle = undefined
         proc.kill('SIGTERM')
         reject(new ExecError(`Command timed out after ${String(options.timeoutMs)}ms`, command))
       }, options.timeoutMs)

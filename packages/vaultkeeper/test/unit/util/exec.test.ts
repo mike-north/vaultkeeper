@@ -86,23 +86,34 @@ describe('execCommandFull', () => {
   // Regression: PR #164 review (issue #127) — the timeout timer was never
   // cleared when the process closed before it fired. Left pending, it kept
   // the event loop alive until it eventually fired and called proc.kill() on
-  // an already-exited process. A distinctive timeoutMs value (98765, far
-  // from any other timeoutMs used in this file) identifies our setTimeout
-  // call unambiguously among any others the test runner itself may issue.
+  // an already-exited process.
+  //
+  // Wraps the real setTimeout (rather than asserting a call count on the
+  // clearTimeout spy) so the assertion pins the *specific* handle our
+  // setTimeout call returned — immune to unrelated clearTimeout calls
+  // elsewhere in the process, unlike a global call-count assertion (review
+  // feedback on the first version of this test). A distinctive timeoutMs
+  // value (98765, far from any other timeoutMs used in this file) identifies
+  // our setTimeout call among any others that may fire during the test.
   it('clears the timeout timer once the process closes, before it fires', async () => {
-    const setTimeoutSpy = vi.spyOn(globalThis, 'setTimeout')
+    const realSetTimeout = globalThis.setTimeout
+    let ourTimeoutHandle: NodeJS.Timeout | undefined
+    const setTimeoutSpy = vi
+      .spyOn(globalThis, 'setTimeout')
+      .mockImplementation((callback: () => void, ms?: number) => {
+        const handle = realSetTimeout(callback, ms)
+        if (ms === 98_765) {
+          ourTimeoutHandle = handle
+        }
+        return handle
+      })
     const clearTimeoutSpy = vi.spyOn(globalThis, 'clearTimeout')
 
     const result = await execCommandFull('echo', ['hello'], { timeoutMs: 98_765 })
     expect(result.exitCode).toBe(0)
 
-    const ourSetTimeoutCalls = setTimeoutSpy.mock.calls.filter(([, delay]) => delay === 98_765)
-    expect(ourSetTimeoutCalls).toHaveLength(1)
-    // Pre-fix, clearTimeout was never called at all on the 'close' path — a
-    // fixed count (rather than inspecting the specific handle, which would
-    // require an unsafe `any`-typed read of the timer-returning spy's mock
-    // results) is enough to prove the timer we scheduled was torn down.
-    expect(clearTimeoutSpy).toHaveBeenCalledTimes(1)
+    expect(ourTimeoutHandle).toBeDefined()
+    expect(clearTimeoutSpy).toHaveBeenCalledWith(ourTimeoutHandle)
 
     setTimeoutSpy.mockRestore()
     clearTimeoutSpy.mockRestore()
@@ -110,7 +121,17 @@ describe('execCommandFull', () => {
 
   // Same regression, via the error path (spawn ENOENT) rather than 'close'.
   it('clears the timeout timer when spawn errors, before it fires', async () => {
-    const setTimeoutSpy = vi.spyOn(globalThis, 'setTimeout')
+    const realSetTimeout = globalThis.setTimeout
+    let ourTimeoutHandle: NodeJS.Timeout | undefined
+    const setTimeoutSpy = vi
+      .spyOn(globalThis, 'setTimeout')
+      .mockImplementation((callback: () => void, ms?: number) => {
+        const handle = realSetTimeout(callback, ms)
+        if (ms === 98_766) {
+          ourTimeoutHandle = handle
+        }
+        return handle
+      })
     const clearTimeoutSpy = vi.spyOn(globalThis, 'clearTimeout')
 
     await expect(
@@ -119,9 +140,8 @@ describe('execCommandFull', () => {
       }),
     ).rejects.toThrow(PluginNotFoundError)
 
-    const ourSetTimeoutCalls = setTimeoutSpy.mock.calls.filter(([, delay]) => delay === 98_766)
-    expect(ourSetTimeoutCalls).toHaveLength(1)
-    expect(clearTimeoutSpy).toHaveBeenCalledTimes(1)
+    expect(ourTimeoutHandle).toBeDefined()
+    expect(clearTimeoutSpy).toHaveBeenCalledWith(ourTimeoutHandle)
 
     setTimeoutSpy.mockRestore()
     clearTimeoutSpy.mockRestore()
