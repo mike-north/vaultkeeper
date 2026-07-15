@@ -109,14 +109,18 @@ describe('execCommandFull', () => {
       })
     const clearTimeoutSpy = vi.spyOn(globalThis, 'clearTimeout')
 
-    const result = await execCommandFull('echo', ['hello'], { timeoutMs: 98_765 })
-    expect(result.exitCode).toBe(0)
+    // try/finally so a failing assertion (or a rejecting execCommandFull)
+    // can't leak the global setTimeout/clearTimeout spies into later tests.
+    try {
+      const result = await execCommandFull('echo', ['hello'], { timeoutMs: 98_765 })
+      expect(result.exitCode).toBe(0)
 
-    expect(ourTimeoutHandle).toBeDefined()
-    expect(clearTimeoutSpy).toHaveBeenCalledWith(ourTimeoutHandle)
-
-    setTimeoutSpy.mockRestore()
-    clearTimeoutSpy.mockRestore()
+      expect(ourTimeoutHandle).toBeDefined()
+      expect(clearTimeoutSpy).toHaveBeenCalledWith(ourTimeoutHandle)
+    } finally {
+      setTimeoutSpy.mockRestore()
+      clearTimeoutSpy.mockRestore()
+    }
   })
 
   // Same regression, via the error path (spawn ENOENT) rather than 'close'.
@@ -134,16 +138,19 @@ describe('execCommandFull', () => {
       })
     const clearTimeoutSpy = vi.spyOn(globalThis, 'clearTimeout')
 
-    await expect(
-      execCommandFull('this-binary-absolutely-does-not-exist-anywhere', ['--version'], {
-        timeoutMs: 98_766,
-      }),
-    ).rejects.toThrow(PluginNotFoundError)
+    // try/finally: same spy-leak guard as the close-path test above.
+    try {
+      await expect(
+        execCommandFull('this-binary-absolutely-does-not-exist-anywhere', ['--version'], {
+          timeoutMs: 98_766,
+        }),
+      ).rejects.toThrow(PluginNotFoundError)
 
-    expect(ourTimeoutHandle).toBeDefined()
-    expect(clearTimeoutSpy).toHaveBeenCalledWith(ourTimeoutHandle)
-
-    setTimeoutSpy.mockRestore()
-    clearTimeoutSpy.mockRestore()
+      expect(ourTimeoutHandle).toBeDefined()
+      expect(clearTimeoutSpy).toHaveBeenCalledWith(ourTimeoutHandle)
+    } finally {
+      setTimeoutSpy.mockRestore()
+      clearTimeoutSpy.mockRestore()
+    }
   })
 })
