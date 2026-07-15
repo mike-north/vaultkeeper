@@ -518,6 +518,21 @@ Result of a preflight check for a single dependency.
 </td></tr>
 <tr><td>
 
+[PreflightCheckError](./vaultkeeper.preflightcheckerror.md)
+
+
+</td><td>
+
+Structured, remediation-free error context for a failed preflight check.
+
+This carries the machine-readable facts a caller needs to build its own audience-appropriate remediation message, so a consumer never has to parse the human-readable `reason` prose. It is currently populated only for the `config` check when the config file is present but invalid.
+
+The `reason` field intentionally keeps the library's own remediation text (which points a library consumer at installing the CLI); a consumer that ships its own CLI should read this structured field instead and phrase the remediation itself.
+
+
+</td></tr>
+<tr><td>
+
 [PreflightResult](./vaultkeeper.preflightresult.md)
 
 
@@ -743,6 +758,17 @@ Key status in the rotation lifecycle.
 </td><td>
 
 The OS platform identifier used for platform-specific behavior.
+
+
+</td></tr>
+<tr><td>
+
+[PreflightCheckErrorKind](./vaultkeeper.preflightcheckerrorkind.md)
+
+
+</td><td>
+
+The kind of error that made a preflight check fail, as a stable machine-readable discriminant. `'config-parse'` means the config file could not be parsed as JSON; `'config-validation'` means it parsed but failed schema validation.
 
 
 </td></tr>
