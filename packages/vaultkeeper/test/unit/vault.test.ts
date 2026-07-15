@@ -252,6 +252,42 @@ describe('VaultKeeper', () => {
       createTokenSpy.mockRestore()
     })
 
+    // Regression for the review thread on #resolveBackendTypeHint (comment
+    // 3590126933): a blank options.backendType override must not be treated
+    // as authoritative — honoring it would mint a token with a blank `bkd`
+    // claim that validateClaims later rejects (an unusable token). A blank
+    // override falls through to the same declared-type/'custom' derivation
+    // as no override at all. Before the fix, bkd was '  ' here.
+    it('ignores a whitespace-only options.backendType override instead of minting a blank bkd claim', async () => {
+      const backend: SecretBackend = {
+        type: 'file',
+        displayName: 'File Backend',
+        isAvailable: () => Promise.resolve(true),
+        store: () => Promise.resolve(),
+        retrieve: () => Promise.resolve('injected-value'),
+        delete: () => Promise.resolve(),
+        exists: () => Promise.resolve(true),
+      }
+      const vault = await VaultKeeper.init({ backend, skipDoctor: true })
+
+      const createTokenSpy = vi.spyOn(jweTokenModule, 'createToken')
+
+      const jwe = await vault.setup('injected-secret', {
+        skipTrust: true,
+        backendType: '  ',
+      })
+
+      expect(createTokenSpy).toHaveBeenCalledOnce()
+      expect(createTokenSpy.mock.calls[0]?.[1].bkd).toBe('file')
+
+      // The token stays usable end-to-end.
+      const { token } = await vault.authorize(jwe)
+      const accessor = vault.getSecret(token)
+      expect(accessor.read((buf) => buf.toString('utf8'))).toBe('injected-value')
+
+      createTokenSpy.mockRestore()
+    })
+
     it('uses a minimal built-in default config when config is omitted', async () => {
       const backend = createMockBackend({ 'my-secret': 'hunter2' })
       // No `config` or `configDir`-loadable file is supplied — this only

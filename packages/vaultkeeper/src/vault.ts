@@ -888,16 +888,19 @@ export class VaultKeeper {
   /**
    * Resolve the backend-type hint used both for introspection
    * ({@link activeBackendType}) and for the `bkd` claim minted by
-   * {@link setup}. An explicit `override` always wins; otherwise the backend's
-   * declared `type` is used (trimmed). A backend that declares an empty or
-   * whitespace-only type — permitted for injected backends — falls back to the
-   * stable `'custom'` sentinel. Centralizing this keeps the two paths in sync
-   * so an injected empty-type backend never mints a token with an empty `bkd`
+   * {@link setup}. A non-blank `override` wins (trimmed); an empty or
+   * whitespace-only override is treated the same as no override, since
+   * honoring it would mint a token with a blank `bkd` claim. Otherwise the
+   * backend's declared `type` is used (trimmed), and a backend that declares
+   * an empty or whitespace-only type — permitted for injected backends —
+   * falls back to the stable `'custom'` sentinel. Centralizing this keeps
+   * both paths in sync so no route ever mints a token with an empty `bkd`
    * claim (which {@link validateClaims} rejects, making the token unusable).
    */
   static #resolveBackendTypeHint(backend: SecretBackend, override?: string): string {
-    if (override !== undefined) {
-      return override
+    const trimmedOverride = override?.trim()
+    if (trimmedOverride !== undefined && trimmedOverride !== '') {
+      return trimmedOverride
     }
     const declared = backend.type.trim()
     return declared === '' ? 'custom' : declared
