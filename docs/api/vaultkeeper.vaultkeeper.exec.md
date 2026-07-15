@@ -4,14 +4,20 @@
 
 ## VaultKeeper.exec() method
 
-Execute a delegated command, injecting the secret from the token.
+Execute a delegated command, injecting secrets from the token(s).
 
-The secret value is substituted for every `{{secret}}` placeholder found in `request.args` and `request.env` values before the process is spawned. The raw secret is never exposed in the return value.
+\*\*Single token:\*\* every `{{secret}}` placeholder in `request.env` values is replaced with the secret value.
+
+\*\*Token map ([SecretTokenMap](./vaultkeeper.secrettokenmap.md)<!-- -->):\*\* every `{{secret:name}}` placeholder is replaced with the secret from the corresponding named token.
+
+Secret placeholders are not supported in `request.command` or `request.args` — process arguments are visible to other processes via `ps` and often collected in logs and telemetry.
+
+The raw secret is never exposed in the return value.
 
 **Signature:**
 
 ```typescript
-exec(token: CapabilityToken, request: ExecRequest): Promise<{
+exec(token: CapabilityToken | SecretTokenMap, request: ExecRequest): Promise<{
         result: ExecResult;
         vaultResponse: VaultResponse;
     }>;
@@ -42,12 +48,12 @@ token
 
 </td><td>
 
-[CapabilityToken](./vaultkeeper.capabilitytoken.md)
+[CapabilityToken](./vaultkeeper.capabilitytoken.md) \| [SecretTokenMap](./vaultkeeper.secrettokenmap.md)
 
 
 </td><td>
 
-A `CapabilityToken` obtained from `authorize()`<!-- -->.
+A single `CapabilityToken` or a `SecretTokenMap` mapping names to tokens obtained from `authorize()`<!-- -->.
 
 
 </td></tr>
@@ -63,7 +69,7 @@ request
 
 </td><td>
 
-The exec request template. Use `{{secret}}` as a placeholder wherever the secret value should be injected.
+The exec request template with placeholders.
 
 
 </td></tr>
@@ -77,5 +83,7 @@ The command result (`stdout`<!-- -->, `stderr`<!-- -->, `exitCode`<!-- -->) toge
 
 ## Exceptions
 
-{<!-- -->Error<!-- -->} If `token` is invalid or was not created by this vault instance.
+{<!-- -->AuthorizationDeniedError<!-- -->} If any token is invalid or was not created by this vault instance.
+
+{<!-- -->ExecError<!-- -->} If the command cannot be started (e.g. ENOENT), a placeholder references an unknown secret name, or a secret placeholder appears in the `command` or `args` field.
 

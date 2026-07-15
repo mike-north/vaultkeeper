@@ -4,7 +4,7 @@
 
 ## FetchRequest.headers property
 
-Request headers. Any header value may contain `{{secret}}`<!-- -->, which is replaced with the secret value before the request is sent.
+Request headers. Any header value may contain `{{secret}}` or `{{secret:name}}`<!-- -->, which is replaced with the secret value before the request is sent.
 
 **Signature:**
 

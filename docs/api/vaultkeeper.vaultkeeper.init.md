@@ -6,6 +6,8 @@
 
 Initialize a new VaultKeeper instance. Runs doctor checks (unless skipped), loads config, and sets up the key manager.
 
+The configured secret backend is resolved lazily on first use, not during `init()`<!-- -->. Trust-only operations (e.g. [VaultKeeper.approveExecutable()](./vaultkeeper.vaultkeeper.approveexecutable.md)<!-- -->, [VaultKeeper.checkExecutableTrust()](./vaultkeeper.vaultkeeper.checkexecutabletrust.md)<!-- -->) therefore succeed even when the configured backend or plugin is unavailable or unregistered; a misconfigured backend surfaces only when a secret operation is invoked.
+
 **Signature:**
 
 ```typescript

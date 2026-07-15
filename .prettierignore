@@ -4,4 +4,5 @@ coverage
 tmp
 scratch
 api-report
+docs/api
 pnpm-lock.yaml

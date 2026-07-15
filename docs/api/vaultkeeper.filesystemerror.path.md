@@ -4,7 +4,7 @@
 
 ## FilesystemError.path property
 
-The absolute path of the file or directory that caused the error.
+The path of the file or directory that caused the error, as provided by the caller. Not guaranteed to be absolute — e.g. `loadConfig` throws this with `configDir` joined with `config.json` exactly as given, without resolving a relative `configDir`<!-- -->.
 
 **Signature:**
 

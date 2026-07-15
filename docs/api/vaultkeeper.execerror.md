@@ -4,7 +4,7 @@
 
 ## ExecError class
 
-Thrown when a delegated `exec()` call fails due to a process-level error (e.g. the command binary is not found or cannot be spawned).
+Thrown when a delegated `exec()` call fails due to an invalid request (e.g. a `{{secret}}` placeholder in the `command` field) or a process-level error (e.g. the command binary is not found or cannot be spawned).
 
 **Signature:**
 

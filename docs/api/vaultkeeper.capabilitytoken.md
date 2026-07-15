@@ -4,7 +4,11 @@
 
 ## CapabilityToken class
 
-Opaque capability token. Claims are inaccessible without `validateCapabilityToken`<!-- -->.
+An opaque handle to authorized secret claims.
+
+A `CapabilityToken` is produced by [VaultKeeper.authorize()](./vaultkeeper.vaultkeeper.authorize.md) and deliberately exposes no readable data. The underlying claims — including the secret value — are held in a module-private `WeakMap` that this class does not reference, and its private fields keep any property from leaking them (`toString()` returns only a debug identifier). There is intentionally no public API for reading the claims directly.
+
+To use the secret, pass the token to a [VaultKeeper](./vaultkeeper.vaultkeeper.md) access method — [VaultKeeper.getSecret()](./vaultkeeper.vaultkeeper.getsecret.md)<!-- -->, [VaultKeeper.fetch()](./vaultkeeper.vaultkeeper.fetch.md)<!-- -->, [VaultKeeper.exec()](./vaultkeeper.vaultkeeper.exec.md)<!-- -->, or [VaultKeeper.sign()](./vaultkeeper.vaultkeeper.sign.md) — which resolve the claims internally.
 
 **Signature:**
 

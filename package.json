@@ -13,6 +13,7 @@
     "check:typecheck": "NX_TUI=false nx run-many -t check:typecheck --exclude=vaultkeeper-workspace",
     "check:lint-ts": "NX_TUI=false nx run-many -t check:lint-ts --exclude=vaultkeeper-workspace",
     "check:api-report": "NX_TUI=false nx run-many -t check:api-report --exclude=vaultkeeper-workspace",
+    "check:api-docs": "node scripts/collect-api-json.mjs && node scripts/check-api-docs.mjs",
     "generate:api-report": "NX_TUI=false nx run-many -t generate:api-report --exclude=vaultkeeper-workspace",
     "generate:api-docs": "pnpm generate:api-report && node scripts/collect-api-json.mjs && api-documenter markdown -i tmp/api-documenter -o docs/api"
   },
