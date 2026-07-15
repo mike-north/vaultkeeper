@@ -163,6 +163,18 @@ describe('delegatedSign', () => {
         InvalidAlgorithmError,
       )
     })
+
+    // Regression test for the sign-side of https://github.com/mike-north/vaultkeeper/issues/180:
+    // delegatedSign previously parsed the private key before validating the
+    // algorithm, so a disallowed algorithm combined with unusable key material
+    // threw InvalidKeyMaterialError instead of InvalidAlgorithmError. The
+    // disallowed-algorithm guard must run first, unconditionally — mirroring
+    // delegatedVerify.
+    it('throws InvalidAlgorithmError (not InvalidKeyMaterialError) for md5 with a garbage key', () => {
+      expect(() => delegatedSign('not-a-pem', { data: 'test', algorithm: 'md5' })).toThrow(
+        InvalidAlgorithmError,
+      )
+    })
   })
 
   describe('edge cases', () => {

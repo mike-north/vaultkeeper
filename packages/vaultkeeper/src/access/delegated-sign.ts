@@ -10,7 +10,7 @@
 import * as crypto from 'node:crypto'
 import type { SignRequest, SignResult } from '../types.js'
 import { InvalidKeyMaterialError } from '../errors.js'
-import { resolveAlgorithmForKey } from './sign-util.js'
+import { assertAllowedAlgorithm, resolveAlgorithmForKey } from './sign-util.js'
 
 /**
  * Sign data using a PEM-encoded private key.
@@ -23,6 +23,12 @@ import { resolveAlgorithmForKey } from './sign-util.js'
  * @internal
  */
 export function delegatedSign(secretPem: string, request: SignRequest): SignResult {
+  // A disallowed algorithm (e.g. 'md5') is a downgrade attempt and must throw
+  // InvalidAlgorithmError unconditionally — mirroring delegatedVerify. Run this
+  // guard BEFORE parsing the key so a disallowed algorithm is not masked by an
+  // InvalidKeyMaterialError when the stored secret is also unusable (issue #180).
+  assertAllowedAlgorithm(request.algorithm)
+
   // Note: `secretPem` is a JS string and cannot be zeroed. This is consistent
   // with how `delegatedFetch` and `delegatedExec` handle `claims.val`. Node.js
   // `KeyObject` also does not expose a zeroing API.

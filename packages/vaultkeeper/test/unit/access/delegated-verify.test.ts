@@ -13,6 +13,8 @@ let ed25519Private: string
 let ed25519Public: string
 let rsaPrivate: string
 let rsaPublic: string
+let ecPrivate: string
+let ecPublic: string
 
 beforeAll(() => {
   const ed = crypto.generateKeyPairSync('ed25519')
@@ -22,6 +24,10 @@ beforeAll(() => {
   const rsa = crypto.generateKeyPairSync('rsa', { modulusLength: 2048 })
   rsaPrivate = rsa.privateKey.export({ type: 'pkcs8', format: 'pem' }).toString()
   rsaPublic = rsa.publicKey.export({ type: 'spki', format: 'pem' }).toString()
+
+  const ec = crypto.generateKeyPairSync('ec', { namedCurve: 'P-256' })
+  ecPrivate = ec.privateKey.export({ type: 'pkcs8', format: 'pem' }).toString()
+  ecPublic = ec.publicKey.export({ type: 'spki', format: 'pem' }).toString()
 })
 
 function signEd25519(data: string): string {
@@ -164,6 +170,76 @@ describe('delegatedVerify', () => {
       expect(
         delegatedVerify({ data, signature, publicKey: rsaPublic, algorithm: 'Sha512' }),
       ).toBe(true)
+    })
+  })
+
+  // Regression tests for https://github.com/mike-north/vaultkeeper/issues/180:
+  // The disallowed-algorithm guard previously ran AFTER key parsing, so a
+  // disallowed algorithm (e.g. 'md5') combined with malformed key material
+  // short-circuited to `return false` and silently skipped the throw. The
+  // README documents the disallowed-algorithm throw as unconditional and
+  // synchronous, so it must fire even when the key is also invalid.
+  //
+  // Matrix (from issue #180):
+  //   md5 + valid RSA   -> throws InvalidAlgorithmError
+  //   md5 + valid EC    -> throws InvalidAlgorithmError
+  //   md5 + garbage key -> throws InvalidAlgorithmError (THE FIX)
+  //   sha256 + garbage key                 -> returns false
+  //   sha256 + valid key + bad signature   -> returns false
+  describe('disallowed algorithm is rejected before key parsing (issue #180)', () => {
+    const GARBAGE_KEY = 'not-a-real-public-key-pem'
+
+    it('throws InvalidAlgorithmError for md5 with a valid RSA key', () => {
+      const signature = signRsa('payload')
+
+      expect(() =>
+        delegatedVerify({ data: 'payload', signature, publicKey: rsaPublic, algorithm: 'md5' }),
+      ).toThrow(InvalidAlgorithmError)
+    })
+
+    it('throws InvalidAlgorithmError for md5 with a valid EC key', () => {
+      const signature = crypto
+        .sign('sha256', Buffer.from('payload'), crypto.createPrivateKey(ecPrivate))
+        .toString('base64')
+
+      expect(() =>
+        delegatedVerify({ data: 'payload', signature, publicKey: ecPublic, algorithm: 'md5' }),
+      ).toThrow(InvalidAlgorithmError)
+    })
+
+    it('throws InvalidAlgorithmError for md5 with a garbage key (the fix)', () => {
+      expect(() =>
+        delegatedVerify({
+          data: 'payload',
+          signature: 'AAAA',
+          publicKey: GARBAGE_KEY,
+          algorithm: 'md5',
+        }),
+      ).toThrow(InvalidAlgorithmError)
+    })
+
+    it('returns false (does not throw) for sha256 with a garbage key', () => {
+      expect(
+        delegatedVerify({
+          data: 'payload',
+          signature: 'AAAA',
+          publicKey: GARBAGE_KEY,
+          algorithm: 'sha256',
+        }),
+      ).toBe(false)
+    })
+
+    it('returns false for sha256 with a valid key and a bad signature', () => {
+      const signature = signRsa('payload')
+
+      expect(
+        delegatedVerify({
+          data: 'different-payload',
+          signature,
+          publicKey: rsaPublic,
+          algorithm: 'sha256',
+        }),
+      ).toBe(false)
     })
   })
 

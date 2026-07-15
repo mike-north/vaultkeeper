@@ -14,6 +14,38 @@ import { InvalidAlgorithmError } from '../errors.js'
 const ALLOWED_ALGORITHMS = new Set(['sha256', 'sha384', 'sha512'])
 
 /**
+ * Assert that a caller-supplied algorithm override is in the allowlist.
+ *
+ * This check is intentionally key-independent so it can run *before* any key
+ * material is parsed. A disallowed algorithm (e.g. `'md5'`, `'sha1'`) is a
+ * downgrade attempt and must be rejected unconditionally — even when the key
+ * material is also malformed or attacker-controlled. Callers that parse key
+ * material first would otherwise short-circuit to a key-parse failure and
+ * silently skip this guard.
+ *
+ * An `undefined` override is a no-op: the default algorithm is chosen later,
+ * once the key type is known.
+ *
+ * @param override - Caller-provided algorithm override, if any.
+ * @throws {InvalidAlgorithmError} If `override` is provided and not in the
+ *   allowed algorithm set.
+ * @internal
+ */
+export function assertAllowedAlgorithm(override: string | undefined): void {
+  if (override === undefined) {
+    return
+  }
+  const alg = override.toLowerCase()
+  if (!ALLOWED_ALGORITHMS.has(alg)) {
+    throw new InvalidAlgorithmError(
+      `Unsupported algorithm '${alg}'. Allowed: ${[...ALLOWED_ALGORITHMS].join(', ')}`,
+      alg,
+      [...ALLOWED_ALGORITHMS],
+    )
+  }
+}
+
+/**
  * Resolve the algorithm parameter for `crypto.sign()` / `crypto.verify()`
  * based on the key type.
  *
@@ -35,13 +67,7 @@ export function resolveAlgorithmForKey(
   if (keyType === 'ed25519' || keyType === 'ed448') {
     return { signAlg: null, label: keyType }
   }
+  assertAllowedAlgorithm(override)
   const alg = (override ?? 'sha256').toLowerCase()
-  if (!ALLOWED_ALGORITHMS.has(alg)) {
-    throw new InvalidAlgorithmError(
-      `Unsupported algorithm '${alg}'. Allowed: ${[...ALLOWED_ALGORITHMS].join(', ')}`,
-      alg,
-      [...ALLOWED_ALGORITHMS],
-    )
-  }
   return { signAlg: alg, label: alg }
 }
