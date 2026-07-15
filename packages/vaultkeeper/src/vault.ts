@@ -365,7 +365,7 @@ export class VaultKeeper {
     if (this.#backendInjected && this.#backend !== undefined) {
       // An injected backend wins over config resolution (see init()); report
       // its declared type, falling back to a stable sentinel if it declares none.
-      return this.#backend.type === '' ? 'custom' : this.#backend.type
+      return VaultKeeper.#resolveBackendTypeHint(this.#backend)
     }
     const firstEnabled = this.#config.backends.find((b) => b.enabled)
     if (firstEnabled === undefined) {
@@ -462,7 +462,7 @@ export class VaultKeeper {
   async setup(secretName: string, options?: SetupOptions): Promise<string> {
     VaultKeeper.#validateSecretName(secretName)
     const backend = this.#requireBackend()
-    const backendType = options?.backendType ?? backend.type
+    const backendType = VaultKeeper.#resolveBackendTypeHint(backend, options?.backendType)
     const ttlMinutes = options?.ttlMinutes ?? this.#config.defaults.ttlMinutes
     const trustTier = options?.trustTier ?? this.#config.defaults.trustTier
     const useLimit = options?.useLimit ?? null
@@ -883,6 +883,24 @@ export class VaultKeeper {
     }
 
     return BackendRegistry.create(firstEnabled.type, firstEnabled, this.#configDir)
+  }
+
+  /**
+   * Resolve the backend-type hint used both for introspection
+   * ({@link activeBackendType}) and for the `bkd` claim minted by
+   * {@link setup}. An explicit `override` always wins; otherwise the backend's
+   * declared `type` is used (trimmed). A backend that declares an empty or
+   * whitespace-only type — permitted for injected backends — falls back to the
+   * stable `'custom'` sentinel. Centralizing this keeps the two paths in sync
+   * so an injected empty-type backend never mints a token with an empty `bkd`
+   * claim (which {@link validateClaims} rejects, making the token unusable).
+   */
+  static #resolveBackendTypeHint(backend: SecretBackend, override?: string): string {
+    if (override !== undefined) {
+      return override
+    }
+    const declared = backend.type.trim()
+    return declared === '' ? 'custom' : declared
   }
 
   #requireBackend(): SecretBackend {

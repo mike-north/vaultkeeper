@@ -5,6 +5,7 @@ import { BackendRegistry } from '../../src/backend/registry.js'
 import type { SecretBackend } from '../../src/backend/types.js'
 import { clearBlocklist } from '../../src/jwe/claims.js'
 import { UsageLimitExceededError } from '../../src/errors.js'
+import * as jweTokenModule from '../../src/jwe/token.js'
 import * as delegatedFetchModule from '../../src/access/delegated-fetch.js'
 import * as delegatedExecModule from '../../src/access/delegated-exec.js'
 import * as delegatedSignModule from '../../src/access/delegated-sign.js'
@@ -211,6 +212,44 @@ describe('VaultKeeper', () => {
         captured = buf.toString('utf-8')
       })
       expect(captured).toBe('injected-value')
+    })
+
+    // Regression for #167 follow-up (thread 3590033605): an injected backend
+    // that declares an empty type must still mint a USABLE token. setup()
+    // derives the `bkd` claim from the same centralized hint as
+    // activeBackendType, so the empty type falls back to 'custom' — a non-empty
+    // bkd that validateClaims accepts. Before the fix, bkd was '' and
+    // authorize() threw "Invalid token: bkd must not be empty".
+    it('mints a valid token (bkd="custom") for an injected empty-type backend (issue #167)', async () => {
+      const backend: SecretBackend = {
+        type: '', // empty declared type — the documented injected edge case
+        displayName: 'Anonymous Backend',
+        isAvailable: () => Promise.resolve(true),
+        store: () => Promise.resolve(),
+        retrieve: () => Promise.resolve('injected-value'),
+        delete: () => Promise.resolve(),
+        exists: () => Promise.resolve(true),
+      }
+      const vault = await VaultKeeper.init({ backend, skipDoctor: true })
+
+      // Spy (call-through) to capture the claims actually minted, without
+      // replacing the real token so authorize() still validates end-to-end.
+      const createTokenSpy = vi.spyOn(jweTokenModule, 'createToken')
+
+      // No options.backendType: setup() must derive a non-empty bkd on its own.
+      const jwe = await vault.setup('injected-secret', { skipTrust: true })
+
+      expect(createTokenSpy).toHaveBeenCalledOnce()
+      expect(createTokenSpy.mock.calls[0]?.[1].bkd).toBe('custom')
+
+      // The token round-trips: authorize() accepts it (pre-fix it threw on the
+      // empty bkd) and the secret is recoverable.
+      const { token } = await vault.authorize(jwe)
+      const accessor = vault.getSecret(token)
+      const secret = accessor.read((buf) => buf.toString('utf8'))
+      expect(secret).toBe('injected-value')
+
+      createTokenSpy.mockRestore()
     })
 
     it('uses a minimal built-in default config when config is omitted', async () => {
