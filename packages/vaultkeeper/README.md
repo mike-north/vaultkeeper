@@ -126,8 +126,10 @@ const { response } = await vault.fetch(
 ```
 
 The same map and `{{secret:name}}` syntax work for `exec()` env values. A `{{secret:name}}` whose
-`name` is not a key in the map throws `VaultError`. The two modes don't mix within a single call: a
-single-token call resolves only `{{secret}}`, and a map call resolves only `{{secret:name}}`.
+`name` is not a key in the map fails the call, but the error type differs by method: `fetch()`
+surfaces the underlying `VaultError`, while `exec()` wraps that same failure as an `ExecError`. The
+two modes don't mix within a single call: a single-token call resolves only `{{secret}}`, and a map
+call resolves only `{{secret:name}}`.
 
 ## Example config
 
@@ -271,14 +273,17 @@ CLI's `vaultkeeper doctor` / WASM `doctor()` surface). Each check reports whethe
 binary was found, and every result is classified **required** or **informational**:
 
 - **Required** checks gate readiness. A required check that fails makes the overall result
-  **not ready** and produces a remediation next-step. `openssl` is always required; a platform's
-  native credential tool (`security` on macOS, `powershell` on Windows, `secret-tool` on Linux) is
-  required only when its backend is the enabled one.
+  **not ready** and produces a remediation next-step. `openssl` is always required. By default —
+  when `runDoctor()` is not scoped to a set of backends — the platform's native credential tool
+  (`security` on macOS, `powershell` on Windows, `secret-tool` on Linux) is **also required**;
+  scoping the run to specific backends (e.g. via the `backends`/`configDir` inputs, as
+  `VaultKeeper.init()` does from your config) narrows that to only the native tool for an enabled
+  backend, demoting the others to informational.
 - **Informational** checks never fail readiness — a failure is reported as a **warning** only.
-  The plugin-backend binaries `op` (1Password), `ykman` (YubiKey), and a native tool whose backend
-  isn't enabled are always listed but stay informational unless their backend is explicitly enabled
-  in `backends`. So with only the default `file` backend enabled, `op`/`ykman`/`security` still
-  appear in the output — a failing one will not block `ready`.
+  The plugin-backend binaries `op` (1Password) and `ykman` (YubiKey) are always listed but stay
+  informational unless their backend is explicitly enabled in `backends`. So with only the default
+  `file` backend enabled, `op`/`ykman` still appear in the output — a failing one will not block
+  `ready`.
 
 A checkmark next to a plugin check therefore means **the binary was detected on `PATH`**, not that
 the backend is active or configured — e.g. a green `op` means the 1Password CLI is installed, not

@@ -22,8 +22,8 @@ await backend.store('MY_SECRET', 'hunter2')
 
 // `keeper.setup()` requires an explicit executable-trust choice; tests use the
 // development-only `skipTrust` opt-out to stay hermetic. (The `TestVault.setup()`
-// convenience method applies this default for you, so `vault.setup('MY_SECRET')`
-// works with no options in tests.)
+// convenience method applies this default for you — via a `TestVault` instance
+// from `TestVault.create()`, e.g. `testVault.setup('MY_SECRET')` with no options.)
 //
 // WARNING: this test-only default does NOT apply to the real `VaultKeeper.setup()`
 // in the `vaultkeeper` package. There, setup() has no default and always requires
