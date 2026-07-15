@@ -206,23 +206,55 @@ const FS_OPERATION_VERB: Record<string, string> = {
 }
 
 /**
+ * Classify a {@link FilesystemError} as `'missing'` (ENOENT), `'denied'`
+ * (EACCES/EPERM), or `'other'`, to pick the human-facing wording.
+ *
+ * Prefers the typed, machine-readable `err.code` — its documented contract
+ * (see `FilesystemError.code`) says to prefer it over parsing the message,
+ * which is not a contractual format and could misclassify if a path happens
+ * to contain one of these tokens. Falls back to a conservative message-regex
+ * only when `code` is `undefined` (a legacy or hand-constructed error with no
+ * underlying cause, e.g. some unit fixtures).
+ */
+function classifyFilesystemError(err: FilesystemError): 'missing' | 'denied' | 'other' {
+  const code = err.code
+  if (code !== undefined) {
+    if (code === 'ENOENT') {
+      return 'missing'
+    }
+    if (code === 'EACCES' || code === 'EPERM') {
+      return 'denied'
+    }
+    return 'other'
+  }
+  // No typed code — fall back to the (non-contractual) message text.
+  if (/\bENOENT\b/.test(err.message)) {
+    return 'missing'
+  }
+  if (/\b(?:EACCES|EPERM)\b/.test(err.message)) {
+    return 'denied'
+  }
+  return 'other'
+}
+
+/**
  * Build a human-facing message for a {@link FilesystemError} from its typed
- * `path`/`permission` fields plus the OS error code parsed out of its
- * `.message`, without ever echoing the raw Node `ENOENT: … open '<path>'`
- * text — which leaks an implementation detail and carries no next step
- * (issue #150). Mirrors the fix-oriented shape of the config-error and
- * identity-mismatch messages.
+ * `path`/`permission`/`code` fields, without ever echoing the raw Node
+ * `ENOENT: … open '<path>'` text — which leaks an implementation detail and
+ * carries no next step (issue #150). Mirrors the fix-oriented shape of the
+ * config-error and identity-mismatch messages.
  */
 function formatFilesystemError(err: FilesystemError): string {
   const quotedPath = `\`${err.path}\``
-  if (/\bENOENT\b/.test(err.message)) {
+  const kind = classifyFilesystemError(err)
+  if (kind === 'missing') {
     return (
       `${err.name}: The file at ${quotedPath} does not exist. ` +
       'Check that the path is correct and the file exists, then try again.'
     )
   }
   const verb = FS_OPERATION_VERB[err.permission] ?? 'accessed'
-  if (/\b(?:EACCES|EPERM)\b/.test(err.message)) {
+  if (kind === 'denied') {
     return (
       `${err.name}: The file at ${quotedPath} cannot be ${verb} (permission denied). ` +
       "Check the file's permissions and try again."

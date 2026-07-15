@@ -495,6 +495,46 @@ describe('formatError renders FilesystemError without raw OS text (issue #150)',
     expect(formatted).not.toContain(`open '`)
   })
 
+  // The typed `code` field is the contract (FilesystemError.code says to
+  // prefer it over parsing the message). These prove code wins even when the
+  // message text carries a DIFFERENT/absent token, so classification can't be
+  // fooled by wording changes or a path that incidentally contains a token.
+  it('classifies by err.code (EACCES) even when the message contains no errno token', () => {
+    const p = '/tmp/secret.json'
+    const err = new FilesystemError(
+      // Deliberately no "EACCES"/"ENOENT" in the message text.
+      `Could not open ${p}`,
+      p,
+      'read',
+      Object.assign(new Error('boom'), { code: 'EACCES' }),
+    )
+
+    const formatted = formatError(err, CONFIG_DIR)
+
+    expect(formatted).toBe(
+      `FilesystemError: The file at \`${p}\` cannot be read (permission denied). ` +
+        "Check the file's permissions and try again.",
+    )
+  })
+
+  it('classifies by err.code (ENOENT) even when the message says something else', () => {
+    // Message text mentions EACCES, but the typed code is ENOENT — code wins.
+    const p = '/tmp/gone'
+    const err = new FilesystemError(
+      `EACCES-looking prose about ${p}`,
+      p,
+      'read',
+      Object.assign(new Error('missing'), { code: 'ENOENT' }),
+    )
+
+    const formatted = formatError(err, CONFIG_DIR)
+
+    expect(formatted).toBe(
+      `FilesystemError: The file at \`${p}\` does not exist. ` +
+        'Check that the path is correct and the file exists, then try again.',
+    )
+  })
+
   it('uses the past-tense operation verb from the permission field for a write EACCES', () => {
     const p = '/tmp/readonly/secret.json'
     const err = new FilesystemError(
