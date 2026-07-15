@@ -19,6 +19,7 @@ import {
   SecretNotFoundError,
   PluginNotFoundError,
   BackendLockedError,
+  BackendUnavailableError,
   AuthorizationDeniedError,
 } from '../errors.js'
 import type { ListableBackend } from './types.js'
@@ -399,6 +400,19 @@ export class OnePasswordBackend implements ListableBackend {
               break
             case 'LOCKED':
               reject(new BackendLockedError('1Password is locked. Please unlock and retry.', true))
+              break
+            case 'INTERNAL':
+              // A worker-internal failure (e.g. a present-but-broken SDK that
+              // could not be loaded) is a backend problem, not a missing
+              // secret — surface it as such with the worker's real detail so it
+              // isn't misclassified as SecretNotFoundError.
+              reject(
+                new BackendUnavailableError(
+                  `1Password per-access worker failed for secret ${id}: ${parsed.error}`,
+                  'worker-internal-error',
+                  ['1password'],
+                ),
+              )
               break
             default:
               reject(new SecretNotFoundError(`Worker failed for secret ${id}: ${parsed.error}`))

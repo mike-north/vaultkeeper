@@ -94,6 +94,7 @@ import { OnePasswordBackend } from '../../../src/backend/one-password-backend.js
 import {
   SecretNotFoundError,
   BackendLockedError,
+  BackendUnavailableError,
   AuthorizationDeniedError,
   PluginNotFoundError,
 } from '../../../src/errors.js'
@@ -656,7 +657,11 @@ describe('OnePasswordBackend', () => {
 
     it('should throw SecretNotFoundError for unknown worker error code (default case)', async () => {
       const backend = makePerAccessBackend()
-      const proc = makeWorkerProcess(JSON.stringify({ error: 'something weird', code: 'INTERNAL' }))
+      // An unrecognized code (not one of the explicitly handled ones) falls
+      // through to the default branch.
+      const proc = makeWorkerProcess(
+        JSON.stringify({ error: 'something weird', code: 'SOMETHING_UNKNOWN' }),
+      )
       mockSpawn.mockReturnValue(proc)
 
       await expect(backend.retrieve('my-secret')).rejects.toBeInstanceOf(SecretNotFoundError)
@@ -731,9 +736,10 @@ describe('OnePasswordBackend', () => {
 
     // Regression for https://github.com/mike-north/vaultkeeper/issues/113: a
     // present-but-broken SDK makes the worker report an INTERNAL failure with
-    // the real load error — the backend must NOT misreport that as a missing
-    // plugin (which would tell the user to reinstall something already there).
-    it('should NOT throw PluginNotFoundError when the worker reports a non-plugin SDK load failure', async () => {
+    // the real load error. The backend must classify that as a backend problem
+    // — NOT a missing plugin (reinstall hint) and NOT a missing secret — while
+    // preserving the worker's real detail.
+    it('should reject INTERNAL worker failures as a backend error preserving the detail', async () => {
       const backend = makePerAccessBackend()
       const proc = makeWorkerProcess(
         JSON.stringify({
@@ -744,8 +750,9 @@ describe('OnePasswordBackend', () => {
       mockSpawn.mockReturnValue(proc)
 
       const error = await backend.retrieve('my-secret').catch((err: unknown) => err)
+      expect(error).toBeInstanceOf(BackendUnavailableError)
       expect(error).not.toBeInstanceOf(PluginNotFoundError)
-      expect(error).toBeInstanceOf(Error)
+      expect(error).not.toBeInstanceOf(SecretNotFoundError)
       // The real load error text is preserved, not swapped for a "reinstall" hint.
       expect(error instanceof Error ? error.message : '').toContain('native binding failed')
     })
