@@ -19,7 +19,7 @@ The zero-config default backend type identifier (`'file'`<!-- -->).
 
 ## Remarks
 
-The zero-config default is deliberately the portable, self-contained AES-256-GCM encrypted file backend rather than the platform-native OS credential store. This guarantees that a bare [VaultKeeper.init()](./vaultkeeper.vaultkeeper.init.md) — or a `vaultkeeper config init` with no `--backend` flag — can never silently write a secret into the user's real login keychain (or Windows DPAPI store) before they have chosen to. It also matches the WASM SDK, which always uses the file backend.
+The zero-config default is deliberately the portable, self-contained AES-256-GCM encrypted file backend rather than the platform-native OS credential store. This guarantees that a bare [VaultKeeper.init()](./vaultkeeper.vaultkeeper.init.md) — or a `vaultkeeper config init` (run via the separate `@vaultkeeper/cli` package) with no `--backend` flag — can never silently write a secret into the user's real login keychain (or Windows DPAPI store) before they have chosen to. It also matches the WASM SDK, which always uses the file backend.
 
-The OS-native store is still available as an explicit opt-in: pass `--backend keychain` (macOS) / `--backend dpapi` (Windows) to `vaultkeeper config init`<!-- -->, or set it in an explicit config. Use [platformNativeBackendType()](./vaultkeeper.platformnativebackendtype.md) to discover which native store the current platform offers.
+The OS-native store is still available as an explicit opt-in: pass `--backend keychain` (macOS) / `--backend dpapi` (Windows) to `vaultkeeper config init` (via `@vaultkeeper/cli`<!-- -->), or set `{ type: 'keychain' | 'dpapi' }` directly in a config object/file. Use [platformNativeBackendType()](./vaultkeeper.platformnativebackendtype.md) to discover which native store the current platform offers.
 

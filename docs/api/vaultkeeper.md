@@ -96,7 +96,7 @@ To use the secret, pass the token to a [VaultKeeper](./vaultkeeper.vaultkeeper.m
 
 Thrown when a config file's contents cannot be parsed as JSON.
 
-The `message` already embeds the file path, the parse location (when the underlying `SyntaxError` exposes one), and a remediation hint pointing at `vaultkeeper config init` — see issue \#68. `path` and `location` are also exposed individually for callers (e.g. `doctor`<!-- -->) that want to report them as structured fields rather than re-parsing the message.
+The `message` already embeds the file path, the parse location (when the underlying `SyntaxError` exposes one), and a remediation hint that either points at `vaultkeeper config init` (via the separate `@vaultkeeper/cli` package — this library ships no CLI of its own) or at repairing/replacing the config directly through this library's JS API — see issues \#68, \#100. `path` and `location` are also exposed individually for callers (e.g. `doctor`<!-- -->) that want to report them as structured fields rather than re-parsing the message.
 
 
 </td></tr>
@@ -381,7 +381,7 @@ Type guard for backends that support listing.
 
 Load the vaultkeeper config from disk, falling back to platform defaults only when the config file is missing (`ENOENT`<!-- -->).
 
-Any other read failure (e.g. `EACCES`<!-- -->, `EISDIR`<!-- -->) is a genuinely broken or unreadable config and is rethrown as a [FilesystemError](./vaultkeeper.filesystemerror.md) rather than silently defaulted — silently defaulting on a permissions error would hide the problem from `doctor` and `config show` (issue \#68). A present file that fails to parse as JSON throws [ConfigParseError](./vaultkeeper.configparseerror.md)<!-- -->; a present file that parses but fails schema validation throws [ConfigValidationError](./vaultkeeper.configvalidationerror.md)<!-- -->. All three error messages include the config file path and a remediation hint naming `vaultkeeper config init --force`<!-- -->, the supported recovery path for an existing-but-broken config (issue \#97).
+Any other read failure (e.g. `EACCES`<!-- -->, `EISDIR`<!-- -->) is a genuinely broken or unreadable config and is rethrown as a [FilesystemError](./vaultkeeper.filesystemerror.md) rather than silently defaulted — silently defaulting on a permissions error would hide the problem from `doctor` and `config show` (issue \#68). A present file that fails to parse as JSON throws [ConfigParseError](./vaultkeeper.configparseerror.md)<!-- -->; a present file that parses but fails schema validation throws [ConfigValidationError](./vaultkeeper.configvalidationerror.md)<!-- -->. All three error messages include the config file path and a remediation hint naming `vaultkeeper config init --force` (via the separate `@vaultkeeper/cli` package) as well as the JS-API alternative of repairing or replacing the config directly — the supported recovery paths for an existing-but-broken config (issues \#97, \#100).
 
 
 </td></tr>
