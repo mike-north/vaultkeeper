@@ -16,6 +16,10 @@ pnpm add vaultkeeper
 
 ## Quick start
 
+vaultkeeper is ESM-only. The consuming project needs `"type": "module"` in its `package.json`
+(or an ESM-capable loader/bundler) for the `import` below to work — a default `npm init -y`
+project is CommonJS and will need that field added first.
+
 ```ts
 import { VaultKeeper } from 'vaultkeeper'
 
@@ -29,7 +33,9 @@ const vault = await VaultKeeper.init()
 // 2. Store a secret in the configured backend
 await vault.store('MY_API_KEY', 'my-secret-value')
 
-// 3. Mint a JWE token for the stored secret
+// 3. Mint a JWE token for the stored secret. Optional setup options
+//    (ttlMinutes, useLimit, trustTier, ...) may be passed as a second
+//    argument; useLimit defaults to unlimited (null) when omitted.
 const jwe = await vault.setup('MY_API_KEY')
 
 // 4. Authorize: decrypt and validate the token

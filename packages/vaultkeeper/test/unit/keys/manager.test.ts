@@ -208,6 +208,63 @@ describe('KeyManager.rotateKey — concurrent rotation guard', () => {
     }).toThrowError(RotationInProgressError)
   })
 
+  // Regression: RotationInProgressError previously surfaced only the bare
+  // "A key rotation is already in progress" message with no next step,
+  // unlike the CLI's other domain errors, which name actionable remediation.
+  it('includes actionable next-step guidance (revoke-key / grace period) in the message', async () => {
+    const mgr = await makeInitializedManager()
+    mgr.rotateKey(5_000)
+
+    try {
+      mgr.rotateKey(5_000)
+      expect.unreachable('rotateKey should have thrown RotationInProgressError')
+    } catch (err) {
+      expect(err).toBeInstanceOf(RotationInProgressError)
+      const message = err instanceof Error ? err.message : String(err)
+      expect(message).toContain('revoke-key')
+      expect(message).toContain('grace period')
+    }
+  })
+
+  it('appends a separating period to a message with no trailing punctuation', () => {
+    const err = new RotationInProgressError('A key rotation is already in progress')
+    expect(err.message).toBe(
+      'A key rotation is already in progress. Either wait for the current grace period to ' +
+        "elapse before rotating again, or run 'vaultkeeper revoke-key' (or call revokeKey()) " +
+        'to invalidate the previous key immediately and clear the grace period.',
+    )
+  })
+
+  // Regression: appending ". Either ..." unconditionally to a message that
+  // already ends in sentence punctuation (e.g. from the WASM error mapper)
+  // produced double punctuation ("already in progress.. Either ...").
+  it('does not double up punctuation when the message already ends in a period', () => {
+    const err = new RotationInProgressError('A key rotation is already in progress.')
+    expect(err.message).not.toContain('..')
+    expect(err.message).toBe(
+      'A key rotation is already in progress. Either wait for the current grace period to ' +
+        "elapse before rotating again, or run 'vaultkeeper revoke-key' (or call revokeKey()) " +
+        'to invalidate the previous key immediately and clear the grace period.',
+    )
+  })
+
+  // Regression: an empty or whitespace-only message (possible from the WASM
+  // error mapper) previously left a bare leading period — ". Either wait ..."
+  // — before the next-step guidance. It should be omitted entirely instead.
+  it('omits the leading period for an empty or whitespace-only message', () => {
+    const emptyMessage = new RotationInProgressError('')
+    const whitespaceMessage = new RotationInProgressError('   ')
+
+    for (const err of [emptyMessage, whitespaceMessage]) {
+      expect(err.message.startsWith('. ')).toBe(false)
+      expect(err.message).toBe(
+        'Either wait for the current grace period to elapse before rotating again, ' +
+          "or run 'vaultkeeper revoke-key' (or call revokeKey()) to invalidate the previous key " +
+          'immediately and clear the grace period.',
+      )
+    }
+  })
+
   it('allows a new rotation after the grace period expires', async () => {
     const mgr = await makeInitializedManager()
     mgr.rotateKey(1_000)

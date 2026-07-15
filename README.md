@@ -554,10 +554,13 @@ Config is loaded from `~/.config/vaultkeeper/config.json` by default. Override w
 
 ## Setup options
 
+All fields are optional; omitting `useLimit` defaults it to `null` (unlimited uses) rather than
+single-use.
+
 ```ts
 const jwe = await vault.setup('SECRET_NAME', {
   ttlMinutes: 30, // token TTL (default: from config)
-  useLimit: 1, // null for unlimited
+  useLimit: 1, // null for unlimited (the default when omitted)
   executablePath: '/path/to/caller', // or 'dev' to skip identity check
   trustTier: 3,
   backendType: 'keychain',
