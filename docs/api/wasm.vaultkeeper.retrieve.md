@@ -50,3 +50,7 @@ string
 
 Promise&lt;string&gt;
 
+## Exceptions
+
+TypeError If `id` is not a string (guards the WASM boundary against a native memory fault).
+

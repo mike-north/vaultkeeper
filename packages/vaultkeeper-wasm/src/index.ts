@@ -75,7 +75,7 @@ import type {
 } from './types.js'
 
 import { createNodeHost } from './node-host.js'
-import { mapWasmError } from './errors.js'
+import { InvalidTokenError, mapWasmError } from './errors.js'
 
 // The WASM module types
 type WasmBindings = typeof import('../wasm/vaultkeeper_wasm.js')
@@ -104,6 +104,54 @@ async function callAsync<T>(fn: () => Promise<T>): Promise<T> {
     return await fn()
   } catch (thrown) {
     throw mapWasmError(thrown)
+  }
+}
+
+/**
+ * Describe a runtime value's type for a type-guard error message. Distinguishes
+ * the cases that actually reach these guards from untyped JS callers — `null`,
+ * arrays, and Promises (an un-awaited `setup()` call is a common mistake) — from
+ * a bare `typeof`, which would report all three unhelpfully as `'object'`.
+ */
+function describeType(value: unknown): string {
+  if (value === null) return 'null'
+  if (Array.isArray(value)) return 'an array'
+  if (value instanceof Promise) return 'a Promise (did you forget to await?)'
+  return `a ${typeof value}`
+}
+
+/**
+ * Reject a non-string argument before it crosses the WASM boundary. The
+ * generated wasm-bindgen glue reads a JS string's bytes directly
+ * (`passStringToWasm0`); handing it a number, object, or un-awaited Promise
+ * corrupts that read and crashes the process with an opaque native
+ * `'memory access out of bounds'` fault instead of a catchable error (issue
+ * #192). Guarding the JS type here turns that into a clear `TypeError`.
+ *
+ * `value` is typed `unknown` rather than `string` on purpose: these wrapper
+ * methods are reachable from untyped JavaScript, where the declared `string`
+ * parameter type is not enforced at runtime, so the check is genuinely
+ * load-bearing (and not an unnecessary condition on an already-`string` value).
+ */
+function ensureStringArg(value: unknown, label: string): asserts value is string {
+  if (typeof value !== 'string') {
+    throw new TypeError(`${label} must be a string, but received ${describeType(value)}`)
+  }
+}
+
+/**
+ * `authorize()`-specific analogue of {@link ensureStringArg}. Because the
+ * argument is a JWE token, a non-string is surfaced as {@link InvalidTokenError}
+ * — the same typed error a malformed token *string* already produces — so that
+ * every bad-token input to `authorize()` is catchable under one type. Prevents
+ * the same native `'memory access out of bounds'` fault described above (issue
+ * #192).
+ */
+function ensureJweString(value: unknown): asserts value is string {
+  if (typeof value !== 'string') {
+    throw new InvalidTokenError(
+      `authorize() requires the JWE token as a string, but received ${describeType(value)}`,
+    )
   }
 }
 
@@ -199,8 +247,12 @@ export class VaultKeeper {
    *   retired legacy `'dev'` opt-out sentinel (use `skipTrust: true`).
    * @throws {@link IdentityMismatchError} If `executablePath`'s current hash no
    *   longer matches a previously approved value (TOFU conflict).
+   * @throws TypeError If `secretName` or `secretValue` is not a string (guards
+   *   the WASM boundary against a native memory fault).
    */
   async setup(secretName: string, secretValue: string, options?: SetupOptions): Promise<string> {
+    ensureStringArg(secretName, 'setup() secretName')
+    ensureStringArg(secretValue, 'setup() secretValue')
     return callAsync(() => this.#inner.setup(secretName, secretValue, options ?? {}))
   }
 
@@ -209,8 +261,15 @@ export class VaultKeeper {
    *
    * The returned `claims` never contain the raw secret value. Read the secret
    * through the one-time {@link SecretAccessor} on `result.secret`.
+   *
+   * @throws {@link InvalidTokenError} If `jwe` is not a string (e.g. a number,
+   *   object, or an un-awaited `setup()` Promise) or is a malformed token
+   *   string. The non-string guard runs before the value crosses into WASM,
+   *   turning what would otherwise be an opaque native memory fault into this
+   *   typed error.
    */
   authorize(jwe: string): AuthorizeResult {
+    ensureJweString(jwe)
     const auth = callSync(() => this.#inner.authorize(jwe))
     // The claims/response getters deserialize on the WASM side and can throw,
     // so route them through callSync too — every throw from authorize() must
@@ -246,18 +305,37 @@ export class VaultKeeper {
     return callSync(() => this.#inner.config())
   }
 
-  /** Store a secret via the file backend. */
+  /**
+   * Store a secret via the file backend.
+   *
+   * @throws TypeError If `id` or `secret` is not a string (guards the WASM
+   *   boundary against a native memory fault).
+   */
   async store(id: string, secret: string): Promise<void> {
+    ensureStringArg(id, 'store() id')
+    ensureStringArg(secret, 'store() secret')
     await callAsync(() => this.#inner.store(id, secret))
   }
 
-  /** Retrieve a secret via the file backend. */
+  /**
+   * Retrieve a secret via the file backend.
+   *
+   * @throws TypeError If `id` is not a string (guards the WASM boundary against
+   *   a native memory fault).
+   */
   async retrieve(id: string): Promise<string> {
+    ensureStringArg(id, 'retrieve() id')
     return callAsync(() => this.#inner.retrieve(id))
   }
 
-  /** Delete a secret via the file backend. */
+  /**
+   * Delete a secret via the file backend.
+   *
+   * @throws TypeError If `id` is not a string (guards the WASM boundary against
+   *   a native memory fault).
+   */
   async delete(id: string): Promise<void> {
+    ensureStringArg(id, 'delete() id')
     await callAsync(() => this.#inner.delete(id))
   }
 

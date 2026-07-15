@@ -86,6 +86,8 @@ Promise&lt;string&gt;
 
 [IdentityMismatchError](./wasm.identitymismatcherror.md) If `executablePath`<!-- -->'s current hash no longer matches a previously approved value (TOFU conflict).
 
+TypeError If `secretName` or `secretValue` is not a string (guards the WASM boundary against a native memory fault).
+
 ## Remarks
 
 \*\*Explicit executable-trust choice required.\*\* Like the TypeScript `vaultkeeper` library's `setup()`<!-- -->, this method no longer defaults to skipping the executable-identity binding. The caller must make an unambiguous decision via [SetupOptions](./wasm.setupoptions.md)<!-- -->: provide exactly one of [SetupOptions.executablePath](./wasm.setupoptions.executablepath.md) (verify and bind the calling executable's identity into the token) or [SetupOptions.skipTrust](./wasm.setupoptions.skiptrust.md) (`true` — a development-only opt-out). Supplying neither — or both — or the retired `'dev'` sentinel as `executablePath` throws [ExecutableTrustRequiredError](./wasm.executabletrustrequirederror.md) rather than silently minting an unbound `'dev'` token. Inspect the error's `reason` (`'missing-choice'` \| `'conflicting-choice'` \| `'legacy-dev-sentinel'`<!-- -->) to distinguish the cases.

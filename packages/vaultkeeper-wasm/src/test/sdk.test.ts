@@ -1037,3 +1037,141 @@ describe('@vaultkeeper/wasm filesystem error typing (issue #138)', () => {
     })
   })
 })
+
+/**
+ * Regression tests for issue #192: the wrapper forwarded its arguments straight
+ * into WASM with no JS-side type guard, so a non-string (a number, a plain
+ * object, or — a common mistake — an un-awaited `setup()` Promise) reached
+ * wasm-bindgen's `passStringToWasm0` and crashed the process with an opaque
+ * `VaultError: memory access out of bounds` fault. A malformed token *string*
+ * by contrast already yielded a clean `InvalidTokenError`. Each guarded method
+ * must now reject a non-string with a typed, catchable error *before* the value
+ * crosses the WASM boundary.
+ *
+ * The `@ts-expect-error` directives are load-bearing: the parameters are typed
+ * `string`, so passing a non-string is a deliberate type violation that models
+ * an untyped-JavaScript caller. If a signature were ever widened to accept the
+ * bad type, the directive would fail the build — flagging that these runtime
+ * guards need re-examining.
+ */
+describe('@vaultkeeper/wasm non-string input guards (issue #192)', () => {
+  it('authorize(number) throws a typed InvalidTokenError, not a native fault', async () => {
+    await withTempDir(async (dir) => {
+      const vault = await createTestVault(dir)
+      assert.throws(
+        // @ts-expect-error deliberately passing a non-string to exercise the runtime guard (issue #192)
+        () => vault.authorize(42),
+        (err: unknown) => err instanceof InvalidTokenError && err instanceof VaultError,
+      )
+      vault.dispose()
+    })
+  })
+
+  it('authorize(object) throws a typed InvalidTokenError, not a native fault', async () => {
+    await withTempDir(async (dir) => {
+      const vault = await createTestVault(dir)
+      assert.throws(
+        // @ts-expect-error deliberately passing a non-string to exercise the runtime guard (issue #192)
+        () => vault.authorize({}),
+        (err: unknown) => err instanceof InvalidTokenError && err instanceof VaultError,
+      )
+      vault.dispose()
+    })
+  })
+
+  it('authorize(Promise) — the un-awaited setup() mistake — throws InvalidTokenError, not a native fault', async () => {
+    await withTempDir(async (dir) => {
+      const vault = await createTestVault(dir)
+      // The exact shape of the reported bug: `vault.authorize(vault.setup(...))`
+      // without an intervening `await`. The pending Promise must be rejected by
+      // the guard, never handed to WASM.
+      const unawaitedSetup = vault.setup('oops', 'value', { skipTrust: true })
+      assert.throws(
+        // @ts-expect-error deliberately passing a Promise to exercise the runtime guard (issue #192)
+        () => vault.authorize(unawaitedSetup),
+        (err: unknown) => err instanceof InvalidTokenError && err instanceof VaultError,
+      )
+      // Drain the Promise so it does not surface as an unhandled rejection.
+      await unawaitedSetup
+      vault.dispose()
+    })
+  })
+
+  it('authorize(valid string) is unchanged — a real token still authorizes', async () => {
+    await withTempDir(async (dir) => {
+      const vault = await createTestVault(dir)
+      const token = await vault.setup('guard-key', 'guard-value', { skipTrust: true })
+      const result = vault.authorize(token)
+      assert.equal(
+        result.secret.read((s) => s),
+        'guard-value',
+      )
+      vault.dispose()
+    })
+  })
+
+  it('setup(nonstring secretName) rejects with a TypeError before touching WASM', async () => {
+    await withTempDir(async (dir) => {
+      const vault = await createTestVault(dir)
+      await assert.rejects(
+        // @ts-expect-error deliberately passing a non-string to exercise the runtime guard (issue #192)
+        () => vault.setup(42, 'value', { skipTrust: true }),
+        (err: unknown) => err instanceof TypeError,
+      )
+      vault.dispose()
+    })
+  })
+
+  it('setup(nonstring secretValue) rejects with a TypeError before touching WASM', async () => {
+    await withTempDir(async (dir) => {
+      const vault = await createTestVault(dir)
+      await assert.rejects(
+        // @ts-expect-error deliberately passing a non-string to exercise the runtime guard (issue #192)
+        () => vault.setup('name', {}, { skipTrust: true }),
+        (err: unknown) => err instanceof TypeError,
+      )
+      vault.dispose()
+    })
+  })
+
+  it('store(nonstring id) and store(nonstring secret) reject with a TypeError', async () => {
+    await withTempDir(async (dir) => {
+      const vault = await createTestVault(dir)
+      await assert.rejects(
+        // @ts-expect-error deliberately passing a non-string to exercise the runtime guard (issue #192)
+        () => vault.store(42, 'value'),
+        (err: unknown) => err instanceof TypeError,
+      )
+      await assert.rejects(
+        // @ts-expect-error deliberately passing a non-string to exercise the runtime guard (issue #192)
+        () => vault.store('id', {}),
+        (err: unknown) => err instanceof TypeError,
+      )
+      vault.dispose()
+    })
+  })
+
+  it('retrieve(nonstring id) rejects with a TypeError before touching WASM', async () => {
+    await withTempDir(async (dir) => {
+      const vault = await createTestVault(dir)
+      await assert.rejects(
+        // @ts-expect-error deliberately passing a non-string to exercise the runtime guard (issue #192)
+        () => vault.retrieve(42),
+        (err: unknown) => err instanceof TypeError,
+      )
+      vault.dispose()
+    })
+  })
+
+  it('delete(nonstring id) rejects with a TypeError before touching WASM', async () => {
+    await withTempDir(async (dir) => {
+      const vault = await createTestVault(dir)
+      await assert.rejects(
+        // @ts-expect-error deliberately passing a non-string to exercise the runtime guard (issue #192)
+        () => vault.delete(42),
+        (err: unknown) => err instanceof TypeError,
+      )
+      vault.dispose()
+    })
+  })
+})

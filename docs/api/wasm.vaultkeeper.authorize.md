@@ -52,3 +52,7 @@ string
 
 [AuthorizeResult](./wasm.authorizeresult.md)
 
+## Exceptions
+
+[InvalidTokenError](./wasm.invalidtokenerror.md) If `jwe` is not a string (e.g. a number, object, or an un-awaited `setup()` Promise) or is a malformed token string. The non-string guard runs before the value crosses into WASM, turning what would otherwise be an opaque native memory fault into this typed error.
+
