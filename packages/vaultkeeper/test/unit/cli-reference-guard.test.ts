@@ -9,8 +9,9 @@ import { fileURLToPath } from 'node:url'
  * config init` as if the CLI shipped with this package. `vaultkeeper` has no
  * `bin` — the CLI ships separately as `@vaultkeeper/cli` — so every mention
  * of `vaultkeeper config init` must be qualified with `@vaultkeeper/cli`
- * or a JS-API remediation (repairing/replacing the config programmatically,
- * e.g. via `config`/`configDir`) in the surrounding text (issue #100).
+ * or a JS-API remediation — repairing/replacing the config
+ * programmatically, e.g. by passing `config`/`configDir` or writing
+ * `config.json` directly — in the surrounding text (issue #100).
  */
 
 const SRC_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../src')
@@ -19,10 +20,13 @@ const BARE_COMMAND_PATTERN = /vaultkeeper config init/g
 
 /**
  * Matches the JS-API remediation alternative to `@vaultkeeper/cli`: text
- * that points at fixing the config programmatically through this library
- * rather than installing the CLI.
+ * that points at fixing the config programmatically through this library —
+ * either by saying so directly ("programmatically" / "JS API"), or by
+ * naming one of the concrete mechanisms (passing `config`/`configDir`, or
+ * writing `config.json` directly) — rather than installing the CLI.
  */
-const JS_API_QUALIFIER_PATTERN = /\bprogrammatically\b|\bJS[- ]API\b/i
+const JS_API_QUALIFIER_PATTERN =
+  /\bprogrammatically\b|\bJS[- ]API\b|`config`|`configDir`|\bconfig\.json\b/i
 
 /**
  * Whether `block` qualifies every bare-command mention it contains — either
@@ -102,6 +106,11 @@ describe('library must not reference a bare CLI command (issue #100)', () => {
 
     it('accepts a block qualified with a JS-API remediation', () => {
       const block = "Instead of 'vaultkeeper config init', fix the config programmatically."
+      expect(isQualified(block)).toBe(true)
+    })
+
+    it('accepts a block qualified only via `configDir`', () => {
+      const block = "Instead of 'vaultkeeper config init', pass an explicit `configDir`."
       expect(isQualified(block)).toBe(true)
     })
   })
