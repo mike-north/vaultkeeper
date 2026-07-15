@@ -31,6 +31,9 @@ import {
   SecretNotFoundError,
   PluginNotFoundError,
   DeviceNotPresentError,
+  DecryptionError,
+  SetupError,
+  ExecError,
 } from '../../../src/errors.js'
 
 const mockExecCommandFull = vi.mocked(execCommandFull)
@@ -276,6 +279,36 @@ describe('YubikeyBackend', () => {
       await expect(backend.retrieve(id)).rejects.toThrow(/GCM authentication failed/)
     })
 
+    // Regression: issue #127 — a tampered ciphertext previously rejected with
+    // a plain `Error`, breaking instanceof-based handling. It must now
+    // reject with a typed DecryptionError naming the entry's path.
+    it('rejects a tampered ciphertext with a typed DecryptionError', async () => {
+      const id = 'tampered-secret-2'
+      const blob = makeEncryptedBlob('original', id)
+      const lastColon = blob.lastIndexOf(':')
+      const ciphertextB64 = blob.slice(lastColon + 1)
+      const ciphertextBytes = Buffer.from(ciphertextB64, 'base64')
+      ciphertextBytes[0] = (ciphertextBytes[0] ?? 0) ^ 0xff
+      const corruptedBlob = blob.slice(0, lastColon + 1) + ciphertextBytes.toString('base64')
+
+      mockDeviceAvailable()
+      mockChallengeResponse(FAKE_HMAC_RESPONSE)
+      mockFs.access.mockResolvedValue(undefined)
+      mockFs.readFile.mockResolvedValue(corruptedBlob)
+
+      try {
+        await backend.retrieve(id)
+        expect.unreachable('retrieve should have rejected')
+      } catch (err) {
+        if (!(err instanceof DecryptionError)) {
+          throw err
+        }
+        // Entry paths are hex-encoded from the secret id (see getEntryPath),
+        // so assert on the shape rather than the literal id substring.
+        expect(err.path).toMatch(/[0-9a-f]+\.enc$/)
+      }
+    })
+
     it('should give a clear error for a legacy AES-256-CBC encrypted file', async () => {
       // A legacy file does not start with a numeric version prefix — simulate
       // binary openssl enc output (e.g. "Salted__...") or any non-versioned content.
@@ -287,6 +320,20 @@ describe('YubikeyBackend', () => {
       mockFs.readFile.mockResolvedValue(legacyContent)
 
       await expect(backend.retrieve('legacy-secret')).rejects.toThrow(/legacy format.*AES-256-CBC/)
+    })
+
+    // Regression: issue #127 — this previously rejected with a plain
+    // `Error`, breaking instanceof-based handling. It must now reject with a
+    // typed DecryptionError.
+    it('rejects a legacy AES-256-CBC file with a typed DecryptionError', async () => {
+      const legacyContent = 'Salted__somebinarycbcdata'
+
+      mockDeviceAvailable()
+      mockChallengeResponse(FAKE_HMAC_RESPONSE)
+      mockFs.access.mockResolvedValue(undefined)
+      mockFs.readFile.mockResolvedValue(legacyContent)
+
+      await expect(backend.retrieve('legacy-secret')).rejects.toBeInstanceOf(DecryptionError)
     })
 
     it('should give a clear "unsupported version" error for a future format version', async () => {
@@ -304,6 +351,20 @@ describe('YubikeyBackend', () => {
       await expect(backend.retrieve('future-secret')).rejects.toThrow(/[Uu]nsupported.*version.*42/)
     })
 
+    // Regression: issue #127 — this previously rejected with a plain
+    // `Error`, breaking instanceof-based handling. It must now reject with a
+    // typed DecryptionError.
+    it('rejects an unsupported future format version with a typed DecryptionError', async () => {
+      const futureVersionBlob = '42:aXY=:dGFn:Y2lwaGVydGV4dA=='
+
+      mockDeviceAvailable()
+      mockChallengeResponse(FAKE_HMAC_RESPONSE)
+      mockFs.access.mockResolvedValue(undefined)
+      mockFs.readFile.mockResolvedValue(futureVersionBlob)
+
+      await expect(backend.retrieve('future-secret')).rejects.toBeInstanceOf(DecryptionError)
+    })
+
     it('should give a clear error for an invalid HMAC response (not 40 hex chars)', async () => {
       // Regression: a truncated or malformed ykman response should produce a
       // descriptive error from deriveKey rather than silently generating a bad key.
@@ -317,6 +378,52 @@ describe('YubikeyBackend', () => {
       mockFs.readFile.mockResolvedValue(blob)
 
       await expect(backend.retrieve(id)).rejects.toThrow(/Invalid YubiKey HMAC response/)
+    })
+
+    // Regression: issue #127 — an invalid HMAC response previously rejected
+    // with a plain `Error`, breaking instanceof-based handling. It must now
+    // reject with a typed SetupError naming the ykman dependency.
+    it('rejects an invalid HMAC response with a typed SetupError', async () => {
+      const id = 'my-secret-2'
+      const blob = makeEncryptedBlob('value', id)
+
+      mockDeviceAvailable()
+      mockChallengeResponse('deadbeef')
+      mockFs.access.mockResolvedValue(undefined)
+      mockFs.readFile.mockResolvedValue(blob)
+
+      try {
+        await backend.retrieve(id)
+        expect.unreachable('retrieve should have rejected')
+      } catch (err) {
+        if (!(err instanceof SetupError)) {
+          throw err
+        }
+        expect(err.dependency).toBe('ykman')
+      }
+    })
+
+    // Regression: issue #127 — a failed ykman challenge-response command
+    // (non-zero exit) previously rejected with a plain `Error`, breaking
+    // instanceof-based handling. It must now reject with a typed ExecError.
+    it('rejects with a typed ExecError when the ykman challenge-response command fails', async () => {
+      const id = 'my-secret-3'
+
+      mockDeviceAvailable()
+      mockExecCommandFull.mockResolvedValueOnce(makeResult(1, '', 'device removed mid-operation'))
+      mockFs.access.mockResolvedValue(undefined)
+      mockFs.readFile.mockResolvedValue(makeEncryptedBlob('value', id))
+
+      try {
+        await backend.retrieve(id)
+        expect.unreachable('retrieve should have rejected')
+      } catch (err) {
+        if (!(err instanceof ExecError)) {
+          throw err
+        }
+        expect(err.command).toBe('ykman')
+        expect(err.message).toContain('device removed mid-operation')
+      }
     })
   })
 

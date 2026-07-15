@@ -1,6 +1,4 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { readFileSync } from 'node:fs'
-import { fileURLToPath } from 'node:url'
 import {
   validateConfig,
   loadConfig,
@@ -454,25 +452,11 @@ describe('loadConfig', () => {
 // Plain-Error audit (issue #115)
 // ---------------------------------------------------------------------------
 
-// Regression: issue #115 audit — config.ts (all config loading and
-// validation lives in this single file; there is no separate loader module)
-// must throw only typed VaultError subclasses (ConfigValidationError,
-// ConfigParseError, FilesystemError), never a plain `Error`. This greps the
-// source directly so a future edit that reintroduces `throw new Error(...)`
-// fails CI instead of silently regressing the "never throw plain Error"
-// convention (see CLAUDE.md).
-describe('plain-Error audit', () => {
-  it('should contain no plain-Error throw (new/no-new/globalThis) in config.ts', () => {
-    const configSourcePath = fileURLToPath(new URL('../../src/config.ts', import.meta.url))
-    const source = readFileSync(configSourcePath, 'utf8')
-    // Whitespace-tolerant and constructor-form-tolerant: a plain Error can be
-    // thrown as `throw new Error(...)`, `throw Error(...)` (no `new`), or
-    // `throw new globalThis.Error(...)`. Extra spaces or a line break between
-    // tokens would also slip past a naive literal match. Catch all of them so
-    // the "never throw plain Error" guard can't be bypassed.
-    expect(source).not.toMatch(/throw\s+(?:new\s+)?(?:globalThis\.)?Error\s*\(/)
-  })
-})
+// Regression: issue #115 first added this guard scoped to config.ts alone.
+// Issue #127 broadened the "never throw plain Error" audit to every source
+// file in this package (and @vaultkeeper/cli) — see
+// `no-plain-error.test.ts`, which supersedes the narrower per-file check
+// that used to live here.
 
 // ---------------------------------------------------------------------------
 // defaultBackendType

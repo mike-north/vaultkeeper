@@ -110,7 +110,7 @@ export async function loadKeyState(configDir: string): Promise<KeyStateSnapshot 
   const wrapKey = await getOrCreateWrapKey(path.join(configDir, KEY_WRAP_FILE))
   let json: string
   try {
-    json = decryptGcm(wrapKey, envelope)
+    json = decryptGcm(wrapKey, envelope, statePath)
   } catch {
     // Envelope failed authentication (tampered, or wrap key lost/rotated).
     // Treat as absent so a fresh key state is generated rather than crashing.

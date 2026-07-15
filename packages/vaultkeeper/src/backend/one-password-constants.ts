@@ -10,6 +10,7 @@
 import { readFileSync, existsSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { SetupError } from '../errors.js'
 
 /** Name reported to the 1Password SDK for integration tracking. */
 export const INTEGRATION_NAME = 'vaultkeeper'
@@ -87,7 +88,8 @@ export function getIntegrationVersion(): string {
       return cachedVersion
     }
   }
-  throw new Error(
+  throw new SetupError(
     `Could not read version from vaultkeeper package.json. Tried paths: ${candidates.join(', ')}`,
+    'vaultkeeper package.json',
   )
 }

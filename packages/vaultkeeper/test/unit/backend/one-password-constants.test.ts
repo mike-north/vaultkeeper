@@ -4,7 +4,7 @@
  * @see https://developer.1password.com/docs/sdks/
  */
 
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi, beforeEach } from 'vitest'
 import * as fs from 'node:fs'
 import * as path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -29,6 +29,47 @@ describe('one-password-constants', () => {
     expect(getIntegrationVersion()).toBe(
       pkg instanceof Object && 'version' in pkg ? pkg.version : undefined,
     )
+  })
+
+  // Regression: issue #127 — when none of the candidate package.json paths
+  // exist (a broken/incomplete install), getIntegrationVersion() previously
+  // threw a plain `Error`, breaking instanceof-based handling. It must now
+  // throw a typed SetupError naming the missing dependency. Uses a fresh
+  // module instance (via vi.resetModules + mocked node:fs) so the module's
+  // memoized cachedVersion from the test above doesn't short-circuit this.
+  // The SetupError class itself is also re-imported fresh from the same
+  // reset module registry — `instanceof` against the statically-imported
+  // top-of-file class would otherwise compare against a different class
+  // object than the one the freshly-loaded module actually threw.
+  describe('when no candidate package.json exists', () => {
+    beforeEach(() => {
+      vi.resetModules()
+    })
+
+    it('throws a typed SetupError', async () => {
+      vi.doMock('node:fs', () => ({
+        readFileSync: vi.fn(),
+        existsSync: vi.fn().mockReturnValue(false),
+      }))
+
+      const { getIntegrationVersion: getVersionWithMockedFs } =
+        await import('../../../src/backend/one-password-constants.js')
+      const { SetupError: FreshSetupError } = await import('../../../src/errors.js')
+
+      try {
+        getVersionWithMockedFs()
+        expect.unreachable('getIntegrationVersion should have thrown')
+      } catch (err) {
+        if (!(err instanceof FreshSetupError)) {
+          throw err
+        }
+        expect(err.dependency).toBe('vaultkeeper package.json')
+        expect(err.message).toContain('package.json')
+      } finally {
+        vi.doUnmock('node:fs')
+        vi.resetModules()
+      }
+    })
   })
 
   describe('isModuleNotFoundError', () => {

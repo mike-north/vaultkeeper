@@ -3,7 +3,7 @@
  */
 
 import { spawn } from 'node:child_process'
-import { PluginNotFoundError } from '../errors.js'
+import { PluginNotFoundError, ExecError } from '../errors.js'
 
 /** Options for command execution. */
 export interface ExecCommandOptions {
@@ -22,7 +22,7 @@ export interface ExecCommandResult {
 
 /**
  * Execute a command and return stdout.
- * @throws Error if the command exits with a non-zero code.
+ * @throws {ExecError} if the command exits with a non-zero code.
  */
 export async function execCommand(
   command: string,
@@ -31,7 +31,10 @@ export async function execCommand(
 ): Promise<string> {
   const result = await execCommandFull(command, args, options)
   if (result.exitCode !== 0) {
-    throw new Error(`Command failed with exit code ${String(result.exitCode)}: ${result.stderr}`)
+    throw new ExecError(
+      `Command failed with exit code ${String(result.exitCode)}: ${result.stderr}`,
+      command,
+    )
   }
   return result.stdout.trim()
 }
@@ -67,7 +70,7 @@ export function execCommandFull(
     if (options?.timeoutMs !== undefined) {
       setTimeout(() => {
         proc.kill('SIGTERM')
-        reject(new Error(`Command timed out after ${String(options.timeoutMs)}ms`))
+        reject(new ExecError(`Command timed out after ${String(options.timeoutMs)}ms`, command))
       }, options.timeoutMs)
     }
 

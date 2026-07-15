@@ -17,7 +17,7 @@
 
 import * as fs from 'node:fs/promises'
 import * as crypto from 'node:crypto'
-import { toFilesystemError } from '../errors.js'
+import { toFilesystemError, DecryptionError } from '../errors.js'
 
 const GCM_IV_BYTES = 12
 const GCM_KEY_BYTES = 32
@@ -46,18 +46,21 @@ export function encryptGcm(key: Buffer, plaintext: string): string {
  *
  * @param key - The same 32-byte AES-256 wrapping key used to encrypt.
  * @param encoded - The colon-separated envelope.
+ * @param path - The path of the encrypted entry being decrypted, for
+ * attribution on a thrown {@link DecryptionError}. Callers that don't yet
+ * have a path (e.g. an in-memory envelope) may omit it.
  * @returns The decrypted UTF-8 plaintext.
- * @throws {Error} If the envelope is malformed or authentication fails.
+ * @throws {DecryptionError} If the envelope is malformed or authentication fails.
  * @internal
  */
-export function decryptGcm(key: Buffer, encoded: string): string {
+export function decryptGcm(key: Buffer, encoded: string, path = ''): string {
   const parts = encoded.split(':')
   if (parts.length !== 3) {
-    throw new Error('Invalid encrypted envelope: expected iv:authTag:ciphertext')
+    throw new DecryptionError('Invalid encrypted envelope: expected iv:authTag:ciphertext', path)
   }
   const [ivB64, authTagB64, ciphertextB64] = parts
   if (ivB64 === undefined || authTagB64 === undefined || ciphertextB64 === undefined) {
-    throw new Error('Invalid encrypted envelope: missing part')
+    throw new DecryptionError('Invalid encrypted envelope: missing part', path)
   }
   const iv = Buffer.from(ivB64, 'base64')
   const authTag = Buffer.from(authTagB64, 'base64')

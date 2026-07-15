@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { execCommand, execCommandFull } from '../../../src/util/exec.js'
-import { PluginNotFoundError } from '../../../src/errors.js'
+import { PluginNotFoundError, ExecError } from '../../../src/errors.js'
 
 describe('execCommand', () => {
   it('returns trimmed stdout on success', async () => {
@@ -10,15 +10,26 @@ describe('execCommand', () => {
   })
 
   it('throws on non-zero exit code with stderr in message', async () => {
-    await expect(
-      execCommand('sh', ['-c', 'echo bad >&2; exit 1']),
-    ).rejects.toThrow(/bad/)
+    await expect(execCommand('sh', ['-c', 'echo bad >&2; exit 1'])).rejects.toThrow(/bad/)
   })
 
   it('throws and includes the exit code in the message', async () => {
-    await expect(
-      execCommand('sh', ['-c', 'exit 2']),
-    ).rejects.toThrow(/2/)
+    await expect(execCommand('sh', ['-c', 'exit 2'])).rejects.toThrow(/2/)
+  })
+
+  // Regression: issue #127 — a non-zero exit code previously rejected with a
+  // plain `Error`, breaking instanceof-based handling. It must now reject
+  // with a typed ExecError naming the failed command.
+  it('rejects with a typed ExecError naming the command', async () => {
+    try {
+      await execCommand('sh', ['-c', 'exit 2'])
+      expect.unreachable('execCommand should have rejected for a non-zero exit code')
+    } catch (err) {
+      if (!(err instanceof ExecError)) {
+        throw err
+      }
+      expect(err.command).toBe('sh')
+    }
   })
 })
 
@@ -42,9 +53,22 @@ describe('execCommandFull', () => {
   })
 
   it('kills the process and rejects after timeout', async () => {
-    await expect(
-      execCommandFull('sleep', ['10'], { timeoutMs: 50 }),
-    ).rejects.toThrow(/timed out/)
+    await expect(execCommandFull('sleep', ['10'], { timeoutMs: 50 })).rejects.toThrow(/timed out/)
+  }, 5000)
+
+  // Regression: issue #127 — a timeout previously rejected with a plain
+  // `Error`, breaking instanceof-based handling. It must now reject with a
+  // typed ExecError naming the command.
+  it('rejects with a typed ExecError naming the command on timeout', async () => {
+    try {
+      await execCommandFull('sleep', ['10'], { timeoutMs: 50 })
+      expect.unreachable('execCommandFull should have rejected after the timeout')
+    } catch (err) {
+      if (!(err instanceof ExecError)) {
+        throw err
+      }
+      expect(err.command).toBe('sleep')
+    }
   }, 5000)
 
   it('pipes stdin to the process', async () => {

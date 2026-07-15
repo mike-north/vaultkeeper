@@ -173,7 +173,7 @@ export class FileBackend implements ListableBackend {
 
     const key = await getOrCreateKey(storageDir)
     try {
-      return decryptGcm(key, encoded)
+      return decryptGcm(key, encoded, entryPath)
     } catch (err) {
       throw new DecryptionError(
         `Failed to decrypt secret: ${err instanceof Error ? err.message : String(err)}`,

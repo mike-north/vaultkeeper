@@ -97,6 +97,7 @@ import {
   BackendUnavailableError,
   AuthorizationDeniedError,
   PluginNotFoundError,
+  ConfigValidationError,
 } from '../../../src/errors.js'
 
 // ---- Test helpers ----
@@ -316,6 +317,25 @@ describe('OnePasswordBackend', () => {
       ).toThrow('per-access mode requires desktop biometric authentication')
     })
 
+    // Regression: issue #127 — this previously threw a plain `Error`,
+    // breaking instanceof-based handling. It must now throw a typed
+    // ConfigValidationError naming the offending options field.
+    it('should throw a typed ConfigValidationError when per-access mode is combined with serviceAccountToken', () => {
+      try {
+        new OnePasswordBackend({
+          vault: VAULT_ID,
+          serviceAccountToken: 'token',
+          accessMode: 'per-access',
+        })
+        expect.unreachable('constructor should have thrown')
+      } catch (err) {
+        if (!(err instanceof ConfigValidationError)) {
+          throw err
+        }
+        expect(err.field).toBe('options.accessMode')
+      }
+    })
+
     it('should throw when both account and serviceAccountToken are provided', () => {
       expect(
         () =>
@@ -325,6 +345,25 @@ describe('OnePasswordBackend', () => {
             serviceAccountToken: 'token',
           }),
       ).toThrow('account and serviceAccountToken are mutually exclusive')
+    })
+
+    // Regression: issue #127 — this previously threw a plain `Error`,
+    // breaking instanceof-based handling. It must now throw a typed
+    // ConfigValidationError naming the offending options field.
+    it('should throw a typed ConfigValidationError when both account and serviceAccountToken are provided', () => {
+      try {
+        new OnePasswordBackend({
+          vault: VAULT_ID,
+          account: 'my-account',
+          serviceAccountToken: 'token',
+        })
+        expect.unreachable('constructor should have thrown')
+      } catch (err) {
+        if (!(err instanceof ConfigValidationError)) {
+          throw err
+        }
+        expect(err.field).toBe('options.serviceAccountToken')
+      }
     })
   })
 
@@ -667,14 +706,25 @@ describe('OnePasswordBackend', () => {
       await expect(backend.retrieve('my-secret')).rejects.toBeInstanceOf(SecretNotFoundError)
     })
 
-    it('should throw Error with worker path when spawn itself errors', async () => {
+    // Regression: issue #127 — this previously rejected with a plain `Error`,
+    // breaking instanceof-based handling. It must now reject with a typed
+    // BackendUnavailableError.
+    it('should throw a typed BackendUnavailableError with worker path when spawn itself errors', async () => {
       const backend = makePerAccessBackend()
       const proc = makeWorkerErrorProcess(new Error('spawn ENOENT'))
       mockSpawn.mockReturnValue(proc)
 
-      await expect(backend.retrieve('my-secret')).rejects.toThrow(
-        'Failed to spawn 1Password per-access worker',
-      )
+      try {
+        await backend.retrieve('my-secret')
+        expect.unreachable('retrieve should have rejected')
+      } catch (err) {
+        if (!(err instanceof BackendUnavailableError)) {
+          throw err
+        }
+        expect(err.message).toContain('Failed to spawn 1Password per-access worker')
+        expect(err.reason).toBe('worker-spawn-failed')
+        expect(err.attempted).toEqual(['1password'])
+      }
     })
 
     it('should throw SecretNotFoundError when worker returns unparseable output', async () => {
@@ -713,6 +763,26 @@ describe('OnePasswordBackend', () => {
       mockSpawn.mockReturnValue(proc)
 
       await expect(backend.retrieve('my-secret')).rejects.toThrow('exit code 137')
+    })
+
+    // Regression: issue #127 — a worker crash with no stdout previously
+    // rejected with a plain `Error`, breaking instanceof-based handling. It
+    // must now reject with a typed BackendUnavailableError.
+    it('should throw a typed BackendUnavailableError when worker crashes with no stdout', async () => {
+      const backend = makePerAccessBackend()
+      const proc = makeWorkerProcess({ stdout: '', stderr: '', exitCode: 137 })
+      mockSpawn.mockReturnValue(proc)
+
+      try {
+        await backend.retrieve('my-secret')
+        expect.unreachable('retrieve should have rejected')
+      } catch (err) {
+        if (!(err instanceof BackendUnavailableError)) {
+          throw err
+        }
+        expect(err.reason).toBe('worker-crashed')
+        expect(err.attempted).toEqual(['1password'])
+      }
     })
 
     // Regression for https://github.com/mike-north/vaultkeeper/issues/113: when
