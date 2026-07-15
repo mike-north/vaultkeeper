@@ -79,18 +79,23 @@ describe('storeCommand', () => {
   })
 
   describe('stdin validation', () => {
-    it('should return 1 when stdin is empty', async () => {
+    // Regression: issue #118 — empty stdin previously returned exit 1 (a
+    // runtime error), while an empty/missing --name returns 2 (a usage
+    // error) for the exact same underlying problem: no usable secret input.
+    // Both are equivalent misuse and must share the usage-error exit code.
+    it('should return 2 when stdin is empty (issue #118 exit-code normalization)', async () => {
       mockStdinWith('')
       const { storeCommand } = await import('../../../src/commands/store.js')
       const code = await storeCommand(['--name', 'my-secret'], configDir)
-      expect(code).toBe(1)
+      expect(code).toBe(2)
     })
 
-    it('should write error when stdin is empty', async () => {
+    it('should write error and usage hint when stdin is empty', async () => {
       mockStdinWith('')
       const { storeCommand } = await import('../../../src/commands/store.js')
       await storeCommand(['--name', 'my-secret'], configDir)
       expect(stderrOutput).toContain('No secret provided on stdin')
+      expect(stderrOutput).toContain('Usage:')
     })
   })
 

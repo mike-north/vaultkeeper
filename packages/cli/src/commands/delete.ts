@@ -1,7 +1,7 @@
 import { parseArgs } from 'node:util'
-import { VaultKeeper, defaultBackendType } from 'vaultkeeper'
+import { VaultKeeper, SecretNotFoundError, defaultBackendType } from 'vaultkeeper'
 import { shouldSkipDoctor } from '../skip-doctor.js'
-import { formatError } from '../output.js'
+import { formatError, secretNotFoundMessage } from '../output.js'
 import { CONFIG_DIR_HELP_OPTION, CONFIG_DIR_HELP_ENV } from '../config-dir.js'
 import { configFileExists, noConfigMessage } from '../config-status.js'
 
@@ -83,7 +83,22 @@ export async function deleteCommand(args: string[], configDir: string): Promise<
     // Delete via VaultKeeper, which resolves the first enabled backend from the
     // loaded config and forwards that backend's config (including `path`).
     const vault = await VaultKeeper.init({ configDir, skipDoctor })
-    await vault.delete(values.name)
+
+    try {
+      await vault.delete(values.name)
+    } catch (deleteErr) {
+      // Every backend's delete() throws SecretNotFoundError for a missing
+      // secret, but each words it differently (e.g. the file backend's
+      // "Secret not found in file store: x" vs exec's own wording). Catching
+      // here — rather than a separate secretExists() pre-check — is the
+      // single source of truth for this normalization: it also covers the
+      // secret being deleted between any check and this call (issue #118
+      // review), which a pre-check alone cannot.
+      if (deleteErr instanceof SecretNotFoundError) {
+        throw new SecretNotFoundError(secretNotFoundMessage(values.name, vault.activeBackendType))
+      }
+      throw deleteErr
+    }
     process.stdout.write(`Secret "${values.name}" deleted.\n`)
     return 0
   } catch (err) {

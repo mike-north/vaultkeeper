@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { SecretNotFoundError } from 'vaultkeeper'
 
 const configDir = '/tmp/vaultkeeper-test-config-dir'
 
@@ -88,32 +89,82 @@ describe('deleteCommand', () => {
     })
   })
 
+  function existingSecretVault(): {
+    delete: typeof mockDeleteFn
+    activeBackendType: string
+  } {
+    return {
+      delete: mockDeleteFn,
+      activeBackendType: 'file',
+    }
+  }
+
   describe('when delete succeeds', () => {
     it('should return 0', async () => {
-      mockInit.mockResolvedValue({ delete: mockDeleteFn })
+      mockInit.mockResolvedValue(existingSecretVault())
       const { deleteCommand } = await import('../../../src/commands/delete.js')
       const code = await deleteCommand(['--name', 'my-secret'], configDir)
       expect(code).toBe(0)
     })
 
     it('should write success message to stdout', async () => {
-      mockInit.mockResolvedValue({ delete: mockDeleteFn })
+      mockInit.mockResolvedValue(existingSecretVault())
       const { deleteCommand } = await import('../../../src/commands/delete.js')
       await deleteCommand(['--name', 'my-secret'], configDir)
       expect(stdoutOutput).toContain('deleted')
     })
   })
 
+  // Regression: issue #118 — delete previously relied on each backend's own
+  // SecretNotFoundError wording ("Secret not found in file store: x"),
+  // different from exec's ("Secret "x" not found in file backend") and with
+  // no recovery hint. delete now catches whatever SecretNotFoundError the
+  // backend's delete() throws and rethrows it with the same wording + hint
+  // exec.ts uses.
+  describe('when vault.delete() throws SecretNotFoundError (issue #118)', () => {
+    it('should return 1 and report a consistent SecretNotFoundError with a recovery hint', async () => {
+      mockDeleteFn.mockRejectedValue(new SecretNotFoundError('Secret not found in file store: x'))
+      mockInit.mockResolvedValue(existingSecretVault())
+      const { deleteCommand } = await import('../../../src/commands/delete.js')
+      const code = await deleteCommand(['--name', 'missing-secret'], configDir)
+      expect(code).toBe(1)
+      expect(stderrOutput).toContain('SecretNotFoundError')
+      expect(stderrOutput).toContain('Secret "missing-secret" not found in the "file" backend')
+      expect(stderrOutput).toContain("Run `vaultkeeper store --name 'missing-secret'` to create it")
+    })
+
+    // Review follow-up on issue #118: an upfront secretExists() pre-check
+    // cannot guarantee consistent wording under a TOCTOU race — the secret
+    // could be deleted by a concurrent process between the check and the
+    // actual delete call, in which case the backend's own not-found message
+    // would leak through. Catching SecretNotFoundError from vault.delete()
+    // itself (rather than pre-checking) is immune to this: whenever the
+    // backend reports "not found" — for any reason, at any moment — the
+    // rendered message is always the normalized one.
+    it('should normalize the wording even when the secret existed moments ago and disappeared before delete() ran', async () => {
+      mockDeleteFn.mockRejectedValue(
+        new SecretNotFoundError('Secret not found in macOS Keychain: race-secret'),
+      )
+      mockInit.mockResolvedValue({ delete: mockDeleteFn, activeBackendType: 'keychain' })
+      const { deleteCommand } = await import('../../../src/commands/delete.js')
+      const code = await deleteCommand(['--name', 'race-secret'], configDir)
+      expect(code).toBe(1)
+      expect(stderrOutput).toContain('Secret "race-secret" not found in the "keychain" backend')
+      expect(stderrOutput).toContain("Run `vaultkeeper store --name 'race-secret'` to create it")
+      expect(stderrOutput).not.toContain('macOS Keychain')
+    })
+  })
+
   describe('--skip-doctor flag', () => {
     it('should pass skipDoctor: false to VaultKeeper.init by default', async () => {
-      mockInit.mockResolvedValue({ delete: mockDeleteFn })
+      mockInit.mockResolvedValue(existingSecretVault())
       const { deleteCommand } = await import('../../../src/commands/delete.js')
       await deleteCommand(['--name', 'my-secret'], configDir)
       expect(mockInit).toHaveBeenCalledWith({ configDir, skipDoctor: false })
     })
 
     it('should pass skipDoctor: true to VaultKeeper.init when --skip-doctor is set', async () => {
-      mockInit.mockResolvedValue({ delete: mockDeleteFn })
+      mockInit.mockResolvedValue(existingSecretVault())
       const { deleteCommand } = await import('../../../src/commands/delete.js')
       await deleteCommand(['--name', 'my-secret', '--skip-doctor'], configDir)
       expect(mockInit).toHaveBeenCalledWith({ configDir, skipDoctor: true })
@@ -121,7 +172,7 @@ describe('deleteCommand', () => {
 
     it('should pass skipDoctor: true when VAULTKEEPER_SKIP_DOCTOR=1 env var is set', async () => {
       process.env.VAULTKEEPER_SKIP_DOCTOR = '1'
-      mockInit.mockResolvedValue({ delete: mockDeleteFn })
+      mockInit.mockResolvedValue(existingSecretVault())
       const { deleteCommand } = await import('../../../src/commands/delete.js')
       await deleteCommand(['--name', 'my-secret'], configDir)
       expect(mockInit).toHaveBeenCalledWith({ configDir, skipDoctor: true })
@@ -129,7 +180,7 @@ describe('deleteCommand', () => {
 
     it('should not skip doctor when VAULTKEEPER_SKIP_DOCTOR=0', async () => {
       process.env.VAULTKEEPER_SKIP_DOCTOR = '0'
-      mockInit.mockResolvedValue({ delete: mockDeleteFn })
+      mockInit.mockResolvedValue(existingSecretVault())
       const { deleteCommand } = await import('../../../src/commands/delete.js')
       await deleteCommand(['--name', 'my-secret'], configDir)
       expect(mockInit).toHaveBeenCalledWith({ configDir, skipDoctor: false })
@@ -137,7 +188,7 @@ describe('deleteCommand', () => {
 
     it('should not skip doctor when VAULTKEEPER_SKIP_DOCTOR=true (non-numeric)', async () => {
       process.env.VAULTKEEPER_SKIP_DOCTOR = 'true'
-      mockInit.mockResolvedValue({ delete: mockDeleteFn })
+      mockInit.mockResolvedValue(existingSecretVault())
       const { deleteCommand } = await import('../../../src/commands/delete.js')
       await deleteCommand(['--name', 'my-secret'], configDir)
       expect(mockInit).toHaveBeenCalledWith({ configDir, skipDoctor: false })
@@ -145,7 +196,7 @@ describe('deleteCommand', () => {
 
     it('should not skip doctor when VAULTKEEPER_SKIP_DOCTOR is empty string', async () => {
       process.env.VAULTKEEPER_SKIP_DOCTOR = ''
-      mockInit.mockResolvedValue({ delete: mockDeleteFn })
+      mockInit.mockResolvedValue(existingSecretVault())
       const { deleteCommand } = await import('../../../src/commands/delete.js')
       await deleteCommand(['--name', 'my-secret'], configDir)
       expect(mockInit).toHaveBeenCalledWith({ configDir, skipDoctor: false })

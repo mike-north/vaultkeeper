@@ -395,8 +395,13 @@ export async function loadConfig(configDir?: string): Promise<VaultConfig> {
     return validateConfig(parsed)
   } catch (err) {
     if (err instanceof ConfigValidationError) {
+      // Regression: issue #118 — this previously joined the diagnosis and the
+      // remediation hint with only a space (`...non-empty string
+      // Fix the file...`), reading as a run-on with no sentence break. A
+      // period now separates them, matching the punctuation already used for
+      // the read-error and parse-error variants of this same hint above.
       throw new ConfigValidationError(
-        `Invalid config at ${configPath}: ${err.message} ${CONFIG_REMEDIATION_HINT}`,
+        `Invalid config at ${configPath}: ${err.message}. ${CONFIG_REMEDIATION_HINT}`,
         err.field,
         configPath,
       )

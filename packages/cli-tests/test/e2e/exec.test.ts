@@ -326,4 +326,48 @@ describe('exec trust gate', () => {
     expect(result.stderr).toContain('SecretNotFoundError')
     expect(result.stdout).not.toContain('ready=')
   })
+
+  // Regression: issue #118 — exec and delete previously reported the same
+  // failure with different wording (exec: `Secret "x" not found in file
+  // backend`; delete: the file backend's own `Secret not found in file
+  // store: x`) and neither included a recovery hint. Both commands must now
+  // render byte-for-byte identical text for the missing-secret line.
+  it('reports the identical SecretNotFoundError wording and hint as `delete` for the same missing secret (issue #118)', async () => {
+    if (env === undefined) throw new Error('env not initialized')
+    const caller = await writeCaller('#!/bin/sh\necho hi\n')
+
+    const execResult = await env.run(
+      execArgs(caller).map((a) => (a === SECRET_NAME ? 'ghost-secret' : a)),
+    )
+    const deleteResult = await env.run(['delete', '--name', 'ghost-secret'])
+
+    const expectedLine = 'Secret "ghost-secret" not found in the "file" backend.'
+    const expectedHint = "Run `vaultkeeper store --name 'ghost-secret'` to create it."
+
+    expect(execResult.exitCode).not.toBe(0)
+    expect(deleteResult.exitCode).not.toBe(0)
+    expect(execResult.stderr).toContain(expectedLine)
+    expect(execResult.stderr).toContain(expectedHint)
+    expect(deleteResult.stderr).toContain(expectedLine)
+    expect(deleteResult.stderr).toContain(expectedHint)
+  })
+
+  // Regression (review follow-up, issue #118): unlike store/delete's --name,
+  // exec --secret is validated only for non-emptiness (no character-set
+  // restriction), so a real subprocess invocation can carry a secret name
+  // containing a double quote. The recovery hint must stay a syntactically
+  // valid, copy-pasteable shell command rather than leaving an unterminated
+  // quote — passed here as a real argv element (no shell involved in
+  // invoking the CLI itself), the way a user's actual secret name would be.
+  it('keeps the recovery hint copy/pasteable when --secret contains a double quote', async () => {
+    if (env === undefined) throw new Error('env not initialized')
+    const caller = await writeCaller('#!/bin/sh\necho hi\n')
+
+    const result = await env.run(
+      execArgs(caller).map((a) => (a === SECRET_NAME ? 'ghost"secret' : a)),
+    )
+
+    expect(result.exitCode).not.toBe(0)
+    expect(result.stderr).toContain(`vaultkeeper store --name 'ghost"secret'`)
+  })
 })

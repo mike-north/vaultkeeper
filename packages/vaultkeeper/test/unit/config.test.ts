@@ -370,6 +370,24 @@ describe('loadConfig', () => {
     }
   })
 
+  // Regression: issue #118 — loadConfig previously joined the inner
+  // validation diagnosis and the remediation hint with only a space
+  // ("...version must be 1 Fix the file..."), reading as a run-on with no
+  // sentence break. A period must now separate diagnosis from remediation.
+  it('should separate the validation diagnosis from the remediation hint with a period, not a run-on (issue #118)', async () => {
+    vi.mocked(readFile).mockResolvedValue(JSON.stringify({ version: 99 }))
+    try {
+      await loadConfig('/fake')
+      expect.unreachable('loadConfig should have thrown')
+    } catch (err) {
+      if (!(err instanceof ConfigValidationError)) {
+        throw err
+      }
+      expect(err.message).toContain('Config version must be 1. Fix the file')
+      expect(err.message).not.toContain('Config version must be 1 Fix the file')
+    }
+  })
+
   // Issue #98: a missing config must resolve to the safe zero-config default
   // (the `file` backend), never the OS-native store — copy-pasting the first
   // documented example can never silently write to the real keychain.

@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import * as path from 'node:path'
-import { ConfigParseError, ConfigValidationError } from 'vaultkeeper'
-import { formatError, formatPreflightConfigError } from '../../src/output.js'
+import { ConfigParseError, ConfigValidationError, SecretNotFoundError } from 'vaultkeeper'
+import { formatError, formatPreflightConfigError, secretNotFoundMessage } from '../../src/output.js'
 import type { PreflightCheckError } from 'vaultkeeper'
 
 const CONFIG_DIR = '/home/user/.config/vaultkeeper'
@@ -82,6 +82,54 @@ describe('formatError', () => {
 
       expect(formatted).toContain(path.join(CONFIG_DIR, 'config.json'))
       expect(formatted).toContain('vaultkeeper config init --force')
+    })
+  })
+
+  // Regression: issue #118 — exec and delete previously worded their
+  // SecretNotFoundError differently and neither included a recovery hint.
+  // secretNotFoundMessage() is the single source of that wording, used by
+  // both commands, so they can never drift apart again.
+  describe('secretNotFoundMessage (issue #118)', () => {
+    it('names the secret, the backend, and an actionable recovery hint', () => {
+      const message = secretNotFoundMessage('db-password', 'file')
+      expect(message).toBe(
+        'Secret "db-password" not found in the "file" backend. ' +
+          "Run `vaultkeeper store --name 'db-password'` to create it.",
+      )
+    })
+
+    it('formats as a proper SecretNotFoundError via formatError', () => {
+      const err = new SecretNotFoundError(secretNotFoundMessage('db-password', 'keychain'))
+      const formatted = formatError(err, CONFIG_DIR)
+      expect(formatted).toBe(
+        'SecretNotFoundError: Secret "db-password" not found in the "keychain" backend. ' +
+          "Run `vaultkeeper store --name 'db-password'` to create it.",
+      )
+    })
+
+    // Regression (review follow-up, issue #118): `exec --secret` is only
+    // validated for non-emptiness, not restricted to store/delete's safe
+    // `--name` character set, so a secret name can contain a literal
+    // double quote. Unescaped interpolation would unbalance the quotes
+    // around the name in the diagnostic sentence; JSON.stringify() escapes
+    // it there instead.
+    it('escapes a double quote in the secret name instead of unbalancing the surrounding quotes', () => {
+      const message = secretNotFoundMessage('foo"bar', 'file')
+      expect(message).toBe(
+        'Secret "foo\\"bar" not found in the "file" backend. ' +
+          `Run \`vaultkeeper store --name 'foo"bar'\` to create it.`,
+      )
+    })
+
+    // Regression (review follow-up, issue #118): the recovery hint is a
+    // literal shell command a user may copy and paste. An unescaped name
+    // containing a double quote would leave that pasted command in an
+    // unterminated-quote state; shellQuote() (single-quote POSIX escaping)
+    // keeps the hint syntactically safe regardless of the name's content.
+    it('shell-quotes the secret name in the recovery hint so it stays copy/pasteable', () => {
+      const message = secretNotFoundMessage("weird'name", 'file')
+      // shellQuote("weird'name") -> 'weird'\''name' (POSIX single-quote escaping)
+      expect(message).toContain("vaultkeeper store --name 'weird'\\''name'")
     })
   })
 })
