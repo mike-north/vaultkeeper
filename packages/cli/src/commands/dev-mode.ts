@@ -55,7 +55,14 @@ export async function devModeCommand(args: string[], configDir: string): Promise
 
   const action = positionals[0]
 
-  if ((action !== 'enable' && action !== 'disable') || values.script === undefined) {
+  if (action !== undefined && action !== 'enable' && action !== 'disable') {
+    process.stderr.write(`Error: unknown action "${action}" (expected "enable" or "disable")\n`)
+    process.stderr.write('Usage: vaultkeeper dev-mode <enable|disable> --script <path>\n')
+    // Exit code 2: usage error (invalid action)
+    return 2
+  }
+
+  if (action === undefined || values.script === undefined) {
     process.stderr.write('Error: missing action or --script flag\n')
     process.stderr.write('Usage: vaultkeeper dev-mode <enable|disable> --script <path>\n')
     // Exit code 2: usage error (missing action or --script)

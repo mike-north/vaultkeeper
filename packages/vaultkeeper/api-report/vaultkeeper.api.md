@@ -82,6 +82,12 @@ export class ConfigValidationError extends VaultError {
 }
 
 // @public
+export class DecryptionError extends VaultError {
+    constructor(message: string, path: string);
+    readonly path: string;
+}
+
+// @public
 export function defaultBackendType(): string;
 
 // @public
