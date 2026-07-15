@@ -77,6 +77,57 @@ fn js_err(msg: &str) -> VaultError {
     VaultError::Other(msg.to_string())
 }
 
+/// Read the `code`/`message`/`path` properties off a value rejected by a
+/// `readFile`/`writeFile`/`deleteFile`/`fileExists` promise. The Node host
+/// bridge (packages/vaultkeeper-wasm/src/node-host.ts, `toHostFilesystemError`)
+/// guarantees `code`/`message` are present on the rejection; `code` mirrors
+/// Node's `NodeJS.ErrnoException.code` (e.g. `"ENOENT"`, `"EACCES"`) and is
+/// `None` only if the bridge itself couldn't determine one. `path` is present
+/// whenever the bridge determined one — which is not always the same string
+/// this Rust call sent it: `writeFile`'s `mkdir` sub-step reports the
+/// *directory* it failed to create, not the file path this call was
+/// nominally about (see `fs_rejection_to_vault_error`).
+fn read_fs_rejection(rejected: &JsValue) -> (Option<String>, String, Option<String>) {
+    let code = Reflect::get(rejected, &JsValue::from_str("code"))
+        .ok()
+        .and_then(|v| v.as_string());
+    let message = Reflect::get(rejected, &JsValue::from_str("message"))
+        .ok()
+        .and_then(|v| v.as_string())
+        .unwrap_or_else(|| format!("{rejected:?}"));
+    let path = Reflect::get(rejected, &JsValue::from_str("path"))
+        .ok()
+        .and_then(|v| v.as_string());
+    (code, message, path)
+}
+
+/// Convert a rejected `readFile`/`writeFile`/`deleteFile`/`fileExists`
+/// promise into a typed `VaultError::Filesystem`, mirroring the native
+/// host's classification (`crates/vaultkeeper-cli/src/host.rs`): every fs
+/// failure is reported as `Filesystem` rather than collapsed into a generic
+/// `Other`, with `code` carrying the errno when the JS host bridge supplied
+/// one. This is what lets core `FileBackend`'s existing exists-probe
+/// (unchanged by #138) disambiguate "missing" from "unreadable" identically
+/// under both hosts.
+///
+/// Prefers the bridge's own `path` over the `path` argument this call was
+/// made with: for `readFile`/`deleteFile`/`fileExists` the two are always
+/// identical (the bridge operates on the exact string this call sent it),
+/// but `writeFile`'s `mkdir` sub-step can fail on a parent directory that
+/// differs from the file path passed in — the bridge's `path` is the more
+/// precise one in that case. Falls back to the argument when the bridge
+/// didn't supply one.
+fn fs_rejection_to_vault_error(rejected: &JsValue, path: &Path, permission: &str) -> VaultError {
+    let (code, message, bridge_path) = read_fs_rejection(rejected);
+    let resolved_path = bridge_path.unwrap_or_else(|| path.display().to_string());
+    VaultError::Filesystem {
+        message: format!("Failed to {permission} {resolved_path}: {message}"),
+        path: resolved_path,
+        permission: permission.to_string(),
+        code,
+    }
+}
+
 /// Stable machine-readable code for a [`VaultError`], used by the TypeScript
 /// bridge to reconstruct a typed error instance from the thrown value.
 ///
@@ -151,6 +202,18 @@ fn vault_error_to_js(e: &VaultError) -> JsValue {
                 &JsValue::from_str(executable_trust_required_js_message(*reason)),
             );
             set("reason", &JsValue::from_str(reason.as_str()));
+        }
+        VaultError::Filesystem {
+            path,
+            permission,
+            code,
+            ..
+        } => {
+            set("path", &JsValue::from_str(path));
+            set("permission", &JsValue::from_str(permission));
+            if let Some(code) = code {
+                set("code", &JsValue::from_str(code));
+            }
         }
         _ => {}
     }
@@ -262,7 +325,7 @@ impl HostPlatform for JsHostPlatform {
 
         let result = JsFuture::from(Promise::from(promise))
             .await
-            .map_err(|e| js_err(&format!("readFile() rejected: {e:?}")))?;
+            .map_err(|e| fs_rejection_to_vault_error(&e, path, "read"))?;
 
         Ok(Uint8Array::new(&result).to_vec())
     }
@@ -282,7 +345,7 @@ impl HostPlatform for JsHostPlatform {
 
         JsFuture::from(Promise::from(promise))
             .await
-            .map_err(|e| js_err(&format!("writeFile() rejected: {e:?}")))?;
+            .map_err(|e| fs_rejection_to_vault_error(&e, path, "write"))?;
 
         Ok(())
     }
@@ -296,9 +359,15 @@ impl HostPlatform for JsHostPlatform {
             .call1(&self.host, &js_path)
             .map_err(|e| js_err(&format!("fileExists() call failed: {e:?}")))?;
 
+        // Mirror the native host's `file_exists` (crates/vaultkeeper-cli/src/host.rs):
+        // the JS bridge (`toHostFilesystemError` in node-host.ts) already
+        // collapses a genuine "does not exist" to a resolved `false`, so any
+        // rejection reaching here is a real failure (e.g. EACCES) that must
+        // surface as `VaultError::Filesystem`, not be swallowed to `false`
+        // the way a bare `Path::exists()`-style check would.
         let result = JsFuture::from(Promise::from(promise))
             .await
-            .map_err(|e| js_err(&format!("fileExists() rejected: {e:?}")))?;
+            .map_err(|e| fs_rejection_to_vault_error(&e, path, "read"))?;
 
         Ok(result.as_bool().unwrap_or(false))
     }
@@ -314,7 +383,7 @@ impl HostPlatform for JsHostPlatform {
 
         JsFuture::from(Promise::from(promise))
             .await
-            .map_err(|e| js_err(&format!("deleteFile() rejected: {e:?}")))?;
+            .map_err(|e| fs_rejection_to_vault_error(&e, path, "write"))?;
 
         Ok(())
     }

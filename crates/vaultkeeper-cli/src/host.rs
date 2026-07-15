@@ -89,6 +89,10 @@ impl HostPlatform for NativeHostPlatform {
             message: format!("Failed to read {}: {e}", path.display()),
             path: path.display().to_string(),
             permission: "read".to_string(),
+            // The native host does not yet derive a symbolic errno code from
+            // `std::io::Error` (out of scope here — see issue #138); only the
+            // WASM host bridge currently populates `code`.
+            code: None,
         })
     }
 
@@ -99,6 +103,7 @@ impl HostPlatform for NativeHostPlatform {
                 message: format!("Failed to create directory {}: {e}", parent.display()),
                 path: parent.display().to_string(),
                 permission: "write".to_string(),
+                code: None,
             })?;
         }
 
@@ -106,6 +111,7 @@ impl HostPlatform for NativeHostPlatform {
             message: format!("Failed to write {}: {e}", path.display()),
             path: path.display().to_string(),
             permission: "write".to_string(),
+            code: None,
         })?;
 
         // Set permissions on Unix
@@ -117,6 +123,7 @@ impl HostPlatform for NativeHostPlatform {
                 message: format!("Failed to set permissions on {}: {e}", path.display()),
                 path: path.display().to_string(),
                 permission: "write".to_string(),
+                code: None,
             })?;
         }
 
@@ -137,6 +144,7 @@ impl HostPlatform for NativeHostPlatform {
                 message: format!("Failed to check existence of {}: {e}", path.display()),
                 path: path.display().to_string(),
                 permission: "read".to_string(),
+                code: None,
             }),
         }
     }
@@ -146,6 +154,7 @@ impl HostPlatform for NativeHostPlatform {
             message: format!("Failed to delete {}: {e}", path.display()),
             path: path.display().to_string(),
             permission: "write".to_string(),
+            code: None,
         })
     }
 
@@ -167,6 +176,7 @@ impl HostPlatform for NativeHostPlatform {
                 message: format!("Failed to list {}: {e}", path.display()),
                 path: path.display().to_string(),
                 permission: "read".to_string(),
+                code: None,
             }),
         }
     }

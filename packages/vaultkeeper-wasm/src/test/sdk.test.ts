@@ -15,17 +15,41 @@ import * as assert from 'node:assert/strict';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { readFile, writeFile } from 'node:fs/promises';
+import { chmod, readFile, writeFile } from 'node:fs/promises';
 import {
   VaultKeeper,
   VaultError,
   SecretNotFoundError,
   DecryptionError,
+  FilesystemError,
   InvalidTokenError,
   RotationInProgressError,
   AccessorConsumedError,
   ExecutableTrustRequiredError,
 } from '../index.js';
+
+/**
+ * Permission-bit tests need a real POSIX filesystem and a non-root user
+ * (root bypasses permission bits entirely, so there'd be nothing to
+ * assert). Mirrors the same skip convention as the Rust host test
+ * (`crates/vaultkeeper-cli/src/host.rs`,
+ * `file_exists_surfaces_filesystem_error_when_probe_is_denied`).
+ */
+const isPermissionTestable =
+  process.platform !== 'win32' && (typeof process.getuid !== 'function' || process.getuid() !== 0);
+
+/**
+ * Assert `code` is a real permission-denied errno. Which one a given
+ * platform/operation reports isn't guaranteed to be `EACCES` specifically —
+ * e.g. some unlink/open paths report `EPERM` instead — so this asserts the
+ * failure is genuinely permission-related without hardcoding a single value.
+ */
+function assertPermissionDeniedCode(code: string | undefined): void {
+  assert.ok(
+    code === 'EACCES' || code === 'EPERM',
+    `expected a permission-denied errno (EACCES or EPERM), got: ${String(code)}`,
+  );
+}
 
 async function withTempDir(fn: (dir: string) => Promise<void>): Promise<void> {
   const dir = await mkdtemp(join(tmpdir(), 'vk-wasm-test-'));
@@ -691,6 +715,180 @@ describe('@vaultkeeper/wasm setup() explicit-trust contract (issue #147)', () =>
           assert.doesNotMatch(err.message, /executable_path|skip_trust|SetupOptions/);
           return true;
         },
+      );
+      vault.dispose();
+    });
+  });
+});
+
+// Regression tests for issue #138: the WASM host bridge previously wrapped
+// every readFile/deleteFile rejection into a generic error, erasing the
+// errno before the core ever saw it — so a permission failure was
+// indistinguishable from any other failure. These drive real chmod-based
+// permission failures (not mocks) through the file backend and assert the
+// typed FilesystemError the fix now produces, mirroring the native CLI
+// host's classification (crates/vaultkeeper-cli/src/host.rs).
+describe('@vaultkeeper/wasm filesystem error typing (issue #138)', () => {
+  it(
+    'permission-denied read throws a typed FilesystemError carrying path and errno code',
+    { skip: !isPermissionTestable },
+    async () => {
+      await withTempDir(async (dir) => {
+        const vault = await createTestVault(dir);
+        await vault.store('locked-secret', 'value');
+
+        const entryPath = join(dir, 'file', `${Buffer.from('locked-secret', 'utf8').toString('hex')}.enc`);
+        await chmod(entryPath, 0o000);
+        try {
+          await assert.rejects(
+            () => vault.retrieve('locked-secret'),
+            (err: unknown) => {
+              assert.ok(
+                err instanceof FilesystemError && err instanceof VaultError,
+                'must be a typed FilesystemError, not a generic VaultError',
+              );
+              assertPermissionDeniedCode(err.code);
+              assert.equal(err.path, entryPath);
+              assert.equal(err.permission, 'read');
+              return true;
+            },
+          );
+        } finally {
+          // Restore so the tempdir can be cleaned up.
+          await chmod(entryPath, 0o600);
+        }
+        vault.dispose();
+      });
+    },
+  );
+
+  it(
+    'permission-denied delete throws a typed FilesystemError',
+    { skip: !isPermissionTestable },
+    async () => {
+      await withTempDir(async (dir) => {
+        const vault = await createTestVault(dir);
+        await vault.store('locked-delete', 'value');
+
+        // Deleting requires write permission on the *containing directory*,
+        // not the entry file itself — remove it there so the exists-probe
+        // (which only needs directory search/execute) still resolves `true`
+        // and the failure is isolated to the delete_file call.
+        const fileDir = join(dir, 'file');
+        await chmod(fileDir, 0o500);
+        try {
+          await assert.rejects(
+            () => vault.delete('locked-delete'),
+            (err: unknown) => {
+              assert.ok(
+                err instanceof FilesystemError && err instanceof VaultError,
+                'must be a typed FilesystemError, not a generic VaultError',
+              );
+              assertPermissionDeniedCode(err.code);
+              assert.equal(err.permission, 'write');
+              return true;
+            },
+          );
+        } finally {
+          // Restore so the tempdir can be cleaned up.
+          await chmod(fileDir, 0o700);
+        }
+        vault.dispose();
+      });
+    },
+  );
+
+  it(
+    'permission-denied store (write) throws a typed FilesystemError',
+    { skip: !isPermissionTestable },
+    async () => {
+      await withTempDir(async (dir) => {
+        const vault = await createTestVault(dir);
+        // Store once so the `file/` storage directory and key file already
+        // exist before locking it down — otherwise the lock-down would also
+        // block `ensure_storage_dir()`'s directory creation, and the failure
+        // wouldn't be isolated to the write itself.
+        await vault.store('warm-up', 'value');
+
+        const fileDir = join(dir, 'file');
+        await chmod(fileDir, 0o500);
+        try {
+          await assert.rejects(
+            () => vault.store('locked-store', 'value'),
+            (err: unknown) => {
+              assert.ok(
+                err instanceof FilesystemError && err instanceof VaultError,
+                'must be a typed FilesystemError, not a generic VaultError',
+              );
+              assertPermissionDeniedCode(err.code);
+              assert.equal(err.permission, 'write');
+              return true;
+            },
+          );
+        } finally {
+          // Restore so the tempdir can be cleaned up.
+          await chmod(fileDir, 0o700);
+        }
+        vault.dispose();
+      });
+    },
+  );
+
+  // Regression test for a PR #154 review follow-up: `writeFile`'s `mkdir`
+  // sub-step can fail on a *different* path than the file this bridge call
+  // was nominally about — the directory it couldn't create, not the entry
+  // file (or, here, the `.keep` sentinel `ensure_storage_dir()` writes).
+  // `fs_rejection_to_vault_error` must surface that more precise directory
+  // path rather than silently overriding it with the Rust-side argument.
+  it(
+    'permission-denied storage directory creation reports the directory that failed, not the sentinel file path',
+    { skip: !isPermissionTestable },
+    async () => {
+      await withTempDir(async (dir) => {
+        const vault = await createTestVault(dir);
+        // Lock down the config dir itself *before* any store() call, so the
+        // `file/` storage directory (and its `.keep` sentinel) never gets
+        // created — this isolates the failure to node-host.ts's
+        // `mkdir(dir, { recursive: true })` step, not the subsequent write.
+        await chmod(dir, 0o500);
+        const fileDir = join(dir, 'file');
+        try {
+          await assert.rejects(
+            () => vault.store('never-created', 'value'),
+            (err: unknown) => {
+              assert.ok(
+                err instanceof FilesystemError && err instanceof VaultError,
+                'must be a typed FilesystemError, not a generic VaultError',
+              );
+              assertPermissionDeniedCode(err.code);
+              assert.equal(
+                err.path,
+                fileDir,
+                'must report the directory mkdir failed to create, not the sentinel file path',
+              );
+              return true;
+            },
+          );
+        } finally {
+          // Restore so the tempdir can be cleaned up.
+          await chmod(dir, 0o700);
+        }
+        vault.dispose();
+      });
+    },
+  );
+
+  // Unchanged behavior (issue #138 non-goal): a missing secret must still
+  // surface as SecretNotFoundError, not be swept into FilesystemError by
+  // this fix — the errno-conveyance change must not disturb the existing
+  // exists-probe disambiguation in FileBackend.
+  it('missing secret still throws a typed SecretNotFoundError, not FilesystemError', async () => {
+    await withTempDir(async (dir) => {
+      const vault = await createTestVault(dir);
+      await assert.rejects(
+        () => vault.retrieve('never-stored-138'),
+        (err: unknown) =>
+          err instanceof SecretNotFoundError && err instanceof VaultError && !(err instanceof FilesystemError),
       );
       vault.dispose();
     });

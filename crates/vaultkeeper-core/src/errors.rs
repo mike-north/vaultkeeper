@@ -137,6 +137,10 @@ pub enum VaultError {
         path: String,
         /// The required permission level (e.g. `"read"`, `"write"`).
         permission: String,
+        /// The underlying OS errno code (e.g. `"ENOENT"`, `"EACCES"`), when
+        /// the host platform was able to supply one. `None` when the host
+        /// does not expose a machine-readable code.
+        code: Option<String>,
     },
 
     /// A key rotation was requested while a previous rotation is still in its grace period.

@@ -41,6 +41,14 @@ export class ExecutableTrustRequiredError extends VaultError {
 export type ExecutableTrustRequiredReason = 'missing-choice' | 'conflicting-choice' | 'legacy-dev-sentinel';
 
 // @public
+export class FilesystemError extends VaultError {
+    constructor(message: string, path: string | undefined, permission: string | undefined, code: string | undefined);
+    readonly code: string | undefined;
+    readonly path?: string;
+    readonly permission?: string;
+}
+
+// @public
 export class InvalidTokenError extends VaultError {
     constructor(message: string);
 }

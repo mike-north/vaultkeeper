@@ -388,6 +388,7 @@ mod tests {
                     message: format!("Permission denied reading {}", path.display()),
                     path: path.display().to_string(),
                     permission: "read".to_string(),
+                    code: None,
                 });
             }
             self.files
@@ -419,6 +420,7 @@ mod tests {
                     message: format!("Permission denied checking existence of {}", path.display()),
                     path: path.display().to_string(),
                     permission: "read".to_string(),
+                    code: None,
                 });
             }
             Ok(self.files.lock().unwrap().contains_key(path))
@@ -429,6 +431,7 @@ mod tests {
                     message: format!("Permission denied deleting {}", path.display()),
                     path: path.display().to_string(),
                     permission: "write".to_string(),
+                    code: None,
                 });
             }
             self.files

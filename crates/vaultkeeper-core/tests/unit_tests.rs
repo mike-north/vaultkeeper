@@ -547,6 +547,7 @@ mod error_tests {
                 message: "m".into(),
                 path: "p".into(),
                 permission: "w".into(),
+                code: None,
             },
             VaultError::RotationInProgress {
                 message: "m".into(),
