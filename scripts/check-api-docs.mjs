@@ -23,7 +23,8 @@ try {
 } catch (err) {
   const reason = err instanceof Error ? err.message : String(err)
   throw new Error(
-    `Cannot read ${collectedDir} (${reason}). Run "pnpm build && pnpm generate:api-report && node scripts/collect-api-json.mjs" first.`,
+    `Cannot read ${collectedDir} (${reason}). Run "pnpm check:api-docs" (not this script directly), ` +
+      'or "pnpm build && pnpm check:api-report && node scripts/collect-api-json.mjs" to populate it manually.',
   )
 }
 
@@ -44,7 +45,11 @@ try {
     )
   }
   const generatedFiles = new Set(readdirSync(tempDir))
-  const allFiles = new Set([...committedFiles, ...generatedFiles])
+  // Sorted so the stale-file list has a deterministic order — readdirSync's
+  // order isn't guaranteed, and iterating a Set preserves insertion order, so
+  // without this the same staleness could print in a different order between
+  // runs, making CI log diffs noisier than necessary.
+  const allFiles = [...new Set([...committedFiles, ...generatedFiles])].sort()
 
   const stale = []
   for (const file of allFiles) {
@@ -52,11 +57,11 @@ try {
     const inGenerated = generatedFiles.has(file)
 
     if (inCommitted && !inGenerated) {
-      stale.push(`docs/api/${file} is committed but no longer generated`)
+      stale.push(`docs/api/${file} is present in docs/api/ but no longer generated`)
       continue
     }
     if (!inCommitted && inGenerated) {
-      stale.push(`docs/api/${file} is generated but not committed`)
+      stale.push(`docs/api/${file} is generated but missing from docs/api/`)
       continue
     }
 
