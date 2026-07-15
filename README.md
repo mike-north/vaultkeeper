@@ -477,39 +477,33 @@ Any standards-compliant JOSE library can verify a vaultkeeper signature given th
 
 A backend that does not implement the signing contract fails with a typed `SigningNotSupportedError` naming the backends that do — signing is never silently emulated.
 
-**End-to-end — generate a key, store it, sign, verify.** A complete round-trip, runnable as written:
+**End-to-end — enroll a key, sign, export, verify.** A complete round-trip, runnable as written:
 
 ```ts
-import { generateKeyPairSync } from 'node:crypto'
 import { VaultKeeper } from 'vaultkeeper'
-
-// 1. Generate a key pair. The PRIVATE key (PEM) is the secret sign() needs;
-//    the PUBLIC key (PEM) is what verify() checks the signature against.
-const { privateKey, publicKey } = generateKeyPairSync('rsa', {
-  modulusLength: 2048,
-  publicKeyEncoding: { type: 'spki', format: 'pem' },
-  privateKeyEncoding: { type: 'pkcs8', format: 'pem' },
-})
 
 const vault = await VaultKeeper.init()
 
-// 2. Store the PEM private key as the secret — NOT a plain string.
-await vault.store('SIGNING_KEY', privateKey)
+// 1. Enroll a signing key. The private half is generated inside the backend
+//    (the `file` backend supports signing today) and never leaves it.
+await vault.createSigningKey('approval-signing-key', 'EdDSA')
 
-// 3. Mint a capability token over it and authorize. `{ skipTrust: true }`
-//    (development only) keeps this runnable on every rebuild; in production pass
-//    a stable `executablePath` instead (see "Trust and identity").
-const jwe = await vault.setup('SIGNING_KEY', { skipTrust: true })
-const { token } = await vault.authorize(jwe)
+// 2. Sign an arbitrary payload. authorizeSigningKey() mints a signing-key
+//    capability token that carries no key material; sign() returns a detached
+//    compact JWS.
+const payload = 'order-42:refund:1999'
+const token = await vault.authorizeSigningKey('approval-signing-key')
+const { result } = await vault.sign(token, { payload })
 
-// 4. Sign — the private key never leaves the vault.
-const { result } = await vault.sign(token, { data: 'order-42:refund:1999' })
+// 3. Export the SPKI PEM public key to pin/register with a verifier.
+const pub = await vault.exportPublicKey('approval-signing-key')
 
-// 5. Verify with the PUBLIC key — static and synchronous.
-const isValid = VaultKeeper.verify({
-  data: 'order-42:refund:1999',
-  signature: result.signature,
-  publicKey,
+// 4. Verify offline — only the payload, the JWS, and the public key. Static:
+//    no vault instance, backend, secret, or token needed.
+const isValid = await VaultKeeper.verify({
+  payload,
+  jws: result.jws,
+  publicKey: pub.publicKeyPem,
 })
 console.log(isValid) // true
 ```

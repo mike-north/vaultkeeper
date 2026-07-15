@@ -14,9 +14,9 @@
  *   1 — a valid invocation that failed at runtime (e.g. SecretNotFoundError)
  *   2 — a bad invocation: usage / argument-validation error. Covers an unknown
  *       command, an unknown top-level flag, a missing/invalid required
- *       argument, empty stdin for `store`/`sign`, and a bare invocation with no
- *       subcommand (which prints usage to stderr rather than exiting 0, so
- *       `vaultkeeper && next_step` does not proceed as if it succeeded).
+ *       argument, empty stdin for `store`/`sign`/`verify`, and a bare invocation
+ *       with no subcommand (which prints usage to stderr rather than exiting 0,
+ *       so `vaultkeeper && next_step` does not proceed as if it succeeded).
  *   3 — `verify` only: signature did not verify (deliberate, documented
  *       exception to the 0/1/2 taxonomy so scripts can tell a bad signature
  *       from a broken tool — see commands/verify.ts)
