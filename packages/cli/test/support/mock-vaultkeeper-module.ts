@@ -15,14 +15,16 @@
  * const mockInit = vi.hoisted(() => vi.fn())
  *
  * vi.mock('vaultkeeper', async (importOriginal) => {
- *   const { mockVaultkeeperModule } = await import('../support/mock-vaultkeeper-module.js')
+ *   const { mockVaultkeeperModule } = await import('../../support/mock-vaultkeeper-module.js')
  *   return mockVaultkeeperModule(importOriginal, {
  *     VaultKeeper: { init: mockInit },
  *   })
  * })
  * ```
  */
-export async function mockVaultkeeperModule<TOverrides extends object>(
+export async function mockVaultkeeperModule<
+  TOverrides extends Partial<Record<keyof typeof import('vaultkeeper'), unknown>>,
+>(
   importOriginal: <T>() => Promise<T>,
   overrides: TOverrides,
 ): Promise<typeof import('vaultkeeper') & TOverrides> {
