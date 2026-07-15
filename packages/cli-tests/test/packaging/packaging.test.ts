@@ -287,7 +287,7 @@ describe('bin ownership', () => {
  * declaration.
  */
 describe('peer dependency stability', () => {
-  it('test-helpers declares an explicit vaultkeeper peer range bounded below 1.0.0', async () => {
+  it('test-helpers declares an explicit vaultkeeper peer range with an upper bound below 1.0.0', async () => {
     const pkg = await readPackageJson('test-helpers')
     const range = pkg.peerDependencies?.vaultkeeper
 
