@@ -356,9 +356,9 @@ This is a convenience method that delegates to the active backend's `store()` me
 
 Verify a signature using a public key.
 
-This is a static method — no VaultKeeper instance, secrets, or capability tokens are required. It is safe to call from CI or any context that has access to public key material.
+This is a static, synchronous method — it returns `boolean`<!-- -->, not `Promise<boolean>`<!-- -->, and no VaultKeeper instance, secrets, or capability tokens are required. It is safe to call from CI or any context that has access to public key material.
 
-Returns `false` for invalid key material, malformed signatures, or any verification failure (except disallowed algorithms, which throw).
+Returns `false` for invalid key material, malformed signatures, or any verification failure (except disallowed algorithms, which throw). Because the method is synchronous, that throw happens immediately on the call stack — not via a rejected `Promise` — so callers must guard it with a regular `try`<!-- -->/`catch`<!-- -->, not `.catch()`<!-- -->.
 
 
 </td></tr>

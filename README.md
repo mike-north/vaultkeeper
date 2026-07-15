@@ -52,6 +52,10 @@ pnpm add vaultkeeper
 pnpm add -D @types/node
 ```
 
+**Supported TypeScript version:** this package requires TypeScript 5.x to typecheck against the shipped `.d.ts` files (the output relies on `verbatimModuleSyntax`). Install a 5.x compiler explicitly — `npm install -D typescript@5` — rather than a bare `npm install -D typescript`, which installs whatever major is current and may not be 5.x.
+
+The package ships both ESM (`import`) and CommonJS (`require()`) builds. The `exports` map selects the correct build automatically, but consumers still need the standard ESM/CJS project setup (e.g. `"type": "module"` for ESM) — see the [TypeScript quick start](#typescript-quick-start) below for both forms.
+
 ### WASM SDK
 
 The WASM SDK wraps the Rust core compiled to WebAssembly. It offers a similar high-level feature set to the TypeScript library, but the public API is not a drop-in replacement — some function signatures differ (e.g., `setup(secretName, secretValue, ...)` vs the TS library's `setup(secretName, options?)`).
@@ -95,7 +99,9 @@ vaultkeeper approve --script /usr/local/bin/my-tool
 vaultkeeper dev-mode enable --script /path/to/script
 
 # Run a command with a secret injected into an env var (approve the caller first,
-# above; see "Running in CI" below for the non-interactive form)
+# above; see "Running in CI" below for the non-interactive form). By default the
+# secret value is redacted from the command's stdout/stderr as `[REDACTED]` —
+# pass --no-redact if you need to see the real output while debugging.
 vaultkeeper exec --secret MY_API_KEY --env MY_API_KEY --caller /usr/local/bin/my-tool -- my-command --flag
 
 # Rotate the encryption key (previous key stays valid during grace period)
@@ -131,6 +137,12 @@ must re-approve it with `vaultkeeper approve --script <caller>`.
 
 > [!NOTE]
 > With no config file present, a bare `VaultKeeper.init()` — and `vaultkeeper config init` with no `--backend` — resolves to the safe, portable `file` backend on **every** platform. It never silently writes a secret to your real OS credential store, so copy-pasting this quick start is safe on macOS and Windows. To opt into the platform-native store (macOS Keychain, Windows DPAPI), pass an explicit config with that backend, or run `vaultkeeper config init --backend keychain` / `--backend dpapi`. Inspect `vault.activeBackendType` to confirm which backend an instance resolved to.
+
+The example below uses ESM `import` syntax, which needs `"type": "module"` in your `package.json`
+(a default `npm init -y` project is CommonJS and needs that field added). If you'd rather stay on
+CommonJS, `require('vaultkeeper')` works unchanged — the package's `exports` map resolves to a CJS
+build automatically; only the `import`/`await` syntax at the top level differs (wrap the body in an
+`async function`, as CommonJS has no top-level `await`).
 
 ```ts
 import { VaultKeeper } from 'vaultkeeper'
@@ -337,6 +349,25 @@ accessor.read((buf) => {
   sendToSdk(buf.toString('utf8'))
 })
 ```
+
+### Sign and verify
+
+`sign()` uses a stored private key to sign data via a capability token — the key itself is never returned to the caller. `verify()` is a **static, synchronous** method that checks a signature against public key material and needs no `VaultKeeper` instance, secret, or token.
+
+```ts
+// Sign — like fetch()/exec()/getSecret(), requires a capability token
+const { result } = await vault.sign(token, { data: 'payload-to-sign' })
+console.log(result.signature, result.algorithm) // base64 signature + algorithm label
+
+// Verify — static: no instance, secret, or token needed
+const isValid = VaultKeeper.verify({
+  data: 'payload-to-sign',
+  signature: result.signature,
+  publicKey: myPublicKeyPem,
+})
+```
+
+`verify()` returns `false` for invalid key material, malformed signatures, or a failed check — except a disallowed algorithm (e.g. `'md5'`), which throws `InvalidAlgorithmError` synchronously (not via a rejected `Promise`), so guard the call with `try`/`catch` rather than `.catch()`.
 
 ## Doctor / preflight
 
