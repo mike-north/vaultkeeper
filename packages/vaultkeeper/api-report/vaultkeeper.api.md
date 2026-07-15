@@ -148,7 +148,8 @@ export interface FetchRequest {
 
 // @public
 export class FilesystemError extends VaultError {
-    constructor(message: string, filePath: string, permission: string);
+    constructor(message: string, filePath: string, permission: string, cause?: unknown);
+    readonly code: string | undefined;
     readonly path: string;
     readonly permission: string;
 }

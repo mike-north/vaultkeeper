@@ -175,7 +175,7 @@ Thrown when a delegated `fetch()` call fails before a `Response` can be produced
 
 </td><td>
 
-Thrown when a filesystem operation fails due to a permission or access problem (e.g. the config directory is not writable).
+Thrown when a filesystem operation fails. Common causes include a permission or access problem, for example the config directory is not writable, but the underlying failure may be any Node.js errno condition, for example the disk is full or a file was expected but a directory was found. Inspect the code property for the specific errno code when one is available.
 
 
 </td></tr>

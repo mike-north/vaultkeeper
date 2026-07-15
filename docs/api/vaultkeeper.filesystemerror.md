@@ -4,7 +4,7 @@
 
 ## FilesystemError class
 
-Thrown when a filesystem operation fails due to a permission or access problem (e.g. the config directory is not writable).
+Thrown when a filesystem operation fails. Common causes include a permission or access problem, for example the config directory is not writable, but the underlying failure may be any Node.js errno condition, for example the disk is full or a file was expected but a directory was found. Inspect the code property for the specific errno code when one is available.
 
 **Signature:**
 
@@ -33,7 +33,7 @@ Description
 </th></tr></thead>
 <tbody><tr><td>
 
-[(constructor)(message, filePath, permission)](./vaultkeeper.filesystemerror._constructor_.md)
+[(constructor)(message, filePath, permission, cause)](./vaultkeeper.filesystemerror._constructor_.md)
 
 
 </td><td>
@@ -72,6 +72,27 @@ Description
 </th></tr></thead>
 <tbody><tr><td>
 
+[code](./vaultkeeper.filesystemerror.code.md)
+
+
+</td><td>
+
+`readonly`
+
+
+</td><td>
+
+string \| undefined
+
+
+</td><td>
+
+The Node.js errno code from the underlying filesystem failure, for example EACCES, EPERM, ENOSPC, or EISDIR. Undefined when the error was constructed without an underlying cause, or when that cause did not expose a string errno code. Prefer this over parsing the message text, which is not a contractual format.
+
+
+</td></tr>
+<tr><td>
+
 [path](./vaultkeeper.filesystemerror.path.md)
 
 
@@ -108,7 +129,7 @@ string
 
 </td><td>
 
-The permission level that was required but not available (e.g. `'read'`<!-- -->, `'write'`<!-- -->, `'execute'`<!-- -->).
+The file operation or access mode that was being attempted when the failure occurred, for example 'read', 'write', 'delete', or 'rwx' for a directory create/access check. Despite the field name, this does not imply the failure was itself a permission problem — it names the attempted operation regardless of the underlying errno, which may be a non-permission code such as ENOSPC or EISDIR.
 
 
 </td></tr>

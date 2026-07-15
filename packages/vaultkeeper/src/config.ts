@@ -374,6 +374,7 @@ export async function loadConfig(configDir?: string): Promise<VaultConfig> {
       `Cannot read config file at ${configPath}: ${describeError(err)}. ${CONFIG_REMEDIATION_HINT}`,
       configPath,
       'read',
+      err,
     )
   }
 

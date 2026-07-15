@@ -47,6 +47,35 @@ describe('FileBackend', () => {
   })
 
   describe('store', () => {
+    // Regression: issue #133 review — with `{ recursive: true }`, mkdir never
+    // throws EEXIST for a directory that already exists (that case resolves
+    // silently); EEXIST means the storage path itself already exists as
+    // something other than a directory (e.g. a regular file). Swallowing it
+    // let a genuine file/directory collision pass silently instead of
+    // surfacing as a typed FilesystemError.
+    it('should surface an EEXIST mkdir failure (storage path occupied by a file) as a typed FilesystemError instead of silently continuing', async () => {
+      const eexistError = Object.assign(new Error('EEXIST: file already exists, mkdir'), {
+        code: 'EEXIST',
+      })
+      mockFs.mkdir.mockRejectedValueOnce(eexistError)
+
+      let caught: unknown
+      try {
+        await backend.store('my-secret', 'secret-value')
+      } catch (err) {
+        caught = err
+      }
+
+      expect(caught).toBeInstanceOf(FilesystemError)
+      if (caught instanceof FilesystemError) {
+        expect(caught.code).toBe('EEXIST')
+        expect(caught.cause).toBe(eexistError)
+        // Must not have proceeded to attempt the write as if the directory
+        // were ready.
+        expect(mockFs.writeFile).not.toHaveBeenCalled()
+      }
+    })
+
     it('should create storage directory and write the encrypted file', async () => {
       mockFs.mkdir.mockResolvedValue(undefined)
       // getOrCreateKey: readFile for key → ENOENT → writeFile for key
@@ -131,6 +160,56 @@ describe('FileBackend', () => {
       }
     })
 
+    // Regression: issue #133 — the wrap that converts a caught fs failure
+    // into a typed FilesystemError discarded the original
+    // NodeJS.ErrnoException, so `.code` survived only as text embedded in
+    // `.message` and `.cause` was never set. Consumers had no machine-readable
+    // way to distinguish e.g. EACCES from ENOSPC.
+    it('should preserve the errno code and cause on an EACCES write failure', async () => {
+      mockFs.mkdir.mockResolvedValueOnce(undefined)
+      const keyBuffer = Buffer.alloc(32, 0xcd)
+      mockFs.readFile.mockResolvedValueOnce(keyBuffer) // key exists
+      const permError = Object.assign(new Error('permission denied'), { code: 'EACCES' })
+      mockFs.writeFile.mockRejectedValueOnce(permError)
+
+      let caught: unknown
+      try {
+        await backend.store('my-secret', 'secret-value')
+      } catch (err) {
+        caught = err
+      }
+
+      expect(caught).toBeInstanceOf(FilesystemError)
+      if (caught instanceof FilesystemError) {
+        expect(caught.code).toBe('EACCES')
+        expect(caught.cause).toBe(permError)
+      }
+    })
+
+    // Regression: issue #133 — same errno-preservation guarantee for a
+    // non-permission errno (disk full), which the message-text-only approach
+    // couldn't reliably distinguish from a permission failure.
+    it('should preserve the ENOSPC errno code and cause on a write failure (non-permission errno)', async () => {
+      mockFs.mkdir.mockResolvedValueOnce(undefined)
+      const keyBuffer = Buffer.alloc(32, 0xcd)
+      mockFs.readFile.mockResolvedValueOnce(keyBuffer) // key exists
+      const noSpaceError = Object.assign(new Error('no space left on device'), { code: 'ENOSPC' })
+      mockFs.writeFile.mockRejectedValueOnce(noSpaceError)
+
+      let caught: unknown
+      try {
+        await backend.store('my-secret', 'secret-value')
+      } catch (err) {
+        caught = err
+      }
+
+      expect(caught).toBeInstanceOf(FilesystemError)
+      if (caught instanceof FilesystemError) {
+        expect(caught.code).toBe('ENOSPC')
+        expect(caught.cause).toBe(noSpaceError)
+      }
+    })
+
     // Regression: PR #126 review — getOrCreateWrapKey() (util/at-rest.ts),
     // used to read/create the `.key` wrapping-key file, still rethrew a raw
     // Node error on a non-ENOENT readFile failure, so an EACCES on the key
@@ -151,6 +230,10 @@ describe('FileBackend', () => {
       expect(caught).toBeInstanceOf(FilesystemError)
       if (caught instanceof FilesystemError) {
         expect(caught.message).toContain('permission denied')
+        // Regression: issue #133 — the wrapping-key helper must also
+        // preserve the errno code and cause, not just the message.
+        expect(caught.code).toBe('EACCES')
+        expect(caught.cause).toBe(permError)
       }
     })
   })
@@ -285,6 +368,10 @@ describe('FileBackend', () => {
       expect(caught).toBeInstanceOf(FilesystemError)
       if (caught instanceof FilesystemError) {
         expect(caught.message).toContain('permission denied')
+        // Regression: issue #133 — errno code and cause must survive the
+        // wrap, not just the message text.
+        expect(caught.code).toBe('EACCES')
+        expect(caught.cause).toBe(permError)
       }
     })
 
@@ -309,6 +396,8 @@ describe('FileBackend', () => {
       expect(caught).toBeInstanceOf(FilesystemError)
       if (caught instanceof FilesystemError) {
         expect(caught.message).toContain('permission denied')
+        expect(caught.code).toBe('EACCES')
+        expect(caught.cause).toBe(permError)
       }
     })
   })
@@ -346,6 +435,10 @@ describe('FileBackend', () => {
       expect(caught).toBeInstanceOf(FilesystemError)
       if (caught instanceof FilesystemError) {
         expect(caught.message).toContain('EPERM')
+        // Regression: issue #133 — the delete-path wrap must also preserve
+        // the errno code and cause, not just embed the code in the message.
+        expect(caught.code).toBe('EPERM')
+        expect(caught.cause).toBe(permError)
       }
     })
 
