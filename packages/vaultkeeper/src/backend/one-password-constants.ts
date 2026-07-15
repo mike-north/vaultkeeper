@@ -24,8 +24,7 @@ export const SDK_INSTALL_URL = 'https://developer.1password.com/docs/sdks/'
  * Single source of truth for the "SDK not installed" error message, so the
  * backend, worker, and discovery modules report it identically.
  */
-export const SDK_NOT_INSTALLED_MESSAGE =
-  '1Password SDK (@1password/sdk) is not installed. Install it to use the 1Password backend.'
+export const SDK_NOT_INSTALLED_MESSAGE = `1Password SDK (${SDK_PACKAGE}) is not installed. Install it to use the 1Password backend.`
 
 /**
  * Whether an error thrown by `import('@1password/sdk')` means the module could
