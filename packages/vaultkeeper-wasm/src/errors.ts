@@ -3,8 +3,17 @@
  *
  * Mirrors the `VaultError` hierarchy of the pure-TypeScript `vaultkeeper`
  * library so that consumers of `@vaultkeeper/wasm` can rely on the same
- * ecosystem-wide contract: every error thrown by the SDK is an instance of
- * {@link VaultError}.
+ * ecosystem-wide contract: every *operational* error thrown by the SDK is an
+ * instance of {@link VaultError}.
+ *
+ * One deliberate exception: passing a wrongly-typed argument (e.g. a
+ * non-string secret name) throws a built-in `TypeError` — Node's own
+ * convention for programmer errors — rather than a `VaultError` subclass.
+ * `authorize()` is the special case that throws `InvalidTokenError` for a
+ * non-string token, since a malformed token is an operational condition its
+ * callers already handle. A `catch (e) { if (e instanceof VaultError) ... }`
+ * handler therefore covers every runtime failure, but not caller-side type
+ * mistakes, which indicate a bug to fix rather than a condition to handle.
  *
  * The Rust/WASM core throws values tagged with a stable `vaultErrorCode`;
  * {@link mapWasmError} reconstructs the matching typed instance at the bridge
