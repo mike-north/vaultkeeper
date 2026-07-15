@@ -46,7 +46,7 @@ vaultkeeper approve --script /usr/local/bin/my-tool
 # Run a command with the secret injected as an env var. By default the secret
 # value is redacted from the command's stdout/stderr as `[REDACTED]` — pass
 # --no-redact if you need to see the real output while debugging.
-vaultkeeper exec --secret MY_API_KEY --env MY_API_TOKEN --caller /usr/local/bin/my-tool -- my-tool --flag
+vaultkeeper exec --secret MY_API_KEY --env MY_API_KEY --caller /usr/local/bin/my-tool -- my-tool --flag
 
 # Toggle development mode for a script under active development
 vaultkeeper dev-mode enable --script /path/to/script
