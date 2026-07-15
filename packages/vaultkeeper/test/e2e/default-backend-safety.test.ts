@@ -48,9 +48,11 @@ describe('zero-config default backend safety (issue #98)', () => {
     expect(vault.activeBackendType).not.toBe('keychain')
     expect(vault.activeBackendType).not.toBe('dpapi')
 
-    // On macOS/Windows the native store differs from the default; prove the
-    // default is not it. On Linux the native store is already `file`, so this
-    // guard is a no-op there.
+    // Prove the resolved default is not the platform's native store wherever
+    // that store differs from `file`: macOS (`keychain`), Windows (`dpapi`),
+    // and Linux (`secret-tool`). The guard only skips on platforms with no
+    // native-store integration (e.g. the BSDs), where the native type is
+    // itself `file` and the inequality would be trivially false.
     if (platformNativeBackendType() !== 'file') {
       expect(vault.activeBackendType).not.toBe(platformNativeBackendType())
     }
