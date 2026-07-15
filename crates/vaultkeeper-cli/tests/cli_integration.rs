@@ -138,14 +138,26 @@ mod doctor {
     // doctor always rendered every non-Ok check with ✗ regardless of
     // whether it was required, so a brand-new file-default install looked
     // broken on the very first command.
+    //
+    // This asserts specifically on the unused plugin-backend lines, not on
+    // overall success/exit code: doctor can legitimately exit 1 (and show a
+    // ✗) for a genuinely missing *core* tool like openssl on some hosts, and
+    // that's an unrelated, orthogonal failure mode this test must not flake
+    // on. The CLI renders each check as `  {icon} {name}...`, so the icon is
+    // immediately followed by the check name.
     #[test]
     fn does_not_show_a_failing_check_for_unused_plugin_backends_on_a_fresh_file_default_run() {
         let (mut cmd, _dir) = cli_test_env();
-        cmd.arg("doctor")
-            .assert()
-            .success()
-            .stdout(predicate::str::contains('\u{2717}').not())
-            .stdout(predicate::str::contains("System ready."));
+        let output = cmd.arg("doctor").output().expect("failed to run");
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            !stdout.contains("\u{2717} ykman"),
+            "expected no failing ykman check: {stdout}"
+        );
+        assert!(
+            !stdout.contains("\u{2717} op"),
+            "expected no failing op check: {stdout}"
+        );
     }
 
     // Issue #116, acceptance criterion 3: opt-in backends still get their

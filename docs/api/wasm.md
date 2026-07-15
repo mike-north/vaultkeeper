@@ -233,7 +233,7 @@ Authorization result. Combines the validated claims (secret redacted), the respo
 
 </td><td>
 
-Individual preflight check result (Rust snake\_case field names).
+Individual preflight check result. The Rust struct serializes with `#[serde(rename_all = "camelCase")]`<!-- -->, so the wire/JSON field names here are camelCase (matching this interface), not the Rust source's snake\_case.
 
 `required` reflects whether this dependency is required for the active/configured backend(s); plugin-backend checks (`op`<!-- -->, `ykman`<!-- -->) are `required: false` when their backend isn't enabled (issue \#116).
 

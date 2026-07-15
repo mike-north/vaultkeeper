@@ -80,12 +80,17 @@ describe('doctor command', () => {
   // doctor always rendered every non-'ok' check with ✗ regardless of
   // whether it was required, so a brand-new file-default install looked
   // broken on the very first command.
+  //
+  // This asserts specifically on the unused plugin-backend lines, not on
+  // overall success/exit code: doctor can legitimately exit 1 (and show a
+  // ✗) for a genuinely missing *core* tool like openssl on some hosts, and
+  // that's an unrelated, orthogonal failure mode this test must not flake
+  // on.
   it('should not show a failing check for unused plugin backends on a fresh file-default run', async () => {
     env = await createCliTestEnv() // DEFAULT_CONFIG: file backend only
     const result = await env.run(['doctor'])
-    expect(result.exitCode).toBe(0)
-    expect(result.stdout).not.toContain('✗')
-    expect(result.stdout).toContain('System ready.')
+    expect(result.stdout).not.toMatch(/✗\s*ykman/)
+    expect(result.stdout).not.toMatch(/✗\s*op\b/)
   })
 
   // Issue #116, acceptance criterion 3: opt-in backends still get their
