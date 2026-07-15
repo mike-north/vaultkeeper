@@ -52,7 +52,7 @@ pnpm add vaultkeeper
 pnpm add -D @types/node
 ```
 
-**Supported TypeScript version:** requires TypeScript 5.x to typecheck against the shipped `.d.ts` files — the output relies on `verbatimModuleSyntax`, which requires TypeScript >= 5.0. A bare `npm install -D typescript` on a fresh project installs the current major, which satisfies this floor.
+**Supported TypeScript version:** typechecking against the shipped `.d.ts` files requires at least TypeScript 5.0 — the output relies on `verbatimModuleSyntax`, which needs TypeScript 5.0 or newer — and this project is developed and tested against the `5.x` line (`^5.7.0`). A bare `npm install -D typescript` on a fresh project installs the current major, which may already be newer than 5.x and isn't verified against this package — pin explicitly with `npm install -D typescript@^5` if you hit typecheck issues on a newer major.
 
 The package ships both ESM (`import`) and CommonJS (`require()`) builds. The `exports` map selects the correct build automatically, but consumers still need the standard ESM/CJS project setup (e.g. `"type": "module"` for ESM) — see the [TypeScript quick start](#typescript-quick-start) below for both forms.
 
