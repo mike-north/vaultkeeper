@@ -62,6 +62,20 @@ describe('approve command', () => {
     expect(result.stdout).toContain('Approved')
   })
 
+  // Issue #183: approve's help framed it as an optional prompt-avoidance
+  // convenience, but in a non-interactive/CI context (non-TTY stdin) it is a
+  // hard prerequisite before a new caller's first exec — there is no prompt to
+  // grant trust. The help must state it is REQUIRED for a new caller in a
+  // non-interactive/CI context.
+  it('--help states approve is required for a new caller in non-interactive/CI use', async () => {
+    env = await createCliTestEnv()
+    const result = await env.run(['approve', '--help'])
+    expect(result.exitCode).toBe(0)
+    expect(result.stdout).toContain('REQUIRED')
+    expect(result.stdout).toMatch(/non-interactive|CI/)
+    expect(result.stdout).toContain('exec')
+  })
+
   // Criterion 1 + Criterion 7 (approve writes the manifest file):
   it('writes the script SHA-256 into trust-manifest.json', async () => {
     env = await createCliTestEnv()

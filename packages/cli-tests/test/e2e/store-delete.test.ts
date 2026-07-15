@@ -41,14 +41,24 @@ describe('store and delete lifecycle', () => {
 
   // Regression: issue #118 — delete previously surfaced the file backend's
   // own not-found message ("Secret not found in file store: x") instead of
-  // the consistent, hint-bearing wording exec.ts uses for the same failure.
-  it('delete should exit non-zero with the consistent SecretNotFoundError wording and a recovery hint for a nonexistent secret (issue #118)', async () => {
+  // the consistent, typed SecretNotFoundError wording exec.ts uses for the
+  // same failure.
+  //
+  // Regression: issue #183 — the shared not-found hint told the user to run
+  // `store` to CREATE the secret, which is nonsensical on the delete path
+  // (they are trying to REMOVE it). The delete-context message must share the
+  // diagnostic sentence but never suggest creating the secret being deleted.
+  it('delete should exit non-zero with the consistent SecretNotFoundError wording and a delete-appropriate hint for a nonexistent secret (issues #118, #183)', async () => {
     env = await createCliTestEnv()
     const result = await env.run(['delete', '--name', 'never-stored', '--skip-doctor'])
     expect(result.exitCode).not.toBe(0)
     expect(result.stderr).toContain('SecretNotFoundError')
     expect(result.stderr).toContain('Secret "never-stored" not found in the "file" backend')
-    expect(result.stderr).toContain("Run `vaultkeeper store --name 'never-stored'` to create it")
+    // The delete path must NOT tell the user to `store` (create) the secret.
+    expect(result.stderr).not.toContain('to create it')
+    expect(result.stderr).not.toContain('vaultkeeper store --name')
+    // It gives a neutral, delete-appropriate explanation instead.
+    expect(result.stderr).toContain('may have already been deleted, or the name may be misspelled')
   })
 
   // Regression: issue #60 — the CLI ignored BackendConfig.path and always wrote

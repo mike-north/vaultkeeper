@@ -280,6 +280,18 @@ function formatFilesystemError(err: FilesystemError): string {
 }
 
 /**
+ * Which command is looking the secret up, so {@link secretNotFoundMessage} can
+ * pick a recovery hint that fits the caller's intent:
+ *
+ * - `'access'` — a command that needs the secret to exist (`exec`, and any
+ *   future read path). Suggesting `store` to create it is the right next step.
+ * - `'delete'` — the user is trying to *remove* the secret. Telling them to
+ *   run `store` to *create* the very thing they are deleting is nonsensical
+ *   (issue #183), so the delete hint is neutral and suggests no creation.
+ */
+export type SecretLookupContext = 'access' | 'delete'
+
+/**
  * Build the standard "secret not found" message, shared by every CLI command
  * that looks up a secret before acting on it.
  *
@@ -288,10 +300,17 @@ function formatFilesystemError(err: FilesystemError): string {
  * file backend`; `delete` surfaced the backend's own `Secret not found in
  * file store: x`), and neither pointed the user at a fix. Centralizing the
  * wording here, and having each command construct the error from this helper
- * instead of the backend's own message, guarantees they stay in sync and
- * always include a recovery hint.
+ * instead of the backend's own message, guarantees they stay in sync.
+ *
+ * The recovery hint is chosen by `context` (issue #183): the shared diagnostic
+ * sentence is identical, but `delete` must not be told to `store` (create) the
+ * secret it is trying to remove — the old shared wording did exactly that.
  */
-export function secretNotFoundMessage(name: string, backendType: string): string {
+export function secretNotFoundMessage(
+  name: string,
+  backendType: string,
+  context: SecretLookupContext = 'access',
+): string {
   // The diagnostic sentence and the recovery hint each need their own kind
   // of quoting, since they aren't the same kind of text:
   //
@@ -304,15 +323,21 @@ export function secretNotFoundMessage(name: string, backendType: string): string
   //   contain a quote, but `name` is user-supplied and, on the exec path
   //   (`--secret`), is validated only for non-emptiness — not restricted to
   //   store/delete's safe `--name` character set — so it needs the escaping.
-  // - The recovery hint is a literal shell command a user may copy and
-  //   paste, so `name` is wrapped with shellQuote() (single-quote POSIX
-  //   shell escaping) instead — JSON's escaping isn't shell-safe and an
-  //   unescaped name could contain a quote, breaking the pasted command
-  //   (review follow-up, issue #118).
-  return (
-    `Secret ${JSON.stringify(name)} not found in the ${JSON.stringify(backendType)} backend. ` +
-    `Run \`vaultkeeper store --name ${shellQuote(name)}\` to create it.`
-  )
+  const diagnostic = `Secret ${JSON.stringify(name)} not found in the ${JSON.stringify(backendType)} backend.`
+
+  if (context === 'delete') {
+    // No `store` suggestion: the user is deleting, not creating. The neutral
+    // hint names the two ordinary explanations for a delete missing its
+    // target so the message is still actionable without being contradictory.
+    return `${diagnostic} It may have already been deleted, or the name may be misspelled.`
+  }
+
+  // The access-path recovery hint is a literal shell command a user may copy
+  // and paste, so `name` is wrapped with shellQuote() (single-quote POSIX
+  // shell escaping) — JSON's escaping isn't shell-safe and an unescaped name
+  // could contain a quote, breaking the pasted command (review follow-up,
+  // issue #118).
+  return `${diagnostic} Run \`vaultkeeper store --name ${shellQuote(name)}\` to create it.`
 }
 
 /** Format an error for display on stderr. */

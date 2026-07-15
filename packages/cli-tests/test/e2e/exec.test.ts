@@ -330,9 +330,14 @@ describe('exec trust gate', () => {
   // Regression: issue #118 — exec and delete previously reported the same
   // failure with different wording (exec: `Secret "x" not found in file
   // backend`; delete: the file backend's own `Secret not found in file
-  // store: x`) and neither included a recovery hint. Both commands must now
-  // render byte-for-byte identical text for the missing-secret line.
-  it('reports the identical SecretNotFoundError wording and hint as `delete` for the same missing secret (issue #118)', async () => {
+  // store: x`) and neither included a recovery hint. Both commands must render
+  // the identical typed class and diagnostic LINE.
+  //
+  // Regression: issue #183 — the shared recovery HINT must NOT be identical:
+  // telling `delete` to `store` (create) the secret it is removing is
+  // nonsensical. exec (an access path) keeps the "run store to create it"
+  // hint; delete gets a neutral, delete-appropriate hint instead.
+  it('shares the SecretNotFoundError diagnostic line with `delete` but gives a context-appropriate hint (issues #118, #183)', async () => {
     if (env === undefined) throw new Error('env not initialized')
     const caller = await writeCaller('#!/bin/sh\necho hi\n')
 
@@ -341,15 +346,26 @@ describe('exec trust gate', () => {
     )
     const deleteResult = await env.run(['delete', '--name', 'ghost-secret'])
 
+    // Shared, byte-for-byte identical diagnostic line and typed class.
     const expectedLine = 'Secret "ghost-secret" not found in the "file" backend.'
-    const expectedHint = "Run `vaultkeeper store --name 'ghost-secret'` to create it."
-
     expect(execResult.exitCode).not.toBe(0)
     expect(deleteResult.exitCode).not.toBe(0)
+    expect(execResult.stderr).toContain('SecretNotFoundError')
+    expect(deleteResult.stderr).toContain('SecretNotFoundError')
     expect(execResult.stderr).toContain(expectedLine)
-    expect(execResult.stderr).toContain(expectedHint)
     expect(deleteResult.stderr).toContain(expectedLine)
-    expect(deleteResult.stderr).toContain(expectedHint)
+
+    // exec (access): suggests creating the secret with `store`.
+    expect(execResult.stderr).toContain(
+      "Run `vaultkeeper store --name 'ghost-secret'` to create it.",
+    )
+
+    // delete (removal): must NOT suggest creating the thing being deleted.
+    expect(deleteResult.stderr).not.toContain('to create it')
+    expect(deleteResult.stderr).not.toContain('vaultkeeper store --name')
+    expect(deleteResult.stderr).toContain(
+      'may have already been deleted, or the name may be misspelled',
+    )
   })
 
   // Regression (review follow-up, issue #118): unlike store/delete's --name,
