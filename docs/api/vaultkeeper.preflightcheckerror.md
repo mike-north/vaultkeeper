@@ -41,6 +41,25 @@ Description
 </th></tr></thead>
 <tbody><tr><td>
 
+[code?](./vaultkeeper.preflightcheckerror.code.md)
+
+
+</td><td>
+
+
+</td><td>
+
+string \| undefined
+
+
+</td><td>
+
+_(Optional)_ The Node.js errno code (for example `EACCES`<!-- -->, `EPERM`<!-- -->, `EISDIR`<!-- -->) from the underlying filesystem failure, present only for a `'config-read'` failure and only when the cause exposed a string errno code. Lets a consumer distinguish a permission problem from another read failure when phrasing the remediation.
+
+
+</td></tr>
+<tr><td>
+
 [configPath](./vaultkeeper.preflightcheckerror.configpath.md)
 
 

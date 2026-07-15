@@ -159,18 +159,22 @@ const PERMISSION_ERROR_CODES = new Set(['EACCES', 'EPERM'])
  * permission code (or no code at all, conservatively) keeps the permissions
  * wording; any other code gets an honest, code-naming message instead.
  */
-function formatConfigReadError(err: FilesystemError): string {
-  if (err.code === undefined || PERMISSION_ERROR_CODES.has(err.code)) {
+function configReadRemediation(configPath: string, code: string | undefined): string {
+  if (code === undefined || PERMISSION_ERROR_CODES.has(code)) {
     return (
-      `${err.name}: The config at \`${err.path}\` could not be read — ` +
+      `The config at \`${configPath}\` could not be read — ` +
       "check the file's permissions and ownership, and that it exists — the " +
       'current user cannot read it. Then try again.'
     )
   }
   return (
-    `${err.name}: The config at \`${err.path}\` could not be read (${err.code}) — ` +
+    `The config at \`${configPath}\` could not be read (${code}) — ` +
     'check that the path is a regular, readable file, then try again.'
   )
+}
+
+function formatConfigReadError(err: FilesystemError): string {
+  return `${err.name}: ${configReadRemediation(err.path, err.code)}`
 }
 
 /**
@@ -185,6 +189,13 @@ export function formatPreflightConfigError(
   error: PreflightCheckError,
   configDir: string,
 ): string {
+  // A read failure (permission/EISDIR/etc.) has a different remediation from a
+  // parse/validation failure: `config init --force` cannot repair a config the
+  // process cannot read, so point at the file's permissions instead, sharing
+  // the exact wording of `formatError`'s unreadable-`config.json` message.
+  if (error.kind === 'config-read') {
+    return configReadRemediation(error.configPath, error.code)
+  }
   const detail = error.location !== undefined ? `at ${error.location}` : undefined
   return configRemediation(error.configPath, detail, configDir)
 }

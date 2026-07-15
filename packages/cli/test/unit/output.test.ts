@@ -318,6 +318,63 @@ describe('formatPreflightConfigError', () => {
     expect(formatted).not.toContain('install @vaultkeeper/cli')
   })
 
+  // Issue #169: a config-read failure (config file unreadable, e.g. EACCES on
+  // the file or its parent dir) has a different remediation from parse/
+  // validation — `config init --force` cannot fix a read-permission problem —
+  // so the doctor remediation points at the file's permissions instead.
+  it('builds a permissions remediation (not `config init --force`) for an EACCES-coded config-read failure', () => {
+    const error: PreflightCheckError = { kind: 'config-read', configPath, code: 'EACCES' }
+
+    const formatted = formatPreflightConfigError(error, configDir)
+
+    expect(formatted).toContain(configPath)
+    expect(formatted.toLowerCase()).toContain('permission')
+    expect(formatted).toContain('could not be read')
+    expect(formatted).not.toContain('config init --force')
+    expect(formatted).not.toContain('install @vaultkeeper/cli')
+  })
+
+  it('treats a config-read failure with no errno code conservatively as a permissions problem', () => {
+    const error: PreflightCheckError = { kind: 'config-read', configPath, code: undefined }
+
+    const formatted = formatPreflightConfigError(error, configDir)
+
+    expect(formatted).toContain(configPath)
+    expect(formatted.toLowerCase()).toContain('permission')
+    expect(formatted).not.toContain('config init --force')
+  })
+
+  it('names the errno instead of claiming permissions for a non-permission config-read failure (EISDIR)', () => {
+    const error: PreflightCheckError = { kind: 'config-read', configPath, code: 'EISDIR' }
+
+    const formatted = formatPreflightConfigError(error, configDir)
+
+    expect(formatted).toContain(configPath)
+    expect(formatted).toContain('EISDIR')
+    expect(formatted.toLowerCase()).not.toContain('permission')
+    expect(formatted).not.toContain('config init --force')
+  })
+
+  // The doctor `config-read` remediation must match the core sentence
+  // formatError produces for the same unreadable `config.json`, so doctor and
+  // every other command speak with one voice (formatError just prefixes the
+  // error name).
+  it('shares the exact read-error wording with formatError (one voice across commands)', () => {
+    const err = new FilesystemError(
+      `Cannot read config file at ${configPath}: permission denied.`,
+      configPath,
+      'read',
+      Object.assign(new Error('permission denied'), { code: 'EACCES' }),
+    )
+    const errorPath = formatError(err, configDir)
+    const doctorPath = formatPreflightConfigError(
+      { kind: 'config-read', configPath, code: 'EACCES' },
+      configDir,
+    )
+
+    expect(errorPath).toBe(`FilesystemError: ${doctorPath}`)
+  })
+
   it('shares the exact remediation wording with formatError for a config-parse failure (one voice across commands)', () => {
     const err = new ConfigParseError(
       `Failed to parse config file at ${configPath} at line 3, column 12: bad. ` +

@@ -21,7 +21,7 @@ vi.mock('../../../src/config.js', () => ({
 }))
 
 import { loadConfig } from '../../../src/config.js'
-import { ConfigParseError, ConfigValidationError } from '../../../src/errors.js'
+import { ConfigParseError, ConfigValidationError, FilesystemError } from '../../../src/errors.js'
 import {
   checkOpenssl,
   checkBash,
@@ -780,6 +780,62 @@ describe('runDoctor with configDir', () => {
 
     const configCheck = result.checks.find((c) => c.name === 'config')
     expect(configCheck?.error?.configPath).toBe('/fake/config.json')
+  })
+
+  // Issue #169: a config file that cannot be READ (e.g. EACCES on the file or
+  // its parent dir, chmod-000) is wrapped by `loadConfig` as a FilesystemError.
+  // The runner must record it as a failing `config` check with structured
+  // `config-read` context (carrying the errno `code`) so a CLI consumer can
+  // render a permissions-specific remediation — not `config init --force`,
+  // which cannot fix a read-permission problem.
+  it('attaches structured config-read error context (with errno code) on a filesystem read failure', async () => {
+    mockCheckOpenssl.mockReturnValue(mockOk('openssl'))
+    mockCheckBash.mockReturnValue(mockOk('bash'))
+    mockCheckSecretTool.mockReturnValue(mockOk('secret-tool'))
+    mockCheckOp.mockReturnValue(mockMissing('op'))
+    mockCheckYkman.mockReturnValue(mockMissing('ykman'))
+    const cause = Object.assign(new Error('EACCES: permission denied'), { code: 'EACCES' })
+    mockLoadConfig.mockRejectedValue(
+      new FilesystemError(
+        'Cannot read config file at /fake/config.json: EACCES: permission denied. ...',
+        '/fake/config.json',
+        'read',
+        cause,
+      ),
+    )
+
+    const result = await runDoctor({ platform: 'linux', configDir: '/fake' })
+
+    const configCheck = result.checks.find((c) => c.name === 'config')
+    expect(configCheck?.status).toBe('invalid')
+    expect(configCheck?.required).toBe(true)
+    expect(result.ready).toBe(false)
+    expect(configCheck?.error).toEqual({
+      kind: 'config-read',
+      configPath: '/fake/config.json',
+      code: 'EACCES',
+    })
+  })
+
+  it('records config-read error context with an undefined code when the cause carries no errno', async () => {
+    mockCheckOpenssl.mockReturnValue(mockOk('openssl'))
+    mockCheckBash.mockReturnValue(mockOk('bash'))
+    mockCheckSecretTool.mockReturnValue(mockOk('secret-tool'))
+    mockCheckOp.mockReturnValue(mockMissing('op'))
+    mockCheckYkman.mockReturnValue(mockMissing('ykman'))
+    // A FilesystemError with no underlying errno cause (the pre-#141 shape).
+    mockLoadConfig.mockRejectedValue(
+      new FilesystemError('Cannot read config file at /fake/config.json.', '/fake/config.json', 'read'),
+    )
+
+    const result = await runDoctor({ platform: 'linux', configDir: '/fake' })
+
+    const configCheck = result.checks.find((c) => c.name === 'config')
+    expect(configCheck?.error).toEqual({
+      kind: 'config-read',
+      configPath: '/fake/config.json',
+      code: undefined,
+    })
   })
 
   it('leaves `error` undefined for an unrecognized config load failure', async () => {

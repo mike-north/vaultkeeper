@@ -22,9 +22,13 @@ export type PreflightCheckStatus = 'ok' | 'missing' | 'version-unsupported' | 'i
  * The kind of error that made a preflight check fail, as a stable
  * machine-readable discriminant. `'config-parse'` means the config file
  * could not be parsed as JSON; `'config-validation'` means it parsed but
- * failed schema validation.
+ * failed schema validation; `'config-read'` means the config file could not
+ * be read at all (for example a permission failure on the file or its parent
+ * directory) — a different remediation from parse/validation, since
+ * overwriting the file (`config init --force`) cannot fix a read-permission
+ * problem.
  */
-export type PreflightCheckErrorKind = 'config-parse' | 'config-validation'
+export type PreflightCheckErrorKind = 'config-parse' | 'config-validation' | 'config-read'
 
 /**
  * Structured, remediation-free error context for a failed preflight check.
@@ -54,6 +58,14 @@ export interface PreflightCheckError {
    * `line 3, column 12`), present only for a `'config-parse'` failure.
    */
   location?: string | undefined
+  /**
+   * The Node.js errno code (for example `EACCES`, `EPERM`, `EISDIR`) from the
+   * underlying filesystem failure, present only for a `'config-read'` failure
+   * and only when the cause exposed a string errno code. Lets a consumer
+   * distinguish a permission problem from another read failure when phrasing
+   * the remediation.
+   */
+  code?: string | undefined
 }
 
 /** Result of a preflight check for a single dependency. */
