@@ -17,8 +17,8 @@ pnpm add vaultkeeper
 ```
 
 **Requirements:** Node >= 20, TypeScript 5.x (if you typecheck against the shipped `.d.ts` files;
-`verbatimModuleSyntax`-era output needs TypeScript >= 5.0). Not a hard runtime dependency — the
-`typescript` peer is optional and only matters if your project runs `tsc` against this package.
+`verbatimModuleSyntax`-era output needs TypeScript >= 5.0). This isn't a `peerDependencies` entry —
+`typescript` only matters if your own project runs `tsc` against this package.
 
 ## Quick start
 
