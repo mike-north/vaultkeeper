@@ -342,7 +342,7 @@ describe('exec trust gate', () => {
     const deleteResult = await env.run(['delete', '--name', 'ghost-secret'])
 
     const expectedLine = 'Secret "ghost-secret" not found in the "file" backend.'
-    const expectedHint = 'Run `vaultkeeper store --name ghost-secret` to create it.'
+    const expectedHint = "Run `vaultkeeper store --name 'ghost-secret'` to create it."
 
     expect(execResult.exitCode).not.toBe(0)
     expect(deleteResult.exitCode).not.toBe(0)
@@ -350,5 +350,24 @@ describe('exec trust gate', () => {
     expect(execResult.stderr).toContain(expectedHint)
     expect(deleteResult.stderr).toContain(expectedLine)
     expect(deleteResult.stderr).toContain(expectedHint)
+  })
+
+  // Regression (review follow-up, issue #118): unlike store/delete's --name,
+  // exec --secret is validated only for non-emptiness (no character-set
+  // restriction), so a real subprocess invocation can carry a secret name
+  // containing a double quote. The recovery hint must stay a syntactically
+  // valid, copy-pasteable shell command rather than leaving an unterminated
+  // quote — passed here as a real argv element (no shell involved in
+  // invoking the CLI itself), the way a user's actual secret name would be.
+  it('keeps the recovery hint copy/pasteable when --secret contains a double quote', async () => {
+    if (env === undefined) throw new Error('env not initialized')
+    const caller = await writeCaller('#!/bin/sh\necho hi\n')
+
+    const result = await env.run(
+      execArgs(caller).map((a) => (a === SECRET_NAME ? 'ghost"secret' : a)),
+    )
+
+    expect(result.exitCode).not.toBe(0)
+    expect(result.stderr).toContain(`vaultkeeper store --name 'ghost"secret'`)
   })
 })

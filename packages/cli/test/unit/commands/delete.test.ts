@@ -130,7 +130,7 @@ describe('deleteCommand', () => {
       expect(code).toBe(1)
       expect(stderrOutput).toContain('SecretNotFoundError')
       expect(stderrOutput).toContain('Secret "missing-secret" not found in the "file" backend')
-      expect(stderrOutput).toContain('Run `vaultkeeper store --name missing-secret` to create it')
+      expect(stderrOutput).toContain("Run `vaultkeeper store --name 'missing-secret'` to create it")
     })
 
     // Review follow-up on issue #118: an upfront secretExists() pre-check
@@ -150,7 +150,7 @@ describe('deleteCommand', () => {
       const code = await deleteCommand(['--name', 'race-secret'], configDir)
       expect(code).toBe(1)
       expect(stderrOutput).toContain('Secret "race-secret" not found in the "keychain" backend')
-      expect(stderrOutput).toContain('Run `vaultkeeper store --name race-secret` to create it')
+      expect(stderrOutput).toContain("Run `vaultkeeper store --name 'race-secret'` to create it")
       expect(stderrOutput).not.toContain('macOS Keychain')
     })
   })

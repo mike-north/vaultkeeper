@@ -7,6 +7,7 @@
 import * as path from 'node:path'
 import { ConfigParseError, ConfigValidationError } from 'vaultkeeper'
 import type { PreflightCheckError } from 'vaultkeeper'
+import { shellQuote } from './shell-quote.js'
 
 /** Check if stdout is a TTY at call time (not module load time). */
 function isTTY(): boolean {
@@ -84,17 +85,26 @@ export function formatPreflightConfigError(error: PreflightCheckError): string {
  * always include a recovery hint.
  */
 export function secretNotFoundMessage(name: string, backendType: string): string {
-  // JSON.stringify quotes AND escapes: `backendType` can only ever be one of
-  // the fixed registry identifiers (file/keychain/dpapi/secret-tool/
-  // 1password/yubikey — see packages/vaultkeeper/src/backend/register-builtins.ts),
-  // none of which contain a quote, but `name` is user-supplied and, on the
-  // exec path (`--secret`), is validated only for non-emptiness — not
-  // restricted to store/delete's safe `--name` character set. A name
-  // containing a literal `"` would otherwise unbalance the surrounding
-  // quotes in this message (review follow-up, issue #118).
+  // The diagnostic sentence and the recovery hint each need their own kind
+  // of quoting, since they aren't the same kind of text:
+  //
+  // - The diagnostic ("Secret "x" not found...") is English prose — the
+  //   quotes are just readability punctuation around the name. JSON.stringify
+  //   escapes an embedded `"` so it can't unbalance those quotes.
+  //   `backendType` can only ever be one of the fixed registry identifiers
+  //   (file/keychain/dpapi/secret-tool/1password/yubikey — see
+  //   packages/vaultkeeper/src/backend/register-builtins.ts), none of which
+  //   contain a quote, but `name` is user-supplied and, on the exec path
+  //   (`--secret`), is validated only for non-emptiness — not restricted to
+  //   store/delete's safe `--name` character set — so it needs the escaping.
+  // - The recovery hint is a literal shell command a user may copy and
+  //   paste, so `name` is wrapped with shellQuote() (single-quote POSIX
+  //   shell escaping) instead — JSON's escaping isn't shell-safe and an
+  //   unescaped name could contain a quote, breaking the pasted command
+  //   (review follow-up, issue #118).
   return (
     `Secret ${JSON.stringify(name)} not found in the ${JSON.stringify(backendType)} backend. ` +
-    `Run \`vaultkeeper store --name ${name}\` to create it.`
+    `Run \`vaultkeeper store --name ${shellQuote(name)}\` to create it.`
   )
 }
 

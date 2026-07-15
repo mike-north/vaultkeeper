@@ -48,7 +48,7 @@ describe('store and delete lifecycle', () => {
     expect(result.exitCode).not.toBe(0)
     expect(result.stderr).toContain('SecretNotFoundError')
     expect(result.stderr).toContain('Secret "never-stored" not found in the "file" backend')
-    expect(result.stderr).toContain('Run `vaultkeeper store --name never-stored` to create it')
+    expect(result.stderr).toContain("Run `vaultkeeper store --name 'never-stored'` to create it")
   })
 
   // Regression: issue #60 — the CLI ignored BackendConfig.path and always wrote
