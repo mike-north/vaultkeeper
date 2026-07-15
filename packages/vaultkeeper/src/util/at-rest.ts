@@ -17,6 +17,7 @@
 
 import * as fs from 'node:fs/promises'
 import * as crypto from 'node:crypto'
+import { FilesystemError } from '../errors.js'
 
 const GCM_IV_BYTES = 12
 const GCM_KEY_BYTES = 32
@@ -95,7 +96,7 @@ export async function getOrCreateWrapKey(keyPath: string): Promise<Buffer> {
     existing = await fs.readFile(keyPath)
   } catch (err) {
     if (!(err instanceof Error && 'code' in err && err.code === 'ENOENT')) {
-      throw err
+      throw toWrapKeyFilesystemError(err, keyPath, 'read')
     }
   }
 
@@ -105,6 +106,31 @@ export async function getOrCreateWrapKey(keyPath: string): Promise<Buffer> {
 
   // Missing or corrupt (wrong length): (re)generate a fresh key in place.
   const key = crypto.randomBytes(GCM_KEY_BYTES)
-  await fs.writeFile(keyPath, key, { mode: 0o600 })
+  try {
+    await fs.writeFile(keyPath, key, { mode: 0o600 })
+  } catch (err) {
+    throw toWrapKeyFilesystemError(err, keyPath, 'write')
+  }
   return key
+}
+
+/**
+ * Re-throw a caught filesystem error from wrapping-key access as a typed
+ * {@link FilesystemError}, preserving the underlying message. Used by
+ * {@link getOrCreateWrapKey} so an `EACCES`/`EPERM` failure reading or
+ * writing the on-disk wrapping key (consumed by both the `FileBackend`
+ * secret store and `KeyManager`'s persisted key state) surfaces as a typed
+ * VaultError instead of the raw Node error.
+ */
+function toWrapKeyFilesystemError(
+  err: unknown,
+  keyPath: string,
+  permission: string,
+): FilesystemError {
+  const detail = err instanceof Error ? err.message : String(err)
+  return new FilesystemError(
+    `Failed to ${permission} wrapping key file at ${keyPath}: ${detail}`,
+    keyPath,
+    permission,
+  )
 }

@@ -427,7 +427,10 @@ describe('plain-Error audit', () => {
   it('should contain no `throw new Error(` in config.ts', () => {
     const configSourcePath = fileURLToPath(new URL('../../src/config.ts', import.meta.url))
     const source = readFileSync(configSourcePath, 'utf8')
-    expect(source).not.toMatch(/throw new Error\(/)
+    // Whitespace-tolerant: `throw new Error (` (extra space before the paren)
+    // or a line break between tokens would slip past a literal `throw new
+    // Error(` match.
+    expect(source).not.toMatch(/throw\s+new\s+Error\s*\(/)
   })
 })
 

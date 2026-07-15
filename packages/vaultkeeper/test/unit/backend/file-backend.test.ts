@@ -123,6 +123,22 @@ describe('FileBackend', () => {
       )
       await expect(backend.store('my-secret', 'secret-value')).rejects.toThrow('permission denied')
     })
+
+    // Regression: PR #126 review — getOrCreateWrapKey() (util/at-rest.ts),
+    // used to read/create the `.key` wrapping-key file, still rethrew a raw
+    // Node error on a non-ENOENT readFile failure, so an EACCES on the key
+    // file (as opposed to the entry file) bypassed the typed-error wrapping
+    // added for the entry read/write/delete paths.
+    it('should surface an EACCES failure reading the wrapping key file as a typed FilesystemError', async () => {
+      mockFs.mkdir.mockResolvedValue(undefined)
+      const permError = Object.assign(new Error('permission denied'), { code: 'EACCES' })
+      mockFs.readFile.mockRejectedValue(permError) // key file read fails
+
+      await expect(backend.store('my-secret', 'secret-value')).rejects.toBeInstanceOf(
+        FilesystemError,
+      )
+      await expect(backend.store('my-secret', 'secret-value')).rejects.toThrow('permission denied')
+    })
   })
 
   describe('legacy $HOME/.vaultkeeper/file fallback (issue #99 back-compat)', () => {
@@ -246,6 +262,24 @@ describe('FileBackend', () => {
       mockFs.readFile.mockRejectedValue(permError)
 
       await expect(backend.retrieve('protected')).rejects.toBeInstanceOf(FilesystemError)
+      await expect(backend.retrieve('protected')).rejects.toThrow('permission denied')
+    })
+
+    // Regression: PR #126 review — an EACCES reading the `.key` wrapping-key
+    // file (as opposed to the entry file) went through
+    // getOrCreateWrapKey() (util/at-rest.ts), which still rethrew the raw
+    // Node error rather than a typed FilesystemError.
+    it('should surface an EACCES failure reading the wrapping key file as a typed FilesystemError', async () => {
+      mockFs.mkdir.mockResolvedValue(undefined)
+      const permError = Object.assign(new Error('permission denied'), { code: 'EACCES' })
+      // First readFile call (entry) succeeds; second (key file) fails.
+      mockFs.readFile.mockResolvedValueOnce('AAAA:BBBB:CCCC')
+      mockFs.readFile.mockRejectedValueOnce(permError)
+
+      await expect(backend.retrieve('protected')).rejects.toBeInstanceOf(FilesystemError)
+
+      mockFs.readFile.mockResolvedValueOnce('AAAA:BBBB:CCCC')
+      mockFs.readFile.mockRejectedValueOnce(permError)
       await expect(backend.retrieve('protected')).rejects.toThrow('permission denied')
     })
   })
