@@ -425,13 +425,15 @@ describe('loadConfig', () => {
 // fails CI instead of silently regressing the "never throw plain Error"
 // convention (see CLAUDE.md).
 describe('plain-Error audit', () => {
-  it('should contain no `throw new Error(` in config.ts', () => {
+  it('should contain no plain-Error throw (new/no-new/globalThis) in config.ts', () => {
     const configSourcePath = fileURLToPath(new URL('../../src/config.ts', import.meta.url))
     const source = readFileSync(configSourcePath, 'utf8')
-    // Whitespace-tolerant: `throw new Error (` (extra space before the paren)
-    // or a line break between tokens would slip past a literal `throw new
-    // Error(` match.
-    expect(source).not.toMatch(/throw\s+new\s+Error\s*\(/)
+    // Whitespace-tolerant and constructor-form-tolerant: a plain Error can be
+    // thrown as `throw new Error(...)`, `throw Error(...)` (no `new`), or
+    // `throw new globalThis.Error(...)`. Extra spaces or a line break between
+    // tokens would also slip past a naive literal match. Catch all of them so
+    // the "never throw plain Error" guard can't be bypassed.
+    expect(source).not.toMatch(/throw\s+(?:new\s+)?(?:globalThis\.)?Error\s*\(/)
   })
 })
 
