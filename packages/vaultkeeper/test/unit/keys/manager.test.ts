@@ -226,6 +226,28 @@ describe('KeyManager.rotateKey — concurrent rotation guard', () => {
     }
   })
 
+  it('appends a separating period to a message with no trailing punctuation', () => {
+    const err = new RotationInProgressError('A key rotation is already in progress')
+    expect(err.message).toBe(
+      'A key rotation is already in progress. Either wait for the current grace period to ' +
+        "elapse before rotating again, or run 'vaultkeeper revoke-key' (or call revokeKey()) " +
+        'to invalidate the previous key immediately and clear the grace period.',
+    )
+  })
+
+  // Regression: appending ". Either ..." unconditionally to a message that
+  // already ends in sentence punctuation (e.g. from the WASM error mapper)
+  // produced double punctuation ("already in progress.. Either ...").
+  it('does not double up punctuation when the message already ends in a period', () => {
+    const err = new RotationInProgressError('A key rotation is already in progress.')
+    expect(err.message).not.toContain('..')
+    expect(err.message).toBe(
+      'A key rotation is already in progress. Either wait for the current grace period to ' +
+        "elapse before rotating again, or run 'vaultkeeper revoke-key' (or call revokeKey()) " +
+        'to invalidate the previous key immediately and clear the grace period.',
+    )
+  })
+
   it('allows a new rotation after the grace period expires', async () => {
     const mgr = await makeInitializedManager()
     mgr.rotateKey(1_000)
