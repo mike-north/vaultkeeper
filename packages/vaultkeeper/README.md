@@ -1,5 +1,9 @@
 # vaultkeeper
 
+This is the library only — it has no `bin` and installs no `vaultkeeper` command. For the CLI
+(`vaultkeeper config init`, `vaultkeeper doctor`, etc.), install the separate
+[`@vaultkeeper/cli`](https://www.npmjs.com/package/@vaultkeeper/cli) package.
+
 Unified, policy-enforced secret storage across OS credential backends. By default secrets are stored
 in a portable, self-contained AES-256-GCM encrypted `file` backend — a bare `VaultKeeper.init()`
 never silently writes to your real OS credential store; the platform-native store (macOS Keychain,

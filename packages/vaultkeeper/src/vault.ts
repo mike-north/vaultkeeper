@@ -101,9 +101,10 @@ function createDefaultInjectedBackendConfig(): VaultConfig {
  * targets the real OS credential store. Inspect
  * {@link VaultKeeper.activeBackendType} after `init()` to confirm which backend
  * a given instance resolved to. To use the OS-native store instead, opt in via
- * an explicit config or `vaultkeeper config init --backend <type>` (see
- * {@link platformNativeBackendType}). When `backend` is set instead, see that
- * option's own JSDoc for the fallback config used in its place.
+ * an explicit config, or `vaultkeeper config init --backend <type>` from the
+ * separate `@vaultkeeper/cli` package (see {@link platformNativeBackendType}).
+ * When `backend` is set instead, see that option's own JSDoc for the fallback
+ * config used in its place.
  */
 export interface VaultKeeperOptions {
   /** Override the config directory. */

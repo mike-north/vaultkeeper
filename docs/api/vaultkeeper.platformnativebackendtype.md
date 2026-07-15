@@ -19,7 +19,7 @@ The OS-native backend type identifier for the current platform.
 
 ## Remarks
 
-This is \*\*not\*\* the zero-config default — [defaultBackendType()](./vaultkeeper.defaultbackendtype.md) (always `'file'`<!-- -->) is. This function reports which platform-native store a user can explicitly opt into (e.g. via `vaultkeeper config init --backend keychain`<!-- -->):
+This is \*\*not\*\* the zero-config default — [defaultBackendType()](./vaultkeeper.defaultbackendtype.md) (always `'file'`<!-- -->) is. This function reports which platform-native store a user can explicitly opt into (e.g. via `vaultkeeper config init --backend keychain` from the separate `@vaultkeeper/cli` package, or `{ type: 'keychain' }` in a config object/file passed directly to this library):
 
 - \*\*macOS\*\* → `keychain` (macOS Keychain) - \*\*Windows\*\* → `dpapi` (Windows DPAPI) - \*\*Linux\*\* → `secret-tool` (Secret Service via `libsecret`<!-- -->; opting in requires the `libsecret-tools` package) - \*\*any other platform\*\* → `file` (no built-in native store integration, so the portable AES-256-GCM encrypted file backend is the only option)
 

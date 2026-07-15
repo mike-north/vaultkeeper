@@ -361,10 +361,13 @@ export class ConfigValidationError extends VaultError {
  * Thrown when a config file's contents cannot be parsed as JSON.
  *
  * The `message` already embeds the file path, the parse location (when the
- * underlying `SyntaxError` exposes one), and a remediation hint pointing at
- * `vaultkeeper config init` — see issue #68. `path` and `location` are also
- * exposed individually for callers (e.g. `doctor`) that want to report them
- * as structured fields rather than re-parsing the message.
+ * underlying `SyntaxError` exposes one), and a remediation hint that either
+ * points at `vaultkeeper config init` (via the separate `@vaultkeeper/cli`
+ * package — this library ships no CLI of its own) or at repairing/replacing
+ * the config directly through this library's JS API — see issues #68, #100.
+ * `path` and `location` are also exposed individually for callers (e.g.
+ * `doctor`) that want to report them as structured fields rather than
+ * re-parsing the message.
  */
 export class ConfigParseError extends VaultError {
   /**

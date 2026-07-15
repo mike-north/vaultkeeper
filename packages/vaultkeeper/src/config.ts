@@ -12,9 +12,13 @@ import { ConfigValidationError, ConfigParseError, FilesystemError } from './erro
  * Remediation hint appended to every config-loading error message so a user
  * always has a concrete next step, regardless of whether the failure was a
  * read error, a JSON syntax error, or a schema validation error (issue #68).
+ *
+ * This library has no CLI of its own (`vaultkeeper` ships no `bin`), so the
+ * hint is qualified rather than naming a bare command: install the separate
+ * `@vaultkeeper/cli` package to run `vaultkeeper config init --force`, or fix
+ * the config through the JS API directly (issue #100).
  */
-const CONFIG_REMEDIATION_HINT =
-  "Fix the file, or run 'vaultkeeper config init --force' to overwrite it with a valid config."
+const CONFIG_REMEDIATION_HINT = `Fix the file — either install @vaultkeeper/cli and run 'vaultkeeper config init --force' to overwrite it with a valid config, or repair/replace it programmatically via this library (pass an explicit \`config\` or \`configDir\`, or write a valid config.json yourself).`
 
 /** `true` if `err` is a Node.js filesystem error with the given `code`. */
 function hasErrorCode(err: unknown, code: string): boolean {
@@ -90,14 +94,16 @@ export function getDefaultConfigDir(): string {
  * The zero-config default is deliberately the portable, self-contained
  * AES-256-GCM encrypted file backend rather than the platform-native OS
  * credential store. This guarantees that a bare {@link VaultKeeper.init} — or a
- * `vaultkeeper config init` with no `--backend` flag — can never silently write
- * a secret into the user's real login keychain (or Windows DPAPI store) before
- * they have chosen to. It also matches the WASM SDK, which always uses the file
+ * `vaultkeeper config init` (run via the separate `@vaultkeeper/cli` package)
+ * with no `--backend` flag — can never silently write a secret into the
+ * user's real login keychain (or Windows DPAPI store) before they have
+ * chosen to. It also matches the WASM SDK, which always uses the file
  * backend.
  *
  * The OS-native store is still available as an explicit opt-in: pass
  * `--backend keychain` (macOS) / `--backend dpapi` (Windows) to
- * `vaultkeeper config init`, or set it in an explicit config. Use
+ * `vaultkeeper config init` (via `@vaultkeeper/cli`), or set
+ * `{ type: 'keychain' | 'dpapi' }` directly in a config object/file. Use
  * {@link platformNativeBackendType} to discover which native store the current
  * platform offers.
  *
@@ -114,7 +120,9 @@ export function defaultBackendType(): string {
  * @remarks
  * This is **not** the zero-config default — {@link defaultBackendType} (always
  * `'file'`) is. This function reports which platform-native store a user can
- * explicitly opt into (e.g. via `vaultkeeper config init --backend keychain`):
+ * explicitly opt into (e.g. via `vaultkeeper config init --backend keychain`
+ * from the separate `@vaultkeeper/cli` package, or `{ type: 'keychain' }` in
+ * a config object/file passed directly to this library):
  *
  * - **macOS** → `keychain` (macOS Keychain)
  * - **Windows** → `dpapi` (Windows DPAPI)
@@ -341,8 +349,10 @@ export function validateConfig(config: unknown): VaultConfig {
  * that fails to parse as JSON throws {@link ConfigParseError}; a present file
  * that parses but fails schema validation throws {@link ConfigValidationError}.
  * All three error messages include the config file path and a remediation
- * hint naming `vaultkeeper config init --force`, the supported recovery path
- * for an existing-but-broken config (issue #97).
+ * hint naming `vaultkeeper config init --force` (via the separate
+ * `@vaultkeeper/cli` package) as well as the JS-API alternative of repairing
+ * or replacing the config directly — the supported recovery paths for an
+ * existing-but-broken config (issues #97, #100).
  *
  * @param configDir - Directory containing config.json. Defaults to
  * `getDefaultConfigDir()`, which itself honors `VAULTKEEPER_CONFIG_DIR`
