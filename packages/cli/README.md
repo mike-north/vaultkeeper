@@ -96,9 +96,10 @@ the label doesn't itself reflect the TOFU check's outcome.
 
 `vaultkeeper dev-mode enable --script <path>` relaxes the TOFU check above for one executable, so
 a binary you're actively rebuilding doesn't get rejected every time its hash changes. It's
-persisted in the config's `developmentMode.executables` list — use `dev-mode disable --script
-<path>` to remove it again. Reserve this for local development only; a production caller should
-stay on TOFU verification so a tampered or swapped binary is still caught.
+persisted in the config's `developmentMode.executables` list — use
+`vaultkeeper dev-mode disable --script <path>` to remove it again. Reserve this for local
+development only; a production caller should stay on TOFU verification so a tampered or swapped
+binary is still caught.
 
 ## Exit codes
 
