@@ -481,6 +481,25 @@ Resolve the OS-native credential store type for the current platform.
 </td></tr>
 <tr><td>
 
+[redactSecrets(text, secrets, replacement)](./vaultkeeper.redactsecrets.md)
+
+
+</td><td>
+
+Replace every occurrence of each secret value in `text` with `replacement`<!-- -->.
+
+This is used to scrub captured child-process `stdout`<!-- -->/`stderr` so a secret injected into a delegated command never surfaces in the returned output.
+
+Before redacting, the secret set is normalized so masking is complete and order-independent:
+
+- \*\*Empty/whitespace-only values are dropped.\*\* An empty string matches between every character, and a whitespace-only value matches ubiquitous whitespace, so redacting either would blank the text rather than a secret. - \*\*Duplicates are removed\*\* so each distinct value is processed once. - \*\*Longer values are redacted first.\*\* If one secret is a substring or prefix of another — common for keys that share a prefix — redacting the shorter one first would leave the longer secret's remaining suffix visible (redacting `"abc"` before `"abc123"` yields `"[REDACTED]123"`<!-- -->, leaking `"123"`<!-- -->). Sorting by length descending guarantees each longer value is fully masked before any shorter substring pass runs.
+
+Both arguments are treated fully literally: the secret is matched as a plain substring (never as a regular expression), and `replacement` is inserted verbatim — `String.prototype.replaceAll`<!-- -->'s `$`<!-- -->-substitution patterns are disabled, since a replacement containing `$&` would otherwise re-expand to the matched secret and silently defeat the redaction.
+
+
+</td></tr>
+<tr><td>
+
 [runDoctor(options)](./vaultkeeper.rundoctor.md)
 
 
@@ -673,12 +692,12 @@ A choice within a setup question.
 </td></tr>
 <tr><td>
 
-[SetupOptions](./vaultkeeper.setupoptions.md)
+[SetupOptionsBase](./vaultkeeper.setupoptionsbase.md)
 
 
 </td><td>
 
-Options for the setup operation.
+Options for [VaultKeeper.setup()](./vaultkeeper.vaultkeeper.setup.md) that are independent of the mandatory executable-trust choice. Intersected with that choice to form [SetupOptions](./vaultkeeper.setupoptions.md)<!-- -->.
 
 
 </td></tr>
@@ -802,6 +821,32 @@ This is a fully offline operation that only requires public key material — no 
 </td></tr>
 </tbody></table>
 
+## Variables
+
+<table><thead><tr><th>
+
+Variable
+
+
+</th><th>
+
+Description
+
+
+</th></tr></thead>
+<tbody><tr><td>
+
+[REDACTED](./vaultkeeper.redacted.md)
+
+
+</td><td>
+
+The token substituted for a redacted secret value.
+
+
+</td></tr>
+</tbody></table>
+
 ## Type Aliases
 
 <table><thead><tr><th>
@@ -893,6 +938,17 @@ Status of a preflight check.
 Map of named secrets to their capability tokens.
 
 Use with `exec()` or `fetch()` to inject multiple secrets into a single request. Each key becomes the name referenced in `{{secret:name}}` placeholders.
+
+
+</td></tr>
+<tr><td>
+
+[SetupOptions](./vaultkeeper.setupoptions.md)
+
+
+</td><td>
+
+Options for the setup operation.
 
 
 </td></tr>
