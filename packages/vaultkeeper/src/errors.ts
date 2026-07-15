@@ -439,7 +439,11 @@ export class FilesystemError extends VaultError {
  */
 export class RotationInProgressError extends VaultError {
   constructor(message: string) {
-    super(message)
+    super(
+      `${message}. Either wait for the current grace period to elapse before rotating again, ` +
+        "or run 'vaultkeeper revoke-key' (or call revokeKey()) to invalidate the previous key " +
+        'immediately and clear the grace period.',
+    )
     this.name = 'RotationInProgressError'
   }
 }

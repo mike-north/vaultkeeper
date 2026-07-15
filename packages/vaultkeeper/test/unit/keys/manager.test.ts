@@ -208,6 +208,24 @@ describe('KeyManager.rotateKey — concurrent rotation guard', () => {
     }).toThrowError(RotationInProgressError)
   })
 
+  // Regression: RotationInProgressError previously surfaced only the bare
+  // "A key rotation is already in progress" message with no next step,
+  // unlike the CLI's other domain errors, which name actionable remediation.
+  it('includes actionable next-step guidance (revoke-key / grace period) in the message', async () => {
+    const mgr = await makeInitializedManager()
+    mgr.rotateKey(5_000)
+
+    try {
+      mgr.rotateKey(5_000)
+      expect.unreachable('rotateKey should have thrown RotationInProgressError')
+    } catch (err) {
+      expect(err).toBeInstanceOf(RotationInProgressError)
+      const message = err instanceof Error ? err.message : String(err)
+      expect(message).toContain('revoke-key')
+      expect(message).toContain('grace period')
+    }
+  })
+
   it('allows a new rotation after the grace period expires', async () => {
     const mgr = await makeInitializedManager()
     mgr.rotateKey(1_000)

@@ -17,6 +17,17 @@ npm install -g @vaultkeeper/cli
 
 ## Quick start
 
+All state (config, keys, the default `file` backend's secrets) lives under a config directory
+that defaults to `~/.config/vaultkeeper`. Override it with the global `--config-dir <path>` flag
+or the `VAULTKEEPER_CONFIG_DIR` environment variable — useful for CI runs and sandboxed/isolated
+test environments that shouldn't touch a developer's real config:
+
+```sh
+vaultkeeper --config-dir /tmp/ci-vault doctor
+# or
+VAULTKEEPER_CONFIG_DIR=/tmp/ci-vault vaultkeeper doctor
+```
+
 ```sh
 # Run preflight checks
 vaultkeeper doctor
@@ -44,6 +55,17 @@ vaultkeeper delete --name MY_API_KEY
 
 Run `vaultkeeper <command> --help` for full flag reference on any subcommand — the CLI's own
 `--help` output is the source of truth for its flags.
+
+## Exit codes
+
+Every command exits with one of three codes, so scripts and CI pipelines can branch on the class
+of failure without parsing stderr:
+
+| Code | Meaning       | Example                                                               |
+| ---- | ------------- | --------------------------------------------------------------------- |
+| `0`  | Success       | `vaultkeeper doctor` when all required dependencies are present       |
+| `1`  | Runtime error | `vaultkeeper delete --name DOES_NOT_EXIST` — the secret doesn't exist |
+| `2`  | Usage error   | `vaultkeeper --bogus` or `vaultkeeper some-unknown-command`           |
 
 ## Available commands
 
