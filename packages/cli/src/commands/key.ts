@@ -8,6 +8,17 @@ import { configFileExists, noConfigMessage } from '../config-status.js'
 import { SECRET_NAME_PATTERN, SECRET_NAME_RULE } from '../secret-name.js'
 
 /**
+ * Print the default-backend notice when no config file exists (uniform with
+ * store/exec/sign), then initialize the vault.
+ */
+async function initVault(configDir: string, skipDoctor: boolean): Promise<VaultKeeper> {
+  if (!(await configFileExists(configDir))) {
+    process.stderr.write(noConfigMessage(defaultBackendType()))
+  }
+  return VaultKeeper.init({ configDir, skipDoctor })
+}
+
+/**
  * Accepted `--type` values mapped to their strict JOSE algorithm identifier.
  * Unknown types are rejected (exit 2) — there is never a silent default.
  */
@@ -78,39 +89,37 @@ export async function keyCommand(args: string[], configDir: string): Promise<num
     return 2
   }
   const name = values.name
+  const skipDoctor = shouldSkipDoctor(values['skip-doctor'])
 
-  // `create` requires a valid --type; `export` ignores it.
-  let algorithm: SigningAlgorithm | undefined
   if (subcommand === 'create') {
+    // No silent algorithm default, ever (issue #124): --type is required, and
+    // its validated mapping is passed straight through — there is no fallback
+    // that could enroll a key under an unstated algorithm.
     if (values.type === undefined) {
       process.stderr.write('Error: --type is required for `key create` (supported: ed25519)\n')
       return 2
     }
-    const mapped = KEY_TYPES[values.type]
-    if (mapped === undefined) {
+    const algorithm: SigningAlgorithm | undefined = KEY_TYPES[values.type]
+    if (algorithm === undefined) {
       process.stderr.write(
         `Error: unknown --type '${values.type}'. Supported: ${Object.keys(KEY_TYPES).join(', ')}\n`,
       )
       return 2
     }
-    algorithm = mapped
-  }
-
-  const skipDoctor = shouldSkipDoctor(values['skip-doctor'])
-
-  try {
-    if (!(await configFileExists(configDir))) {
-      process.stderr.write(noConfigMessage(defaultBackendType()))
-    }
-    const vault = await VaultKeeper.init({ configDir, skipDoctor })
-
-    if (subcommand === 'create') {
-      // algorithm is defined here (set above for the create branch).
-      const pub = await vault.createSigningKey(name, algorithm ?? 'EdDSA')
+    try {
+      const vault = await initVault(configDir, skipDoctor)
+      const pub = await vault.createSigningKey(name, algorithm)
       process.stderr.write(`Signing key "${name}" created (kid ${pub.kid}).\n`)
       return 0
+    } catch (err) {
+      process.stderr.write(`${formatError(err, configDir)}\n`)
+      return 1
     }
+  }
 
+  // export
+  try {
+    const vault = await initVault(configDir, skipDoctor)
     const pub = await vault.exportPublicKey(name)
     process.stdout.write(
       pub.publicKeyPem.endsWith('\n') ? pub.publicKeyPem : `${pub.publicKeyPem}\n`,

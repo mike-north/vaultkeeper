@@ -18,7 +18,15 @@ import {
   SigningKeyNotFoundError,
   SigningKeyAlreadyExistsError,
   FilesystemError,
+  InvalidKeyMaterialError,
 } from '../../../src/errors.js'
+import { encryptGcm, getOrCreateWrapKey } from '../../../src/util/at-rest.js'
+
+/** Compute the on-disk encrypted-key path the FileBackend uses for a signing id. */
+function signingKeyFile(dir: string, id: string): string {
+  const safeId = Buffer.from(id, 'utf8').toString('hex')
+  return path.join(dir, 'signing-keys', `${safeId}.pem.enc`)
+}
 
 let storageDir: string
 let backend: FileBackend
@@ -117,6 +125,30 @@ describe('FileBackend signing contract', () => {
     await expect(
       backend.signWithKey('signing-key:missing', Buffer.from('x')),
     ).rejects.toBeInstanceOf(SigningKeyNotFoundError)
+  })
+
+  // Corrupt/tampered on-disk key material (decrypts cleanly but is not a valid
+  // private key) must surface as a typed VaultError, never a raw Node crypto
+  // exception. We simulate it by writing validly-encrypted non-PEM content under
+  // the same wrap key the backend uses.
+  async function corruptStoredKey(): Promise<void> {
+    await backend.generateSigningKey(ID, 'EdDSA')
+    const wrapKey = await getOrCreateWrapKey(path.join(storageDir, '.key'))
+    await fs.writeFile(signingKeyFile(storageDir, ID), encryptGcm(wrapKey, 'not a private key'), {
+      mode: 0o600,
+    })
+  }
+
+  it('getPublicKey throws a typed InvalidKeyMaterialError for corrupt stored key material', async () => {
+    await corruptStoredKey()
+    await expect(backend.getPublicKey(ID)).rejects.toBeInstanceOf(InvalidKeyMaterialError)
+  })
+
+  it('signWithKey throws a typed InvalidKeyMaterialError for corrupt stored key material', async () => {
+    await corruptStoredKey()
+    await expect(backend.signWithKey(ID, Buffer.from('payload'))).rejects.toBeInstanceOf(
+      InvalidKeyMaterialError,
+    )
   })
 })
 

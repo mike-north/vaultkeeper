@@ -34,6 +34,7 @@ import {
   SigningKeyNotFoundError,
   SigningKeyAlreadyExistsError,
   InvalidAlgorithmError,
+  InvalidKeyMaterialError,
 } from '../errors.js'
 import { encryptGcm, decryptGcm, getOrCreateWrapKey } from '../util/at-rest.js'
 import { getDefaultConfigDir } from '../config.js'
@@ -397,9 +398,29 @@ export class FileBackend implements ListableBackend, SigningBackend {
     }
   }
 
-  async getPublicKey(id: string): Promise<SigningPublicKey> {
+  /**
+   * Load, decrypt, and parse the private key for `id` into a `KeyObject`.
+   *
+   * A parse failure means the decrypted-at-rest material is corrupt or tampered
+   * (it decrypted cleanly but is not a valid PKCS#8 private key). It is
+   * translated into a typed {@link InvalidKeyMaterialError} — never allowed to
+   * surface as a raw Node crypto exception — and the message never echoes any
+   * part of the key material.
+   */
+  async #loadSigningKeyObject(id: string): Promise<crypto.KeyObject> {
     const pkcs8Pem = await this.#loadSigningKeyPem(id)
-    const privateKey = crypto.createPrivateKey(pkcs8Pem)
+    try {
+      return crypto.createPrivateKey(pkcs8Pem)
+    } catch {
+      throw new InvalidKeyMaterialError(
+        `The stored signing key for "${displayKeyName(id)}" is not valid private key material ` +
+          '(it may be corrupt or tampered).',
+      )
+    }
+  }
+
+  async getPublicKey(id: string): Promise<SigningPublicKey> {
+    const privateKey = await this.#loadSigningKeyObject(id)
     const publicKey = crypto.createPublicKey(privateKey)
     const publicKeyPem = publicKey.export({ type: 'spki', format: 'pem' }).toString()
     const spkiDer = publicKey.export({ type: 'spki', format: 'der' })
@@ -411,8 +432,7 @@ export class FileBackend implements ListableBackend, SigningBackend {
   }
 
   async signWithKey(id: string, data: Buffer): Promise<Buffer> {
-    const pkcs8Pem = await this.#loadSigningKeyPem(id)
-    const privateKey = crypto.createPrivateKey(pkcs8Pem)
+    const privateKey = await this.#loadSigningKeyObject(id)
     // Ed25519: the algorithm is implicit in the key, so pass null.
     return crypto.sign(null, data, privateKey)
   }
