@@ -31,8 +31,9 @@
     "test": "node --test dist/test/*.test.js",
     "check:typecheck": "tsc --noEmit",
     "check:lint-ts": "eslint .",
+    "check:format": "prettier --check --ignore-path ../../.prettierignore .",
     "check:api-report": "api-extractor run",
-    "check": "pnpm check:typecheck && pnpm check:lint-ts && pnpm check:api-report",
+    "check": "pnpm check:typecheck && pnpm check:lint-ts && pnpm check:format && pnpm check:api-report",
     "generate:api-report": "api-extractor run --local"
   },
   "keywords": [

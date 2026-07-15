@@ -14,16 +14,16 @@
 /** Base error for all `@vaultkeeper/wasm` errors. */
 export class VaultError extends Error {
   constructor(message: string) {
-    super(message);
-    this.name = 'VaultError';
+    super(message)
+    this.name = 'VaultError'
   }
 }
 
 /** Thrown when a requested secret does not exist in the backend store. */
 export class SecretNotFoundError extends VaultError {
   constructor(message: string) {
-    super(message);
-    this.name = 'SecretNotFoundError';
+    super(message)
+    this.name = 'SecretNotFoundError'
   }
 }
 
@@ -38,13 +38,13 @@ export class DecryptionError extends VaultError {
    * if the WASM boundary did not supply one — this is never fabricated as an
    * empty string, so its absence is distinguishable from a genuine path.
    */
-  readonly path?: string;
+  readonly path?: string
 
   constructor(message: string, path?: string) {
-    super(message);
-    this.name = 'DecryptionError';
+    super(message)
+    this.name = 'DecryptionError'
     if (path !== undefined) {
-      this.path = path;
+      this.path = path
     }
   }
 }
@@ -64,7 +64,7 @@ export class FilesystemError extends VaultError {
    * if a malformed boundary shape omitted it — never fabricated as an empty
    * string, so its absence is distinguishable from a genuine path.
    */
-  readonly path?: string;
+  readonly path?: string
 
   /**
    * The file operation that was being attempted, e.g. `'read'` or `'write'`
@@ -76,14 +76,14 @@ export class FilesystemError extends VaultError {
    * this is always populated by the real core; `undefined` only guards a
    * malformed boundary shape.
    */
-  readonly permission?: string;
+  readonly permission?: string
 
   /**
    * The underlying OS errno code (e.g. `'ENOENT'`, `'EACCES'`), when the
    * Node host bridge was able to supply one. `undefined` when no code was
    * available — never fabricated.
    */
-  readonly code: string | undefined;
+  readonly code: string | undefined
 
   constructor(
     message: string,
@@ -91,15 +91,15 @@ export class FilesystemError extends VaultError {
     permission: string | undefined,
     code: string | undefined,
   ) {
-    super(message);
-    this.name = 'FilesystemError';
+    super(message)
+    this.name = 'FilesystemError'
     if (path !== undefined) {
-      this.path = path;
+      this.path = path
     }
     if (permission !== undefined) {
-      this.permission = permission;
+      this.permission = permission
     }
-    this.code = code;
+    this.code = code
   }
 }
 
@@ -110,8 +110,8 @@ export class FilesystemError extends VaultError {
  */
 export class InvalidTokenError extends VaultError {
   constructor(message: string) {
-    super(message);
-    this.name = 'InvalidTokenError';
+    super(message)
+    this.name = 'InvalidTokenError'
   }
 }
 
@@ -122,12 +122,12 @@ export class TokenExpiredError extends VaultError {
    * `true`, the secret still exists in the backend and a new token can be
    * issued.
    */
-  readonly canRefresh: boolean;
+  readonly canRefresh: boolean
 
   constructor(message: string, canRefresh: boolean) {
-    super(message);
-    this.name = 'TokenExpiredError';
-    this.canRefresh = canRefresh;
+    super(message)
+    this.name = 'TokenExpiredError'
+    this.canRefresh = canRefresh
   }
 }
 
@@ -137,8 +137,8 @@ export class TokenExpiredError extends VaultError {
  */
 export class KeyRotatedError extends VaultError {
   constructor(message: string) {
-    super(message);
-    this.name = 'KeyRotatedError';
+    super(message)
+    this.name = 'KeyRotatedError'
   }
 }
 
@@ -148,8 +148,8 @@ export class KeyRotatedError extends VaultError {
  */
 export class KeyRevokedError extends VaultError {
   constructor(message: string) {
-    super(message);
-    this.name = 'KeyRevokedError';
+    super(message)
+    this.name = 'KeyRevokedError'
   }
 }
 
@@ -159,8 +159,8 @@ export class KeyRevokedError extends VaultError {
  */
 export class TokenRevokedError extends VaultError {
   constructor(message: string) {
-    super(message);
-    this.name = 'TokenRevokedError';
+    super(message)
+    this.name = 'TokenRevokedError'
   }
 }
 
@@ -170,8 +170,8 @@ export class TokenRevokedError extends VaultError {
  */
 export class UsageLimitExceededError extends VaultError {
   constructor(message: string) {
-    super(message);
-    this.name = 'UsageLimitExceededError';
+    super(message)
+    this.name = 'UsageLimitExceededError'
   }
 }
 
@@ -181,8 +181,8 @@ export class UsageLimitExceededError extends VaultError {
  */
 export class RotationInProgressError extends VaultError {
   constructor(message: string) {
-    super(message);
-    this.name = 'RotationInProgressError';
+    super(message)
+    this.name = 'RotationInProgressError'
   }
 }
 
@@ -192,8 +192,8 @@ export class RotationInProgressError extends VaultError {
  */
 export class AccessorConsumedError extends VaultError {
   constructor(message: string) {
-    super(message);
-    this.name = 'AccessorConsumedError';
+    super(message)
+    this.name = 'AccessorConsumedError'
   }
 }
 
@@ -209,7 +209,7 @@ export class AccessorConsumedError extends VaultError {
 export type ExecutableTrustRequiredReason =
   | 'missing-choice'
   | 'conflicting-choice'
-  | 'legacy-dev-sentinel';
+  | 'legacy-dev-sentinel'
 
 /**
  * Thrown by `setup()` when the caller does not make an unambiguous
@@ -225,12 +225,12 @@ export type ExecutableTrustRequiredReason =
  */
 export class ExecutableTrustRequiredError extends VaultError {
   /** Machine-readable discriminator; see {@link ExecutableTrustRequiredReason}. */
-  readonly reason: ExecutableTrustRequiredReason;
+  readonly reason: ExecutableTrustRequiredReason
 
   constructor(message: string, reason: ExecutableTrustRequiredReason) {
-    super(message);
-    this.name = 'ExecutableTrustRequiredError';
-    this.reason = reason;
+    super(message)
+    this.name = 'ExecutableTrustRequiredError'
+    this.reason = reason
   }
 }
 
@@ -251,41 +251,41 @@ export class IdentityMismatchError extends VaultError {
    * `undefined` only if the WASM boundary did not supply one — never
    * fabricated, so its absence is distinguishable from a genuine hash.
    */
-  readonly previousHash?: string;
+  readonly previousHash?: string
 
   /**
    * The hash computed from the current executable. `undefined` only if the
    * WASM boundary did not supply one — never fabricated.
    */
-  readonly currentHash?: string;
+  readonly currentHash?: string
 
   constructor(message: string, previousHash?: string, currentHash?: string) {
-    super(message);
-    this.name = 'IdentityMismatchError';
+    super(message)
+    this.name = 'IdentityMismatchError'
     if (previousHash !== undefined) {
-      this.previousHash = previousHash;
+      this.previousHash = previousHash
     }
     if (currentHash !== undefined) {
-      this.currentHash = currentHash;
+      this.currentHash = currentHash
     }
   }
 }
 
 /** Shape of the tagged error value thrown across the WASM boundary. */
 interface WasmErrorShape {
-  vaultErrorCode: string;
-  message: string;
+  vaultErrorCode: string
+  message: string
   // Only `vaultErrorCode` and `message` are validated by isWasmErrorShape;
   // the rest are typed `unknown` so consumers are forced to narrow through
   // optionalString/optionalBoolean instead of trusting a malformed boundary
   // value to honor the field types.
-  canRefresh?: unknown;
-  path?: unknown;
-  reason?: unknown;
-  permission?: unknown;
-  code?: unknown;
-  previousHash?: unknown;
-  currentHash?: unknown;
+  canRefresh?: unknown
+  path?: unknown
+  reason?: unknown
+  permission?: unknown
+  code?: unknown
+  previousHash?: unknown
+  currentHash?: unknown
 }
 
 /**
@@ -295,18 +295,18 @@ interface WasmErrorShape {
  * for malformed boundary shapes.
  */
 function optionalString(value: unknown): string | undefined {
-  return typeof value === 'string' ? value : undefined;
+  return typeof value === 'string' ? value : undefined
 }
 
 /** Boolean analogue of {@link optionalString}: non-booleans become `undefined`. */
 function optionalBoolean(value: unknown): boolean | undefined {
-  return typeof value === 'boolean' ? value : undefined;
+  return typeof value === 'boolean' ? value : undefined
 }
 
 function isWasmErrorShape(value: unknown): value is WasmErrorShape {
-  if (typeof value !== 'object' || value === null) return false;
-  const record: Record<string, unknown> = { ...value };
-  return typeof record.vaultErrorCode === 'string' && typeof record.message === 'string';
+  if (typeof value !== 'object' || value === null) return false
+  const record: Record<string, unknown> = { ...value }
+  return typeof record.vaultErrorCode === 'string' && typeof record.message === 'string'
 }
 
 /**
@@ -318,9 +318,9 @@ function toTrustRequiredReason(reason: unknown): ExecutableTrustRequiredReason {
   switch (reason) {
     case 'conflicting-choice':
     case 'legacy-dev-sentinel':
-      return reason;
+      return reason
     default:
-      return 'missing-choice';
+      return 'missing-choice'
   }
 }
 
@@ -330,15 +330,15 @@ function toTrustRequiredReason(reason: unknown): ExecutableTrustRequiredReason {
  * that callers can always rely on `instanceof VaultError`.
  */
 export function mapWasmError(thrown: unknown): VaultError {
-  if (thrown instanceof VaultError) return thrown;
+  if (thrown instanceof VaultError) return thrown
 
   if (isWasmErrorShape(thrown)) {
-    const { vaultErrorCode, message } = thrown;
+    const { vaultErrorCode, message } = thrown
     switch (vaultErrorCode) {
       case 'secret-not-found':
-        return new SecretNotFoundError(message);
+        return new SecretNotFoundError(message)
       case 'decryption':
-        return new DecryptionError(message, optionalString(thrown.path));
+        return new DecryptionError(message, optionalString(thrown.path))
       case 'filesystem':
         // A `filesystem`-coded thrown value is still more informative as a
         // `FilesystemError` with undefined `path`/`permission` than a
@@ -352,25 +352,25 @@ export function mapWasmError(thrown: unknown): VaultError {
           optionalString(thrown.path),
           optionalString(thrown.permission),
           optionalString(thrown.code),
-        );
+        )
       case 'invalid-token':
-        return new InvalidTokenError(message);
+        return new InvalidTokenError(message)
       case 'token-expired':
-        return new TokenExpiredError(message, optionalBoolean(thrown.canRefresh) ?? false);
+        return new TokenExpiredError(message, optionalBoolean(thrown.canRefresh) ?? false)
       case 'key-rotated':
-        return new KeyRotatedError(message);
+        return new KeyRotatedError(message)
       case 'key-revoked':
-        return new KeyRevokedError(message);
+        return new KeyRevokedError(message)
       case 'token-revoked':
-        return new TokenRevokedError(message);
+        return new TokenRevokedError(message)
       case 'usage-limit-exceeded':
-        return new UsageLimitExceededError(message);
+        return new UsageLimitExceededError(message)
       case 'rotation-in-progress':
-        return new RotationInProgressError(message);
+        return new RotationInProgressError(message)
       case 'accessor-consumed':
-        return new AccessorConsumedError(message);
+        return new AccessorConsumedError(message)
       case 'executable-trust-required':
-        return new ExecutableTrustRequiredError(message, toTrustRequiredReason(thrown.reason));
+        return new ExecutableTrustRequiredError(message, toTrustRequiredReason(thrown.reason))
       case 'identity-mismatch':
         // Sanitize the hashes: a malformed boundary value (e.g. `null`) must not
         // land as a non-string field and violate IdentityMismatchError's
@@ -380,12 +380,12 @@ export function mapWasmError(thrown: unknown): VaultError {
           message,
           optionalString(thrown.previousHash),
           optionalString(thrown.currentHash),
-        );
+        )
       default:
-        return new VaultError(message);
+        return new VaultError(message)
     }
   }
 
-  if (thrown instanceof Error) return new VaultError(thrown.message);
-  return new VaultError(String(thrown));
+  if (thrown instanceof Error) return new VaultError(thrown.message)
+  return new VaultError(String(thrown))
 }
