@@ -490,7 +490,7 @@ impl WasmVaultKeeper {
     /// When `options.executablePath` is supplied, the executable is hashed and
     /// run through trust verification (Sigstore → trust-manifest match → TOFU
     /// first-encounter) via the host bridge; a first-encounter TOFU record is
-    /// persisted only after the token has minted (issue #148).
+    /// persisted only after the token has been minted (issue #148).
     pub async fn setup(
         &self,
         secret_name: &str,

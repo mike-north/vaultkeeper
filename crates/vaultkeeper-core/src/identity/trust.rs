@@ -49,7 +49,7 @@ impl PendingTrust {
     /// nothing to record.
     ///
     /// Call this only after the overall operation has otherwise succeeded (e.g.
-    /// the token has minted) so a failure never leaves a premature TOFU record
+    /// the token has been minted) so a failure never leaves a premature TOFU record
     /// behind (issue #148).
     pub async fn commit(&self, host: &dyn HostPlatform) -> Result<(), VaultError> {
         if let Some(manifest) = &self.manifest_to_save {
