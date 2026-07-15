@@ -204,6 +204,17 @@ export interface ExecRequest {
   env?: Record<string, string> | undefined
   /** Working directory for the spawned process. */
   cwd?: string | undefined
+  /**
+   * Whether to redact injected secret values from the captured `stdout` and
+   * `stderr` before they are returned. Defaults to `true`: every occurrence of
+   * an injected secret value in the captured output is replaced with
+   * `[REDACTED]`, so the raw secret never appears in {@link ExecResult} even
+   * when the spawned command echoes it. Set to `false` to receive the raw,
+   * unredacted output — only for callers that genuinely need it (for example
+   * output that legitimately contains the secret and must be preserved), since
+   * doing so forfeits the redaction guarantee.
+   */
+  redact?: boolean | undefined
 }
 
 /** Result from delegated command execution. */

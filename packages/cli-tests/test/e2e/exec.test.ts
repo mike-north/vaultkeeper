@@ -26,10 +26,17 @@
  * subprocesses sharing a config dir and asserts the second invocation
  * neither re-prompts nor prints an "expired"/re-authentication notice.
  *
+ * Issue #191 adds coverage for spawn-failure error mapping: exec against a
+ * wrapped command that cannot be started (a nonexistent binary, or a
+ * non-executable file) must surface a typed `ExecError` with remediation
+ * rendered through the CLI's typed-error formatter — not a bare Node
+ * `Error: spawn <path> ENOENT`.
+ *
  * @see https://github.com/mike-north/vaultkeeper/issues/57
  * @see https://github.com/mike-north/vaultkeeper/issues/58
  * @see https://github.com/mike-north/vaultkeeper/issues/59
  * @see https://github.com/mike-north/vaultkeeper/issues/104
+ * @see https://github.com/mike-north/vaultkeeper/issues/191
  */
 import * as fs from 'node:fs/promises'
 import * as os from 'node:os'
@@ -385,5 +392,63 @@ describe('exec trust gate', () => {
 
     expect(result.exitCode).not.toBe(0)
     expect(result.stderr).toContain(`vaultkeeper store --name 'ghost"secret'`)
+  })
+})
+
+// Issue #191: a wrapped command that cannot be spawned must fail with a typed
+// ExecError (rendered `ExecError: …` by the CLI's error formatter) plus
+// remediation — never a bare `Error: spawn <path> ENOENT`. Trust verification
+// passes first; the failure is purely in the spawn error-mapping path.
+describe('exec spawn error mapping (issue #191)', () => {
+  // The wrapped command after `--` — distinct from the trusted --caller.
+  function execWrapping(caller: string, wrapped: string[]): string[] {
+    return [
+      'exec',
+      '--secret',
+      SECRET_NAME,
+      '--env',
+      'INJECTED',
+      '--caller',
+      caller,
+      '--',
+      ...wrapped,
+    ]
+  }
+
+  it('maps a nonexistent wrapped command (ENOENT) to a typed ExecError with remediation', async () => {
+    if (env === undefined) throw new Error('env not initialized')
+    const caller = await writeCaller('#!/bin/sh\necho hi\n')
+    const approved = await env.run(['approve', '--script', caller])
+    expect(approved.exitCode).toBe(0)
+
+    const result = await env.run(execWrapping(caller, ['/no/such/command', 'arg']))
+
+    expect(result.exitCode).not.toBe(0)
+    // Typed class framing, not a bare `Error: spawn … ENOENT`.
+    expect(result.stderr).toContain('ExecError:')
+    expect(result.stderr).not.toMatch(/^Error: spawn/m)
+    expect(result.stderr).toContain('Could not start "/no/such/command"')
+    expect(result.stderr).toContain('no such file or directory')
+    // Trust verification ran and passed before the spawn was attempted.
+    expect(result.stderr).toContain('Trust: verified')
+  })
+
+  it('maps a non-executable wrapped file (EACCES) to a typed ExecError with remediation', async () => {
+    if (env === undefined) throw new Error('env not initialized')
+    const caller = await writeCaller('#!/bin/sh\necho hi\n')
+    const approved = await env.run(['approve', '--script', caller])
+    expect(approved.exitCode).toBe(0)
+
+    // A plain, non-executable file — spawning it fails with EACCES.
+    const notExecutable = path.join(homeDir, 'not-executable.txt')
+    await fs.writeFile(notExecutable, 'just some text, no exec bit\n', { mode: 0o644 })
+
+    const result = await env.run(execWrapping(caller, [notExecutable]))
+
+    expect(result.exitCode).not.toBe(0)
+    expect(result.stderr).toContain('ExecError:')
+    expect(result.stderr).not.toMatch(/^Error: spawn/m)
+    expect(result.stderr).toContain(`Could not start "${notExecutable}"`)
+    expect(result.stderr).toContain('permission denied')
   })
 })

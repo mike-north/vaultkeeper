@@ -437,6 +437,23 @@ Resolve the OS-native credential store type for the current platform.
 </td></tr>
 <tr><td>
 
+[redactSecrets(text, secrets, replacement)](./vaultkeeper.redactsecrets.md)
+
+
+</td><td>
+
+Replace every occurrence of each secret value in `text` with `replacement`<!-- -->.
+
+This is used to scrub captured child-process `stdout`<!-- -->/`stderr` so a secret injected into a delegated command never surfaces in the returned output.
+
+Before redacting, the secret set is normalized so masking is complete and order-independent:
+
+- \*\*Empty/whitespace-only values are dropped.\*\* An empty string matches between every character, and a whitespace-only value matches ubiquitous whitespace, so redacting either would blank the text rather than a secret. - \*\*Duplicates are removed\*\* so each distinct value is processed once. - \*\*Longer values are redacted first.\*\* If one secret is a substring or prefix of another — common for keys that share a prefix — redacting the shorter one first would leave the longer secret's remaining suffix visible (redacting `"abc"` before `"abc123"` yields `"[REDACTED]123"`<!-- -->, leaking `"123"`<!-- -->). Sorting by length descending guarantees each longer value is fully masked before any shorter substring pass runs.
+
+
+</td></tr>
+<tr><td>
+
 [runDoctor(options)](./vaultkeeper.rundoctor.md)
 
 
@@ -727,6 +744,32 @@ Response from a vault access operation.
 Request for signature verification.
 
 This is a static operation that only requires public key material — no VaultKeeper instance or capability token is needed.
+
+
+</td></tr>
+</tbody></table>
+
+## Variables
+
+<table><thead><tr><th>
+
+Variable
+
+
+</th><th>
+
+Description
+
+
+</th></tr></thead>
+<tbody><tr><td>
+
+[REDACTED](./vaultkeeper.redacted.md)
+
+
+</td><td>
+
+The token substituted for a redacted secret value.
 
 
 </td></tr>

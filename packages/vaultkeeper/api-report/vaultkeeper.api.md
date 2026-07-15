@@ -108,6 +108,7 @@ export interface ExecRequest {
     command: string;
     cwd?: string | undefined;
     env?: Record<string, string> | undefined;
+    redact?: boolean | undefined;
 }
 
 // @public
@@ -251,6 +252,12 @@ export interface PreflightResult {
     ready: boolean;
     warnings: string[];
 }
+
+// @public
+export const REDACTED = "[REDACTED]";
+
+// @public
+export function redactSecrets(text: string, secrets: readonly string[], replacement?: string): string;
 
 // @public
 export class RotationInProgressError extends VaultError {

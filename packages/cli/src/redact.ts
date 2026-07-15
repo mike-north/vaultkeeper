@@ -1,12 +1,16 @@
 import { Transform } from 'node:stream'
 import type { TransformCallback } from 'node:stream'
+import { redactSecrets } from 'vaultkeeper'
 
 /**
  * A Transform stream that replaces all occurrences of a secret value
  * with a replacement string in the piped output.
  *
  * Handles secrets that may be split across chunk boundaries by buffering
- * up to `secret.length - 1` bytes from the end of each chunk.
+ * up to `secret.length - 1` bytes from the end of each chunk. The actual
+ * substitution is delegated to `vaultkeeper`'s {@link redactSecrets} so the
+ * CLI's streaming redaction and the library's buffered `exec()` redaction
+ * share one code path.
  *
  * @internal
  */
@@ -34,7 +38,7 @@ export class RedactingStream extends Transform {
     }
 
     const str = this.#tail + chunk.toString('utf8')
-    const redacted = str.replaceAll(this.#secret, this.#replacement)
+    const redacted = redactSecrets(str, [this.#secret], this.#replacement)
 
     // Buffer the last (secret.length - 1) chars in case the secret
     // is split across this chunk and the next one.
