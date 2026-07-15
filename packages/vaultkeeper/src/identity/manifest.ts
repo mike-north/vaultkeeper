@@ -64,6 +64,7 @@ export async function loadManifest(configDir: string): Promise<TrustManifest> {
       `Cannot read trust manifest at ${manifestPath}: ${detail}`,
       manifestPath,
       'read',
+      err,
     )
   }
 
@@ -76,6 +77,7 @@ export async function loadManifest(configDir: string): Promise<TrustManifest> {
       `Trust manifest at ${manifestPath} is not valid JSON: ${detail}`,
       manifestPath,
       'read',
+      err,
     )
   }
 
@@ -114,6 +116,7 @@ export async function saveManifest(configDir: string, manifest: TrustManifest): 
       `Cannot write trust manifest at ${manifestPath}: ${detail}`,
       manifestPath,
       'write',
+      err,
     )
   }
 }
