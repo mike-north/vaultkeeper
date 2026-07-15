@@ -54,7 +54,7 @@ string
 
 </td><td>
 
-Absolute path of the config file that failed to parse or validate.
+Path to the config file that failed to parse or validate, as derived from the doctor call's `configDir`<!-- -->. Not guaranteed to be absolute — it is `configDir` joined with `config.json` exactly as given, so it is relative when `configDir` is relative.
 
 
 </td></tr>

@@ -42,7 +42,12 @@ export type PreflightCheckErrorKind = 'config-parse' | 'config-validation'
 export interface PreflightCheckError {
   /** The kind of failure, as a stable machine-readable discriminant. */
   kind: PreflightCheckErrorKind
-  /** Absolute path of the config file that failed to parse or validate. */
+  /**
+   * Path to the config file that failed to parse or validate, as derived from
+   * the doctor call's `configDir`. Not guaranteed to be absolute — it is
+   * `configDir` joined with `config.json` exactly as given, so it is relative
+   * when `configDir` is relative.
+   */
   configPath: string
   /**
    * Human-readable parse location within the config file (for example
