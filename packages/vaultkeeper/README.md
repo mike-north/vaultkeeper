@@ -52,8 +52,57 @@ const { response } = await vault.fetch(token, {
 })
 ```
 
-Other access patterns — delegated `exec()` (secret injected via env var) and controlled direct
-access via `getSecret()` (auto-zeroing buffer) — are documented in the repo README linked below.
+Other access patterns: delegated `exec()` (secret injected via env var) uses the same `{{secret}}`
+placeholder substitution as `fetch()` above. Controlled direct access via `getSecret()` is
+different — it returns a `SecretAccessor` whose secret is only reachable through a single-use
+`read(callback)` call backed by an auto-zeroing buffer; no placeholder substitution is involved.
+See the `SecretAccessor` and `ExecRequest` types in the package's shipped `.d.ts` for their full
+signatures.
+
+## Example config
+
+`VaultKeeper.init()` works with no config file (it resolves to the safe `file` backend). To pin
+the configuration explicitly — e.g. to set a non-default TTL or trust tier — write a config file
+matching this shape. This example is safe-by-default: it uses the portable `file` backend, not
+your OS credential store.
+
+```json
+{
+  "version": 1,
+  "backends": [{ "type": "file", "enabled": true }],
+  "keyRotation": { "gracePeriodDays": 7 },
+  "defaults": { "ttlMinutes": 60, "trustTier": 3 }
+}
+```
+
+- `backends` — ordered list of backend configs; whichever entry is **first** with `"enabled": true`
+  becomes the single active backend — there's no automatic fallback to a later entry. To switch to
+  an OS-native store, put an entry with `"type": "keychain"` (macOS), `"dpapi"` (Windows), or
+  `"secret-tool"` (Linux) ahead of (or in place of) the `file` entry.
+- `keyRotation.gracePeriodDays` — how many days the previous encryption key stays valid for
+  decrypting existing tokens after `rotateKey()` runs; see [Key rotation](#key-rotation) below.
+- `defaults.ttlMinutes` / `defaults.trustTier` — applied to `setup()` when its options don't
+  override them; see [Trust tiers](#trust-tiers) below.
+
+The full field reference is documented on the `VaultConfig` interface in the package's shipped
+`.d.ts` (`vaultkeeper/dist/*.d.ts`).
+
+## Key rotation
+
+`rotateKey()` replaces the active encryption key but keeps the previous one valid for decryption
+for `keyRotation.gracePeriodDays` days, so tokens minted before a rotation don't break immediately.
+Once the grace period elapses, the retired key is dropped and JWEs encrypted under it can no
+longer be decrypted.
+
+## Trust tiers
+
+Executable identity is verified during `setup()` against a local trust-on-first-use (TOFU)
+manifest: a caller executable's hash is either already approved (trusted), unrecognized (first
+encounter, recorded automatically), or changed since it was approved (a conflict, which rejects
+the call until re-approved via `approveExecutable()`). Separately, `trustTier` (`1`, `2`, or `3`)
+is a policy **label** attached to the resulting token — it does not itself reflect the outcome of
+that verification. It defaults to `defaults.trustTier` from the config and can be overridden per
+call via `setup()`'s `trustTier` option.
 
 ## Backends
 
@@ -74,8 +123,9 @@ in-memory backend with zero OS dependencies in your own test suite.
 
 ## Full documentation
 
-Access patterns, key rotation, trust tiers, development mode, configuration reference, and the
-full error hierarchy are documented in the
+The package's shipped `.d.ts` files carry the complete API reference (every type, method, and
+option, with JSDoc). For narrative coverage of development mode and the full error hierarchy
+beyond what's inlined above, see the
 [repository README](https://github.com/mike-north/vaultkeeper#readme).
 
 ## License
