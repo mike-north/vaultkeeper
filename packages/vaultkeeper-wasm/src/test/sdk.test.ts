@@ -505,3 +505,34 @@ describe('@vaultkeeper/wasm security parity (issue #66)', () => {
     });
   });
 });
+
+// Issue #104: pin the documented setup(secretName, secretValue) contract —
+// it mints the token from the `secretValue` argument and never reads
+// whatever is already persisted under `secretName` via store()/retrieve().
+// This is a deliberate divergence from the TS `vaultkeeper` library's
+// setup(secretName, options?), which always reads from the backend. If this
+// test starts failing, either the divergence was silently closed (update the
+// README/JSDoc accordingly) or setup() regressed to reading stored state.
+describe('@vaultkeeper/wasm setup() contract (issue #104)', () => {
+  it('setup() mints from its secretValue argument, ignoring any stored value under the same name', async () => {
+    await withTempDir(async (dir) => {
+      const vault = await createTestVault(dir);
+      await vault.store('contract-key', 'stored-value');
+
+      const token = vault.setup('contract-key', 'argument-value');
+      const result = vault.authorize(token);
+
+      assert.equal(
+        result.secret.read((value) => value),
+        'argument-value',
+        'setup() must encapsulate the secretValue argument, not the stored value',
+      );
+
+      // The stored value is untouched and independently retrievable — store()
+      // and setup() are independent operations.
+      const stored = await vault.retrieve('contract-key');
+      assert.equal(stored, 'stored-value');
+      vault.dispose();
+    });
+  });
+});
