@@ -276,6 +276,55 @@ describe('FileBackend', () => {
       await expect(backend.delete('protected')).rejects.toBeInstanceOf(FilesystemError)
       await expect(backend.delete('protected')).rejects.toThrow('EPERM')
     })
+
+    // Regression: PR #126 review — the delete path wrapped unlink failures
+    // with the 'write' operation label, so the message read "Failed to
+    // write secret file..." for what was actually a delete. Must say delete.
+    it('should describe a non-ENOENT unlink failure as a delete, not a write', async () => {
+      const permError = Object.assign(new Error('EPERM'), { code: 'EPERM' })
+      mockFs.unlink.mockRejectedValue(permError)
+
+      let caught: unknown
+      try {
+        await backend.delete('protected')
+      } catch (err) {
+        caught = err
+      }
+
+      expect(caught).toBeInstanceOf(FilesystemError)
+      if (caught instanceof FilesystemError) {
+        expect(caught.permission).toBe('delete')
+        expect(caught.message).toContain('Failed to delete secret file')
+        expect(caught.message).not.toContain('Failed to write secret file')
+      }
+    })
+
+    // Same operation-label bug on the legacy-location delete path.
+    it('should describe a non-ENOENT unlink failure on the legacy path as a delete', async () => {
+      const legacyBackendForDelete = new FileBackend()
+      const noFileError = Object.assign(new Error('ENOENT'), { code: 'ENOENT' })
+      const permError = Object.assign(new Error('EPERM'), { code: 'EPERM' })
+      mockFs.unlink.mockImplementation((target) => {
+        const filePath = typeof target === 'string' ? target : ''
+        if (filePath.startsWith(defaultStorageDir)) {
+          return Promise.reject(noFileError)
+        }
+        return Promise.reject(permError)
+      })
+
+      let caught: unknown
+      try {
+        await legacyBackendForDelete.delete('protected')
+      } catch (err) {
+        caught = err
+      }
+
+      expect(caught).toBeInstanceOf(FilesystemError)
+      if (caught instanceof FilesystemError) {
+        expect(caught.permission).toBe('delete')
+        expect(caught.message).toContain('Failed to delete secret file')
+      }
+    })
   })
 
   describe('exists', () => {

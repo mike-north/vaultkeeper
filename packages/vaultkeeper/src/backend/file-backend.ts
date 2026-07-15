@@ -90,9 +90,9 @@ async function getOrCreateKey(storageDir: string): Promise<Buffer> {
 /**
  * Re-throw a caught filesystem error as a typed {@link FilesystemError},
  * preserving the underlying message. `permission` should describe the
- * access level that was being attempted (e.g. `'read'`, `'write'`) —
- * appropriate for `EACCES`/`EPERM` failures encountered while reading or
- * writing a secret entry on disk.
+ * operation that was being attempted (e.g. `'read'`, `'write'`, `'delete'`) —
+ * appropriate for `EACCES`/`EPERM` failures encountered while reading,
+ * writing, or deleting a secret entry on disk.
  */
 function toFilesystemError(err: unknown, filePath: string, permission: string): FilesystemError {
   const detail = err instanceof Error ? err.message : String(err)
@@ -213,7 +213,7 @@ export class FileBackend implements ListableBackend {
       return
     } catch (err) {
       if (!(err instanceof Error && 'code' in err && err.code === 'ENOENT')) {
-        throw toFilesystemError(err, entryPath, 'write')
+        throw toFilesystemError(err, entryPath, 'delete')
       }
     }
 
@@ -224,7 +224,7 @@ export class FileBackend implements ListableBackend {
         return
       } catch (err) {
         if (!(err instanceof Error && 'code' in err && err.code === 'ENOENT')) {
-          throw toFilesystemError(err, legacyEntryPath, 'write')
+          throw toFilesystemError(err, legacyEntryPath, 'delete')
         }
       }
     }
