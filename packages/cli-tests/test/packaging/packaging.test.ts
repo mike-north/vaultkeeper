@@ -50,6 +50,7 @@ interface PackageJson {
   types?: string
   bin?: string | Record<string, string>
   exports?: ExportsValue
+  peerDependencies?: Record<string, string>
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -123,6 +124,9 @@ function isPackageJson(value: unknown): value is PackageJson {
     return false
   }
   if (value.exports !== undefined && !isExportsValue(value.exports)) {
+    return false
+  }
+  if (value.peerDependencies !== undefined && !isStringRecord(value.peerDependencies)) {
     return false
   }
   return true
@@ -267,5 +271,28 @@ describe('bin ownership', () => {
   it('declares no bin field on the vaultkeeper library package', async () => {
     const pkg = await readPackageJson('vaultkeeper')
     expect(pkg.bin).toBeUndefined()
+  })
+})
+
+/**
+ * Regression guard for https://github.com/mike-north/vaultkeeper/issues/156:
+ * `test-helpers`' `vaultkeeper` peerDependency previously used `workspace:^`,
+ * which publishes as a caret range (e.g. `^0.6.0`) that a routine 0.x
+ * `vaultkeeper` minor bump exits — and changesets forces a major bump on any
+ * peer-dependent whenever the dependency's release is non-patch, regardless
+ * of whether the published range actually still allows the new version. An
+ * explicit range with an upper bound below `1.0.0` keeps routine 0.x minors
+ * in range (so the cascade only fires deliberately, once `vaultkeeper`
+ * reaches 1.0.0). This assertion fails against the pre-fix `workspace:^`
+ * declaration.
+ */
+describe('peer dependency stability', () => {
+  it('test-helpers declares an explicit vaultkeeper peer range with an upper bound below 1.0.0', async () => {
+    const pkg = await readPackageJson('test-helpers')
+    const range = pkg.peerDependencies?.vaultkeeper
+
+    expect(range).toBeDefined()
+    expect(range).not.toMatch(/^workspace:/)
+    expect(range).toMatch(/<\s*1(\.0\.0)?(\s|$)/)
   })
 })

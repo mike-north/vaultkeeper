@@ -47,7 +47,7 @@
     "access": "public"
   },
   "peerDependencies": {
-    "vaultkeeper": "workspace:^"
+    "vaultkeeper": ">=0.6.0 <1"
   },
   "devDependencies": {
     "vaultkeeper": "workspace:*",
