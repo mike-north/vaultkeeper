@@ -5,7 +5,7 @@
 
 use vaultkeeper_core::backend::{BackendRegistry, ExecOutput, HostPlatform, Platform};
 use vaultkeeper_core::config::{default_config, load_config_from_str, validate_config};
-use vaultkeeper_core::errors::VaultError;
+use vaultkeeper_core::errors::{ExecutableTrustRequiredReason, VaultError};
 use vaultkeeper_core::keys::KeyManager;
 use vaultkeeper_core::types::{
     BackendConfig, DevelopmentMode, KeyRotationPolicy, KeyStatus, SecretAccessor, TrustTier,
@@ -734,7 +734,7 @@ mod vault_keeper {
         let err = vault.setup("s", "v", None).unwrap_err();
         match err {
             VaultError::ExecutableTrustRequired { reason, .. } => {
-                assert_eq!(reason, "missing-choice");
+                assert_eq!(reason, ExecutableTrustRequiredReason::MissingChoice);
             }
             other => panic!("expected ExecutableTrustRequired, got {other:?}"),
         }
@@ -749,7 +749,7 @@ mod vault_keeper {
         let err = vault.setup("s", "v", Some(&opts)).unwrap_err();
         match err {
             VaultError::ExecutableTrustRequired { reason, .. } => {
-                assert_eq!(reason, "missing-choice");
+                assert_eq!(reason, ExecutableTrustRequiredReason::MissingChoice);
             }
             other => panic!("expected ExecutableTrustRequired, got {other:?}"),
         }
@@ -768,7 +768,7 @@ mod vault_keeper {
         let err = vault.setup("s", "v", Some(&opts)).unwrap_err();
         match err {
             VaultError::ExecutableTrustRequired { reason, .. } => {
-                assert_eq!(reason, "conflicting-choice");
+                assert_eq!(reason, ExecutableTrustRequiredReason::ConflictingChoice);
             }
             other => panic!("expected ExecutableTrustRequired, got {other:?}"),
         }
@@ -786,7 +786,7 @@ mod vault_keeper {
         let err = vault.setup("s", "v", Some(&opts)).unwrap_err();
         match err {
             VaultError::ExecutableTrustRequired { reason, .. } => {
-                assert_eq!(reason, "legacy-dev-sentinel");
+                assert_eq!(reason, ExecutableTrustRequiredReason::LegacyDevSentinel);
             }
             other => panic!("expected ExecutableTrustRequired, got {other:?}"),
         }
@@ -833,7 +833,11 @@ mod vault_keeper {
             let err = vault.setup("s", "v", Some(&opts)).unwrap_err();
             match err {
                 VaultError::ExecutableTrustRequired { reason, .. } => {
-                    assert_eq!(reason, "missing-choice", "input {bad:?}");
+                    assert_eq!(
+                        reason,
+                        ExecutableTrustRequiredReason::MissingChoice,
+                        "input {bad:?}"
+                    );
                 }
                 other => panic!("expected ExecutableTrustRequired for {bad:?}, got {other:?}"),
             }

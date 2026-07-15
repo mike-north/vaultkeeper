@@ -676,4 +676,23 @@ describe('@vaultkeeper/wasm setup() explicit-trust contract (issue #147)', () =>
       vault.dispose();
     });
   });
+
+  it("the thrown error's message uses the JS option names, not the Rust core's field names", async () => {
+    await withTempDir(async (dir) => {
+      const vault = await createTestVault(dir);
+      assert.throws(
+        () => vault.setup('js-names', 'value', {}),
+        (err: unknown) => {
+          assert.ok(err instanceof ExecutableTrustRequiredError);
+          // The WASM boundary rewrites the Rust-native message into the SDK's
+          // own option names — consumers must never see Rust snake_case fields.
+          assert.match(err.message, /options\.executablePath/);
+          assert.match(err.message, /options\.skipTrust/);
+          assert.doesNotMatch(err.message, /executable_path|skip_trust|SetupOptions/);
+          return true;
+        },
+      );
+      vault.dispose();
+    });
+  });
 });

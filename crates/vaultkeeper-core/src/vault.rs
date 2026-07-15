@@ -4,7 +4,7 @@ use std::collections::HashMap;
 
 use crate::backend::{HostPlatform, SecretBackend};
 use crate::config;
-use crate::errors::VaultError;
+use crate::errors::{ExecutableTrustRequiredReason, VaultError};
 use crate::jwe::{
     CreateTokenOptions, block_token, create_token, decrypt_token, extract_kid, validate_claims,
 };
@@ -202,12 +202,13 @@ impl VaultKeeper {
 
         if skip_trust && executable_path.is_some() {
             return Err(VaultError::ExecutableTrustRequired {
-                message: "VaultKeeper.setup() received both options.executablePath and \
-                          options.skipTrust: true, which are mutually exclusive. Pass \
-                          options.executablePath to bind the calling executable's identity, or \
-                          options.skipTrust: true to skip the binding (development only) — not both."
+                message: "VaultKeeper::setup() received both SetupOptions.executable_path and \
+                          SetupOptions.skip_trust: Some(true), which are mutually exclusive. Set \
+                          SetupOptions.executable_path to bind the calling executable's identity, \
+                          or SetupOptions.skip_trust: Some(true) to skip the binding (development \
+                          only) — not both."
                     .to_string(),
-                reason: "conflicting-choice".to_string(),
+                reason: ExecutableTrustRequiredReason::ConflictingChoice,
             });
         }
 
@@ -219,24 +220,24 @@ impl VaultKeeper {
 
         match executable_path {
             None => Err(VaultError::ExecutableTrustRequired {
-                message: "VaultKeeper.setup() requires an explicit executable-trust choice and \
-                          no longer defaults to skipping it. Either pass \
-                          options.executablePath set to the calling executable's real path \
-                          (binds that identity into the token), or set options.skipTrust: \
-                          true to deliberately skip the binding (development only)."
+                message: "VaultKeeper::setup() requires an explicit executable-trust choice and \
+                          no longer defaults to skipping it. Either set \
+                          SetupOptions.executable_path to the calling executable's real path \
+                          (binds that identity into the token), or set SetupOptions.skip_trust: \
+                          Some(true) to deliberately skip the binding (development only)."
                     .to_string(),
-                reason: "missing-choice".to_string(),
+                reason: ExecutableTrustRequiredReason::MissingChoice,
             }),
             // Reject the retired legacy opt-out sentinel. Before explicit-trust,
-            // options.executablePath: "dev" was the documented way to skip the
-            // identity binding; point migrating callers at the dedicated opt-out.
+            // executable_path: "dev" was the documented way to skip the identity
+            // binding; point migrating callers at the dedicated opt-out.
             Some("dev") => Err(VaultError::ExecutableTrustRequired {
-                message: "VaultKeeper.setup() no longer supports the legacy options.executablePath: 'dev' \
-                          sentinel for skipping the identity binding. Set options.skipTrust: true to \
-                          deliberately skip the binding (development only), or pass \
-                          options.executablePath set to the calling executable's real path to bind it."
+                message: "VaultKeeper::setup() no longer supports the legacy SetupOptions.executable_path: \
+                          \"dev\" sentinel for skipping the identity binding. Set SetupOptions.skip_trust: \
+                          Some(true) to deliberately skip the binding (development only), or set \
+                          SetupOptions.executable_path to the calling executable's real path to bind it."
                     .to_string(),
-                reason: "legacy-dev-sentinel".to_string(),
+                reason: ExecutableTrustRequiredReason::LegacyDevSentinel,
             }),
             // An empty or whitespace-only executable path is not a real trust
             // choice: it would mint a token whose `exe` claim fails the
@@ -244,13 +245,13 @@ impl VaultKeeper {
             // later reject it as an unusable token. Reject it up front as a
             // missing choice rather than minting the bad token.
             Some(path) if path.trim().is_empty() => Err(VaultError::ExecutableTrustRequired {
-                message: "VaultKeeper.setup() received an empty options.executablePath, which is \
-                          not a valid executable-trust choice. Pass options.executablePath set to \
+                message: "VaultKeeper::setup() received an empty SetupOptions.executable_path, which \
+                          is not a valid executable-trust choice. Set SetupOptions.executable_path to \
                           the calling executable's real path (binds that identity into the token), \
-                          or set options.skipTrust: true to deliberately skip the binding \
+                          or set SetupOptions.skip_trust: Some(true) to deliberately skip the binding \
                           (development only)."
                     .to_string(),
-                reason: "missing-choice".to_string(),
+                reason: ExecutableTrustRequiredReason::MissingChoice,
             }),
             Some(path) => Ok(path.to_string()),
         }
