@@ -35,11 +35,17 @@ export const REDACTED = '[REDACTED]'
  *   `"123"`). Sorting by length descending guarantees each longer value is
  *   fully masked before any shorter substring pass runs.
  *
+ * Both arguments are treated fully literally: the secret is matched as a
+ * plain substring (never as a regular expression), and `replacement` is
+ * inserted verbatim — `String.prototype.replaceAll`'s `$`-substitution
+ * patterns are disabled, since a replacement containing `$&` would otherwise
+ * re-expand to the matched secret and silently defeat the redaction.
+ *
  * @param text - The text to scrub.
  * @param secrets - The secret values to redact. Every non-empty, non-whitespace
  *   value has all of its occurrences replaced.
- * @param replacement - The token to substitute for each occurrence. Defaults to
- *   {@link REDACTED}.
+ * @param replacement - The token to substitute for each occurrence, inserted
+ *   literally. Defaults to {@link REDACTED}.
  * @returns `text` with every occurrence of each redactable secret replaced.
  *
  * @public
@@ -53,9 +59,12 @@ export function redactSecrets(
     .filter((secret) => secret.trim().length > 0)
     .sort((a, b) => b.length - a.length)
 
+  // '$' doubles to '$$' so replaceAll inserts the replacement verbatim
+  // instead of interpreting $&/$`/$' substitution patterns.
+  const literalReplacement = replacement.replaceAll('$', '$$$$')
   let result = text
   for (const secret of ordered) {
-    result = result.replaceAll(secret, replacement)
+    result = result.replaceAll(secret, literalReplacement)
   }
   return result
 }

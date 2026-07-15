@@ -450,6 +450,8 @@ Before redacting, the secret set is normalized so masking is complete and order-
 
 - \*\*Empty/whitespace-only values are dropped.\*\* An empty string matches between every character, and a whitespace-only value matches ubiquitous whitespace, so redacting either would blank the text rather than a secret. - \*\*Duplicates are removed\*\* so each distinct value is processed once. - \*\*Longer values are redacted first.\*\* If one secret is a substring or prefix of another — common for keys that share a prefix — redacting the shorter one first would leave the longer secret's remaining suffix visible (redacting `"abc"` before `"abc123"` yields `"[REDACTED]123"`<!-- -->, leaking `"123"`<!-- -->). Sorting by length descending guarantees each longer value is fully masked before any shorter substring pass runs.
 
+Both arguments are treated fully literally: the secret is matched as a plain substring (never as a regular expression), and `replacement` is inserted verbatim — `String.prototype.replaceAll`<!-- -->'s `$`<!-- -->-substitution patterns are disabled, since a replacement containing `$&` would otherwise re-expand to the matched secret and silently defeat the redaction.
+
 
 </td></tr>
 <tr><td>

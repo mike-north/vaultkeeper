@@ -72,4 +72,24 @@ describe('redactSecrets', () => {
   it('exposes REDACTED as the default token', () => {
     expect(REDACTED).toBe('[REDACTED]')
   })
+
+  // Regression guards for the literal-matching contract (PR #195 review).
+  // replaceAll with a string pattern is spec-literal today, but redactSecrets
+  // is a public shared API — a future refactor to RegExp-based replacement
+  // would silently reintroduce metacharacter interpretation.
+  it('matches secrets containing regex metacharacters literally', () => {
+    const secret = 'a.b*c$1(x)[y]+?'
+    expect(redactSecrets(`token=${secret};`, [secret])).toBe(`token=${REDACTED};`)
+    // A near-miss that a regex interpretation of '.' or '*' would match:
+    expect(redactSecrets('token=aXbbbc11xxyy;', [secret])).toBe('token=aXbbbc11xxyy;')
+  })
+
+  // '$&' in a replacement string re-expands to the matched substring — i.e.
+  // the secret itself. The replacement must be inserted verbatim so a custom
+  // token can never accidentally preserve what it was meant to erase.
+  it('inserts the replacement literally — $-substitution patterns cannot re-expand the secret', () => {
+    expect(redactSecrets('key=hunter2', ['hunter2'], '<$&>')).toBe('key=<$&>')
+    expect(redactSecrets('key=hunter2', ['hunter2'], '$$ paid')).toBe('key=$$ paid')
+    expect(redactSecrets('key=hunter2', ['hunter2'], "$'")).toBe("key=$'")
+  })
 })
