@@ -1174,4 +1174,28 @@ describe('@vaultkeeper/wasm non-string input guards (issue #192)', () => {
       vault.dispose()
     })
   })
+
+  // The guard message names the offending value's type; the article must read
+  // cleanly ("an object" / "undefined", not "a object" / "a undefined").
+  it('guard error messages pick the right article for each value type', async () => {
+    await withTempDir(async (dir) => {
+      const vault = await createTestVault(dir)
+      await assert.rejects(
+        // @ts-expect-error deliberately passing an object to check the guard message (issue #192)
+        () => vault.retrieve({}),
+        (err: unknown) => err instanceof TypeError && err.message.includes('received an object'),
+      )
+      await assert.rejects(
+        // @ts-expect-error deliberately passing undefined to check the guard message (issue #192)
+        () => vault.retrieve(undefined),
+        (err: unknown) => err instanceof TypeError && err.message.endsWith('received undefined'),
+      )
+      await assert.rejects(
+        // @ts-expect-error deliberately passing a number to check the guard message (issue #192)
+        () => vault.retrieve(42),
+        (err: unknown) => err instanceof TypeError && err.message.includes('received a number'),
+      )
+      vault.dispose()
+    })
+  })
 })

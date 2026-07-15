@@ -111,13 +111,18 @@ async function callAsync<T>(fn: () => Promise<T>): Promise<T> {
  * Describe a runtime value's type for a type-guard error message. Distinguishes
  * the cases that actually reach these guards from untyped JS callers — `null`,
  * arrays, and Promises (an un-awaited `setup()` call is a common mistake) — from
- * a bare `typeof`, which would report all three unhelpfully as `'object'`.
+ * a bare `typeof`, which would report all three unhelpfully as `'object'`. The
+ * article is chosen to read cleanly: `undefined` takes none ("received
+ * undefined"), `object` takes "an", every other `typeof` takes "a".
  */
 function describeType(value: unknown): string {
   if (value === null) return 'null'
   if (Array.isArray(value)) return 'an array'
   if (value instanceof Promise) return 'a Promise (did you forget to await?)'
-  return `a ${typeof value}`
+  const type = typeof value
+  if (type === 'undefined') return 'undefined'
+  if (type === 'object') return 'an object'
+  return `a ${type}`
 }
 
 /**
