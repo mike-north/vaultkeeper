@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { SecretNotFoundError } from 'vaultkeeper'
 
 const configDir = '/tmp/vaultkeeper-test-config-dir'
 
@@ -88,16 +89,12 @@ describe('deleteCommand', () => {
     })
   })
 
-  // deleteCommand pre-checks existence via vault.secretExists() before calling
-  // vault.delete() (issue #118), so the mocked vault must implement both.
   function existingSecretVault(): {
     delete: typeof mockDeleteFn
-    secretExists: ReturnType<typeof vi.fn>
     activeBackendType: string
   } {
     return {
       delete: mockDeleteFn,
-      secretExists: vi.fn().mockResolvedValue(true),
       activeBackendType: 'file',
     }
   }
@@ -118,25 +115,43 @@ describe('deleteCommand', () => {
     })
   })
 
-  // Regression: issue #118 — delete previously relied on the file backend's
-  // own SecretNotFoundError ("Secret not found in file store: x"), worded
-  // differently from exec's ("Secret "x" not found in file backend") and with
-  // no recovery hint. delete now pre-checks existence and reports the same
-  // wording + hint exec.ts does.
-  describe('when the secret does not exist (issue #118)', () => {
+  // Regression: issue #118 — delete previously relied on each backend's own
+  // SecretNotFoundError wording ("Secret not found in file store: x"),
+  // different from exec's ("Secret "x" not found in file backend") and with
+  // no recovery hint. delete now catches whatever SecretNotFoundError the
+  // backend's delete() throws and rethrows it with the same wording + hint
+  // exec.ts uses.
+  describe('when vault.delete() throws SecretNotFoundError (issue #118)', () => {
     it('should return 1 and report a consistent SecretNotFoundError with a recovery hint', async () => {
-      mockInit.mockResolvedValue({
-        delete: mockDeleteFn,
-        secretExists: vi.fn().mockResolvedValue(false),
-        activeBackendType: 'file',
-      })
+      mockDeleteFn.mockRejectedValue(new SecretNotFoundError('Secret not found in file store: x'))
+      mockInit.mockResolvedValue(existingSecretVault())
       const { deleteCommand } = await import('../../../src/commands/delete.js')
       const code = await deleteCommand(['--name', 'missing-secret'], configDir)
       expect(code).toBe(1)
       expect(stderrOutput).toContain('SecretNotFoundError')
       expect(stderrOutput).toContain('Secret "missing-secret" not found in the "file" backend')
       expect(stderrOutput).toContain('Run `vaultkeeper store --name missing-secret` to create it')
-      expect(mockDeleteFn).not.toHaveBeenCalled()
+    })
+
+    // Review follow-up on issue #118: an upfront secretExists() pre-check
+    // cannot guarantee consistent wording under a TOCTOU race — the secret
+    // could be deleted by a concurrent process between the check and the
+    // actual delete call, in which case the backend's own not-found message
+    // would leak through. Catching SecretNotFoundError from vault.delete()
+    // itself (rather than pre-checking) is immune to this: whenever the
+    // backend reports "not found" — for any reason, at any moment — the
+    // rendered message is always the normalized one.
+    it('should normalize the wording even when the secret existed moments ago and disappeared before delete() ran', async () => {
+      mockDeleteFn.mockRejectedValue(
+        new SecretNotFoundError('Secret not found in macOS Keychain: race-secret'),
+      )
+      mockInit.mockResolvedValue({ delete: mockDeleteFn, activeBackendType: 'keychain' })
+      const { deleteCommand } = await import('../../../src/commands/delete.js')
+      const code = await deleteCommand(['--name', 'race-secret'], configDir)
+      expect(code).toBe(1)
+      expect(stderrOutput).toContain('Secret "race-secret" not found in the "keychain" backend')
+      expect(stderrOutput).toContain('Run `vaultkeeper store --name race-secret` to create it')
+      expect(stderrOutput).not.toContain('macOS Keychain')
     })
   })
 

@@ -27,18 +27,16 @@ describe('store and delete lifecycle', () => {
   // while an empty/missing --name exits 2 (usage error) for the same
   // underlying problem (no usable secret input). Both must now agree.
   //
-  // Note: doctor runs before the stdin check, so on a system missing a
-  // dependency the doctor failure (still a usage-unrelated runtime error, 1)
-  // surfaces first — both are valid CLI error paths for this environment.
+  // storeCommand reads and validates stdin BEFORE calling VaultKeeper.init()
+  // (see packages/cli/src/commands/store.ts), so doctor never runs before
+  // this check — --skip-doctor here only removes an unrelated source of
+  // flakiness on systems missing an optional dependency, it does not change
+  // which path is under test. The outcome is deterministic either way.
   it('store should exit 2 when stdin is empty (issue #118)', async () => {
     env = await createCliTestEnv()
-    const result = await env.runWithStdin(['store', '--name', 'test-secret'], '')
-    if (result.stderr.includes('doctor')) {
-      expect(result.exitCode).toBe(1)
-    } else {
-      expect(result.exitCode).toBe(2)
-      expect(result.stderr).toContain('No secret provided on stdin')
-    }
+    const result = await env.runWithStdin(['store', '--name', 'test-secret', '--skip-doctor'], '')
+    expect(result.exitCode).toBe(2)
+    expect(result.stderr).toContain('No secret provided on stdin')
   })
 
   // Regression: issue #118 — delete previously surfaced the file backend's

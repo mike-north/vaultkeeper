@@ -84,16 +84,21 @@ export async function deleteCommand(args: string[], configDir: string): Promise<
     // loaded config and forwards that backend's config (including `path`).
     const vault = await VaultKeeper.init({ configDir, skipDoctor })
 
-    // Check existence up front (mirrors exec.ts's pre-check) rather than
-    // relying on the backend's own not-found exception. Each backend words
-    // its "not found" message differently (issue #118), so building the
-    // error here — from the same helper exec.ts uses — guarantees identical
-    // wording and a recovery hint regardless of which backend is active.
-    if (!(await vault.secretExists(values.name))) {
-      throw new SecretNotFoundError(secretNotFoundMessage(values.name, vault.activeBackendType))
+    try {
+      await vault.delete(values.name)
+    } catch (deleteErr) {
+      // Every backend's delete() throws SecretNotFoundError for a missing
+      // secret, but each words it differently (e.g. the file backend's
+      // "Secret not found in file store: x" vs exec's own wording). Catching
+      // here — rather than a separate secretExists() pre-check — is the
+      // single source of truth for this normalization: it also covers the
+      // secret being deleted between any check and this call (issue #118
+      // review), which a pre-check alone cannot.
+      if (deleteErr instanceof SecretNotFoundError) {
+        throw new SecretNotFoundError(secretNotFoundMessage(values.name, vault.activeBackendType))
+      }
+      throw deleteErr
     }
-
-    await vault.delete(values.name)
     process.stdout.write(`Secret "${values.name}" deleted.\n`)
     return 0
   } catch (err) {
