@@ -23,7 +23,7 @@ const ALLOWED_ALGORITHMS = new Set(['sha256', 'sha384', 'sha512'])
  * material first would otherwise short-circuit to a key-parse failure and
  * silently skip this guard.
  *
- * A `undefined` override is a no-op: the default algorithm is chosen later,
+ * An `undefined` override is a no-op: the default algorithm is chosen later,
  * once the key type is known.
  *
  * @param override - Caller-provided algorithm override, if any.
