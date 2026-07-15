@@ -43,7 +43,9 @@ echo "my-secret-value" | vaultkeeper store --name MY_API_KEY
 # Pre-approve an executable (TOFU) so it isn't prompted on first use
 vaultkeeper approve --script /usr/local/bin/my-tool
 
-# Run a command with the secret injected as an env var
+# Run a command with the secret injected as an env var. By default the secret
+# value is redacted from the command's stdout/stderr as `[REDACTED]` — pass
+# --no-redact if you need to see the real output while debugging.
 vaultkeeper exec --secret MY_API_KEY --env MY_API_TOKEN --caller /usr/local/bin/my-tool -- my-tool --flag
 
 # Toggle development mode for a script under active development
@@ -89,6 +91,14 @@ re-approval). `vaultkeeper approve --script <path>` pre-registers a caller's has
 trusted on its first `exec` run. This TOFU trust check is separate from the `trustTier` label
 (`1`, `2`, or `3`) that `defaults.trustTier` attaches to each minted token as policy metadata —
 the label doesn't itself reflect the TOFU check's outcome.
+
+## Development mode
+
+`vaultkeeper dev-mode enable --script <path>` relaxes the TOFU check above for one executable, so
+a binary you're actively rebuilding doesn't get rejected every time its hash changes. It's
+persisted in the config's `developmentMode.executables` list — use `dev-mode disable --script
+<path>` to remove it again. Reserve this for local development only; a production caller should
+stay on TOFU verification so a tampered or swapped binary is still caught.
 
 ## Exit codes
 

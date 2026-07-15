@@ -16,13 +16,17 @@ secret never appears in a return value.
 pnpm add vaultkeeper
 ```
 
-**Requirements:** Node >= 20
+**Requirements:** Node >= 20, TypeScript 5.x (if you typecheck against the shipped `.d.ts` files;
+`verbatimModuleSyntax`-era output needs TypeScript >= 5.0). Not a hard runtime dependency — the
+`typescript` peer is optional and only matters if your project runs `tsc` against this package.
 
 ## Quick start
 
-vaultkeeper is ESM-only. The consuming project needs `"type": "module"` in its `package.json`
-(or an ESM-capable loader/bundler) for the `import` below to work — a default `npm init -y`
-project is CommonJS and will need that field added first.
+The package ships both ESM and CommonJS builds, selected automatically via `exports` based on how
+you import it — no extra configuration needed either way.
+
+**ESM** (`import`) — requires `"type": "module"` in your `package.json` (or an ESM-capable
+loader/bundler); a default `npm init -y` project is CommonJS and needs that field added first:
 
 ```ts
 import { VaultKeeper } from 'vaultkeeper'
@@ -52,10 +56,32 @@ const { response } = await vault.fetch(token, {
 })
 ```
 
+**CommonJS** (`require()`) — the `exports` map resolves the same package to a CJS build
+automatically, no `"type"` field needed:
+
+```js
+const { VaultKeeper } = require('vaultkeeper')
+
+async function main() {
+  const vault = await VaultKeeper.init()
+  await vault.store('MY_API_KEY', 'my-secret-value')
+  const jwe = await vault.setup('MY_API_KEY')
+  const { token } = await vault.authorize(jwe)
+  const { response } = await vault.fetch(token, {
+    url: 'https://api.example.com/data',
+    headers: { Authorization: 'Bearer {{secret}}' },
+  })
+}
+
+main()
+```
+
 Other access patterns: delegated `exec()` (secret injected via env var) uses the same `{{secret}}`
 placeholder substitution as `fetch()` above. Controlled direct access via `getSecret()` is
 different — it returns a `SecretAccessor` whose secret is only reachable through a single-use
 `read(callback)` call backed by an auto-zeroing buffer; no placeholder substitution is involved.
+`sign()`/`verify()` are a fourth pattern for signing/verifying data with a stored private key
+without ever exposing it — see [Signing and verification](#signing-and-verification) below.
 See the `SecretAccessor` and `ExecRequest` types in the package's shipped `.d.ts` for their full
 signatures.
 
@@ -104,6 +130,46 @@ is a policy **label** attached to the resulting token — it does not itself ref
 that verification. It defaults to `defaults.trustTier` from the config and can be overridden per
 call via `setup()`'s `trustTier` option.
 
+## Development mode
+
+Development mode relaxes the TOFU identity check above for specific executables, so a binary that
+is rebuilt frequently during local development doesn't get rejected as an `IdentityMismatchError`
+every time its hash changes. Add an executable with `await vault.setDevelopmentMode(path, true)`
+(persisted in `config.developmentMode.executables`), or pass `executablePath: 'dev'` to a single
+`setup()` call to skip the check for just that call. Only use this for local workflows — a
+production caller should stay on TOFU verification so a tampered or swapped binary is caught.
+
+```ts
+// Persist an executable as dev-mode-exempt across setup() calls:
+await vault.setDevelopmentMode('/path/to/my-dev-tool', true)
+
+// Or skip identity verification for a single call without persisting anything:
+const jwe = await vault.setup('MY_API_KEY', { executablePath: 'dev' })
+```
+
+## Signing and verification
+
+`sign()`/`verify()` are a fourth access pattern: they let you sign or verify data with a stored
+private/public key without the private key ever leaving `VaultKeeper` internals.
+
+```ts
+// Sign — requires a capability token, like fetch()/exec()/getSecret()
+const { result } = await vault.sign(token, { data: 'payload-to-sign' })
+console.log(result.signature, result.algorithm) // base64 signature + algorithm label
+
+// Verify — a static method: no VaultKeeper instance, secret, or token needed
+const isValid = VaultKeeper.verify({
+  data: 'payload-to-sign',
+  signature: result.signature,
+  publicKey: myPublicKeyPem,
+})
+```
+
+`verify()` is synchronous and returns `false` for invalid key material, malformed signatures, or a
+failed verification — except a disallowed algorithm (e.g. `'md5'`), which throws
+`InvalidAlgorithmError` immediately (not via a rejected `Promise`), so wrap the call in a regular
+`try`/`catch`, not `.catch()`.
+
 ## Backends
 
 The first enabled backend in the configuration is used. With no config file, that is the safe
@@ -116,6 +182,25 @@ With no explicit `path`, the `file` backend stores secrets under `<configDir>/fi
 resolved config directory (`~/.config/vaultkeeper` by default) that holds `config.json` and key
 material.
 
+## Error types
+
+Every error this package throws extends `VaultError`. Catch `VaultError` to handle any of them
+generically, or catch a specific subclass for targeted handling. The most common ones:
+
+| Class                   | When thrown                                                                                               |
+| ----------------------- | --------------------------------------------------------------------------------------------------------- |
+| `SecretNotFoundError`   | Secret does not exist in the backend                                                                      |
+| `TokenExpiredError`     | JWE has passed its `exp` claim                                                                            |
+| `IdentityMismatchError` | Executable hash changed since TOFU approval (see [Trust tiers](#trust-tiers))                             |
+| `ExecError`             | `exec()` request was invalid, or the command could not be started                                         |
+| `InvalidTokenError`     | JWE could not be decrypted or validated                                                                   |
+| `AccessorConsumedError` | `SecretAccessor.read()` called after it was already consumed                                              |
+| `InvalidAlgorithmError` | Signing/verifying with a disallowed algorithm (see [Signing and verification](#signing-and-verification)) |
+
+The full hierarchy (23 classes covering backend, config, key-rotation, and filesystem failures too)
+is documented on each class's JSDoc in the package's shipped `.d.ts`, and enumerated in the
+[repository README](https://github.com/mike-north/vaultkeeper#readme).
+
 ## Testing against this library
 
 Use [`@vaultkeeper/test-helpers`](https://www.npmjs.com/package/@vaultkeeper/test-helpers) for an
@@ -124,8 +209,8 @@ in-memory backend with zero OS dependencies in your own test suite.
 ## Full documentation
 
 The package's shipped `.d.ts` files carry the complete API reference (every type, method, and
-option, with JSDoc). For narrative coverage of development mode and the full error hierarchy
-beyond what's inlined above, see the
+option, with JSDoc). For the exhaustive error class list and additional narrative detail beyond
+what's inlined above, see the
 [repository README](https://github.com/mike-north/vaultkeeper#readme).
 
 ## License
