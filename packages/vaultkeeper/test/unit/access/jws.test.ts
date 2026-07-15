@@ -132,6 +132,25 @@ describe('verifyDetachedJws', () => {
     ).resolves.toBe(false)
   })
 
+  // The algorithm/envelope is validated BEFORE any key material is parsed, so a
+  // malformed key can never mask (or be reported in place of) an unsupported
+  // algorithm. With a disallowed alg AND an unparseable key, the result is the
+  // algorithm decision — the documented invalid-signature outcome (`false`) —
+  // not the key-parse error (InvalidKeyMaterialError), and never an accepted
+  // signature. (Mirrors the algorithm-before-key-parsing guarantee from #186.)
+  it('rejects a disallowed algorithm before parsing key material, even when the key is also unparseable', async () => {
+    const header = Buffer.from(
+      JSON.stringify({ alg: 'HS256', b64: false, crit: ['b64'] }),
+    ).toString('base64url')
+    const result = verifyDetachedJws({
+      payload: 'p',
+      jws: `${header}..AAAA`,
+      publicKey: 'not-a-parseable-key',
+    })
+    // Resolves to false (algorithm rejected) — does NOT throw the key error.
+    await expect(result).resolves.toBe(false)
+  })
+
   // RFC 7515 §4.1.11: a verifier must reject a JWS whose `crit` lists any
   // extension it does not understand. We understand only `b64`, so `crit` must
   // be exactly ["b64"] — these two failure shapes verify to `false`, not an

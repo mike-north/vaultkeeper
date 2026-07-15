@@ -95,8 +95,35 @@ function hasExpectedHeader(header: unknown): boolean {
  * @internal
  */
 export async function verifyDetachedJws(request: VerifyRequest): Promise<boolean> {
-  // Reject a private key supplied as the public key with a clear message before
-  // parsing — the documented contract is an SPKI *public* key only.
+  // Validate the JWS envelope — its structure and, critically, its declared
+  // algorithm and `crit` — BEFORE parsing any key material. The algorithm this
+  // verifier accepts is fixed (EdDSA); an unsupported algorithm, or a `crit`
+  // listing an un-understood extension, must be rejected on the envelope's own
+  // terms (RFC 7515 §4.1.11 crit semantics). Doing this first guarantees a
+  // malformed key can never mask that decision or be reported in its place.
+  const parts = request.jws.trim().split('.')
+  if (parts.length !== 3) {
+    return false
+  }
+  const [protectedB64, middle, signatureB64] = parts
+  // A detached compact JWS has an empty payload segment.
+  if (protectedB64 === undefined || signatureB64 === undefined || middle !== '') {
+    return false
+  }
+
+  let header: unknown
+  try {
+    header = JSON.parse(Buffer.from(protectedB64, 'base64url').toString('utf8'))
+  } catch {
+    return false
+  }
+  if (!hasExpectedHeader(header)) {
+    return false
+  }
+
+  // Only once the algorithm/envelope is accepted do we parse the public key.
+  // Reject a private key supplied as the public key with a clear message — the
+  // documented contract is an SPKI *public* key only.
   if (request.publicKey.includes('PRIVATE KEY')) {
     throw new InvalidKeyMaterialError(
       'A private key was supplied where an SPKI public key is required.',
@@ -116,26 +143,6 @@ export async function verifyDetachedJws(request: VerifyRequest): Promise<boolean
     throw new InvalidKeyMaterialError(
       'The supplied public key is not an SPKI PEM EdDSA public key.',
     )
-  }
-
-  const parts = request.jws.trim().split('.')
-  if (parts.length !== 3) {
-    return false
-  }
-  const [protectedB64, middle, signatureB64] = parts
-  // A detached compact JWS has an empty payload segment.
-  if (protectedB64 === undefined || signatureB64 === undefined || middle !== '') {
-    return false
-  }
-
-  let header: unknown
-  try {
-    header = JSON.parse(Buffer.from(protectedB64, 'base64url').toString('utf8'))
-  } catch {
-    return false
-  }
-  if (!hasExpectedHeader(header)) {
-    return false
   }
 
   try {
