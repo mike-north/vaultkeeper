@@ -38,10 +38,16 @@ export class BackendRegistry {
    * Create a backend instance by type.
    * @param type - Backend type identifier
    * @param config - Optional backend configuration forwarded to the factory
+   * @param configDir - Optional resolved config directory forwarded to the
+   *   factory, so file-based backends can default their storage under it
    * @returns A SecretBackend instance
    * @throws {@link BackendUnavailableError} if the backend type is not registered
    */
-  static create(type: string, config?: import('../types.js').BackendConfig): SecretBackend {
+  static create(
+    type: string,
+    config?: import('../types.js').BackendConfig,
+    configDir?: string,
+  ): SecretBackend {
     const factory = this.backends.get(type)
     if (factory === undefined) {
       throw new BackendUnavailableError(
@@ -51,7 +57,7 @@ export class BackendRegistry {
         Array.from(this.backends.keys()),
       )
     }
-    return factory(config)
+    return factory(config, configDir)
   }
 
   /**

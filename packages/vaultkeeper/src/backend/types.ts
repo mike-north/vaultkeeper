@@ -7,13 +7,18 @@
  *
  * @remarks
  * Factories may optionally accept a {@link BackendConfig} to configure the
- * backend from the user's vaultkeeper config file. Factories that do not need
- * configuration can ignore the parameter.
+ * backend from the user's vaultkeeper config file, and the resolved config
+ * directory (the same directory config and key material are read from) so
+ * file-based backends can default their storage under it. Factories that do
+ * not need either can ignore the parameters.
  *
  * @public
  */
 // Inline import() avoids a circular dependency: ../types.js imports from this barrel.
-export type BackendFactory = (config?: import('../types.js').BackendConfig) => SecretBackend
+export type BackendFactory = (
+  config?: import('../types.js').BackendConfig,
+  configDir?: string,
+) => SecretBackend
 
 /**
  * Abstraction interface for all secret storage backends.

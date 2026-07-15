@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import * as path from 'node:path'
+import * as os from 'node:os'
 
 vi.mock('node:fs/promises', () => ({
   mkdir: vi.fn(),
@@ -12,9 +13,13 @@ vi.mock('node:fs/promises', () => ({
 
 import * as fs from 'node:fs/promises'
 import { FileBackend } from '../../../src/backend/file-backend.js'
+import { getDefaultConfigDir } from '../../../src/config.js'
 import { SecretNotFoundError } from '../../../src/errors.js'
 
 const mockFs = vi.mocked(fs)
+
+/** The new (issue #99) default storage dir: `<configDir>/file`. */
+const defaultStorageDir = path.join(getDefaultConfigDir(), 'file')
 
 describe('FileBackend', () => {
   let backend: FileBackend
@@ -53,8 +58,10 @@ describe('FileBackend', () => {
 
       await backend.store('my-secret', 'secret-value')
 
+      // Issue #99: default storage lives under the resolved config dir
+      // (getDefaultConfigDir()/file), not the legacy $HOME/.vaultkeeper/file.
       expect(mockFs.mkdir).toHaveBeenCalledWith(
-        expect.stringContaining('.vaultkeeper'),
+        defaultStorageDir,
         expect.objectContaining({ recursive: true }),
       )
       expect(mockFs.writeFile).toHaveBeenCalledTimes(2)
@@ -97,11 +104,73 @@ describe('FileBackend', () => {
       )
       const encryptedWriteCall = mockFs.writeFile.mock.calls[0]
       expect(encryptedWriteCall?.[0]).toEqual(expect.stringContaining(customDir))
-      // Default $HOME/.vaultkeeper location must never be touched.
-      expect(mockFs.mkdir).not.toHaveBeenCalledWith(
-        expect.stringContaining('.vaultkeeper'),
-        expect.anything(),
+      // Default config-dir-relative location must never be touched.
+      expect(mockFs.mkdir).not.toHaveBeenCalledWith(defaultStorageDir, expect.anything())
+    })
+  })
+
+  describe('legacy $HOME/.vaultkeeper/file fallback (issue #99 back-compat)', () => {
+    let legacyBackend: FileBackend
+    const legacyStorageDir = path.join(os.homedir(), '.vaultkeeper', 'file')
+
+    beforeEach(() => {
+      // No explicit storageDir/configDir → legacy fallback is active.
+      legacyBackend = new FileBackend()
+      vi.clearAllMocks()
+    })
+
+    it('retrieve falls back to the legacy location when absent from the new default', async () => {
+      const crypto = await import('node:crypto')
+      const key = crypto.randomBytes(32)
+      const iv = crypto.randomBytes(12)
+      const cipher = crypto.createCipheriv('aes-256-gcm', key, iv, { authTagLength: 16 })
+      const encrypted = Buffer.concat([cipher.update('legacy-value', 'utf8'), cipher.final()])
+      const authTag = cipher.getAuthTag()
+      const encoded = [
+        iv.toString('base64'),
+        authTag.toString('base64'),
+        encrypted.toString('base64'),
+      ].join(':')
+
+      const noFileError = Object.assign(new Error('ENOENT'), { code: 'ENOENT' })
+      mockFs.readFile.mockImplementation((target) => {
+        const filePath = typeof target === 'string' ? target : ''
+        if (filePath.startsWith(defaultStorageDir)) {
+          return Promise.reject(noFileError)
+        }
+        if (filePath.endsWith('.enc')) {
+          return Promise.resolve(encoded)
+        }
+        return Promise.resolve(key)
+      })
+
+      const result = await legacyBackend.retrieve('legacy-secret')
+      expect(result).toBe('legacy-value')
+      expect(mockFs.readFile).toHaveBeenCalledWith(
+        expect.stringContaining(legacyStorageDir),
+        'utf8',
       )
+    })
+
+    it('retrieve throws SecretNotFoundError when the secret exists in neither location', async () => {
+      const noFileError = Object.assign(new Error('ENOENT'), { code: 'ENOENT' })
+      mockFs.readFile.mockRejectedValue(noFileError)
+
+      await expect(legacyBackend.retrieve('missing')).rejects.toBeInstanceOf(SecretNotFoundError)
+    })
+
+    it('does not consult the legacy location when an explicit path is configured', async () => {
+      const explicitBackend = new FileBackend(path.join(path.sep, 'explicit', 'dir'))
+      const noFileError = Object.assign(new Error('ENOENT'), { code: 'ENOENT' })
+      mockFs.readFile.mockRejectedValue(noFileError)
+
+      await expect(explicitBackend.retrieve('missing')).rejects.toBeInstanceOf(SecretNotFoundError)
+      // Only the explicit dir was consulted — never the legacy dir.
+      for (const call of mockFs.readFile.mock.calls) {
+        const target = call[0]
+        const filePath = typeof target === 'string' ? target : ''
+        expect(filePath).not.toContain(legacyStorageDir)
+      }
     })
   })
 

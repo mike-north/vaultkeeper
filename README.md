@@ -275,9 +275,11 @@ The first enabled backend in the configuration is used.
 | Windows  | `dpapi`         | PowerShell (built-in)                                            |
 | Any      | `file`          | None (AES-256-GCM encrypted file, no OS credential store needed) |
 
-The `file` backend works on all platforms and requires no system dependencies. Use it as a fallback or in environments without a native credential store (CI, Docker, etc.).
+The `file` backend works on all platforms and requires no system dependencies. Use it as a fallback or in environments without a native credential store (CI, Docker, etc.). With no explicit `path` configured, it stores secrets under `<configDir>/file/` — the same resolved config directory (`~/.config/vaultkeeper` by default, overridable via `--config-dir`/`VAULTKEEPER_CONFIG_DIR`) that holds `config.json` and key material, so everything lives in one discoverable place. Set `"path"` on the backend config to store secrets elsewhere instead.
 
 To use the native Linux credential store instead, install `secret-tool` (`sudo apt install libsecret-tools`) and set `"type": "secret-tool"` in your config.
+
+> **Upgrading from before this default changed:** the `file` backend's default storage directory moved from `$HOME/.vaultkeeper/file` to `<configDir>/file`. Existing secrets at the old location are still readable — `retrieve`/`exists`/`delete`/`list` fall back to it transparently when a secret isn't found at the new default — but `store` always writes to the new location going forward. Secrets you write after upgrading land in the new location; nothing at the old location is migrated automatically.
 
 ## Access patterns
 

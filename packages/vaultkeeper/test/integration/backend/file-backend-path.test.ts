@@ -107,7 +107,7 @@ describe('BackendConfig.path plumbing (file backend)', () => {
     expect(await fs.readdir(customDir)).not.toContain(entryFile('api-key'))
   })
 
-  it('uses the default home location when no path is configured', async () => {
+  it('uses the resolved config dir when no path is configured (issue #99)', async () => {
     const config: VaultConfig = {
       version: 1,
       backends: [{ type: 'file', enabled: true }],
@@ -118,8 +118,76 @@ describe('BackendConfig.path plumbing (file backend)', () => {
 
     await vault.store('api-key', 'sk-live-abc123')
 
-    const defaultDir = path.join(fakeHome, '.vaultkeeper', 'file')
-    const entries = await fs.readdir(defaultDir)
+    // Default storage now lives under the resolved config dir (fakeHome/file),
+    // not the legacy $HOME/.vaultkeeper/file location.
+    const configDirDefault = path.join(fakeHome, 'file')
+    const entries = await fs.readdir(configDirDefault)
     expect(entries).toContain(entryFile('api-key'))
+
+    const legacyDir = path.join(fakeHome, '.vaultkeeper', 'file')
+    await expect(fs.readdir(legacyDir)).rejects.toMatchObject({ code: 'ENOENT' })
+  })
+
+  it('reads a secret from the legacy $HOME/.vaultkeeper/file location when absent from the new default (issue #99 back-compat)', async () => {
+    // Simulate a secret written under the pre-#99 default before this fix
+    // existed, using a fresh FileBackend pointed directly at the legacy dir.
+    const legacyDir = path.join(fakeHome, '.vaultkeeper', 'file')
+    const legacyBackend = BackendRegistry.create('file', {
+      type: 'file',
+      enabled: true,
+      path: legacyDir,
+    })
+    await legacyBackend.store('legacy-key', 'legacy-secret-value')
+
+    const config: VaultConfig = {
+      version: 1,
+      backends: [{ type: 'file', enabled: true }],
+      keyRotation: { gracePeriodDays: 7 },
+      defaults: { ttlMinutes: 30, trustTier: 3 },
+    }
+    const vault = await VaultKeeper.init({ skipDoctor: true, config, configDir: fakeHome })
+
+    const jwe = await vault.setup('legacy-key', { executablePath: 'dev' })
+    const { token } = await vault.authorize(jwe)
+    let secret: string | undefined
+    vault.getSecret(token).read((buf) => {
+      secret = buf.toString('utf8')
+    })
+    expect(secret).toBe('legacy-secret-value')
+
+    // New default location was never written to by the legacy-only read.
+    const configDirDefault = path.join(fakeHome, 'file')
+    await expect(fs.readdir(configDirDefault)).rejects.toMatchObject({ code: 'ENOENT' })
+  })
+
+  // Acceptance criterion 4: no-path store lands under the resolved config
+  // dir, and a second VaultKeeper against the same config dir reads it back.
+  it('lets a second VaultKeeper against the same config dir read back a no-path store (criterion 4)', async () => {
+    const config: VaultConfig = {
+      version: 1,
+      backends: [{ type: 'file', enabled: true }],
+      keyRotation: { gracePeriodDays: 7 },
+      defaults: { ttlMinutes: 30, trustTier: 3 },
+      developmentMode: { executables: ['dev'] },
+    }
+    const configDir = await fs.mkdtemp(path.join(osModule.tmpdir(), 'vk-cfgdir-'))
+    try {
+      const vault1 = await VaultKeeper.init({ skipDoctor: true, config, configDir })
+      await vault1.store('api-key', 'sk-live-abc123')
+
+      const storageDir = path.join(configDir, 'file')
+      expect(await fs.readdir(storageDir)).toContain(entryFile('api-key'))
+
+      const vault2 = await VaultKeeper.init({ skipDoctor: true, config, configDir })
+      const jwe = await vault2.setup('api-key', { executablePath: 'dev' })
+      const { token } = await vault2.authorize(jwe)
+      let secret: string | undefined
+      vault2.getSecret(token).read((buf) => {
+        secret = buf.toString('utf8')
+      })
+      expect(secret).toBe('sk-live-abc123')
+    } finally {
+      await fs.rm(configDir, { recursive: true, force: true })
+    }
   })
 })

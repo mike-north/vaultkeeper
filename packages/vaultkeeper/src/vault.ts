@@ -835,7 +835,7 @@ export class VaultKeeper {
       throw new BackendUnavailableError('No enabled backends configured', 'none-enabled', [])
     }
 
-    return BackendRegistry.create(firstEnabled.type, firstEnabled)
+    return BackendRegistry.create(firstEnabled.type, firstEnabled, this.#configDir)
   }
 
   #requireBackend(): SecretBackend {

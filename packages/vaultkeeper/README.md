@@ -45,6 +45,10 @@ The first enabled backend in the configuration is used: `keychain` (macOS), `dpa
 `secret-tool` (Linux, via `libsecret`), or `file` (AES-256-GCM encrypted file, all platforms, no
 system dependencies). Plugin backends for 1Password and YubiKey are also available.
 
+With no explicit `path`, the `file` backend stores secrets under `<configDir>/file/` — the same
+resolved config directory (`~/.config/vaultkeeper` by default) that holds `config.json` and key
+material.
+
 ## Testing against this library
 
 Use [`@vaultkeeper/test-helpers`](https://www.npmjs.com/package/@vaultkeeper/test-helpers) for an
