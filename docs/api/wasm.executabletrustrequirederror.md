@@ -6,7 +6,7 @@
 
 Thrown by `setup()` when the caller does not make an unambiguous executable-trust decision.
 
-Mirrors the pure-TypeScript `vaultkeeper` library's `ExecutableTrustRequiredError`<!-- -->: `setup()` deliberately has no default trust behaviour, so the caller must pass either a real `executablePath` or explicitly opt out with `skipTrust: true`<!-- -->. Supplying neither — or both — or the retired `'dev'` sentinel as `executablePath` throws this error rather than silently minting an unverified token. Inspect [ExecutableTrustRequiredError.reason](./wasm.executabletrustrequirederror.reason.md) to distinguish the cases.
+Mirrors the pure-TypeScript `vaultkeeper` library's `ExecutableTrustRequiredError`<!-- -->: `setup()` deliberately has no default trust behaviour, so the caller must pass either a real `executablePath` or explicitly opt out with `skipTrust: true`<!-- -->. Supplying neither — or both — or the retired `'dev'` sentinel as `executablePath` throws this error rather than silently minting an unbound token. Inspect [ExecutableTrustRequiredError.reason](./wasm.executabletrustrequirederror.reason.md) to distinguish the cases.
 
 **Signature:**
 
@@ -84,12 +84,12 @@ Description
 
 </td><td>
 
-'missing-choice' \| 'conflicting-choice' \| 'legacy-dev-sentinel'
+[ExecutableTrustRequiredReason](./wasm.executabletrustrequiredreason.md)
 
 
 </td><td>
 
-Machine-readable discriminator for why the trust choice was rejected. `'missing-choice'` means neither `executablePath` nor `skipTrust: true` was provided. `'conflicting-choice'` means both were provided, which are mutually exclusive intents. `'legacy-dev-sentinel'` means `executablePath` was the retired literal `'dev'` opt-out sentinel, which is no longer supported and must be replaced with `skipTrust: true`<!-- -->.
+Machine-readable discriminator; see [ExecutableTrustRequiredReason](./wasm.executabletrustrequiredreason.md)<!-- -->.
 
 
 </td></tr>

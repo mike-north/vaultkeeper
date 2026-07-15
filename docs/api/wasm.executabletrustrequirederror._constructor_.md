@@ -9,7 +9,7 @@ Constructs a new instance of the `ExecutableTrustRequiredError` class
 **Signature:**
 
 ```typescript
-constructor(message: string, reason: 'missing-choice' | 'conflicting-choice' | 'legacy-dev-sentinel');
+constructor(message: string, reason: ExecutableTrustRequiredReason);
 ```
 
 ## Parameters
@@ -51,7 +51,7 @@ reason
 
 </td><td>
 
-'missing-choice' \| 'conflicting-choice' \| 'legacy-dev-sentinel'
+[ExecutableTrustRequiredReason](./wasm.executabletrustrequiredreason.md)
 
 
 </td><td>

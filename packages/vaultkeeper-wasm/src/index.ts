@@ -58,6 +58,7 @@ export {
   AccessorConsumedError,
   ExecutableTrustRequiredError,
 } from './errors.js';
+export type { ExecutableTrustRequiredReason } from './errors.js';
 
 // Lazy-load the WASM module
 import type {
@@ -167,14 +168,16 @@ export class VaultKeeper {
    *
    * @remarks
    * **Explicit executable-trust choice required.** Like the TypeScript
-   * `vaultkeeper` library's `setup()`, this method does not default to skipping
-   * executable-trust verification. The caller must make an unambiguous decision
-   * via {@link SetupOptions}: provide exactly one of
-   * {@link SetupOptions.executablePath} (bind the token to the calling
-   * executable) or {@link SetupOptions.skipTrust} (`true` — a development-only
-   * opt-out). Supplying neither — or both — or the retired `'dev'` sentinel as
+   * `vaultkeeper` library's `setup()`, this method no longer defaults to
+   * skipping the executable-identity binding. The caller must make an
+   * unambiguous decision via {@link SetupOptions}: provide exactly one of
+   * {@link SetupOptions.executablePath} (bind the calling executable's identity
+   * into the token) or {@link SetupOptions.skipTrust} (`true` — a
+   * development-only opt-out). This binding records the declared identity into
+   * the token's `exe` claim; it does not itself run TOFU/manifest verification.
+   * Supplying neither — or both — or the retired `'dev'` sentinel as
    * `executablePath` throws {@link ExecutableTrustRequiredError} rather than
-   * silently minting an unverified `'dev'`-bound token. Inspect the error's
+   * silently minting an unbound `'dev'` token. Inspect the error's
    * `reason` (`'missing-choice'` | `'conflicting-choice'` |
    * `'legacy-dev-sentinel'`) to distinguish the cases.
    *

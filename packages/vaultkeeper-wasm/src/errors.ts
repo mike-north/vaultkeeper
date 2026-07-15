@@ -144,6 +144,20 @@ export class AccessorConsumedError extends VaultError {
 }
 
 /**
+ * Machine-readable discriminator for why an executable-trust choice was
+ * rejected by `setup()`. `'missing-choice'` means neither `executablePath` nor
+ * `skipTrust: true` was provided (an empty/whitespace `executablePath` counts
+ * as missing). `'conflicting-choice'` means both were provided, which are
+ * mutually exclusive intents. `'legacy-dev-sentinel'` means `executablePath`
+ * was the retired literal `'dev'` opt-out sentinel, which is no longer
+ * supported and must be replaced with `skipTrust: true`.
+ */
+export type ExecutableTrustRequiredReason =
+  | 'missing-choice'
+  | 'conflicting-choice'
+  | 'legacy-dev-sentinel';
+
+/**
  * Thrown by `setup()` when the caller does not make an unambiguous
  * executable-trust decision.
  *
@@ -152,32 +166,19 @@ export class AccessorConsumedError extends VaultError {
  * behaviour, so the caller must pass either a real `executablePath` or
  * explicitly opt out with `skipTrust: true`. Supplying neither — or both — or
  * the retired `'dev'` sentinel as `executablePath` throws this error rather
- * than silently minting an unverified token. Inspect
+ * than silently minting an unbound token. Inspect
  * {@link ExecutableTrustRequiredError.reason} to distinguish the cases.
  */
 export class ExecutableTrustRequiredError extends VaultError {
-  /**
-   * Machine-readable discriminator for why the trust choice was rejected.
-   * `'missing-choice'` means neither `executablePath` nor `skipTrust: true` was
-   * provided. `'conflicting-choice'` means both were provided, which are
-   * mutually exclusive intents. `'legacy-dev-sentinel'` means `executablePath`
-   * was the retired literal `'dev'` opt-out sentinel, which is no longer
-   * supported and must be replaced with `skipTrust: true`.
-   */
-  readonly reason: 'missing-choice' | 'conflicting-choice' | 'legacy-dev-sentinel';
+  /** Machine-readable discriminator; see {@link ExecutableTrustRequiredReason}. */
+  readonly reason: ExecutableTrustRequiredReason;
 
-  constructor(
-    message: string,
-    reason: 'missing-choice' | 'conflicting-choice' | 'legacy-dev-sentinel',
-  ) {
+  constructor(message: string, reason: ExecutableTrustRequiredReason) {
     super(message);
     this.name = 'ExecutableTrustRequiredError';
     this.reason = reason;
   }
 }
-
-/** The three reasons an executable-trust choice can be rejected. */
-type ExecutableTrustRequiredReason = 'missing-choice' | 'conflicting-choice' | 'legacy-dev-sentinel';
 
 /** Shape of the tagged error value thrown across the WASM boundary. */
 interface WasmErrorShape {

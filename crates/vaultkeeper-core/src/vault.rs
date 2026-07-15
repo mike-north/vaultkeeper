@@ -190,8 +190,11 @@ impl VaultKeeper {
     ///
     /// Returns the sentinel `"dev"` (no executable binding) when trust is
     /// deliberately skipped; otherwise returns the caller-supplied executable
-    /// path. Returns [`VaultError::ExecutableTrustRequired`] when the caller
-    /// makes no unambiguous choice — mirroring the TypeScript library's
+    /// path, which is bound into the token's `exe` claim. This binding records
+    /// the caller's declared identity — it does not itself run TOFU/manifest
+    /// verification (that lives in `identity::trust::verify_trust`). Returns
+    /// [`VaultError::ExecutableTrustRequired`] when the caller makes no
+    /// unambiguous choice — mirroring the TypeScript library's
     /// `ExecutableTrustRequiredError` (message + `reason` discriminator).
     fn resolve_executable_identity(options: Option<&SetupOptions>) -> Result<String, VaultError> {
         let executable_path = options.and_then(|o| o.executable_path.as_deref());
@@ -201,8 +204,8 @@ impl VaultKeeper {
             return Err(VaultError::ExecutableTrustRequired {
                 message: "VaultKeeper.setup() received both options.executablePath and \
                           options.skipTrust: true, which are mutually exclusive. Pass \
-                          options.executablePath to verify the calling executable, or \
-                          options.skipTrust: true to skip verification (development only) — not both."
+                          options.executablePath to bind the calling executable's identity, or \
+                          options.skipTrust: true to skip the binding (development only) — not both."
                     .to_string(),
                 reason: "conflicting-choice".to_string(),
             });
@@ -217,21 +220,21 @@ impl VaultKeeper {
         match executable_path {
             None => Err(VaultError::ExecutableTrustRequired {
                 message: "VaultKeeper.setup() requires an explicit executable-trust choice and \
-                          no longer defaults to skipping verification. Either pass \
+                          no longer defaults to skipping it. Either pass \
                           options.executablePath set to the calling executable's real path \
-                          (runs trust-on-first-use verification), or set options.skipTrust: \
-                          true to deliberately skip verification (development only)."
+                          (binds that identity into the token), or set options.skipTrust: \
+                          true to deliberately skip the binding (development only)."
                     .to_string(),
                 reason: "missing-choice".to_string(),
             }),
             // Reject the retired legacy opt-out sentinel. Before explicit-trust,
-            // options.executablePath: "dev" was the documented way to skip
-            // verification; point migrating callers at the dedicated opt-out.
+            // options.executablePath: "dev" was the documented way to skip the
+            // identity binding; point migrating callers at the dedicated opt-out.
             Some("dev") => Err(VaultError::ExecutableTrustRequired {
                 message: "VaultKeeper.setup() no longer supports the legacy options.executablePath: 'dev' \
-                          sentinel for skipping trust verification. Set options.skipTrust: true to \
-                          deliberately skip verification (development only), or pass \
-                          options.executablePath set to the calling executable's real path to verify it."
+                          sentinel for skipping the identity binding. Set options.skipTrust: true to \
+                          deliberately skip the binding (development only), or pass \
+                          options.executablePath set to the calling executable's real path to bind it."
                     .to_string(),
                 reason: "legacy-dev-sentinel".to_string(),
             }),
@@ -243,9 +246,9 @@ impl VaultKeeper {
             Some(path) if path.trim().is_empty() => Err(VaultError::ExecutableTrustRequired {
                 message: "VaultKeeper.setup() received an empty options.executablePath, which is \
                           not a valid executable-trust choice. Pass options.executablePath set to \
-                          the calling executable's real path (runs trust-on-first-use \
-                          verification), or set options.skipTrust: true to deliberately skip \
-                          verification (development only)."
+                          the calling executable's real path (binds that identity into the token), \
+                          or set options.skipTrust: true to deliberately skip the binding \
+                          (development only)."
                     .to_string(),
                 reason: "missing-choice".to_string(),
             }),

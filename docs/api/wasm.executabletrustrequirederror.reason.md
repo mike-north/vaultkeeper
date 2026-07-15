@@ -4,10 +4,10 @@
 
 ## ExecutableTrustRequiredError.reason property
 
-Machine-readable discriminator for why the trust choice was rejected. `'missing-choice'` means neither `executablePath` nor `skipTrust: true` was provided. `'conflicting-choice'` means both were provided, which are mutually exclusive intents. `'legacy-dev-sentinel'` means `executablePath` was the retired literal `'dev'` opt-out sentinel, which is no longer supported and must be replaced with `skipTrust: true`<!-- -->.
+Machine-readable discriminator; see [ExecutableTrustRequiredReason](./wasm.executabletrustrequiredreason.md)<!-- -->.
 
 **Signature:**
 
 ```typescript
-readonly reason: 'missing-choice' | 'conflicting-choice' | 'legacy-dev-sentinel';
+readonly reason: ExecutableTrustRequiredReason;
 ```

@@ -71,7 +71,7 @@ Thrown when a stored secret entry cannot be decrypted — the ciphertext is corr
 
 Thrown by `setup()` when the caller does not make an unambiguous executable-trust decision.
 
-Mirrors the pure-TypeScript `vaultkeeper` library's `ExecutableTrustRequiredError`<!-- -->: `setup()` deliberately has no default trust behaviour, so the caller must pass either a real `executablePath` or explicitly opt out with `skipTrust: true`<!-- -->. Supplying neither — or both — or the retired `'dev'` sentinel as `executablePath` throws this error rather than silently minting an unverified token. Inspect [ExecutableTrustRequiredError.reason](./wasm.executabletrustrequirederror.reason.md) to distinguish the cases.
+Mirrors the pure-TypeScript `vaultkeeper` library's `ExecutableTrustRequiredError`<!-- -->: `setup()` deliberately has no default trust behaviour, so the caller must pass either a real `executablePath` or explicitly opt out with `skipTrust: true`<!-- -->. Supplying neither — or both — or the retired `'dev'` sentinel as `executablePath` throws this error rather than silently minting an unbound token. Inspect [ExecutableTrustRequiredError.reason](./wasm.executabletrustrequirederror.reason.md) to distinguish the cases.
 
 
 </td></tr>
@@ -381,6 +381,17 @@ Description
 
 </th></tr></thead>
 <tbody><tr><td>
+
+[ExecutableTrustRequiredReason](./wasm.executabletrustrequiredreason.md)
+
+
+</td><td>
+
+Machine-readable discriminator for why an executable-trust choice was rejected by `setup()`<!-- -->. `'missing-choice'` means neither `executablePath` nor `skipTrust: true` was provided (an empty/whitespace `executablePath` counts as missing). `'conflicting-choice'` means both were provided, which are mutually exclusive intents. `'legacy-dev-sentinel'` means `executablePath` was the retired literal `'dev'` opt-out sentinel, which is no longer supported and must be replaced with `skipTrust: true`<!-- -->.
+
+
+</td></tr>
+<tr><td>
 
 [KeyStatus](./wasm.keystatus.md)
 
