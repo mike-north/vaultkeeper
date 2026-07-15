@@ -113,5 +113,24 @@ _(Optional)_ Additional environment variables to merge into the child process en
 
 
 </td></tr>
+<tr><td>
+
+[redact?](./vaultkeeper.execrequest.redact.md)
+
+
+</td><td>
+
+
+</td><td>
+
+boolean \| undefined
+
+
+</td><td>
+
+_(Optional)_ Whether to redact injected secret values from the captured `stdout` and `stderr` before they are returned. Defaults to `true`<!-- -->: every occurrence of an injected secret value in the captured output is replaced with `[REDACTED]`<!-- -->, so the raw secret never appears in [ExecResult](./vaultkeeper.execresult.md) even when the spawned command echoes it. Set to `false` to receive the raw, unredacted output — only for callers that genuinely need it (for example output that legitimately contains the secret and must be preserved), since doing so forfeits the redaction guarantee.
+
+
+</td></tr>
 </tbody></table>
 

@@ -90,11 +90,14 @@ describe('delegatedExec', () => {
   })
 
   describe('env placeholder replacement', () => {
+    // These assert on the raw injected value, so they opt out of the
+    // default output redaction (issue #189) to observe the secret directly.
     it('replaces {{secret}} in env values', async () => {
       const request: ExecRequest = {
         command: 'sh',
         args: ['-c', 'echo $MY_SECRET'],
         env: { MY_SECRET: '{{secret}}' },
+        redact: false,
       }
 
       const result = await delegatedExec('envval', request)
@@ -109,6 +112,7 @@ describe('delegatedExec', () => {
         command: 'sh',
         args: ['-c', 'echo $INJECTED_VAR'],
         env: { INJECTED_VAR: '{{secret}}' },
+        redact: false,
       }
 
       const result = await delegatedExec('merged', request)
@@ -187,11 +191,88 @@ describe('delegatedExec', () => {
           API_KEY: '{{secret:apiKey}}',
           DB_PASS: '{{secret:dbPass}}',
         },
+        // Assert on the raw injected values — opt out of default redaction.
+        redact: false,
       }
 
       const result = await delegatedExec({ apiKey: 'key123', dbPass: 'pass456' }, request)
 
       expect(result.stdout.trim()).toBe('key123 pass456')
+    })
+  })
+
+  describe('output redaction (issue #189)', () => {
+    // The security guarantee: a delegated command that echoes the injected
+    // secret must NOT leak it back through ExecResult.stdout. By default the
+    // captured output is scrubbed to [REDACTED].
+    it('redacts the injected secret from stdout by default', async () => {
+      const request: ExecRequest = {
+        command: 'sh',
+        args: ['-c', 'echo "value is $S"'],
+        env: { S: '{{secret}}' },
+      }
+
+      const result = await delegatedExec('sk_live_FAKE', request)
+
+      expect(result.stdout).not.toContain('sk_live_FAKE')
+      expect(result.stdout).toContain('[REDACTED]')
+      expect(result.stdout.trim()).toBe('value is [REDACTED]')
+    })
+
+    it('redacts the injected secret from stderr by default', async () => {
+      const request: ExecRequest = {
+        command: 'sh',
+        args: ['-c', 'echo "leak $S" >&2'],
+        env: { S: '{{secret}}' },
+      }
+
+      const result = await delegatedExec('sk_live_FAKE', request)
+
+      expect(result.stderr).not.toContain('sk_live_FAKE')
+      expect(result.stderr).toContain('[REDACTED]')
+    })
+
+    it('returns raw, unredacted output when redact is false', async () => {
+      const request: ExecRequest = {
+        command: 'sh',
+        args: ['-c', 'echo "value is $S"'],
+        env: { S: '{{secret}}' },
+        redact: false,
+      }
+
+      const result = await delegatedExec('sk_live_FAKE', request)
+
+      expect(result.stdout.trim()).toBe('value is sk_live_FAKE')
+      expect(result.stdout).not.toContain('[REDACTED]')
+    })
+
+    it('redacts all injected values in multi-secret (named) mode', async () => {
+      const request: ExecRequest = {
+        command: 'sh',
+        args: ['-c', 'echo "$API and $DB"'],
+        env: { API: '{{secret:apiKey}}', DB: '{{secret:dbPass}}' },
+      }
+
+      const result = await delegatedExec({ apiKey: 'key-AAA', dbPass: 'pass-BBB' }, request)
+
+      expect(result.stdout).not.toContain('key-AAA')
+      expect(result.stdout).not.toContain('pass-BBB')
+      expect(result.stdout.trim()).toBe('[REDACTED] and [REDACTED]')
+    })
+
+    it('redacts a secret value even when it appears in output but was not injected via that run', async () => {
+      // A named secret present in the token map is scrubbed from output even if
+      // the command surfaces it from another source — redaction is conservative.
+      const request: ExecRequest = {
+        command: 'sh',
+        args: ['-c', 'echo "only $API"; echo "leaked pass-BBB"'],
+        env: { API: '{{secret:apiKey}}' },
+      }
+
+      const result = await delegatedExec({ apiKey: 'key-AAA', dbPass: 'pass-BBB' }, request)
+
+      expect(result.stdout).not.toContain('key-AAA')
+      expect(result.stdout).not.toContain('pass-BBB')
     })
   })
 

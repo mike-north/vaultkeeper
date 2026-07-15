@@ -590,11 +590,17 @@ export class VaultKeeper {
    * `request.args` — process arguments are visible to other processes via
    * `ps` and often collected in logs and telemetry.
    *
-   * The raw secret is never exposed in the return value.
+   * The raw secret is never exposed in the return value: by default the
+   * captured `stdout`/`stderr` is scrubbed of every injected secret value
+   * (replaced with `[REDACTED]`), so a command that echoes the secret does not
+   * leak it back. Pass `request.redact = false` to receive raw, unredacted
+   * output — only when a caller genuinely needs it, since that forfeits the
+   * guarantee.
    *
    * @param token - A single `CapabilityToken` or a `SecretTokenMap` mapping
    *   names to tokens obtained from `authorize()`.
-   * @param request - The exec request template with placeholders.
+   * @param request - The exec request template with placeholders. Set
+   *   `redact: false` to opt out of output redaction.
    * @returns The command result (`stdout`, `stderr`, `exitCode`) together with
    *   the vault metadata (`vaultResponse`).
    * @throws {AuthorizationDeniedError} If any token is invalid or was not

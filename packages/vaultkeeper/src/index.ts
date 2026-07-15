@@ -76,6 +76,8 @@ export type {
   ExecutableTrustStatus,
 } from './vault.js'
 
+export { redactSecrets, REDACTED } from './access/index.js'
+
 export { defaultBackendType, platformNativeBackendType } from './config.js'
 export { getDefaultConfigDir, getPlatformDefaultConfigDir, loadConfig } from './config.js'
 

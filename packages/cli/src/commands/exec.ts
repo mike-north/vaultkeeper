@@ -33,6 +33,7 @@ import {
   VaultKeeper,
   IdentityMismatchError,
   SecretNotFoundError,
+  ExecError,
   defaultBackendType,
 } from 'vaultkeeper'
 import { promptApproval } from '../approval.js'
@@ -427,7 +428,32 @@ export async function execCommand(args: string[], configDir: string): Promise<nu
     // [W7 fix] Wait for child to exit, handling both 'close' and 'error' events
     return await new Promise<number>((resolve, reject) => {
       child.on('error', (err) => {
-        reject(err)
+        // A spawn failure (the wrapped command could not be started) arrives
+        // here as a bare Node error, e.g. `Error: spawn <path> ENOENT`. Map the
+        // two common cases to a typed ExecError with remediation so the failure
+        // is rendered through the CLI's typed-error formatter (ClassName:
+        // message) like every other error, instead of leaking the raw Node text
+        // (issue #191).
+        const code = err instanceof Error && 'code' in err ? err.code : undefined
+        if (code === 'ENOENT') {
+          reject(
+            new ExecError(
+              `Could not start "${commandName}" — no such file or directory. ` +
+                `Check the command path and that it is executable.`,
+              commandName,
+            ),
+          )
+        } else if (code === 'EACCES') {
+          reject(
+            new ExecError(
+              `Could not start "${commandName}" — permission denied. ` +
+                `Check the command path and that it is executable.`,
+              commandName,
+            ),
+          )
+        } else {
+          reject(err)
+        }
       })
       child.on('close', (code) => {
         resolve(code ?? 1)

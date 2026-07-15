@@ -392,6 +392,8 @@ const { response } = await vault.fetch(token, {
 
 The secret is substituted for every `{{secret}}` placeholder in `env` values before the process is spawned. Secret placeholders are **not supported** in `command` or `args` — `exec()` throws `ExecError` if one appears there. Process arguments are visible to other users via `ps` and are often collected in logs and telemetry, so inject secrets via `env` instead.
 
+The returned `stdout`/`stderr` is **redacted by default**: every occurrence of an injected secret value in the captured output is replaced with `[REDACTED]`, so the raw secret never appears in the return value even if the spawned command echoes it. Pass `redact: false` to receive raw, unredacted output — only when a caller genuinely needs it, since that forfeits the guarantee.
+
 ```ts
 const { result } = await vault.exec(token, {
   command: 'my-tool',
@@ -399,7 +401,7 @@ const { result } = await vault.exec(token, {
   env: { API_KEY: '{{secret}}' },
   cwd: '/tmp',
 })
-console.log(result.stdout, result.exitCode)
+console.log(result.stdout, result.exitCode) // any echoed secret shows as [REDACTED]
 ```
 
 ### Controlled direct access

@@ -12,7 +12,7 @@ Execute a delegated command, injecting secrets from the token(s).
 
 Secret placeholders are not supported in `request.command` or `request.args` — process arguments are visible to other processes via `ps` and often collected in logs and telemetry.
 
-The raw secret is never exposed in the return value.
+The raw secret is never exposed in the return value: by default the captured `stdout`<!-- -->/`stderr` is scrubbed of every injected secret value (replaced with `[REDACTED]`<!-- -->), so a command that echoes the secret does not leak it back. Pass `request.redact = false` to receive raw, unredacted output — only when a caller genuinely needs it, since that forfeits the guarantee.
 
 **Signature:**
 
@@ -69,7 +69,7 @@ request
 
 </td><td>
 
-The exec request template with placeholders.
+The exec request template with placeholders. Set `redact: false` to opt out of output redaction.
 
 
 </td></tr>
