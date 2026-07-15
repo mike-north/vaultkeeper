@@ -88,32 +88,68 @@ describe('deleteCommand', () => {
     })
   })
 
+  // deleteCommand pre-checks existence via vault.secretExists() before calling
+  // vault.delete() (issue #118), so the mocked vault must implement both.
+  function existingSecretVault(): {
+    delete: typeof mockDeleteFn
+    secretExists: ReturnType<typeof vi.fn>
+    activeBackendType: string
+  } {
+    return {
+      delete: mockDeleteFn,
+      secretExists: vi.fn().mockResolvedValue(true),
+      activeBackendType: 'file',
+    }
+  }
+
   describe('when delete succeeds', () => {
     it('should return 0', async () => {
-      mockInit.mockResolvedValue({ delete: mockDeleteFn })
+      mockInit.mockResolvedValue(existingSecretVault())
       const { deleteCommand } = await import('../../../src/commands/delete.js')
       const code = await deleteCommand(['--name', 'my-secret'], configDir)
       expect(code).toBe(0)
     })
 
     it('should write success message to stdout', async () => {
-      mockInit.mockResolvedValue({ delete: mockDeleteFn })
+      mockInit.mockResolvedValue(existingSecretVault())
       const { deleteCommand } = await import('../../../src/commands/delete.js')
       await deleteCommand(['--name', 'my-secret'], configDir)
       expect(stdoutOutput).toContain('deleted')
     })
   })
 
+  // Regression: issue #118 — delete previously relied on the file backend's
+  // own SecretNotFoundError ("Secret not found in file store: x"), worded
+  // differently from exec's ("Secret "x" not found in file backend") and with
+  // no recovery hint. delete now pre-checks existence and reports the same
+  // wording + hint exec.ts does.
+  describe('when the secret does not exist (issue #118)', () => {
+    it('should return 1 and report a consistent SecretNotFoundError with a recovery hint', async () => {
+      mockInit.mockResolvedValue({
+        delete: mockDeleteFn,
+        secretExists: vi.fn().mockResolvedValue(false),
+        activeBackendType: 'file',
+      })
+      const { deleteCommand } = await import('../../../src/commands/delete.js')
+      const code = await deleteCommand(['--name', 'missing-secret'], configDir)
+      expect(code).toBe(1)
+      expect(stderrOutput).toContain('SecretNotFoundError')
+      expect(stderrOutput).toContain('Secret "missing-secret" not found in the "file" backend')
+      expect(stderrOutput).toContain('Run `vaultkeeper store --name missing-secret` to create it')
+      expect(mockDeleteFn).not.toHaveBeenCalled()
+    })
+  })
+
   describe('--skip-doctor flag', () => {
     it('should pass skipDoctor: false to VaultKeeper.init by default', async () => {
-      mockInit.mockResolvedValue({ delete: mockDeleteFn })
+      mockInit.mockResolvedValue(existingSecretVault())
       const { deleteCommand } = await import('../../../src/commands/delete.js')
       await deleteCommand(['--name', 'my-secret'], configDir)
       expect(mockInit).toHaveBeenCalledWith({ configDir, skipDoctor: false })
     })
 
     it('should pass skipDoctor: true to VaultKeeper.init when --skip-doctor is set', async () => {
-      mockInit.mockResolvedValue({ delete: mockDeleteFn })
+      mockInit.mockResolvedValue(existingSecretVault())
       const { deleteCommand } = await import('../../../src/commands/delete.js')
       await deleteCommand(['--name', 'my-secret', '--skip-doctor'], configDir)
       expect(mockInit).toHaveBeenCalledWith({ configDir, skipDoctor: true })
@@ -121,7 +157,7 @@ describe('deleteCommand', () => {
 
     it('should pass skipDoctor: true when VAULTKEEPER_SKIP_DOCTOR=1 env var is set', async () => {
       process.env.VAULTKEEPER_SKIP_DOCTOR = '1'
-      mockInit.mockResolvedValue({ delete: mockDeleteFn })
+      mockInit.mockResolvedValue(existingSecretVault())
       const { deleteCommand } = await import('../../../src/commands/delete.js')
       await deleteCommand(['--name', 'my-secret'], configDir)
       expect(mockInit).toHaveBeenCalledWith({ configDir, skipDoctor: true })
@@ -129,7 +165,7 @@ describe('deleteCommand', () => {
 
     it('should not skip doctor when VAULTKEEPER_SKIP_DOCTOR=0', async () => {
       process.env.VAULTKEEPER_SKIP_DOCTOR = '0'
-      mockInit.mockResolvedValue({ delete: mockDeleteFn })
+      mockInit.mockResolvedValue(existingSecretVault())
       const { deleteCommand } = await import('../../../src/commands/delete.js')
       await deleteCommand(['--name', 'my-secret'], configDir)
       expect(mockInit).toHaveBeenCalledWith({ configDir, skipDoctor: false })
@@ -137,7 +173,7 @@ describe('deleteCommand', () => {
 
     it('should not skip doctor when VAULTKEEPER_SKIP_DOCTOR=true (non-numeric)', async () => {
       process.env.VAULTKEEPER_SKIP_DOCTOR = 'true'
-      mockInit.mockResolvedValue({ delete: mockDeleteFn })
+      mockInit.mockResolvedValue(existingSecretVault())
       const { deleteCommand } = await import('../../../src/commands/delete.js')
       await deleteCommand(['--name', 'my-secret'], configDir)
       expect(mockInit).toHaveBeenCalledWith({ configDir, skipDoctor: false })
@@ -145,7 +181,7 @@ describe('deleteCommand', () => {
 
     it('should not skip doctor when VAULTKEEPER_SKIP_DOCTOR is empty string', async () => {
       process.env.VAULTKEEPER_SKIP_DOCTOR = ''
-      mockInit.mockResolvedValue({ delete: mockDeleteFn })
+      mockInit.mockResolvedValue(existingSecretVault())
       const { deleteCommand } = await import('../../../src/commands/delete.js')
       await deleteCommand(['--name', 'my-secret'], configDir)
       expect(mockInit).toHaveBeenCalledWith({ configDir, skipDoctor: false })

@@ -95,8 +95,13 @@ export async function storeCommand(args: string[], configDir: string): Promise<n
     const secret = Buffer.concat(chunks).toString('utf8').trimEnd()
 
     if (secret.length === 0) {
+      // Exit code 2, not 1: empty stdin is equivalent misuse to an empty or
+      // missing `--name` above — both mean "no usable input was given" — and
+      // must be reported the same way (regression: issue #118 exit-code
+      // matrix normalization against the #69 taxonomy).
       process.stderr.write('Error: No secret provided on stdin\n')
-      return 1
+      process.stderr.write('Usage: echo "secret" | vaultkeeper store --name <name>\n')
+      return 2
     }
 
     // No-config story is uniform across store/delete/exec/config show/doctor

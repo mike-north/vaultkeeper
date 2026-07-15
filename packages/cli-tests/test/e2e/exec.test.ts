@@ -326,4 +326,29 @@ describe('exec trust gate', () => {
     expect(result.stderr).toContain('SecretNotFoundError')
     expect(result.stdout).not.toContain('ready=')
   })
+
+  // Regression: issue #118 — exec and delete previously reported the same
+  // failure with different wording (exec: `Secret "x" not found in file
+  // backend`; delete: the file backend's own `Secret not found in file
+  // store: x`) and neither included a recovery hint. Both commands must now
+  // render byte-for-byte identical text for the missing-secret line.
+  it('reports the identical SecretNotFoundError wording and hint as `delete` for the same missing secret (issue #118)', async () => {
+    if (env === undefined) throw new Error('env not initialized')
+    const caller = await writeCaller('#!/bin/sh\necho hi\n')
+
+    const execResult = await env.run(
+      execArgs(caller).map((a) => (a === SECRET_NAME ? 'ghost-secret' : a)),
+    )
+    const deleteResult = await env.run(['delete', '--name', 'ghost-secret'])
+
+    const expectedLine = 'Secret "ghost-secret" not found in the "file" backend.'
+    const expectedHint = 'Run `vaultkeeper store --name ghost-secret` to create it.'
+
+    expect(execResult.exitCode).not.toBe(0)
+    expect(deleteResult.exitCode).not.toBe(0)
+    expect(execResult.stderr).toContain(expectedLine)
+    expect(execResult.stderr).toContain(expectedHint)
+    expect(deleteResult.stderr).toContain(expectedLine)
+    expect(deleteResult.stderr).toContain(expectedHint)
+  })
 })

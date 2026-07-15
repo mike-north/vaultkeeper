@@ -41,7 +41,7 @@ import { RedactingStream } from '../redact.js'
 import { shouldSkipDoctor } from '../skip-doctor.js'
 import { shouldAutoApprove } from '../auto-approve.js'
 import { shellQuote } from '../shell-quote.js'
-import { formatError } from '../output.js'
+import { formatError, secretNotFoundMessage } from '../output.js'
 import { CONFIG_DIR_HELP_OPTION, CONFIG_DIR_HELP_ENV } from '../config-dir.js'
 import { configFileExists, noConfigMessage } from '../config-status.js'
 
@@ -319,9 +319,7 @@ export async function execCommand(args: string[], configDir: string): Promise<nu
     // `setup()`, it never touches the TOFU trust manifest), so it cannot be
     // used to bypass caller approval.
     if (!(await vault.secretExists(secret))) {
-      throw new SecretNotFoundError(
-        `Secret "${secret}" not found in ${vault.activeBackendType} backend`,
-      )
+      throw new SecretNotFoundError(secretNotFoundMessage(secret, vault.activeBackendType))
     }
 
     // Enforce the trust gate BEFORE touching the cache or retrieving the

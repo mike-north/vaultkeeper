@@ -71,6 +71,25 @@ export function formatPreflightConfigError(error: PreflightCheckError): string {
   return configRemediation(error.configPath, error.location)
 }
 
+/**
+ * Build the standard "secret not found" message, shared by every CLI command
+ * that looks up a secret before acting on it.
+ *
+ * Regression: issue #118 — `exec` and `delete` previously reported different
+ * wording for the identical failure (`exec` said `Secret "x" not found in
+ * file backend`; `delete` surfaced the backend's own `Secret not found in
+ * file store: x`), and neither pointed the user at a fix. Centralizing the
+ * wording here, and having each command construct the error from this helper
+ * instead of the backend's own message, guarantees they stay in sync and
+ * always include a recovery hint.
+ */
+export function secretNotFoundMessage(name: string, backendType: string): string {
+  return (
+    `Secret "${name}" not found in the "${backendType}" backend. ` +
+    `Run \`vaultkeeper store --name ${name}\` to create it.`
+  )
+}
+
 /** Format an error for display on stderr. */
 export function formatError(err: unknown, configDir: string): string {
   if (err instanceof ConfigParseError || err instanceof ConfigValidationError) {

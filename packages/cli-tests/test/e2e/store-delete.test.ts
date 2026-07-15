@@ -23,16 +23,34 @@ describe('store and delete lifecycle', () => {
     }
   })
 
-  it('store should exit 1 when stdin is empty', async () => {
+  // Regression: issue #118 — empty stdin previously exited 1 (runtime error)
+  // while an empty/missing --name exits 2 (usage error) for the same
+  // underlying problem (no usable secret input). Both must now agree.
+  //
+  // Note: doctor runs before the stdin check, so on a system missing a
+  // dependency the doctor failure (still a usage-unrelated runtime error, 1)
+  // surfaces first — both are valid CLI error paths for this environment.
+  it('store should exit 2 when stdin is empty (issue #118)', async () => {
     env = await createCliTestEnv()
     const result = await env.runWithStdin(['store', '--name', 'test-secret'], '')
-    expect(result.exitCode).toBe(1)
-    // The error is either "No secret provided on stdin" (file backend) or a
-    // doctor check failure (if the system lacks dependencies). Both are valid
-    // CLI error paths.
-    const matchesExpected =
-      result.stderr.includes('No secret provided on stdin') || result.stderr.includes('doctor')
-    expect(matchesExpected).toBe(true)
+    if (result.stderr.includes('doctor')) {
+      expect(result.exitCode).toBe(1)
+    } else {
+      expect(result.exitCode).toBe(2)
+      expect(result.stderr).toContain('No secret provided on stdin')
+    }
+  })
+
+  // Regression: issue #118 — delete previously surfaced the file backend's
+  // own not-found message ("Secret not found in file store: x") instead of
+  // the consistent, hint-bearing wording exec.ts uses for the same failure.
+  it('delete should exit non-zero with the consistent SecretNotFoundError wording and a recovery hint for a nonexistent secret (issue #118)', async () => {
+    env = await createCliTestEnv()
+    const result = await env.run(['delete', '--name', 'never-stored', '--skip-doctor'])
+    expect(result.exitCode).not.toBe(0)
+    expect(result.stderr).toContain('SecretNotFoundError')
+    expect(result.stderr).toContain('Secret "never-stored" not found in the "file" backend')
+    expect(result.stderr).toContain('Run `vaultkeeper store --name never-stored` to create it')
   })
 
   // Regression: issue #60 — the CLI ignored BackendConfig.path and always wrote
