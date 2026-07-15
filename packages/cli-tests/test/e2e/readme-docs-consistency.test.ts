@@ -1,6 +1,6 @@
 /**
  * Docs consistency guard for the root README, extending the drift-check family
- * started by the README/CLI drift check (#62). Catches two regressions from
+ * started by the README/CLI drift check (#62). Catches regressions from
  * https://github.com/mike-north/vaultkeeper/issues/102:
  *
  * 1. An "access pattern" named in prose (e.g. in the "Which package should I
@@ -11,6 +11,14 @@
  *    contradicts the quick-start config note — both must agree that a
  *    zero-config `vaultkeeper`/`VaultKeeper.init()` resolves to the safe
  *    `file` backend (the native credential store is opt-in only).
+ * 3. A trust-tier description that overclaims a Sigstore-transparency-log or
+ *    package-registry-signature verification model. Per
+ *    `packages/vaultkeeper/src/identity/trust.ts`, the real mechanism is
+ *    TOFU-manifest hash checking: a caller's hash is "approved" (found in the
+ *    trust manifest), "not yet approved" (first encounter), or "mismatch"
+ *    (changed since approval). The Sigstore integration point is a stub that
+ *    always falls through, and "tier 2" is not a registry check — it is the
+ *    same trust-manifest lookup as tier 3.
  *
  * @see https://github.com/mike-north/vaultkeeper/issues/102
  * @see https://github.com/mike-north/vaultkeeper/issues/62
@@ -122,5 +130,31 @@ describe('README default-backend statement is internally consistent (issue #102)
 
   it('does not contain a stale [!WARNING] block warning that a bare init targets the real credential store', () => {
     expect(README.includes('[!WARNING]')).toBe(false)
+  })
+})
+
+describe('README trust-tier description matches the real TOFU-manifest mechanism (issue #102)', () => {
+  it('does not claim tier 1/2 are active Sigstore or registry-signature verification', () => {
+    // These exact phrasings previously appeared as table cells claiming an
+    // active verification mechanism; the caveat prose intentionally *names*
+    // Sigstore and registry checks while explaining they don't happen, so
+    // this asserts the old table-row phrasing specifically, not the words.
+    expect(README).not.toMatch(/Sigstore transparency log/i)
+    expect(README).not.toMatch(/\|\s*Registry signature\s*\|/i)
+    expect(README).not.toMatch(/\|\s*Intended method\s*\|/i)
+  })
+
+  it('describes the actual TOFU (trust-manifest hash) model with its three real outcomes', () => {
+    const trustSection = /## Trust tiers[\s\S]*?(?=\n## )/.exec(README)?.[0]
+    expect(trustSection, 'expected to find the "## Trust tiers" section in README.md').toBeDefined()
+    expect(trustSection).toMatch(/TOFU/)
+    expect(trustSection).toMatch(/Not yet approved/i)
+    expect(trustSection).toMatch(/Approved/)
+    expect(trustSection).toMatch(/Mismatch/i)
+    // The honest caveat: Sigstore is a non-functional stub, and "tier 2" is
+    // not a registry check — both must stay documented so this doesn't drift
+    // back to an overclaim.
+    expect(trustSection).toMatch(/stub/i)
+    expect(trustSection).toMatch(/no executable is verified via Sigstore or any package registry/i)
   })
 })
