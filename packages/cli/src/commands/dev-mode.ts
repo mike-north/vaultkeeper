@@ -72,7 +72,7 @@ export async function devModeCommand(args: string[], configDir: string): Promise
     process.stdout.write(`Development mode ${enabled ? 'enabled' : 'disabled'} for ${scriptPath}\n`)
     return 0
   } catch (err) {
-    process.stderr.write(`${formatError(err)}\n`)
+    process.stderr.write(`${formatError(err, configDir)}\n`)
     return 1
   }
 }

@@ -28,13 +28,20 @@ const IdentityMismatchError = vi.hoisted(
     },
 )
 
-vi.mock('vaultkeeper', () => ({
-  VaultKeeper: {
-    init: mockInit,
-  },
-  IdentityMismatchError,
-  defaultBackendType: vi.fn().mockReturnValue('file'),
-}))
+// Partial mock: keep real exports (e.g. ConfigParseError/ConfigValidationError,
+// needed by formatError's instanceof checks — issue #114) alongside the
+// mocked entry points this suite controls.
+vi.mock('vaultkeeper', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('vaultkeeper')>()
+  return {
+    ...actual,
+    VaultKeeper: {
+      init: mockInit,
+    },
+    IdentityMismatchError,
+    defaultBackendType: vi.fn().mockReturnValue('file'),
+  }
+})
 
 // Prevent any real approval prompts from blocking tests
 vi.mock('../../../src/approval.js', () => ({

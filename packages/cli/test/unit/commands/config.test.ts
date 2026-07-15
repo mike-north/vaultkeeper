@@ -173,6 +173,9 @@ describe('configCommand', () => {
       expect(stderrOutput).toContain('vaultkeeper config init --backend file')
     })
 
+    // Issue #114: the remediation must be CLI-native ("run `vaultkeeper
+    // config init --force`"), never the library's "install @vaultkeeper/cli"
+    // text — this CLI is already installed.
     it('should exit non-zero with a parse error, path, location, and remediation hint on invalid JSON (issue #68)', async () => {
       await fs.mkdir(configDir, { recursive: true })
       await fs.writeFile(path.join(configDir, 'config.json'), '{ bad json', 'utf8')
@@ -182,7 +185,8 @@ describe('configCommand', () => {
       expect(stdoutOutput).toBe('')
       expect(stderrOutput).toContain(path.join(configDir, 'config.json'))
       expect(stderrOutput).toMatch(/line \d+, column \d+/)
-      expect(stderrOutput).toContain('vaultkeeper config init')
+      expect(stderrOutput).toContain('vaultkeeper config init --force')
+      expect(stderrOutput).not.toContain('install @vaultkeeper/cli')
     })
 
     it('never dumps invalid JSON with exit 0 (regression: issue #68 repro)', async () => {
@@ -194,7 +198,12 @@ describe('configCommand', () => {
       expect(stdoutOutput).not.toContain('bad json')
     })
 
-    it('exits non-zero with a schema validation error, path, and remediation hint on structurally invalid config', async () => {
+    // Issue #114: the CLI's own message no longer echoes the library's
+    // field-level reason verbatim (that text lives only alongside the
+    // library's "install @vaultkeeper/cli" remediation — issue #100); it
+    // instead builds a CLI-native message from the error's remediation-free
+    // structured fields (path here; also location for a parse error).
+    it('exits non-zero with a CLI-native remediation, path, and recovery command on structurally invalid config', async () => {
       await fs.mkdir(configDir, { recursive: true })
       await fs.writeFile(
         path.join(configDir, 'config.json'),
@@ -205,8 +214,8 @@ describe('configCommand', () => {
       const code = await configCommand(['show'], configDir)
       expect(code).toBe(1)
       expect(stderrOutput).toContain(path.join(configDir, 'config.json'))
-      expect(stderrOutput).toContain('version must be 1')
-      expect(stderrOutput).toContain('vaultkeeper config init')
+      expect(stderrOutput).toContain('vaultkeeper config init --force')
+      expect(stderrOutput).not.toContain('install @vaultkeeper/cli')
     })
   })
 
