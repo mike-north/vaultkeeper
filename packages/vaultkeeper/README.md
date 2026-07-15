@@ -52,10 +52,12 @@ const { response } = await vault.fetch(token, {
 })
 ```
 
-Other access patterns — delegated `exec()` (secret injected via env var) and controlled direct
-access via `getSecret()` (auto-zeroing buffer) — share the same `{{secret}}` placeholder substitution
-shown above; see the `SecretAccessor` and `ExecRequest` types in the package's shipped `.d.ts` for
-their full signatures.
+Other access patterns: delegated `exec()` (secret injected via env var) uses the same `{{secret}}`
+placeholder substitution as `fetch()` above. Controlled direct access via `getSecret()` is
+different — it returns a `SecretAccessor` whose secret is only reachable through a single-use
+`read(callback)` call backed by an auto-zeroing buffer; no placeholder substitution is involved.
+See the `SecretAccessor` and `ExecRequest` types in the package's shipped `.d.ts` for their full
+signatures.
 
 ## Example config
 
