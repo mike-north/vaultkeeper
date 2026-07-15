@@ -41,6 +41,7 @@ export { createNodeHost } from './node-host.js';
 export {
   VaultError,
   SecretNotFoundError,
+  DecryptionError,
   InvalidTokenError,
   TokenExpiredError,
   KeyRotatedError,

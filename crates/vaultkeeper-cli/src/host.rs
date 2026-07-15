@@ -125,7 +125,20 @@ impl HostPlatform for NativeHostPlatform {
     }
 
     async fn file_exists(&self, path: &Path) -> Result<bool, VaultError> {
-        Ok(path.exists())
+        // `Path::exists()` swallows every error (including EACCES) and
+        // reports `false`, which would let a permission failure masquerade
+        // as "does not exist" for callers (like FileBackend::retrieve) that
+        // rely on this to distinguish the two. Use `metadata` directly so
+        // only a genuine ENOENT-equivalent maps to `Ok(false)`.
+        match std::fs::metadata(path) {
+            Ok(_) => Ok(true),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(false),
+            Err(e) => Err(VaultError::Filesystem {
+                message: format!("Failed to check existence of {}: {e}", path.display()),
+                path: path.display().to_string(),
+                permission: "read".to_string(),
+            }),
+        }
     }
 
     async fn delete_file(&self, path: &Path) -> Result<(), VaultError> {
@@ -170,5 +183,65 @@ impl HostPlatform for NativeHostPlatform {
 
     fn config_dir(&self) -> &Path {
         &self.config_dir
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    /// Regression test for PR #135 review feedback: `file_exists` must map a
+    /// genuine "does not exist" (ENOENT) to `Ok(false)`, not lose that
+    /// distinction the way `Path::exists()` does.
+    #[tokio::test]
+    async fn file_exists_returns_false_for_missing_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let host = NativeHostPlatform::new(dir.path().to_path_buf());
+        let missing = dir.path().join("does-not-exist");
+        assert!(!host.file_exists(&missing).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn file_exists_returns_true_for_existing_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let host = NativeHostPlatform::new(dir.path().to_path_buf());
+        let present = dir.path().join("present.txt");
+        fs::write(&present, b"hi").unwrap();
+        assert!(host.file_exists(&present).await.unwrap());
+    }
+
+    /// Regression test for PR #135 review feedback: `Path::exists()`
+    /// swallows every error (including EACCES) and reports `false`, which
+    /// would let `FileBackend::retrieve()`'s exists-probe misreport a
+    /// permission failure as "does not exist". `file_exists` must instead
+    /// surface a genuine stat failure (here: an inaccessible parent
+    /// directory) as `VaultError::Filesystem`.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn file_exists_surfaces_filesystem_error_when_probe_is_denied() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let host = NativeHostPlatform::new(dir.path().to_path_buf());
+        let blocked_dir = dir.path().join("blocked");
+        fs::create_dir(&blocked_dir).unwrap();
+        let entry = blocked_dir.join("secret.enc");
+        fs::write(&entry, b"data").unwrap();
+        // Remove search permission on the parent so stat'ing the child fails
+        // with EACCES rather than ENOENT.
+        fs::set_permissions(&blocked_dir, fs::Permissions::from_mode(0o000)).unwrap();
+
+        let result = host.file_exists(&entry).await;
+        // Restore permissions unconditionally so the tempdir can be cleaned up.
+        fs::set_permissions(&blocked_dir, fs::Permissions::from_mode(0o700)).unwrap();
+
+        match result {
+            // Running with elevated privileges (e.g. root in CI) bypasses
+            // permission bits entirely, so there's nothing to assert.
+            Ok(_) => {}
+            Err(VaultError::Filesystem { permission, .. }) => assert_eq!(permission, "read"),
+            Err(other) => panic!("expected VaultError::Filesystem, got {other:?}"),
+        }
     }
 }

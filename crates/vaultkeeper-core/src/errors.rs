@@ -51,6 +51,15 @@ pub enum VaultError {
     #[error("{message}")]
     SecretNotFound { message: String },
 
+    /// A stored secret entry could not be decrypted — the ciphertext is
+    /// corrupted/truncated or the AES-GCM authentication tag failed to verify.
+    #[error("{message}")]
+    Decryption {
+        message: String,
+        /// The path of the encrypted entry that failed to decrypt.
+        path: String,
+    },
+
     // --- JWE Lifecycle Failures ---
     /// A JWE token has passed its expiration time.
     #[error("{message}")]

@@ -26,6 +26,12 @@ export function createNodeHost(configDirOverride?: string): WasmHostPlatform;
 export function createVaultKeeper(options?: VaultKeeperOptions, configDir?: string): Promise<VaultKeeper>;
 
 // @public
+export class DecryptionError extends VaultError {
+    constructor(message: string, path?: string);
+    readonly path?: string;
+}
+
+// @public
 export class InvalidTokenError extends VaultError {
     constructor(message: string);
 }

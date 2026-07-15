@@ -80,14 +80,18 @@ fn js_err(msg: &str) -> VaultError {
 /// Stable machine-readable code for a [`VaultError`], used by the TypeScript
 /// bridge to reconstruct a typed error instance from the thrown value.
 ///
-/// Typed variants map one-to-one to a code. `VaultError::Other(..)` — which the
-/// core uses for malformed/decryption/validation failures — maps to the generic
-/// `vault-error`; `authorize()` reclassifies its own `Other` errors to
-/// `invalid-token`, since any non-typed failure there means the token is
-/// unprocessable. This mapping is deliberately confined to the WASM boundary.
+/// Typed variants map one-to-one to a code. Corrupted/undecryptable stored
+/// entries are their own typed `VaultError::Decryption`, mapped to
+/// `decryption`. `VaultError::Other(..)` — which the core uses for the
+/// remaining malformed/validation failures that don't yet have a dedicated
+/// variant — maps to the generic `vault-error`; `authorize()` reclassifies
+/// its own `Other` errors to `invalid-token`, since any non-typed failure
+/// there means the token is unprocessable. This mapping is deliberately
+/// confined to the WASM boundary.
 fn vault_error_code(e: &VaultError) -> &'static str {
     match e {
         VaultError::SecretNotFound { .. } => "secret-not-found",
+        VaultError::Decryption { .. } => "decryption",
         VaultError::TokenExpired { .. } => "token-expired",
         VaultError::KeyRotated { .. } => "key-rotated",
         VaultError::KeyRevoked { .. } => "key-revoked",
@@ -122,6 +126,9 @@ fn vault_error_to_js(e: &VaultError) -> JsValue {
     match e {
         VaultError::TokenExpired { can_refresh, .. } => {
             set("canRefresh", &JsValue::from_bool(*can_refresh));
+        }
+        VaultError::Decryption { path, .. } => {
+            set("path", &JsValue::from_str(path));
         }
         VaultError::BackendUnavailable {
             reason, attempted, ..

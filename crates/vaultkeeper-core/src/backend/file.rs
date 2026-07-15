@@ -74,11 +74,11 @@ impl FileBackend {
                         self.host.write_file(&key_path, &key, 0o600).await?;
                         Ok(key)
                     }
-                    Ok(true) => {
-                        // File exists but couldn't be read — surface the original error
-                        Err(read_err)
-                    }
-                    Err(exists_err) => Err(exists_err),
+                    // Whether the exists-probe found the key file or itself
+                    // failed, the definitive signal is the original read
+                    // failure — the probe is only a best-effort disambiguation
+                    // step and a probe failure must not mask or replace it.
+                    Ok(true) | Err(_) => Err(read_err),
                 }
             }
         }
@@ -205,29 +205,49 @@ impl SecretBackend for FileBackend {
 
     async fn retrieve(&self, id: &str) -> Result<String, VaultError> {
         let entry_path = self.entry_path(id);
-        let data =
-            self.host
-                .read_file(&entry_path)
-                .await
-                .map_err(|_| VaultError::SecretNotFound {
-                    message: format!("Secret not found in file store: {id}"),
-                })?;
 
-        let encoded = String::from_utf8(data)
-            .map_err(|e| VaultError::Other(format!("Encrypted file is not valid UTF-8: {e}")))?;
+        // Only a genuine "entry does not exist" should surface as
+        // SecretNotFound. Any other read failure (e.g. EACCES/EPERM, surfaced
+        // by the host as a typed VaultError::Filesystem) must propagate
+        // unchanged so callers can tell "missing" apart from "unreadable".
+        //
+        // The exists-probe below exists solely to disambiguate; if the probe
+        // itself fails, that is not a more informative signal than the read
+        // failure we already have — the caller asked to read a secret, not
+        // to check for its existence, so a probe failure must not mask or
+        // replace the original read error.
+        let data = match self.host.read_file(&entry_path).await {
+            Ok(data) => data,
+            Err(read_err) => {
+                return match self.host.file_exists(&entry_path).await {
+                    Ok(false) => Err(VaultError::SecretNotFound {
+                        message: format!("Secret not found in file store: {id}"),
+                    }),
+                    Ok(true) | Err(_) => Err(read_err),
+                };
+            }
+        };
+
+        // A stored entry is always `iv:authTag:ciphertext` UTF-8 text (see
+        // module docs); invalid UTF-8 means the on-disk entry is corrupted,
+        // the same class of failure as a bad auth tag below — type it the
+        // same way rather than as a generic `Other`.
+        let encoded = String::from_utf8(data).map_err(|e| VaultError::Decryption {
+            message: format!("Encrypted file is not valid UTF-8: {e}"),
+            path: entry_path.display().to_string(),
+        })?;
 
         let key = self.get_or_create_key().await?;
-        decrypt_gcm(&key, &encoded)
+        decrypt_gcm(&key, &encoded).map_err(|e| VaultError::Decryption {
+            message: format!("Failed to decrypt secret: {e}"),
+            path: entry_path.display().to_string(),
+        })
     }
 
     async fn delete(&self, id: &str) -> Result<(), VaultError> {
         let entry_path = self.entry_path(id);
         match self.host.file_exists(&entry_path).await {
-            Ok(true) => self
-                .host
-                .delete_file(&entry_path)
-                .await
-                .map_err(|e| VaultError::Other(format!("Failed to delete secret file: {e}"))),
+            Ok(true) => self.host.delete_file(&entry_path).await,
             Ok(false) => Err(VaultError::SecretNotFound {
                 message: format!("Secret not found in file store: {id}"),
             }),
@@ -330,12 +350,22 @@ mod tests {
     }
 
     use crate::backend::{ExecOutput, Platform};
-    use std::collections::HashMap;
+    use std::collections::{HashMap, HashSet};
     use std::sync::Mutex;
 
+    /// Test double for `HostPlatform` that can simulate permission failures
+    /// distinct from "file does not exist": paths added to `deny_read` /
+    /// `deny_delete` still exist (so `file_exists` returns `true`) but their
+    /// read/delete calls fail with a `VaultError::Filesystem`, mirroring what
+    /// the real `NativeHostPlatform` produces for EACCES/EPERM. `deny_exists`
+    /// separately simulates the exists-probe itself failing (e.g. EACCES
+    /// stat'ing a parent directory).
     struct TestHost {
         files: Mutex<HashMap<PathBuf, Vec<u8>>>,
         config_dir: PathBuf,
+        deny_read: Mutex<HashSet<PathBuf>>,
+        deny_delete: Mutex<HashSet<PathBuf>>,
+        deny_exists: Mutex<HashSet<PathBuf>>,
     }
 
     #[async_trait::async_trait]
@@ -353,6 +383,13 @@ mod tests {
             })
         }
         async fn read_file(&self, path: &Path) -> Result<Vec<u8>, VaultError> {
+            if self.deny_read.lock().unwrap().contains(path) {
+                return Err(VaultError::Filesystem {
+                    message: format!("Permission denied reading {}", path.display()),
+                    path: path.display().to_string(),
+                    permission: "read".to_string(),
+                });
+            }
             self.files
                 .lock()
                 .unwrap()
@@ -373,9 +410,27 @@ mod tests {
             Ok(())
         }
         async fn file_exists(&self, path: &Path) -> Result<bool, VaultError> {
+            if self.deny_exists.lock().unwrap().contains(path) {
+                // `permission` stays within VaultError::Filesystem's
+                // documented "read"/"write" contract; the message text (not
+                // a synthetic permission value) is what distinguishes this
+                // from a `read_file` failure in tests.
+                return Err(VaultError::Filesystem {
+                    message: format!("Permission denied checking existence of {}", path.display()),
+                    path: path.display().to_string(),
+                    permission: "read".to_string(),
+                });
+            }
             Ok(self.files.lock().unwrap().contains_key(path))
         }
         async fn delete_file(&self, path: &Path) -> Result<(), VaultError> {
+            if self.deny_delete.lock().unwrap().contains(path) {
+                return Err(VaultError::Filesystem {
+                    message: format!("Permission denied deleting {}", path.display()),
+                    path: path.display().to_string(),
+                    permission: "write".to_string(),
+                });
+            }
             self.files
                 .lock()
                 .unwrap()
@@ -409,6 +464,9 @@ mod tests {
         Arc::new(TestHost {
             files: Mutex::new(HashMap::new()),
             config_dir: PathBuf::from("/test/config"),
+            deny_read: Mutex::new(HashSet::new()),
+            deny_delete: Mutex::new(HashSet::new()),
+            deny_exists: Mutex::new(HashSet::new()),
         })
     }
 
@@ -431,6 +489,184 @@ mod tests {
         let backend = FileBackend::new(host);
         let result = backend.retrieve("nonexistent").await;
         assert!(result.is_err());
+    }
+
+    // Regression tests for issue #134: FileBackend collapsed distinct failure
+    // modes into wrong or unstructured errors.
+
+    /// AC1: `retrieve` must map only a genuine "entry does not exist" to
+    /// `SecretNotFound`.
+    #[tokio::test]
+    async fn retrieve_missing_file_returns_secret_not_found() {
+        let host = make_test_host();
+        let backend = FileBackend::new(host);
+        let err = backend.retrieve("nonexistent").await.unwrap_err();
+        assert!(
+            matches!(err, VaultError::SecretNotFound { .. }),
+            "expected SecretNotFound, got {err:?}"
+        );
+    }
+
+    /// AC1: a read failure on an entry that *does* exist (e.g. EACCES/EPERM,
+    /// surfaced by the host as `VaultError::Filesystem`) must propagate
+    /// unchanged rather than being misreported as `SecretNotFound`.
+    #[tokio::test]
+    async fn retrieve_permission_denied_returns_filesystem_not_secret_not_found() {
+        let host = make_test_host();
+        let backend = FileBackend::new(host.clone());
+        backend.store("locked-secret", "value").await.unwrap();
+        let entry_path = backend.entry_path("locked-secret");
+        host.deny_read.lock().unwrap().insert(entry_path.clone());
+
+        let err = backend.retrieve("locked-secret").await.unwrap_err();
+        match err {
+            VaultError::Filesystem {
+                path, permission, ..
+            } => {
+                assert_eq!(path, entry_path.display().to_string());
+                assert_eq!(permission, "read");
+            }
+            other => panic!("expected VaultError::Filesystem, got {other:?}"),
+        }
+    }
+
+    /// Regression test for PR #135 review feedback: when the read fails AND
+    /// the follow-up exists-probe used to disambiguate "missing" from
+    /// "unreadable" *also* fails, the probe's own failure must not replace
+    /// the original read failure. The read failure is the definitive signal
+    /// for what `retrieve()` actually attempted; the probe is only a
+    /// best-effort disambiguation step and its failure carries no more
+    /// information than "we couldn't disambiguate."
+    #[tokio::test]
+    async fn retrieve_read_failure_survives_exists_probe_failure() {
+        let host = make_test_host();
+        let backend = FileBackend::new(host.clone());
+        backend.store("probe-fails", "value").await.unwrap();
+        let entry_path = backend.entry_path("probe-fails");
+        host.deny_read.lock().unwrap().insert(entry_path.clone());
+        host.deny_exists.lock().unwrap().insert(entry_path.clone());
+
+        let err = backend.retrieve("probe-fails").await.unwrap_err();
+        match err {
+            // `permission` is "read" on both the read failure and the
+            // exists-probe failure (both are legitimately read-adjacent
+            // operations), so the message text — not `permission` — is what
+            // distinguishes which one surfaced.
+            VaultError::Filesystem { message, .. } => {
+                assert!(
+                    message.contains("reading") && !message.contains("checking existence"),
+                    "must surface the original read failure ('reading ...'), not the exists-probe failure ('checking existence ...'); got: {message}"
+                );
+            }
+            other => panic!("expected the original read Filesystem error, got {other:?}"),
+        }
+    }
+
+    /// Regression test for PR #135 review feedback: `get_or_create_key()` has
+    /// the identical read-failure / exists-probe-failure pattern as
+    /// `retrieve()` — a failing exists-probe must not mask the original
+    /// failure to read an existing key file.
+    #[tokio::test]
+    async fn get_or_create_key_read_failure_survives_exists_probe_failure() {
+        let host = make_test_host();
+        let backend = FileBackend::new(host.clone());
+        let key_path = backend.storage_dir().join(KEY_FILE);
+        // Seed a key file so read_file() has something to fail on, then deny
+        // both the read and the follow-up exists-probe.
+        host.files
+            .lock()
+            .unwrap()
+            .insert(key_path.clone(), vec![0u8; GCM_KEY_BYTES]);
+        host.deny_read.lock().unwrap().insert(key_path.clone());
+        host.deny_exists.lock().unwrap().insert(key_path);
+
+        let err = backend.get_or_create_key().await.unwrap_err();
+        match err {
+            VaultError::Filesystem { message, .. } => {
+                assert!(
+                    message.contains("reading") && !message.contains("checking existence"),
+                    "must surface the original read failure ('reading ...'), not the exists-probe failure ('checking existence ...'); got: {message}"
+                );
+            }
+            other => panic!("expected the original read Filesystem error, got {other:?}"),
+        }
+    }
+
+    /// AC2: `delete` must propagate the host's `VaultError::Filesystem`
+    /// instead of re-wrapping it as `VaultError::Other`, losing its fields.
+    #[tokio::test]
+    async fn delete_permission_denied_returns_filesystem() {
+        let host = make_test_host();
+        let backend = FileBackend::new(host.clone());
+        backend.store("locked-delete", "value").await.unwrap();
+        let entry_path = backend.entry_path("locked-delete");
+        host.deny_delete.lock().unwrap().insert(entry_path.clone());
+
+        let err = backend.delete("locked-delete").await.unwrap_err();
+        match err {
+            VaultError::Filesystem {
+                path, permission, ..
+            } => {
+                assert_eq!(path, entry_path.display().to_string());
+                assert_eq!(permission, "write");
+            }
+            other => panic!("expected VaultError::Filesystem, got {other:?}"),
+        }
+    }
+
+    /// AC3: corrupted ciphertext / a failed AES-GCM auth tag must surface as
+    /// a typed `VaultError::Decryption` carrying the entry path, not a
+    /// generic `VaultError::Other`.
+    #[tokio::test]
+    async fn retrieve_corrupt_ciphertext_returns_decryption_error() {
+        let host = make_test_host();
+        let backend = FileBackend::new(host.clone());
+        backend.store("corrupt-me", "value").await.unwrap();
+        let entry_path = backend.entry_path("corrupt-me");
+
+        // Flip a byte in the stored `iv:authTag:ciphertext` encoding so the
+        // AES-GCM auth tag fails to verify on retrieve.
+        {
+            let mut files = host.files.lock().unwrap();
+            let data = files.get_mut(&entry_path).expect("entry must exist");
+            let last = data.len() - 1;
+            data[last] = if data[last] == b'A' { b'B' } else { b'A' };
+        }
+
+        let err = backend.retrieve("corrupt-me").await.unwrap_err();
+        match err {
+            VaultError::Decryption { path, .. } => {
+                assert_eq!(path, entry_path.display().to_string());
+            }
+            other => panic!("expected VaultError::Decryption, got {other:?}"),
+        }
+    }
+
+    /// Regression test for PR #135 review feedback: an on-disk entry that
+    /// isn't even valid UTF-8 (the stored `iv:authTag:ciphertext` encoding is
+    /// always UTF-8 text) is the same class of corruption as a bad auth tag
+    /// and must surface as `VaultError::Decryption`, not a generic `Other`.
+    #[tokio::test]
+    async fn retrieve_non_utf8_entry_returns_decryption_error() {
+        let host = make_test_host();
+        let backend = FileBackend::new(host.clone());
+        backend.store("garbled", "value").await.unwrap();
+        let entry_path = backend.entry_path("garbled");
+
+        // Overwrite with raw bytes that are not valid UTF-8 at all (0xFF is
+        // never a valid UTF-8 lead or continuation byte).
+        host.files
+            .lock()
+            .unwrap()
+            .insert(entry_path.clone(), vec![0xFF, 0xFE, 0xFD]);
+
+        let err = backend.retrieve("garbled").await.unwrap_err();
+        match err {
+            VaultError::Decryption { path, .. } => {
+                assert_eq!(path, entry_path.display().to_string());
+            }
+            other => panic!("expected VaultError::Decryption, got {other:?}"),
+        }
     }
 
     #[tokio::test]

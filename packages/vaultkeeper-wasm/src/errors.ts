@@ -28,6 +28,28 @@ export class SecretNotFoundError extends VaultError {
 }
 
 /**
+ * Thrown when a stored secret entry cannot be decrypted — the ciphertext is
+ * corrupted/truncated or the AES-GCM authentication tag failed to verify.
+ * Mirrors the pure-TypeScript `vaultkeeper` library's `DecryptionError`.
+ */
+export class DecryptionError extends VaultError {
+  /**
+   * The path of the encrypted entry that failed to decrypt. `undefined` only
+   * if the WASM boundary did not supply one — this is never fabricated as an
+   * empty string, so its absence is distinguishable from a genuine path.
+   */
+  readonly path?: string;
+
+  constructor(message: string, path?: string) {
+    super(message);
+    this.name = 'DecryptionError';
+    if (path !== undefined) {
+      this.path = path;
+    }
+  }
+}
+
+/**
  * Thrown when a JWE string is invalid or cannot be processed — structurally
  * malformed, decryption failure (wrong key, tampered ciphertext), or a
  * decrypted payload that does not match the expected claims schema.
@@ -126,6 +148,7 @@ interface WasmErrorShape {
   vaultErrorCode: string;
   message: string;
   canRefresh?: boolean;
+  path?: string;
 }
 
 function isWasmErrorShape(value: unknown): value is WasmErrorShape {
@@ -147,6 +170,8 @@ export function mapWasmError(thrown: unknown): VaultError {
     switch (vaultErrorCode) {
       case 'secret-not-found':
         return new SecretNotFoundError(message);
+      case 'decryption':
+        return new DecryptionError(message, thrown.path);
       case 'invalid-token':
         return new InvalidTokenError(message);
       case 'token-expired':
