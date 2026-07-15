@@ -38,7 +38,7 @@ Description
 </th></tr></thead>
 <tbody><tr><td>
 
-[create(type, config)](./vaultkeeper.backendregistry.create.md)
+[create(type, config, configDir)](./vaultkeeper.backendregistry.create.md)
 
 
 </td><td>

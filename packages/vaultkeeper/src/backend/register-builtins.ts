@@ -28,7 +28,10 @@ import { YubikeyBackend } from './yubikey-backend.js'
  * @internal
  */
 export function registerBuiltinBackends(): void {
-  BackendRegistry.register('file', (config?: BackendConfig) => new FileBackend(config?.path))
+  BackendRegistry.register(
+    'file',
+    (config?: BackendConfig, configDir?: string) => new FileBackend(config?.path, configDir),
+  )
   BackendRegistry.register('keychain', () => new KeychainBackend())
   BackendRegistry.register('dpapi', (config?: BackendConfig) => new DpapiBackend(config?.path))
   BackendRegistry.register('secret-tool', () => new SecretToolBackend())
