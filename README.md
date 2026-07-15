@@ -21,7 +21,12 @@ import { VaultKeeper } from 'vaultkeeper'
 
 const vault = await VaultKeeper.init() // zero-config default: safe `file` backend when no config exists
 await vault.store('MY_API_KEY', 'my-secret-value')
-const jwe = await vault.setup('MY_API_KEY', { executablePath: process.argv[1] })
+// `setup()` requires exactly one trust choice. `{ skipTrust: true }` (development
+// only) keeps this snippet safe to re-run; in production bind a STABLE
+// executablePath (a released binary, or process.execPath) — NOT process.argv[1],
+// whose hash changes on every rebuild and would throw IdentityMismatchError on
+// the next run. See "Trust and identity" below.
+const jwe = await vault.setup('MY_API_KEY', { skipTrust: true })
 const { token } = await vault.authorize(jwe)
 await vault.fetch(token, {
   url: 'https://api.example.com/data',
@@ -200,7 +205,10 @@ import { VaultKeeper } from 'vaultkeeper'
 
 // 1. Initialize (runs doctor preflight checks)
 //    With no config file, the backend resolves to the safe `file` backend on
-//    every platform — never your real OS credential store.
+//    every platform — never your real OS credential store. init() is a runtime,
+//    in-memory operation: it loads built-in defaults and does NOT write a
+//    config.json. To persist a config file on disk, use the CLI's
+//    `vaultkeeper config init` (see "@vaultkeeper/cli").
 const vault = await VaultKeeper.init()
 console.log(vault.activeBackendType) // "file"
 
@@ -219,12 +227,16 @@ console.log(vault.activeBackendType) // "file"
 // 2. Store a secret in the configured backend
 await vault.store('MY_API_KEY', 'my-secret-value')
 
-// 3. Mint a JWE token for the stored secret, bound to this executable's
-//    verified identity (Trust On First Use). `setup()` requires an explicit
-//    executable-trust choice: pass the calling executable's path to verify it,
-//    or `{ skipTrust: true }` to deliberately skip verification in development
-//    (see "Development mode").
-const jwe = await vault.setup('MY_API_KEY', { executablePath: process.argv[1] })
+// 3. Mint a JWE token for the stored secret. `setup()` requires an explicit
+//    executable-trust choice — exactly one of `executablePath` (Trust On First
+//    Use verification) or `{ skipTrust: true }` (development opt-out); the type
+//    system enforces this. `{ skipTrust: true }` is used here so the snippet is
+//    safe to re-run. In PRODUCTION bind a STABLE `executablePath` (a released
+//    binary, or `process.execPath` to trust the Node runtime) — NOT
+//    `process.argv[1]` for a compiled entry point, whose hash changes on every
+//    rebuild and throws `IdentityMismatchError` on the next run (see "Trust and
+//    identity" / "Development mode").
+const jwe = await vault.setup('MY_API_KEY', { skipTrust: true })
 
 // 4. Authorize: decrypt and validate the token
 const { token, vaultResponse } = await vault.authorize(jwe)
@@ -465,8 +477,10 @@ const vault = await VaultKeeper.init()
 // 2. Store the PEM private key as the secret — NOT a plain string.
 await vault.store('SIGNING_KEY', privateKey)
 
-// 3. Mint a capability token over it and authorize.
-const jwe = await vault.setup('SIGNING_KEY', { executablePath: process.argv[1] })
+// 3. Mint a capability token over it and authorize. `{ skipTrust: true }`
+//    (development only) keeps this runnable on every rebuild; in production pass
+//    a stable `executablePath` instead (see "Trust and identity").
+const jwe = await vault.setup('SIGNING_KEY', { skipTrust: true })
 const { token } = await vault.authorize(jwe)
 
 // 4. Sign — the private key never leaves the vault.
@@ -544,6 +558,8 @@ Executable identity is verified during `setup()` by hashing the executable (SHA-
 - **Not yet approved** — first encounter with this executable path. The hash is recorded in the trust manifest so the same binary is recognized next time.
 - **Approved** — the executable's current hash matches what's recorded in the trust manifest (via `vaultkeeper approve --script <path>` or a prior `setup()` call).
 - **Mismatch** — the executable's current hash differs from what's recorded (the binary was rebuilt or replaced). `setup()` throws `IdentityMismatchError`; re-approve with `vaultkeeper approve --script <caller>`.
+
+> **Choose a stable anchor for `executablePath` — do not use `process.argv[1]` for a compiled or bundled entry point.** Because verification is a content hash, binding to a dev build target means the FIRST run records the hash and the NEXT run (after any source edit + recompile) hits the **Mismatch** case above and throws `IdentityMismatchError`. In production point `executablePath` at a **stable** artifact — a released/installed binary (e.g. `/usr/local/bin/my-tool`), or `process.execPath` to trust the Node runtime itself. For a local caller you rebuild frequently but still want to verify, use [Development mode](#development-mode) rather than `skipTrust`. The trust choice is also type-enforced: `SetupOptions` requires exactly one of `executablePath` or `skipTrust: true`, so `setup('NAME')` and `setup('NAME', {})` are compile-time errors.
 
 A `trustTier` value (`1`, `2`, or `3`) can also be attached to the resulting token as a policy label, independent of the TOFU check above.
 

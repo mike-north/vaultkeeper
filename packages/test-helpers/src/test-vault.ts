@@ -2,9 +2,24 @@
  * Pre-configured VaultKeeper for consumer tests.
  */
 
-import type { VaultConfig, SetupOptions } from 'vaultkeeper'
+import type { VaultConfig, SetupOptionsBase } from 'vaultkeeper'
 import { VaultKeeper, BackendRegistry } from 'vaultkeeper'
 import { InMemoryBackend } from './in-memory-backend.js'
+
+/**
+ * Options accepted by {@link TestVault.setup}. Deliberately looser than the
+ * library's discriminated `SetupOptions` union: the trust choice is optional
+ * here because `TestVault.setup` defaults it to `skipTrust: true` when omitted,
+ * so tests can call `setup('NAME')` with no trust choice at all.
+ *
+ * @public
+ */
+export interface TestVaultSetupOptions extends SetupOptionsBase {
+  /** Bind the token to this executable path (real TOFU verification). */
+  executablePath?: string | undefined
+  /** Skip verification. Omitting a trust choice defaults to `true`. */
+  skipTrust?: boolean | undefined
+}
 
 /** Default test configuration with short TTL and dev-mode trust. */
 const TEST_CONFIG: VaultConfig = {
@@ -112,7 +127,9 @@ export class TestVault {
    * `VaultKeeper`'s own semantics, only `executablePath` or `skipTrust: true`
    * count as an explicit trust choice — `skipTrust: false` is not a choice, so
    * it is treated the same as omitting the option entirely and still receives
-   * the convenience default.
+   * the convenience default. If `executablePath` is supplied it always wins (it
+   * cannot be combined with `skipTrust` — the library's `SetupOptions` union
+   * forbids both).
    *
    * @param name - The secret identifier.
    * @param options - Optional setup options; the trust choice defaults to
@@ -120,9 +137,17 @@ export class TestVault {
    * @returns The minted compact JWE string.
    * @public
    */
-  setup(name: string, options?: SetupOptions): Promise<string> {
-    const hasTrustChoice = options?.executablePath !== undefined || options?.skipTrust === true
-    return this.keeper.setup(name, hasTrustChoice ? options : { ...options, skipTrust: true })
+  setup(name: string, options?: TestVaultSetupOptions): Promise<string> {
+    // Split the loose test-facing options into base fields and the trust choice,
+    // then hand the wrapped keeper a value that satisfies its strict
+    // discriminated `SetupOptions` union. Only `executablePath` or an explicit
+    // `skipTrust: true` counts as a trust choice; anything else (including
+    // `skipTrust: false`) falls back to the hermetic `skipTrust: true` default.
+    const { executablePath, skipTrust: _skipTrust, ...base } = options ?? {}
+    if (executablePath !== undefined) {
+      return this.keeper.setup(name, { ...base, executablePath })
+    }
+    return this.keeper.setup(name, { ...base, skipTrust: true })
   }
 
   /**

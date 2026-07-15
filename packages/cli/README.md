@@ -40,7 +40,11 @@ vaultkeeper config init
 # Store a secret (reads from stdin)
 echo "my-secret-value" | vaultkeeper store --name MY_API_KEY
 
-# Pre-approve an executable (TOFU) so it isn't prompted on first use
+# Pre-approve an executable (TOFU) so it's trusted on its first `exec`.
+# In non-interactive/CI use this is a REQUIRED first step for a new caller: with
+# no TTY to show an approval prompt, the first `exec` of an unrecognized caller
+# fails unless it was pre-approved here (or you pass --yes / VAULTKEEPER_YES to
+# approve it inline). Interactively it just avoids the one-time prompt.
 vaultkeeper approve --script /usr/local/bin/my-tool
 
 # Run a command with the secret injected as an env var. By default the secret

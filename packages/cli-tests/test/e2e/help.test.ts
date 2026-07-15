@@ -47,6 +47,18 @@ describe('help and usage', () => {
     expect(result.stdout).toContain('Usage: vaultkeeper [--config-dir <path>] <command>')
   })
 
+  // Regression: issue #193 item 3 — an unknown TOP-LEVEL flag previously printed
+  // only an error line with no Usage: block, unlike the unknown-command case and
+  // every subcommand-level usage error. It must exit 2 AND print the Usage:
+  // block (error on stderr, usage on stdout, matching unknown-command).
+  it('should exit 2 with an error and a Usage: block for an unknown top-level flag', async () => {
+    env = await createCliTestEnv()
+    const result = await env.run(['--bogus'])
+    expect(result.exitCode).toBe(2)
+    expect(result.stderr).toContain("unknown option '--bogus'")
+    expect(result.stdout).toContain('Usage: vaultkeeper [--config-dir <path>] <command>')
+  })
+
   it('should print version and exit 0 for --version', async () => {
     env = await createCliTestEnv()
     const result = await env.run(['--version'])

@@ -57,11 +57,30 @@ const vault = await VaultKeeper.init()
 await vault.store('MY_API_KEY', 'my-secret-value')
 
 // 3. Mint a JWE token for the stored secret. `setup()` requires an explicit
-//    executable-trust choice: pass `executablePath` to verify the caller
-//    (Trust On First Use), or `{ skipTrust: true }` to skip verification in
-//    development. Other options (ttlMinutes, useLimit, trustTier, ...) are
-//    optional; useLimit defaults to unlimited (null) when omitted.
-const jwe = await vault.setup('MY_API_KEY', { executablePath: process.argv[1] })
+//    executable-trust choice — exactly one of `executablePath` or
+//    `skipTrust: true` (the type system enforces this; omitting both, or
+//    passing both, is a compile error). Other options (ttlMinutes, useLimit,
+//    trustTier, ...) are optional; useLimit defaults to unlimited (null).
+//
+//    LOCAL DEVELOPMENT (used here so this snippet is safe to re-run): skip
+//    verification with `{ skipTrust: true }`. It is safe to re-run after every
+//    rebuild — the token just carries no executable-identity binding, so use it
+//    only in development/tests, never in production.
+const jwe = await vault.setup('MY_API_KEY', { skipTrust: true })
+
+//    PRODUCTION: bind the token to a STABLE executable so a swapped or tampered
+//    binary is rejected. Point `executablePath` at a released, stable artifact
+//    (e.g. '/usr/local/bin/my-tool'), or at the Node runtime itself via
+//    `process.execPath` ("trust the node binary").
+//
+//    ⚠️  Do NOT use `executablePath: process.argv[1]` for a compiled or bundled
+//    entry point: its SHA-256 hash changes on every `tsc`/bundler rebuild, so
+//    the FIRST run records the hash and the NEXT run (after any source edit +
+//    recompile) throws `IdentityMismatchError`. For a caller you rebuild
+//    frequently but still want to verify, use Development mode instead (see
+//    "Development mode" below) rather than `skipTrust`.
+//
+// const jwe = await vault.setup('MY_API_KEY', { executablePath: '/usr/local/bin/my-tool' })
 
 // 4. Authorize: decrypt and validate the token
 const { token, vaultResponse } = await vault.authorize(jwe)
@@ -82,7 +101,10 @@ const { VaultKeeper } = require('vaultkeeper')
 async function main() {
   const vault = await VaultKeeper.init()
   await vault.store('MY_API_KEY', 'my-secret-value')
-  const jwe = await vault.setup('MY_API_KEY', { executablePath: process.argv[1] })
+  // `{ skipTrust: true }` (development only) keeps this snippet safe to re-run;
+  // for production bind to a stable executablePath instead — see the ESM step 3
+  // above for the rebuild caveat and the production shape.
+  const jwe = await vault.setup('MY_API_KEY', { skipTrust: true })
   const { token } = await vault.authorize(jwe)
   const { response } = await vault.fetch(token, {
     url: 'https://api.example.com/data',
@@ -115,6 +137,24 @@ const { result } = await vault.exec(token, {
 console.log(result.stdout, result.exitCode)
 ```
 
+**Output redaction (on by default).** If the child process echoes the injected secret, `exec()`
+scrubs every occurrence of the secret value out of the captured `result.stdout` and `result.stderr`,
+replacing each with `[REDACTED]` before returning — so the raw secret does not leak back through
+captured output. This is the same redaction the [`@vaultkeeper/cli`](https://www.npmjs.com/package/@vaultkeeper/cli)
+applies. With a `SecretTokenMap` (multiple secrets), **every** injected value is redacted. To opt
+out and receive the raw, unredacted output — for example when you need to parse a payload that
+legitimately contains the value — pass `redact: false` (mirroring the CLI's `--no-redact`):
+
+```ts
+// Raw output — the injected secret is NOT scrubbed. Handle the result carefully;
+// it may contain the secret verbatim.
+const { result } = await vault.exec(token, {
+  command: 'my-tool',
+  env: { API_KEY: 'Bearer {{secret}}' },
+  redact: false,
+})
+```
+
 **Controlled direct access** via `getSecret()` is different — unlike `fetch()`/`exec()`, it does
 **not** take a callback of its own and returns **synchronously**. It hands back a `SecretAccessor`
 whose secret is only reachable through a single-use `read(callback)` call backed by an auto-zeroing
@@ -143,9 +183,11 @@ instead of the bare `{{secret}}`:
 
 ```ts
 // Authorize each secret independently, then key the tokens by the names you'll
-// reference in placeholders.
-const apiJwe = await vault.setup('API_KEY', { executablePath: process.argv[1] })
-const dbJwe = await vault.setup('DB_PASSWORD', { executablePath: process.argv[1] })
+// reference in placeholders. `{ skipTrust: true }` (development only) is shown
+// here; in production pass a stable `executablePath` instead — see
+// [Trust tiers](#trust-tiers).
+const apiJwe = await vault.setup('API_KEY', { skipTrust: true })
+const dbJwe = await vault.setup('DB_PASSWORD', { skipTrust: true })
 const { token: apiToken } = await vault.authorize(apiJwe)
 const { token: dbToken } = await vault.authorize(dbJwe)
 
@@ -171,6 +213,13 @@ call resolves only `{{secret:name}}`.
 the configuration explicitly — e.g. to set a non-default TTL or trust tier — write a config file
 matching this shape. This example is safe-by-default: it uses the portable `file` backend, not
 your OS credential store.
+
+> **`VaultKeeper.init()` does not write a `config.json`.** `init()` is a **runtime, in-memory**
+> operation: with no config file it loads built-in defaults into the process and writes nothing to
+> disk (it only ever reads an existing config). To **persist** a `config.json` on disk, use the CLI
+> `vaultkeeper config init` (from [`@vaultkeeper/cli`](https://www.npmjs.com/package/@vaultkeeper/cli)),
+> which writes the file shown below. So `init()` never creates the config file — don't expect a
+> `config.json` to appear after calling it; write one yourself (below) or run `config init`.
 
 ```json
 {
@@ -237,10 +286,24 @@ protect a production caller: `vault.setup('MY_API_KEY', { executablePath: '/usr/
 })`. To deliberately skip verification during development, pass the explicit, greppable opt-out
 `vault.setup('MY_API_KEY', { skipTrust: true })` instead — a token minted this way carries no
 executable identity binding, so use it only in local development or tests, never in production.
-Calling `setup()` with neither option (or both) throws `ExecutableTrustRequiredError`. Once a real
+Calling `setup()` with neither option (or both) is rejected at **compile time** — the `SetupOptions`
+type requires exactly one, and the options argument is mandatory, so `vault.setup('MY_API_KEY')` and
+`vault.setup('MY_API_KEY', {})` fail to typecheck; `ExecutableTrustRequiredError` remains the runtime
+backstop for untyped (plain-JavaScript) callers. Once a real
 path is passed, the caller's hash is either already approved (trusted), unrecognized (first
 encounter, recorded automatically), or changed since it was approved (a conflict, which rejects the
-call until re-approved via `approveExecutable()`). Separately, `trustTier` (`1`, `2`, or `3`) is a
+call until re-approved via `approveExecutable()`).
+
+> **Approving a new caller — library vs. CLI.** In this library, a new caller's first `setup()` with
+> a real `executablePath` is **recorded automatically** on first encounter (TOFU), so no separate
+> approval step is required — there is no interactive prompt to answer. This differs from the
+> [`@vaultkeeper/cli`](https://www.npmjs.com/package/@vaultkeeper/cli): its `exec` **prompts** to
+> approve an unrecognized caller, and in a **non-interactive/CI** context (no TTY) that first `exec`
+> **requires** a prior `vaultkeeper approve` (or `--yes`) — pre-approval there is a hard prerequisite,
+> not just a prompt-avoidance convenience. Use `approveExecutable()` in this library to pre-record a
+> caller ahead of time, or to re-approve after a hash conflict.
+
+Separately, `trustTier` (`1`, `2`, or `3`) is a
 policy **label** attached to the resulting token — it does not itself reflect the outcome of that
 verification, and it has no effect when verification is skipped via `skipTrust`. It defaults to
 `defaults.trustTier` from the config and can be overridden per call via `setup()`'s `trustTier`
@@ -319,9 +382,11 @@ const vault = await VaultKeeper.init()
 // 2. Store the PEM private key as the secret — NOT a plain string.
 await vault.store('SIGNING_KEY', privateKey)
 
-// 3. Mint a capability token over it and authorize (first run auto-records this
-//    executable in the TOFU manifest; see "Trust tiers").
-const jwe = await vault.setup('SIGNING_KEY', { executablePath: process.argv[1] })
+// 3. Mint a capability token over it and authorize. `{ skipTrust: true }`
+//    (development only) keeps this example runnable on every rebuild; in
+//    production pass a stable `executablePath` to bind the caller's identity
+//    (see "Trust tiers").
+const jwe = await vault.setup('SIGNING_KEY', { skipTrust: true })
 const { token } = await vault.authorize(jwe)
 
 // 4. Sign — the private key never leaves the vault.

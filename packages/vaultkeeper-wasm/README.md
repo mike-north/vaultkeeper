@@ -74,6 +74,25 @@ vault.dispose()
 
 This package ships a committed `.wasm` binary — no `wasm-pack` install step required to consume it.
 
+## Doctor / preflight checks
+
+`vault.doctor()` runs the same preflight pass as the `vaultkeeper` library and CLI, returning a
+`PreflightResult` whose per-dependency entries are classified **required** or **informational**
+(see the [`vaultkeeper` README's "Doctor / preflight checks"](https://www.npmjs.com/package/vaultkeeper)
+for the full model).
+
+One WASM-specific caveat: this SDK persists secrets through the built-in **`file`** backend only —
+it does not route through an OS-native credential store. But `doctor()` here runs the **unscoped**
+preflight (it is not narrowed to the file backend the way `VaultKeeper.init()` narrows to your
+configured backends), so the platform-native credential tool (`security` on macOS, `powershell` on
+Windows, `secret-tool` on Linux) is still reported with `required: true`. For this SDK's file-backend
+usage that entry is effectively an **inventory** signal, not a real readiness gate — a missing native
+tool does not stop the SDK from working, because nothing here uses it. Only `openssl` (always
+required) genuinely gates file-backend operation. Treat a failing native-tool entry from
+`vault.doctor()` as informational unless you have separately arranged to use that OS store. (Scoping
+the WASM `doctor()` to the file backend so this entry demotes to informational is tracked as a
+follow-up; it needs a change to the Rust core and a rebuild of the committed `.wasm`.)
+
 ## Full documentation
 
 See the [repository README](https://github.com/mike-north/vaultkeeper#readme) for the delegated

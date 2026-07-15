@@ -648,12 +648,12 @@ A choice within a setup question.
 </td></tr>
 <tr><td>
 
-[SetupOptions](./vaultkeeper.setupoptions.md)
+[SetupOptionsBase](./vaultkeeper.setupoptionsbase.md)
 
 
 </td><td>
 
-Options for the setup operation.
+Options for [VaultKeeper.setup()](./vaultkeeper.vaultkeeper.setup.md) that are independent of the mandatory executable-trust choice. Intersected with that choice to form [SetupOptions](./vaultkeeper.setupoptions.md)<!-- -->.
 
 
 </td></tr>
@@ -868,6 +868,17 @@ Status of a preflight check.
 Map of named secrets to their capability tokens.
 
 Use with `exec()` or `fetch()` to inject multiple secrets into a single request. Each key becomes the name referenced in `{{secret:name}}` placeholders.
+
+
+</td></tr>
+<tr><td>
+
+[SetupOptions](./vaultkeeper.setupoptions.md)
+
+
+</td><td>
+
+Options for the setup operation.
 
 
 </td></tr>
