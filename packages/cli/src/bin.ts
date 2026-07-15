@@ -130,8 +130,11 @@ async function main(): Promise<number> {
 
   // A bare invocation (no arguments at all) is a usage error, not success:
   // print usage to stderr and exit 2 so that `vaultkeeper && next_step` does
-  // not proceed as if a command had succeeded (issue #151). This aligns bare
-  // invocation with the unknown-command case, which already exits 2.
+  // not proceed as if a command had succeeded (issue #151). This matches the
+  // exit CODE of the unknown-command case (both 2); the output STREAM
+  // deliberately differs — a bare invocation has no error line, so its usage
+  // goes to stderr, whereas unknown-command writes its "Unknown command"
+  // error to stderr and the usage that follows to stdout.
   if (filteredArgv.length === 0) {
     printHelp(process.stderr)
     return 2
