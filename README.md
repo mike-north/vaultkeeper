@@ -148,6 +148,18 @@ echo "my-secret-value" | vaultkeeper store --name MY_API_KEY
 # Delete a secret
 vaultkeeper delete --name MY_API_KEY
 
+# Enroll a signing key, then export its public half to pin/register elsewhere
+vaultkeeper key create --name approval-signing-key --type ed25519
+vaultkeeper key export --name approval-signing-key > approval.pub
+
+# Sign an arbitrary challenge from stdin; stdout is exactly the detached
+# signature (a compact JWS), so it is safe to redirect into a file
+printf '%s' "$CHALLENGE" | vaultkeeper sign --name approval-signing-key > sig
+
+# Verify a detached signature fully offline — only the public key, the payload
+# on stdin, and the signature. Exit 0 = valid, 3 = did not verify.
+vaultkeeper verify --public-key approval.pub --signature sig <<<"$CHALLENGE"
+
 # Pre-approve an executable (TOFU): records its SHA-256 in the trust manifest
 vaultkeeper approve --script /usr/local/bin/my-tool
 
@@ -430,33 +442,40 @@ accessor.read((buf) => {
 
 ### Sign and verify
 
-`sign()` uses a stored private key to sign data via a capability token — the key itself is never returned to the caller. `verify()` is a **static, synchronous** method that checks a signature against public key material and needs no `VaultKeeper` instance, secret, or token.
+Signing keys are a **distinct resource from secrets**. A signing key's private half never flows through `store()`/`retrieve()`/`fetch()`/`exec()` or a capability token's claims — the backend generates the key, exposes only its public half, and performs each signature itself, so the key never leaves the backend. `verify()` is a **static** method that checks a detached signature against public key material and needs no `VaultKeeper` instance, backend, secret, or token.
 
-> **Precondition — the stored secret must be a PEM private key.** `sign()` feeds the stored secret
-> string straight to `crypto.createPrivateKey()`, which treats a string as **PEM**, so the value you
-> `store()` must be **PEM-encoded private-key material** (e.g. a PKCS#8 PEM), not an arbitrary string.
-> Secrets are stored as text, so raw binary DER is not directly storable — convert DER to PEM first.
-> Minting a token over a plain string like the quick start's `'my-secret-value'` and then calling
-> `sign()` throws `InvalidKeyMaterialError`. Store a real key first — see the worked example below.
-> (`verify()` takes a **public** key and never reads a stored secret, so it never throws
-> `InvalidKeyMaterialError`.)
+The end-to-end flow — enroll a key, export its public half, sign an arbitrary caller-supplied payload, and verify:
 
 ```ts
-// Sign — like fetch()/exec()/getSecret(), requires a capability token minted
-// over a stored PEM PRIVATE key (see the precondition above).
-const { result } = await vault.sign(token, { data: 'order-42:refund:1999' })
-console.log(result.signature, result.algorithm) // base64 signature + algorithm label
+// 1. Enroll a signing key (backend-side; only the `file` backend supports this today)
+const { publicKeyPem, kid } = await vault.createSigningKey('approval-signing-key', 'EdDSA')
 
-// Verify — static: no instance, secret, or token needed. `publicKey` is the
-// SPKI PEM matching the private key that signed the data.
-const isValid = VaultKeeper.verify({
-  data: 'order-42:refund:1999',
-  signature: result.signature,
-  publicKey: myPublicKeyPem,
+// 2. Export the SPKI PEM public key any time, to pin/register with a verifier
+const pub = await vault.exportPublicKey('approval-signing-key')
+
+// 3. Sign an arbitrary payload. authorizeSigningKey() mints a capability token
+//    that carries only { kid, backendRef, keyType } — never key material.
+const token = await vault.authorizeSigningKey('approval-signing-key')
+const { result } = await vault.sign(token, { payload: 'gate1:abc123:1706000000' })
+console.log(result.jws) // detached compact JWS: <protected>..<signature>
+
+// 4. Verify, fully offline — only the payload, the JWS, and the public key
+const isValid = await VaultKeeper.verify({
+  payload: 'gate1:abc123:1706000000',
+  jws: result.jws,
+  publicKey: pub.publicKeyPem,
 })
 ```
 
-`verify()` returns `false` for invalid key material, malformed signatures, or a failed check — except a disallowed algorithm (e.g. `'md5'`), which throws `InvalidAlgorithmError` synchronously (not via a rejected `Promise`), so guard the call with `try`/`catch` rather than `.catch()`.
+**Signature format (stable, documented, third-party-verifiable).** The output is a detached-payload Compact JWS — the three-tuple is:
+
+- **algorithm** — `EdDSA` (Ed25519); the algorithm registry uses strict JOSE identifiers.
+- **encoding** — base64url, no padding ([RFC 7515](https://www.rfc-editor.org/rfc/rfc7515)).
+- **detachment** — detached payload via [RFC 7797](https://www.rfc-editor.org/rfc/rfc7797) `b64:false`, `crit:["b64"]`; the serialization is `<protected>..<signature>` with the payload omitted.
+
+Any standards-compliant JOSE library can verify a vaultkeeper signature given the payload and the public key, with no dependency on vaultkeeper. `verify()` returns `false` for a signature that does not check out — a tampered payload, the wrong key, or a malformed JWS — and throws `InvalidKeyMaterialError` only when the public key itself is unparseable (an operational fault, distinct from a bad signature).
+
+A backend that does not implement the signing contract fails with a typed `SigningNotSupportedError` naming the backends that do — signing is never silently emulated.
 
 **End-to-end — generate a key, store it, sign, verify.** A complete round-trip, runnable as written:
 
@@ -755,29 +774,31 @@ const jwe = await vault.setup('SECRET_NAME', {
 
 All errors extend `VaultError`. The `@vaultkeeper/wasm` package exports and throws a subset of this hierarchy (see the "In `@vaultkeeper/wasm`" column) — errors tied to platform credential-store integration or executable-identity checks that don't apply to the WASM SDK's file-backend-only, lower-level surface are TS-library-only.
 
-| Class                          | When thrown                                                                                                                                                                                                                    | In `@vaultkeeper/wasm` |
-| ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | :--------------------: |
-| `BackendLockedError`           | Keychain or credential store is locked                                                                                                                                                                                         |    TS-library-only     |
-| `DeviceNotPresentError`        | Required hardware device not connected                                                                                                                                                                                         |    TS-library-only     |
-| `AuthorizationDeniedError`     | User denied an OS permission dialog                                                                                                                                                                                            |    TS-library-only     |
-| `BackendUnavailableError`      | No configured backend is reachable                                                                                                                                                                                             |    TS-library-only     |
-| `PluginNotFoundError`          | A required plugin binary is not installed                                                                                                                                                                                      |    TS-library-only     |
-| `SecretNotFoundError`          | Secret does not exist in the backend                                                                                                                                                                                           |          Yes           |
-| `TokenExpiredError`            | JWE has passed its `exp` claim                                                                                                                                                                                                 |          Yes           |
-| `KeyRotatedError`              | Key exited grace period; JWE is permanently unreadable                                                                                                                                                                         |          Yes           |
-| `KeyRevokedError`              | Key was explicitly revoked                                                                                                                                                                                                     |          Yes           |
-| `TokenRevokedError`            | Token has been blocked (e.g. single-use token already consumed)                                                                                                                                                                |          Yes           |
-| `UsageLimitExceededError`      | Token presented more times than its `use` limit allows                                                                                                                                                                         |          Yes           |
-| `IdentityMismatchError`        | Executable hash changed since TOFU approval                                                                                                                                                                                    |    TS-library-only     |
-| `ExecutableTrustRequiredError` | `setup()` called without an explicit executable-trust choice (neither `executablePath` nor `skipTrust: true`, or both)                                                                                                         |    TS-library-only     |
-| `ExecError`                    | `exec()` request was invalid (e.g. `{{secret}}` in the `command` or `args` field) or the command could not be started (not found or failed to spawn)                                                                           |    TS-library-only     |
-| `InvalidTokenError`            | JWE could not be decrypted or validated (e.g. structurally malformed, tampered, or failed decryption)                                                                                                                          |          Yes           |
-| `AccessorConsumedError`        | `SecretAccessor.read()` called after already consumed                                                                                                                                                                          |          Yes           |
-| `InvalidAlgorithmError`        | Signing/verifying with a disallowed algorithm (e.g. `md5`)                                                                                                                                                                     |    TS-library-only     |
-| `InvalidKeyMaterialError`      | `sign()` could not parse the stored secret as PEM private-key material (e.g. a plain-string secret; raw binary DER is not storable as a string — convert to PEM first). `verify()` never throws it — it reads no stored secret |    TS-library-only     |
-| `SetupError`                   | Required system dependency missing or incompatible at init                                                                                                                                                                     |    TS-library-only     |
-| `FilesystemError`              | Config directory not readable or writable                                                                                                                                                                                      |    TS-library-only     |
-| `RotationInProgressError`      | `rotateKey()` called while previous key is still in grace period                                                                                                                                                               |          Yes           |
+| Class                          | When thrown                                                                                                                                          | In `@vaultkeeper/wasm` |
+| ------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------- | :--------------------: |
+| `BackendLockedError`           | Keychain or credential store is locked                                                                                                               |    TS-library-only     |
+| `DeviceNotPresentError`        | Required hardware device not connected                                                                                                               |    TS-library-only     |
+| `AuthorizationDeniedError`     | User denied an OS permission dialog                                                                                                                  |    TS-library-only     |
+| `BackendUnavailableError`      | No configured backend is reachable                                                                                                                   |    TS-library-only     |
+| `PluginNotFoundError`          | A required plugin binary is not installed                                                                                                            |    TS-library-only     |
+| `SecretNotFoundError`          | Secret does not exist in the backend                                                                                                                 |          Yes           |
+| `TokenExpiredError`            | JWE has passed its `exp` claim                                                                                                                       |          Yes           |
+| `KeyRotatedError`              | Key exited grace period; JWE is permanently unreadable                                                                                               |          Yes           |
+| `KeyRevokedError`              | Key was explicitly revoked                                                                                                                           |          Yes           |
+| `TokenRevokedError`            | Token has been blocked (e.g. single-use token already consumed)                                                                                      |          Yes           |
+| `UsageLimitExceededError`      | Token presented more times than its `use` limit allows                                                                                               |          Yes           |
+| `IdentityMismatchError`        | Executable hash changed since TOFU approval                                                                                                          |    TS-library-only     |
+| `ExecutableTrustRequiredError` | `setup()` called without an explicit executable-trust choice (neither `executablePath` nor `skipTrust: true`, or both)                               |    TS-library-only     |
+| `ExecError`                    | `exec()` request was invalid (e.g. `{{secret}}` in the `command` or `args` field) or the command could not be started (not found or failed to spawn) |    TS-library-only     |
+| `InvalidTokenError`            | JWE could not be decrypted or validated (e.g. structurally malformed, tampered, or failed decryption)                                                |          Yes           |
+| `AccessorConsumedError`        | `SecretAccessor.read()` called after already consumed                                                                                                |          Yes           |
+| `InvalidAlgorithmError`        | `createSigningKey()` with an unsupported signing algorithm (strict JOSE identifiers; only `EdDSA` today)                                             |    TS-library-only     |
+| `InvalidKeyMaterialError`      | `verify()` given an unparseable public key (an operational fault, distinct from a signature that simply does not verify)                             |    TS-library-only     |
+| `SigningKeyNotFoundError`      | A named signing key does not exist; distinct from `SecretNotFoundError` (signing keys occupy their own namespace)                                    |    TS-library-only     |
+| `SigningNotSupportedError`     | The active backend does not implement the signing contract; names the backends that do (the `file` backend today)                                    |    TS-library-only     |
+| `SetupError`                   | Required system dependency missing or incompatible at init                                                                                           |    TS-library-only     |
+| `FilesystemError`              | Config directory not readable or writable                                                                                                            |    TS-library-only     |
+| `RotationInProgressError`      | `rotateKey()` called while previous key is still in grace period                                                                                     |          Yes           |
 
 ## Architecture
 
