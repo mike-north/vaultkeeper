@@ -193,9 +193,7 @@ impl VaultKeeper {
     /// path. Returns [`VaultError::ExecutableTrustRequired`] when the caller
     /// makes no unambiguous choice — mirroring the TypeScript library's
     /// `ExecutableTrustRequiredError` (message + `reason` discriminator).
-    fn resolve_executable_identity(
-        options: Option<&SetupOptions>,
-    ) -> Result<String, VaultError> {
+    fn resolve_executable_identity(options: Option<&SetupOptions>) -> Result<String, VaultError> {
         let executable_path = options.and_then(|o| o.executable_path.as_deref());
         let skip_trust = options.and_then(|o| o.skip_trust).unwrap_or(false);
 

@@ -696,14 +696,16 @@ mod vault_keeper {
         .await
         .unwrap();
 
-        let token = vault.setup(
-            "my-secret",
-            "s3cret-value",
-            Some(&vaultkeeper_core::vault::SetupOptions {
-                skip_trust: Some(true),
-                ..Default::default()
-            }),
-        ).unwrap();
+        let token = vault
+            .setup(
+                "my-secret",
+                "s3cret-value",
+                Some(&vaultkeeper_core::vault::SetupOptions {
+                    skip_trust: Some(true),
+                    ..Default::default()
+                }),
+            )
+            .unwrap();
 
         // JWE compact serialization has 5 dot-separated parts
         assert_eq!(token.split('.').count(), 5);
@@ -830,14 +832,16 @@ mod vault_keeper {
         .await
         .unwrap();
 
-        let token = vault.setup(
-            "db-password",
-            "hunter2",
-            Some(&vaultkeeper_core::vault::SetupOptions {
-                skip_trust: Some(true),
-                ..Default::default()
-            }),
-        ).unwrap();
+        let token = vault
+            .setup(
+                "db-password",
+                "hunter2",
+                Some(&vaultkeeper_core::vault::SetupOptions {
+                    skip_trust: Some(true),
+                    ..Default::default()
+                }),
+            )
+            .unwrap();
         let (claims, response) = vault.authorize(&token).unwrap();
 
         assert_eq!(claims.sub, "db-password");
@@ -862,14 +866,16 @@ mod vault_keeper {
         .unwrap();
 
         // Create token with initial key
-        let token = vault.setup(
-            "api-key",
-            "abc123",
-            Some(&vaultkeeper_core::vault::SetupOptions {
-                skip_trust: Some(true),
-                ..Default::default()
-            }),
-        ).unwrap();
+        let token = vault
+            .setup(
+                "api-key",
+                "abc123",
+                Some(&vaultkeeper_core::vault::SetupOptions {
+                    skip_trust: Some(true),
+                    ..Default::default()
+                }),
+            )
+            .unwrap();
 
         // Rotate the key
         vault.rotate_key().unwrap();
@@ -902,14 +908,16 @@ mod vault_keeper {
         .await
         .unwrap();
 
-        let token = vault.setup(
-            "key",
-            "val",
-            Some(&vaultkeeper_core::vault::SetupOptions {
-                skip_trust: Some(true),
-                ..Default::default()
-            }),
-        ).unwrap();
+        let token = vault
+            .setup(
+                "key",
+                "val",
+                Some(&vaultkeeper_core::vault::SetupOptions {
+                    skip_trust: Some(true),
+                    ..Default::default()
+                }),
+            )
+            .unwrap();
 
         // Revoke all keys — generates a completely new key
         vault.revoke_key().unwrap();
