@@ -22,7 +22,14 @@ await backend.store('MY_SECRET', 'hunter2')
 
 // `keeper.setup()` requires an explicit executable-trust choice; tests use the
 // development-only `skipTrust` opt-out to stay hermetic. (The `TestVault.setup()`
-// convenience method applies this default for you.)
+// convenience method applies this default for you, so `vault.setup('MY_SECRET')`
+// works with no options in tests.)
+//
+// WARNING: this test-only default does NOT apply to the real `VaultKeeper.setup()`
+// in the `vaultkeeper` package. There, setup() has no default and always requires
+// either `executablePath` (TOFU verification) or an explicit `{ skipTrust: true }`
+// — a bare `setup('MY_SECRET')` throws `ExecutableTrustRequiredError`. Don't copy a
+// zero-arg setup() out of a test into non-test production code.
 const jwe = await keeper.setup('MY_SECRET', { skipTrust: true })
 const { token } = await keeper.authorize(jwe)
 const { result } = await keeper.exec(token, {

@@ -77,14 +77,57 @@ async function main() {
 main()
 ```
 
-Other access patterns: delegated `exec()` (secret injected via env var) uses the same `{{secret}}`
-placeholder substitution as `fetch()` above. Controlled direct access via `getSecret()` is
-different — it returns a `SecretAccessor` whose secret is only reachable through a single-use
-`read(callback)` call backed by an auto-zeroing buffer; no placeholder substitution is involved.
-`sign()`/`verify()` are a fourth pattern for signing/verifying data with a stored private key
-without ever exposing it — see [Signing and verification](#signing-and-verification) below.
-See the `SecretAccessor` and `ExecRequest` types in the package's shipped `.d.ts` for their full
-signatures.
+Other access patterns share the same capability-token flow (`setup()` → `authorize()`):
+
+**Delegated `exec()`** injects the secret into a child process's environment — never its `argv`,
+which is visible to other processes via `ps`. Placeholders are substituted in `env` values only
+(passing `{{secret}}` in `command`/`args` throws `ExecError`):
+
+```ts
+// `token` comes from authorize(), exactly like the fetch() example above.
+const { result } = await vault.exec(token, {
+  command: 'curl',
+  args: ['-sS', 'https://api.example.com/data'],
+  env: { API_KEY: 'Bearer {{secret}}' }, // {{secret}} resolved just before spawn
+})
+console.log(result.stdout, result.exitCode)
+```
+
+**Controlled direct access** via `getSecret()` is different — it returns a `SecretAccessor` whose
+secret is only reachable through a single-use `read(callback)` call backed by an auto-zeroing
+buffer; no placeholder substitution is involved. `sign()`/`verify()` are a fourth pattern for
+signing/verifying data with a stored private key without ever exposing it — see
+[Signing and verification](#signing-and-verification) below. See the `SecretAccessor` and
+`ExecRequest` types in the package's shipped `.d.ts` for their full signatures.
+
+## Multiple secrets in one request
+
+`fetch()` and `exec()` accept either a single `CapabilityToken` or a `SecretTokenMap`
+(`Record<string, CapabilityToken>`) to inject several secrets into one call. With a map, reference
+each secret by the **named** placeholder `{{secret:<name>}}`, where `<name>` is a key in the map,
+instead of the bare `{{secret}}`:
+
+```ts
+// Authorize each secret independently, then key the tokens by the names you'll
+// reference in placeholders.
+const apiJwe = await vault.setup('API_KEY', { executablePath: process.argv[1] })
+const dbJwe = await vault.setup('DB_PASSWORD', { executablePath: process.argv[1] })
+const { token: apiToken } = await vault.authorize(apiJwe)
+const { token: dbToken } = await vault.authorize(dbJwe)
+
+const { response } = await vault.fetch(
+  { apiKey: apiToken, dbPassword: dbToken },
+  {
+    url: 'https://api.example.com/data',
+    headers: { Authorization: 'Bearer {{secret:apiKey}}' },
+    body: JSON.stringify({ db: '{{secret:dbPassword}}' }),
+  },
+)
+```
+
+The same map and `{{secret:name}}` syntax work for `exec()` env values. A `{{secret:name}}` whose
+`name` is not a key in the map throws `VaultError`. The two modes don't mix within a single call: a
+single-token call resolves only `{{secret}}`, and a map call resolves only `{{secret:name}}`.
 
 ## Example config
 
@@ -111,8 +154,29 @@ your OS credential store.
 - `defaults.ttlMinutes` / `defaults.trustTier` — applied to `setup()` when its options don't
   override them; see [Trust tiers](#trust-tiers) below.
 
-The full field reference is documented on the `VaultConfig` interface in the package's shipped
-`.d.ts` (`vaultkeeper/dist/*.d.ts`).
+### Full `VaultConfig` reference
+
+Every field of the config object (the `VaultConfig` interface, also carried on the package's
+shipped `.d.ts`):
+
+| Field                         | Type              | Required | Meaning                                                                                                    |
+| ----------------------------- | ----------------- | -------- | ---------------------------------------------------------------------------------------------------------- |
+| `version`                     | `number`          | yes      | Config schema version. Currently must be `1`.                                                              |
+| `backends`                    | `BackendConfig[]` | yes      | Ordered backend list; the **first** entry with `enabled: true` is the single active backend (no fallback). |
+| `keyRotation.gracePeriodDays` | `number`          | yes      | Days the previous key stays valid for decryption after `rotateKey()` before it is retired.                 |
+| `defaults.ttlMinutes`         | `number`          | yes      | Default JWE time-to-live applied by `setup()` when its `ttlMinutes` option is omitted.                     |
+| `defaults.trustTier`          | `1 \| 2 \| 3`     | yes      | Default policy trust-tier label applied by `setup()` when its `trustTier` option is omitted.               |
+| `developmentMode.executables` | `string[]`        | no       | Executable paths exempted from TOFU identity verification (see [Development mode](#development-mode)).     |
+
+Each `BackendConfig` entry in `backends`:
+
+| Field     | Type                     | Required | Meaning                                                                                            |
+| --------- | ------------------------ | -------- | -------------------------------------------------------------------------------------------------- |
+| `type`    | `string`                 | yes      | Backend type: `'file'`, `'keychain'`, `'dpapi'`, `'secret-tool'`, `'1password'`, `'yubikey'`.      |
+| `enabled` | `boolean`                | yes      | Whether this backend is active. Only enabled backends are considered during initialization.        |
+| `plugin`  | `boolean`                | no       | `true` for plugin-provided backends (1Password, YubiKey) rather than built-in ones.                |
+| `path`    | `string`                 | no       | Storage directory for file-based backends. Defaults to `<configDir>/file/` for the `file` backend. |
+| `options` | `Record<string, string>` | no       | Backend-specific options collected during interactive setup.                                       |
 
 ## Key rotation
 
@@ -183,6 +247,11 @@ failed verification — except a disallowed algorithm (e.g. `'md5'`), which thro
 `InvalidAlgorithmError` immediately (not via a rejected `Promise`), so wrap the call in a regular
 `try`/`catch`, not `.catch()`.
 
+The disallowed-algorithm throw applies only to RSA and EC keys. For **Ed25519 / Ed448** keys the
+signing algorithm is implicit in the key itself, so a `request.algorithm` override is ignored and
+an otherwise-disallowed value does **not** throw `InvalidAlgorithmError` — the same caveat applies
+to `sign()`.
+
 ## Backends
 
 The first enabled backend in the configuration is used. With no config file, that is the safe
@@ -195,36 +264,112 @@ With no explicit `path`, the `file` backend stores secrets under `<configDir>/fi
 resolved config directory (`~/.config/vaultkeeper` by default) that holds `config.json` and key
 material.
 
+## Doctor / preflight checks
+
+`VaultKeeper.init()` runs a preflight check pass (the same checks the `runDoctor()` export and the
+CLI's `vaultkeeper doctor` / WASM `doctor()` surface). Each check reports whether a dependency
+binary was found, and every result is classified **required** or **informational**:
+
+- **Required** checks gate readiness. A required check that fails makes the overall result
+  **not ready** and produces a remediation next-step. `openssl` is always required; a platform's
+  native credential tool (`security` on macOS, `powershell` on Windows, `secret-tool` on Linux) is
+  required only when its backend is the enabled one.
+- **Informational** checks never fail readiness — a failure is reported as a **warning** only.
+  The plugin-backend binaries `op` (1Password), `ykman` (YubiKey), and a native tool whose backend
+  isn't enabled are always listed but stay informational unless their backend is explicitly enabled
+  in `backends`. So with only the default `file` backend enabled, `op`/`ykman`/`security` still
+  appear in the output — a failing one will not block `ready`.
+
+A checkmark next to a plugin check therefore means **the binary was detected on `PATH`**, not that
+the backend is active or configured — e.g. a green `op` means the 1Password CLI is installed, not
+that a 1Password backend is enabled. To actually route secrets through a plugin backend you must
+add it to `backends` (see [Backends](#backends)).
+
 ## Error types
 
 Every error this package throws extends `VaultError`. Catch `VaultError` to handle any of them
-generically, or catch a specific subclass for targeted handling. The most common ones:
+generically, or catch a specific subclass for targeted handling. The complete hierarchy — every
+subclass, grouped by concern — follows. Classes listing extra fields expose them as strongly-typed
+read-only properties for machine-readable context.
 
-| Class                   | When thrown                                                                                               |
-| ----------------------- | --------------------------------------------------------------------------------------------------------- |
-| `SecretNotFoundError`   | Secret does not exist in the backend                                                                      |
-| `TokenExpiredError`     | JWE has passed its `exp` claim                                                                            |
-| `IdentityMismatchError` | Executable hash changed since TOFU approval (see [Trust tiers](#trust-tiers))                             |
-| `ExecError`             | `exec()` request was invalid, or the command could not be started                                         |
-| `InvalidTokenError`     | JWE could not be decrypted or validated                                                                   |
-| `AccessorConsumedError` | `SecretAccessor.read()` called after it was already consumed                                              |
-| `InvalidAlgorithmError` | Signing/verifying with a disallowed algorithm (see [Signing and verification](#signing-and-verification)) |
+**Backend access**
 
-The full hierarchy — covering backend, config, key-rotation, and filesystem failures too — is
-documented on each class's JSDoc in the package's shipped `.d.ts`, and enumerated in the
-[repository README](https://github.com/mike-north/vaultkeeper#readme).
+| Class                      | When thrown                                                                                |
+| -------------------------- | ------------------------------------------------------------------------------------------ |
+| `SecretNotFoundError`      | Requested secret does not exist in the backend store.                                      |
+| `BackendUnavailableError`  | No configured backend is available or reachable (fields: `reason`, `attempted`).           |
+| `BackendLockedError`       | Backend/credential store is locked and needs an interactive unlock (field: `interactive`). |
+| `DeviceNotPresentError`    | A required hardware device (e.g. YubiKey) is not connected (field: `timeoutMs`).           |
+| `AuthorizationDeniedError` | The user explicitly denied an OS authorization prompt.                                     |
+| `PluginNotFoundError`      | A required backend plugin is not installed (fields: `plugin`, `installUrl`).               |
+
+**JWE / token lifecycle**
+
+| Class                     | When thrown                                                                         |
+| ------------------------- | ----------------------------------------------------------------------------------- |
+| `TokenExpiredError`       | JWE has passed its `exp` claim (field: `canRefresh`).                               |
+| `KeyRotatedError`         | Encryption key rotated out of its grace period; the JWE can no longer be decrypted. |
+| `KeyRevokedError`         | Encryption key referenced by the JWE's `kid` header was explicitly revoked.         |
+| `TokenRevokedError`       | JWE was explicitly blocked (e.g. a single-use token that was already consumed).     |
+| `UsageLimitExceededError` | Token was presented more times than its `use` limit allows.                         |
+| `InvalidTokenError`       | JWE is malformed, fails decryption, or its decrypted claims do not validate.        |
+
+**Identity & trust**
+
+| Class                          | When thrown                                                                                                           |
+| ------------------------------ | --------------------------------------------------------------------------------------------------------------------- |
+| `IdentityMismatchError`        | Executable hash changed since TOFU approval (fields: `previousHash`, `currentHash`; see [Trust tiers](#trust-tiers)). |
+| `ExecutableTrustRequiredError` | `setup()` called with no clear trust choice — neither `executablePath` nor `skipTrust` (field: `reason`).             |
+
+**Access patterns**
+
+| Class                     | When thrown                                                                                                                                |
+| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| `FetchError`              | Delegated `fetch()` failed before a `Response` (malformed URL, network failure) (field: `url`).                                            |
+| `ExecError`               | `exec()` request was invalid, or the command could not be started (field: `command`).                                                      |
+| `AccessorConsumedError`   | `SecretAccessor.read()` called after it was already consumed.                                                                              |
+| `InvalidAlgorithmError`   | Signing/verifying with a disallowed algorithm (fields: `algorithm`, `allowed`; see [Signing and verification](#signing-and-verification)). |
+| `InvalidKeyMaterialError` | The stored secret is not valid PEM/DER private key material (raised by `sign()`; `verify()` returns `false` instead).                      |
+
+**Config, filesystem & key rotation**
+
+| Class                     | When thrown                                                                                              |
+| ------------------------- | -------------------------------------------------------------------------------------------------------- |
+| `DecryptionError`         | An encrypted-at-rest entry could not be decrypted (field: `path`).                                       |
+| `ConfigValidationError`   | A config value failed structural/semantic validation (fields: `field`, `configFilePath`).                |
+| `ConfigParseError`        | Config file contents are not valid JSON (fields: `path`, `location`).                                    |
+| `SetupError`              | A required system dependency is missing or incompatible at init (field: `dependency`).                   |
+| `FilesystemError`         | A filesystem operation failed — permission, ENOSPC, EISDIR, etc. (fields: `path`, `permission`, `code`). |
+| `RotationInProgressError` | `rotateKey()` called while a previous rotation's grace period is still active.                           |
+
+Each class's JSDoc (carried on the package's shipped `.d.ts`) documents these same errors and
+fields inline. The [repository README](https://github.com/mike-north/vaultkeeper#readme) mirrors
+this list for online reference.
 
 ## Testing against this library
 
 Use [`@vaultkeeper/test-helpers`](https://www.npmjs.com/package/@vaultkeeper/test-helpers) for an
-in-memory backend with zero OS dependencies in your own test suite.
+in-memory backend and a pre-configured `TestVault` with zero OS dependencies in your own test
+suite. Install it as a **devDependency** — a combined `npm i vaultkeeper @vaultkeeper/test-helpers`
+would place it in `dependencies`, so install it separately:
+
+```sh
+pnpm add -D @vaultkeeper/test-helpers
+```
+
+> **Note:** `TestVault` and its `setup()` convenience default the trust choice to `skipTrust` so
+> tests stay hermetic. The real `VaultKeeper.setup()` has **no default** — it always requires
+> either `executablePath` (TOFU verification) or an explicit `{ skipTrust: true }`, and throws
+> `ExecutableTrustRequiredError` if given neither. Don't copy a bare `setup('NAME')` out of a test
+> into non-test code (see [Trust tiers](#trust-tiers)).
 
 ## Full documentation
 
-The package's shipped `.d.ts` files carry the complete API reference (every type, method, and
-option, with JSDoc). For the exhaustive error class list and additional narrative detail beyond
-what's inlined above, see the
-[repository README](https://github.com/mike-north/vaultkeeper#readme).
+This README is self-contained: the full error hierarchy, development-mode narrative, and complete
+`VaultConfig` reference above are all shipped inside the package (no network access required). The
+package's `.d.ts` files carry the same reference on every exported type, method, and option via
+JSDoc. The [repository README](https://github.com/mike-north/vaultkeeper#readme) mirrors this
+content online as a supplement.
 
 ## License
 

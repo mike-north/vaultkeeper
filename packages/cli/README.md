@@ -101,6 +101,23 @@ persisted in the config's `developmentMode.executables` list — use
 development only; a production caller should stay on TOFU verification so a tampered or swapped
 binary is still caught.
 
+## Doctor / preflight checks
+
+`vaultkeeper doctor` lists a dependency check per backend tool and marks each present or missing.
+Two things are easy to misread:
+
+- **A checkmark means the binary was found on `PATH`, not that a backend is active.** A green `op`
+  means the 1Password CLI is installed — not that a 1Password backend is enabled. Secrets only
+  route through a backend that is enabled in your config (`vaultkeeper config show`).
+- **Plugin-backend checks (`op`, `ykman`, and a native tool whose backend isn't enabled) are
+  always-run informational.** They appear even when only the default `file` backend is enabled, and
+  a missing one is reported as a **warning** — it never makes `doctor` fail. `doctor` reports "not
+  ready" (and exits non-zero) only when a **required** check fails: `openssl`, or the native
+  credential tool (`security`/`powershell`/`secret-tool`) for the backend you actually enabled.
+
+The native Rust CLI's `doctor` and the WASM SDK's `doctor()` apply the same required-vs-informational
+rules.
+
 ## Exit codes
 
 Every command exits with one of three codes, so scripts and CI pipelines can branch on the class
@@ -121,9 +138,10 @@ of failure without parsing stderr:
 ## Full documentation
 
 The [`vaultkeeper`](https://www.npmjs.com/package/vaultkeeper) library package's README and shipped
-`.d.ts` cover the TypeScript API and access patterns for embedding vaultkeeper programmatically. For
-narrative coverage of development mode and the full error hierarchy, see the
-[repository README](https://github.com/mike-north/vaultkeeper#readme).
+`.d.ts` cover the TypeScript API and access patterns for embedding vaultkeeper programmatically —
+including the complete error hierarchy and full `VaultConfig` reference, shipped inline in that
+package's README. The [repository README](https://github.com/mike-north/vaultkeeper#readme) mirrors
+the same content online as a supplement.
 
 ## License
 
