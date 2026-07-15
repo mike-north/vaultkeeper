@@ -293,6 +293,17 @@ Thrown during initialization when a required system dependency (e.g. OpenSSL or 
 </td></tr>
 <tr><td>
 
+[SigningKeyAlreadyExistsError](./vaultkeeper.signingkeyalreadyexistserror.md)
+
+
+</td><td>
+
+Thrown when `key create` (or `createSigningKey`<!-- -->) is asked to enroll a signing key under a name that already exists. Enrollment never silently overwrites an existing key, because a regenerated keypair would invalidate every public key that was previously exported and pinned by a verifier.
+
+
+</td></tr>
+<tr><td>
+
 [SigningKeyNotFoundError](./vaultkeeper.signingkeynotfounderror.md)
 
 

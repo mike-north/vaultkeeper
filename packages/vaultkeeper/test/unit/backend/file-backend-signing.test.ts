@@ -14,7 +14,11 @@ import * as crypto from 'node:crypto'
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { FileBackend } from '../../../src/backend/file-backend.js'
 import { isSigningBackend } from '../../../src/backend/types.js'
-import { SigningKeyNotFoundError, VaultError } from '../../../src/errors.js'
+import {
+  SigningKeyNotFoundError,
+  SigningKeyAlreadyExistsError,
+  FilesystemError,
+} from '../../../src/errors.js'
 
 let storageDir: string
 let backend: FileBackend
@@ -71,9 +75,33 @@ describe('FileBackend signing contract', () => {
     ).rejects.toThrow(/EdDSA/)
   })
 
-  it('refuses to overwrite an existing signing key', async () => {
+  it('refuses to overwrite an existing signing key with a typed already-exists error', async () => {
     await backend.generateSigningKey(ID, 'EdDSA')
-    await expect(backend.generateSigningKey(ID, 'EdDSA')).rejects.toBeInstanceOf(VaultError)
+    const pubBefore = await backend.getPublicKey(ID)
+    await expect(backend.generateSigningKey(ID, 'EdDSA')).rejects.toBeInstanceOf(
+      SigningKeyAlreadyExistsError,
+    )
+    await expect(backend.generateSigningKey(ID, 'EdDSA')).rejects.toMatchObject({
+      keyName: 'approval',
+    })
+    // The original key must be untouched (kid unchanged) after the refusal.
+    const pubAfter = await backend.getPublicKey(ID)
+    expect(pubAfter.kid).toBe(pubBefore.kid)
+  })
+
+  it('a non-ENOENT probe failure surfaces a typed FilesystemError, never a silent overwrite', async () => {
+    // Make the signing-key directory path a regular FILE so that probing for a
+    // key underneath it fails with ENOTDIR (a non-ENOENT error) rather than
+    // "not found". A transient/permission-style probe failure must be surfaced,
+    // not mistaken for "absent" — which could clobber an existing key.
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'vk-file-signing-blocked-'))
+    try {
+      await fs.writeFile(path.join(dir, 'signing-keys'), 'not a directory', 'utf8')
+      const blocked = new FileBackend(dir)
+      await expect(blocked.generateSigningKey(ID, 'EdDSA')).rejects.toBeInstanceOf(FilesystemError)
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true })
+    }
   })
 
   it('getPublicKey throws SigningKeyNotFoundError for a missing key', async () => {

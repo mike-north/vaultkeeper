@@ -795,6 +795,7 @@ All errors extend `VaultError`. The `@vaultkeeper/wasm` package exports and thro
 | `InvalidAlgorithmError`        | `createSigningKey()` with an unsupported signing algorithm (strict JOSE identifiers; only `EdDSA` today)                                             |    TS-library-only     |
 | `InvalidKeyMaterialError`      | `verify()` given an unparseable public key (an operational fault, distinct from a signature that simply does not verify)                             |    TS-library-only     |
 | `SigningKeyNotFoundError`      | A named signing key does not exist; distinct from `SecretNotFoundError` (signing keys occupy their own namespace)                                    |    TS-library-only     |
+| `SigningKeyAlreadyExistsError` | `key create` was asked to enroll a signing key whose name already exists; enrollment never overwrites (that would break pinned public keys)          |    TS-library-only     |
 | `SigningNotSupportedError`     | The active backend does not implement the signing contract; names the backends that do (the `file` backend today)                                    |    TS-library-only     |
 | `SetupError`                   | Required system dependency missing or incompatible at init                                                                                           |    TS-library-only     |
 | `FilesystemError`              | Config directory not readable or writable                                                                                                            |    TS-library-only     |

@@ -358,6 +358,12 @@ export interface SigningBackend extends SecretBackend {
 }
 
 // @public
+export class SigningKeyAlreadyExistsError extends VaultError {
+    constructor(message: string, keyName: string);
+    readonly keyName: string;
+}
+
+// @public
 export class SigningKeyNotFoundError extends VaultError {
     constructor(message: string, keyName: string);
     readonly keyName: string;

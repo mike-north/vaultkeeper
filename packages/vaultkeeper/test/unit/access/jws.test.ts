@@ -148,4 +148,29 @@ describe('verifyDetachedJws', () => {
       verifyDetachedJws({ payload: 'p', jws, publicKey: privatePem }),
     ).rejects.toBeInstanceOf(InvalidKeyMaterialError)
   })
+
+  // The documented contract is an SPKI PEM public key. A non-SPKI encoding must
+  // be rejected as a typed operational fault, not silently accepted — otherwise
+  // the documented third-party-verify contract is weaker than it claims.
+  it('throws InvalidKeyMaterialError for a PKCS#1 (non-SPKI) public key', async () => {
+    const { privateKey } = makeEd25519()
+    const jws = await createDetachedJws(KID, 'p', edSigner(privateKey))
+    const rsa = crypto.generateKeyPairSync('rsa', { modulusLength: 2048 })
+    const pkcs1Pem = rsa.publicKey.export({ type: 'pkcs1', format: 'pem' }).toString()
+    expect(pkcs1Pem).toContain('BEGIN RSA PUBLIC KEY')
+    await expect(
+      verifyDetachedJws({ payload: 'p', jws, publicKey: pkcs1Pem }),
+    ).rejects.toBeInstanceOf(InvalidKeyMaterialError)
+  })
+
+  it('throws InvalidKeyMaterialError for a valid SPKI key of the wrong type (RSA)', async () => {
+    const { privateKey } = makeEd25519()
+    const jws = await createDetachedJws(KID, 'p', edSigner(privateKey))
+    const rsa = crypto.generateKeyPairSync('rsa', { modulusLength: 2048 })
+    const rsaSpkiPem = rsa.publicKey.export({ type: 'spki', format: 'pem' }).toString()
+    expect(rsaSpkiPem).toContain('BEGIN PUBLIC KEY')
+    await expect(
+      verifyDetachedJws({ payload: 'p', jws, publicKey: rsaSpkiPem }),
+    ).rejects.toBeInstanceOf(InvalidKeyMaterialError)
+  })
 })

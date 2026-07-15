@@ -3,10 +3,12 @@ import * as publicApi from '../../../src/index.js'
 import {
   CapabilityToken,
   createCapabilityToken,
+  createSigningCapabilityToken,
   validateCapabilityToken,
+  isSigningClaims,
 } from '../../../src/identity/session.js'
 import { AuthorizationDeniedError } from '../../../src/errors.js'
-import type { VaultClaims } from '../../../src/identity/types.js'
+import type { VaultClaims, SigningClaims } from '../../../src/identity/types.js'
 
 function makeClaims(overrides: Partial<VaultClaims> = {}): VaultClaims {
   return {
@@ -124,5 +126,41 @@ describe('validateCapabilityToken', () => {
 
     expect(validateCapabilityToken(tokenA).jti).toBe('token-a')
     expect(validateCapabilityToken(tokenB).jti).toBe('token-b')
+  })
+})
+
+function makeSigningClaims(overrides: Partial<SigningClaims> = {}): SigningClaims {
+  return { keyType: 'signing-key', kid: 'test-kid', backendRef: 'signing-key:test', ...overrides }
+}
+
+describe('isSigningClaims', () => {
+  it('accepts well-formed signing claims', () => {
+    expect(isSigningClaims(makeSigningClaims())).toBe(true)
+  })
+
+  it('accepts real claims from createSigningCapabilityToken', () => {
+    const token = createSigningCapabilityToken(makeSigningClaims())
+    expect(isSigningClaims(validateCapabilityToken(token))).toBe(true)
+  })
+
+  it('rejects ordinary secret claims (no keyType marker)', () => {
+    expect(isSigningClaims(makeClaims())).toBe(false)
+  })
+
+  it('rejects signing claims with an empty kid', () => {
+    expect(isSigningClaims(makeSigningClaims({ kid: '' }))).toBe(false)
+  })
+
+  it('rejects signing claims with an empty backendRef', () => {
+    expect(isSigningClaims(makeSigningClaims({ backendRef: '' }))).toBe(false)
+  })
+
+  it('rejects a claims object carrying BOTH signing markers and secret material', () => {
+    // Defense in depth: a hostile/malformed object that presents the signing
+    // markers but also carries a `val` secret must never be treated as a
+    // signing key. Object.assign attaches `val` at runtime while keeping a
+    // SigningClaims-assignable static type (no cast needed).
+    const both: SigningClaims = Object.assign(makeSigningClaims(), { val: 'super-secret' })
+    expect(isSigningClaims(both)).toBe(false)
   })
 })
