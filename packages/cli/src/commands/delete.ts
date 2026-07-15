@@ -87,7 +87,7 @@ export async function deleteCommand(args: string[], configDir: string): Promise<
     process.stdout.write(`Secret "${values.name}" deleted.\n`)
     return 0
   } catch (err) {
-    process.stderr.write(`${formatError(err)}\n`)
+    process.stderr.write(`${formatError(err, configDir)}\n`)
     return 1
   }
 }

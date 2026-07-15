@@ -113,7 +113,7 @@ export async function storeCommand(args: string[], configDir: string): Promise<n
     process.stdout.write(`Secret "${values.name}" stored successfully.\n`)
     return 0
   } catch (err) {
-    process.stderr.write(`${formatError(err)}\n`)
+    process.stderr.write(`${formatError(err, configDir)}\n`)
     return 1
   }
 }

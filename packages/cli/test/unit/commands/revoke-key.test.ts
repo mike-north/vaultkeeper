@@ -5,11 +5,18 @@ const configDir = '/tmp/vaultkeeper-test-config-dir'
 // vi.hoisted ensures the mock factory can reference mockInit before imports are resolved.
 const mockInit = vi.hoisted(() => vi.fn())
 
-vi.mock('vaultkeeper', () => ({
-  VaultKeeper: {
-    init: mockInit,
-  },
-}))
+// Partial mock: keep real exports (e.g. ConfigParseError/ConfigValidationError,
+// needed by formatError's instanceof checks — issue #114) alongside the
+// mocked entry points this suite controls.
+vi.mock('vaultkeeper', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('vaultkeeper')>()
+  return {
+    ...actual,
+    VaultKeeper: {
+      init: mockInit,
+    },
+  }
+})
 
 describe('revokeKeyCommand', () => {
   let stderrOutput: string

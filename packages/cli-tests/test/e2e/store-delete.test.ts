@@ -81,7 +81,13 @@ describe('store and delete lifecycle', () => {
   // "Failed to parse config file at <path>" and no location or remediation.
   // The error must now include the file path, a parse location, and a
   // remediation hint naming `vaultkeeper config init`.
-  it('store should exit non-zero with path, parse location, and remediation hint for corrupt config.json (issue #68 repro)', async () => {
+  //
+  // Issue #114 (acceptance criterion 4): a user running `vaultkeeper store`
+  // is already running the CLI, so the remediation must be CLI-native
+  // ("run `vaultkeeper config init --force`") — never the library's
+  // "install @vaultkeeper/cli" text, which is the wrong advice for someone
+  // who already has it installed.
+  it('store should exit non-zero with a CLI-native remediation (path, parse location, config init --force) for corrupt config.json (issues #68, #114)', async () => {
     env = await createCliTestEnv()
     await fs.writeFile(path.join(env.configDir, 'config.json'), '{ bad json', 'utf8')
     const result = await env.runWithStdin(
@@ -91,7 +97,8 @@ describe('store and delete lifecycle', () => {
     expect(result.exitCode).not.toBe(0)
     expect(result.stderr).toContain(path.join(env.configDir, 'config.json'))
     expect(result.stderr).toMatch(/line \d+, column \d+/)
-    expect(result.stderr).toContain('vaultkeeper config init')
+    expect(result.stderr).toContain('vaultkeeper config init --force')
+    expect(result.stderr).not.toContain('install @vaultkeeper/cli')
   })
 
   // No-config story (issue #68): store falls back to the default backend and

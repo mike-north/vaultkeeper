@@ -82,7 +82,7 @@ export async function doctorCommand(args: string[], configDir: string): Promise<
     }
     return 1
   } catch (err) {
-    process.stderr.write(`${formatError(err)}\n`)
+    process.stderr.write(`${formatError(err, configDir)}\n`)
     return 1
   }
 }
