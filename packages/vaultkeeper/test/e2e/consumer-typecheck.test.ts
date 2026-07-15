@@ -35,8 +35,12 @@
  * `pnpm --dir packages/vaultkeeper/test/e2e/ts-version-fixtures install --ignore-workspace`
  * (see that directory's `package.json` for why it's a standalone,
  * non-workspace install). Matrix cells for which the pinned compiler isn't
- * installed are skipped, not failed, so local runs without that setup step
- * still pass; CI always installs the fixtures first.
+ * installed are registered as real Vitest skips via `it.skipIf` (mirroring
+ * the conformance runner's `describe.skipIf` pattern) — not a silent early
+ * `return`, which Vitest would otherwise report as a false pass — so local
+ * runs without that setup step show honest "skipped" cells instead of
+ * misleadingly green ones; CI always installs the fixtures first, so every
+ * cell actually runs there.
  *
  * @see https://github.com/mike-north/vaultkeeper/issues/72
  * @see https://github.com/mike-north/vaultkeeper/issues/125
@@ -54,20 +58,6 @@ const execFileAsync = promisify(execFile)
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const require = createRequire(import.meta.url)
 
-/**
- * Pinned TypeScript compiler versions typechecked against the shipped
- * `.d.ts`. Chosen per #125's acceptance criteria: the stated floor
- * (5.0.x), the latest 5.x, and the latest 6.x/7.x (to establish whether
- * newer majors work). Update alongside `./ts-version-fixtures/package.json`
- * and the README TypeScript-version note if this list changes.
- */
-const TS_VERSIONS = [
-  { label: 'TypeScript 5.0.4 (stated floor)', packageAlias: 'typescript-5-0' },
-  { label: 'TypeScript 5.9.3 (latest 5.x)', packageAlias: 'typescript-5-9' },
-  { label: 'TypeScript 6.0.3 (latest 6.x)', packageAlias: 'typescript-6-0' },
-  { label: 'TypeScript 7.0.2 (latest 7.x)', packageAlias: 'typescript-7-0' },
-] as const
-
 const fixturesRoot = resolve(__dirname, 'ts-version-fixtures')
 
 /** Resolves the installed root of a pinned compiler, or undefined if the standalone fixtures install hasn't been run. */
@@ -78,6 +68,24 @@ function resolveFixtureTypescriptRoot(packageAlias: string): string | undefined 
     return undefined
   }
 }
+
+/**
+ * Pinned TypeScript compiler versions typechecked against the shipped
+ * `.d.ts`. Chosen per #125's acceptance criteria: the stated floor
+ * (5.0.x), the latest 5.x, and the latest 6.x/7.x (to establish whether
+ * newer majors work). Update alongside `./ts-version-fixtures/package.json`
+ * and the README TypeScript-version note if this list changes.
+ *
+ * `typescriptRoot` is resolved once at module load (a synchronous
+ * `require.resolve`), not inside the test body, so `it.skipIf` below can
+ * make a real skip/run decision per cell before Vitest registers the test.
+ */
+const TS_VERSIONS = [
+  { label: 'TypeScript 5.0.4 (stated floor)', packageAlias: 'typescript-5-0' },
+  { label: 'TypeScript 5.9.3 (latest 5.x)', packageAlias: 'typescript-5-9' },
+  { label: 'TypeScript 6.0.3 (latest 6.x)', packageAlias: 'typescript-6-0' },
+  { label: 'TypeScript 7.0.2 (latest 7.x)', packageAlias: 'typescript-7-0' },
+].map((entry) => ({ ...entry, typescriptRoot: resolveFixtureTypescriptRoot(entry.packageAlias) }))
 
 const consumerSource = [
   `import type { SecretAccessor, SignRequest, VerifyRequest } from 'vaultkeeper'`,
@@ -118,79 +126,84 @@ describe('published .d.ts typechecks across the supported TypeScript version mat
     project = undefined
   })
 
-  it.each(TS_VERSIONS)(
-    'typechecks under $label',
-    async ({ packageAlias, label }) => {
-      const typescriptRoot = resolveFixtureTypescriptRoot(packageAlias)
-      if (!typescriptRoot) {
-        console.warn(
-          `Skipping "${label}": pinned compiler "${packageAlias}" isn't installed. ` +
-            `Run: pnpm --dir packages/vaultkeeper/test/e2e/ts-version-fixtures install --ignore-workspace`,
-        )
-        return
-      }
+  for (const { label, typescriptRoot } of TS_VERSIONS) {
+    // A real vitest skip (registers the cell as "skipped" in the report),
+    // not a silent early `return` from inside the test body — an early
+    // `return` would still report the cell as passed, which is misleading
+    // when the pinned compiler was never actually invoked. Mirrors the
+    // conformance runner's `describe.skipIf` pattern for an unavailable
+    // dependency.
+    it.skipIf(!typescriptRoot)(
+      `typechecks under ${label}`,
+      async () => {
+        // Narrowed by skipIf above: this branch only runs when resolved.
+        if (!typescriptRoot) {
+          throw new Error(`unreachable: "${label}" should have been skipped`)
+        }
 
-      project = new Project('vaultkeeper-dts-consumer', '1.0.0')
-      project.mergeFiles({
-        'package.json': JSON.stringify({
-          name: 'vaultkeeper-dts-consumer',
-          version: '1.0.0',
-          type: 'module',
-        }),
-        'tsconfig.json': JSON.stringify({
-          compilerOptions: {
-            target: 'ES2022',
-            module: 'NodeNext',
-            moduleResolution: 'NodeNext',
-            strict: true,
-            skipLibCheck: false,
-            noEmit: true,
-            // Deliberately scopes ambient globals to none, as many strict
-            // monorepo tsconfigs do. This is the reliably reproducible
-            // trigger verified for issue #72 (the issue's literal "no types
-            // array" setup doesn't reproduce on TS 5.9; explicit types: []
-            // does): `@types/node` is installed (linked below) but not
-            // auto-included, so the published `.d.ts` must resolve `Buffer`
-            // via a real import rather than relying on the ambient global.
-            types: [],
-          },
-          include: ['consumer.ts'],
-        }),
-        'consumer.ts': consumerSource,
-      })
+        project = new Project('vaultkeeper-dts-consumer', '1.0.0')
+        project.mergeFiles({
+          'package.json': JSON.stringify({
+            name: 'vaultkeeper-dts-consumer',
+            version: '1.0.0',
+            type: 'module',
+          }),
+          'tsconfig.json': JSON.stringify({
+            compilerOptions: {
+              target: 'ES2022',
+              module: 'NodeNext',
+              moduleResolution: 'NodeNext',
+              strict: true,
+              skipLibCheck: false,
+              noEmit: true,
+              // Deliberately scopes ambient globals to none, as many strict
+              // monorepo tsconfigs do. This is the reliably reproducible
+              // trigger verified for issue #72 (the issue's literal "no
+              // types array" setup doesn't reproduce on TS 5.9; explicit
+              // types: [] does): `@types/node` is installed (linked below)
+              // but not auto-included, so the published `.d.ts` must
+              // resolve `Buffer` via a real import rather than relying on
+              // the ambient global.
+              types: [],
+            },
+            include: ['consumer.ts'],
+          }),
+          'consumer.ts': consumerSource,
+        })
 
-      // Link the local builds (requires `pnpm build` to have run for these
-      // three packages).
-      const vaultkeeperRoot = resolve(__dirname, '..', '..')
-      const testHelpersRoot = resolve(__dirname, '..', '..', '..', 'test-helpers')
-      const cliTestHelpersRoot = resolve(__dirname, '..', '..', '..', 'cli-test-helpers')
-      project.linkDependency('vaultkeeper', { target: vaultkeeperRoot })
-      project.linkDependency('@vaultkeeper/test-helpers', { target: testHelpersRoot })
-      project.linkDependency('@vaultkeeper/cli-test-helpers', { target: cliTestHelpersRoot })
+        // Link the local builds (requires `pnpm build` to have run for
+        // these three packages).
+        const vaultkeeperRoot = resolve(__dirname, '..', '..')
+        const testHelpersRoot = resolve(__dirname, '..', '..', '..', 'test-helpers')
+        const cliTestHelpersRoot = resolve(__dirname, '..', '..', '..', 'cli-test-helpers')
+        project.linkDependency('vaultkeeper', { target: vaultkeeperRoot })
+        project.linkDependency('@vaultkeeper/test-helpers', { target: testHelpersRoot })
+        project.linkDependency('@vaultkeeper/cli-test-helpers', { target: cliTestHelpersRoot })
 
-      // Link the pinned compiler for this matrix cell.
-      project.linkDependency('typescript', { target: typescriptRoot })
+        // Link the pinned compiler for this matrix cell.
+        project.linkDependency('typescript', { target: typescriptRoot })
 
-      // Link the monorepo's own @types/node so every cell typechecks against
-      // the same lib files, without a network install.
-      const typesNodeRoot = dirname(require.resolve('@types/node/package.json'))
-      project.linkDependency('@types/node', { target: typesNodeRoot })
+        // Link the monorepo's own @types/node so every cell typechecks
+        // against the same lib files, without a network install.
+        const typesNodeRoot = dirname(require.resolve('@types/node/package.json'))
+        project.linkDependency('@types/node', { target: typesNodeRoot })
 
-      await project.write()
+        await project.write()
 
-      const tscBin = resolve(typescriptRoot, 'bin', 'tsc')
+        const tscBin = resolve(typescriptRoot, 'bin', 'tsc')
 
-      // A real tsc invocation (loading the compiler, @types/node's lib
-      // files, and the vaultkeeper rollup) is slow on CI runners relative
-      // to vitest's 5s default test timeout, so both the test and the
-      // child process get a generous budget here.
-      await expect(
-        execFileAsync('node', [tscBin, '--noEmit'], {
-          cwd: project.baseDir,
-          timeout: 90_000,
-        }),
-      ).resolves.toBeDefined()
-    },
-    120_000,
-  )
+        // A real tsc invocation (loading the compiler, @types/node's lib
+        // files, and the vaultkeeper rollup) is slow on CI runners relative
+        // to vitest's 5s default test timeout, so both the test and the
+        // child process get a generous budget here.
+        await expect(
+          execFileAsync('node', [tscBin, '--noEmit'], {
+            cwd: project.baseDir,
+            timeout: 90_000,
+          }),
+        ).resolves.toBeDefined()
+      },
+      120_000,
+    )
+  }
 })
