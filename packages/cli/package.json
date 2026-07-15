@@ -34,9 +34,10 @@
     "clean": "node -e \"import('node:fs').then(fs=>fs.rmSync('dist',{recursive:true,force:true}))\"",
     "test": "vitest run",
     "check:typecheck": "tsc --noEmit",
+    "check:typecheck-tests": "tsc --noEmit -p tsconfig.test.json",
     "check:lint-ts": "eslint .",
     "check:api-report": "api-extractor run",
-    "check": "pnpm check:typecheck && pnpm check:lint-ts && pnpm check:api-report",
+    "check": "pnpm check:typecheck && pnpm check:typecheck-tests && pnpm check:lint-ts && pnpm check:api-report",
     "generate:api-report": "api-extractor run --local"
   },
   "keywords": [

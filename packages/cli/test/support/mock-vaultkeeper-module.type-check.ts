@@ -1,10 +1,11 @@
 /**
  * Type-only regression checks for `mockVaultkeeperModule`'s `overrides`
  * constraint. Never invoked at runtime (vitest only collects `*.test.ts`) —
- * this file exists purely so `tsc` proves the constraint holds. It is picked
- * up by `tsconfig.test.json`, which is also the project ESLint's type-aware
- * config points at, so type errors here surface the same way a broken build
- * would.
+ * this file exists purely so `tsc` proves the constraint holds. It is
+ * compiled by `tsconfig.test.json` via the `check:typecheck-tests` script
+ * (`tsc --noEmit -p tsconfig.test.json`), which runs as part of `pnpm check`
+ * and CI, so type errors here fail the build the same way a broken
+ * production build would.
  */
 import { mockVaultkeeperModule } from './mock-vaultkeeper-module.js'
 
