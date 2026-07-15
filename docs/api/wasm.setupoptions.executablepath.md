@@ -4,9 +4,7 @@
 
 ## SetupOptions.executablePath property
 
-The calling executable's real path, recorded as a claim label in the minted token. Mutually exclusive with [SetupOptions.skipTrust](./wasm.setupoptions.skiptrust.md)<!-- -->. The retired `'dev'` sentinel is rejected — use `skipTrust: true` to skip binding a real identity instead.
-
-This value is a claim label only. Unlike the TypeScript `vaultkeeper` library's `VaultKeeper.setup()`<!-- -->, this WASM SDK performs no trust-on-first-use (TOFU) verification: the path is copied straight into the token's `exe` claim without hashing the executable, consulting a trust manifest, or throwing on a changed or nonexistent path. Passing `executablePath` here therefore documents an intended identity but does not enforce it. Making WASM `setup()` verify with the same semantics as the TypeScript library is tracked separately (see vaultkeeper issue \#165); until then, treat this field as descriptive metadata, not an enforced security boundary.
+The calling executable's real path. When supplied, `setup()` hashes the executable and runs trust-on-first-use verification (Sigstore → trust-manifest match → TOFU first-encounter), binding the verified hash into the minted token's `exe` claim; a hash conflicting with a previously approved value throws `IdentityMismatchError`<!-- -->. Mutually exclusive with [SetupOptions.skipTrust](./wasm.setupoptions.skiptrust.md)<!-- -->. The retired `'dev'` sentinel is rejected — use `skipTrust: true` to skip verification instead.
 
 **Signature:**
 

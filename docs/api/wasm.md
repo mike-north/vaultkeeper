@@ -88,6 +88,19 @@ Thrown when a filesystem operation fails while reading, writing, or deleting a s
 </td></tr>
 <tr><td>
 
+[IdentityMismatchError](./wasm.identitymismatcherror.md)
+
+
+</td><td>
+
+Thrown by `setup()` when the executable at `executablePath` has a hash that conflicts with a value previously approved for it under trust-on-first-use.
+
+Mirrors the pure-TypeScript `vaultkeeper` library's `IdentityMismatchError`<!-- -->: the first encounter with an executable records its hash, and a later hash change (a rebuilt or substituted binary) surfaces here rather than silently re-approving. Re-approval is required before the executable can be bound again. Inspect [IdentityMismatchError.previousHash](./wasm.identitymismatcherror.previoushash.md) and [IdentityMismatchError.currentHash](./wasm.identitymismatcherror.currenthash.md) to see what changed.
+
+
+</td></tr>
+<tr><td>
+
 [InvalidTokenError](./wasm.invalidtokenerror.md)
 
 

@@ -16,6 +16,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { chmod, readFile, writeFile } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
 import {
   VaultKeeper,
   VaultError,
@@ -26,6 +27,7 @@ import {
   RotationInProgressError,
   AccessorConsumedError,
   ExecutableTrustRequiredError,
+  IdentityMismatchError,
 } from '../index.js';
 
 /**
@@ -73,6 +75,57 @@ async function createTestVault(dir: string): Promise<VaultKeeper> {
   return VaultKeeper.create({ skipDoctor: true }, dir);
 }
 
+/** SHA-256 hex digest of `content`, matching the core's executable hashing. */
+function sha256Hex(content: string): string {
+  return createHash('sha256').update(content).digest('hex');
+}
+
+/**
+ * Write a fake executable file into `dir` and return its path plus the hash
+ * the trust layer will compute for it.
+ */
+async function writeFakeExecutable(
+  dir: string,
+  name: string,
+  content: string,
+): Promise<{ path: string; hash: string }> {
+  const path = join(dir, name);
+  await writeFile(path, content);
+  return { path, hash: sha256Hex(content) };
+}
+
+/**
+ * Read the approved hashes recorded for `namespace` in the trust manifest at
+ * `<configDir>/trust-manifest.json`. Returns `[]` when the manifest does not
+ * exist (nothing recorded), letting tests assert the #148 ordering property.
+ */
+async function readApprovedHashes(configDir: string, namespace: string): Promise<string[]> {
+  let raw: string;
+  try {
+    raw = await readFile(join(configDir, 'trust-manifest.json'), 'utf8');
+  } catch (err) {
+    // Only a missing manifest means "nothing recorded". Any other failure
+    // (EACCES, EISDIR, …) must surface so it can't masquerade as no-entries
+    // and mask a real problem in a test asserting the manifest is unwritten.
+    if (err instanceof Error && 'code' in err && err.code === 'ENOENT') {
+      return [];
+    }
+    throw err;
+  }
+  const parsed: unknown = JSON.parse(raw);
+  // Walk the shape with spreads (never `as`) to satisfy the no-type-assertion
+  // lint rule, mirroring how errors.ts narrows unknown boundary shapes.
+  if (typeof parsed !== 'object' || parsed === null) return [];
+  const root: Record<string, unknown> = { ...parsed };
+  if (typeof root.entries !== 'object' || root.entries === null) return [];
+  const entries: Record<string, unknown> = { ...root.entries };
+  const entry = entries[namespace];
+  if (typeof entry !== 'object' || entry === null) return [];
+  const entryRecord: Record<string, unknown> = { ...entry };
+  const hashes: unknown = entryRecord.hashes;
+  return Array.isArray(hashes) ? hashes.filter((h): h is string => typeof h === 'string') : [];
+}
+
 describe('@vaultkeeper/wasm SDK', () => {
   it('creates a VaultKeeper instance', async () => {
     await withTempDir(async (dir) => {
@@ -95,7 +148,7 @@ describe('@vaultkeeper/wasm SDK', () => {
   it('setup produces a JWE token', async () => {
     await withTempDir(async (dir) => {
       const vault = await createTestVault(dir);
-      const token = vault.setup('test-secret', 'my-value', { skipTrust: true });
+      const token = await vault.setup('test-secret', 'my-value', { skipTrust: true });
       // JWE compact format: 5 base64url segments separated by dots
       const parts = token.split('.');
       assert.equal(parts.length, 5, 'JWE must have 5 parts');
@@ -106,7 +159,7 @@ describe('@vaultkeeper/wasm SDK', () => {
   it('setup + authorize round-trip', async () => {
     await withTempDir(async (dir) => {
       const vault = await createTestVault(dir);
-      const token = vault.setup('my-key', 'super-secret', { skipTrust: true });
+      const token = await vault.setup('my-key', 'super-secret', { skipTrust: true });
       const result = vault.authorize(token);
 
       assert.equal(result.claims.sub, 'my-key');
@@ -159,7 +212,7 @@ describe('@vaultkeeper/wasm SDK', () => {
   it('authorize rejects tampered JWE token', async () => {
     await withTempDir(async (dir) => {
       const vault = await createTestVault(dir);
-      const token = vault.setup('key', 'value', { skipTrust: true });
+      const token = await vault.setup('key', 'value', { skipTrust: true });
       // Corrupt the ciphertext (4th segment)
       const parts = token.split('.');
       const segment = parts[3];
@@ -174,7 +227,7 @@ describe('@vaultkeeper/wasm SDK', () => {
   it('setup with custom TTL', async () => {
     await withTempDir(async (dir) => {
       const vault = await createTestVault(dir);
-      const token = vault.setup('ttl-key', 'ttl-value', { ttlMinutes: 5, skipTrust: true });
+      const token = await vault.setup('ttl-key', 'ttl-value', { ttlMinutes: 5, skipTrust: true });
       const result = vault.authorize(token);
       // exp should be iat + 300 seconds (5 minutes)
       assert.equal(result.claims.exp - result.claims.iat, 300);
@@ -185,7 +238,7 @@ describe('@vaultkeeper/wasm SDK', () => {
   it('setup with use limit', async () => {
     await withTempDir(async (dir) => {
       const vault = await createTestVault(dir);
-      const token = vault.setup('limit-key', 'limit-value', { useLimit: 3, skipTrust: true });
+      const token = await vault.setup('limit-key', 'limit-value', { useLimit: 3, skipTrust: true });
       const result = vault.authorize(token);
       assert.equal(result.claims.use, 3);
       vault.dispose();
@@ -195,7 +248,7 @@ describe('@vaultkeeper/wasm SDK', () => {
   it('rotate key then authorize with old token re-encrypts', async () => {
     await withTempDir(async (dir) => {
       const vault = await createTestVault(dir);
-      const token = vault.setup('rotate-key', 'rotate-value', { skipTrust: true });
+      const token = await vault.setup('rotate-key', 'rotate-value', { skipTrust: true });
       vault.rotateKey();
       const result = vault.authorize(token);
       // Old token decrypted with previous key
@@ -215,12 +268,12 @@ describe('@vaultkeeper/wasm SDK', () => {
   it('revokeKey generates new key and invalidates old tokens', async () => {
     await withTempDir(async (dir) => {
       const vault = await createTestVault(dir);
-      const token = vault.setup('revoke-key', 'revoke-value', { skipTrust: true });
+      const token = await vault.setup('revoke-key', 'revoke-value', { skipTrust: true });
       vault.revokeKey();
       // Old token should be rejected — key was revoked
       assert.throws(() => vault.authorize(token), /revoked|unknown/i);
       // New tokens should still work
-      const newToken = vault.setup('post-revoke', 'new-value', { skipTrust: true });
+      const newToken = await vault.setup('post-revoke', 'new-value', { skipTrust: true });
       const result = vault.authorize(newToken);
       assert.equal(
         result.secret.read((value) => value),
@@ -276,7 +329,7 @@ describe('@vaultkeeper/wasm SDK', () => {
   it('claims contain expected fields', async () => {
     await withTempDir(async (dir) => {
       const vault = await createTestVault(dir);
-      const token = vault.setup('claim-key', 'claim-value', { skipTrust: true });
+      const token = await vault.setup('claim-key', 'claim-value', { skipTrust: true });
       const result = vault.authorize(token);
       const claims = result.claims;
       // Verify all expected fields exist
@@ -296,7 +349,7 @@ describe('@vaultkeeper/wasm SDK', () => {
   it('JWE header uses dir + A256GCM (RFC 7516 interop)', async () => {
     await withTempDir(async (dir) => {
       const vault = await createTestVault(dir);
-      const token = vault.setup('interop-key', 'interop-value', { skipTrust: true });
+      const token = await vault.setup('interop-key', 'interop-value', { skipTrust: true });
       const parts = token.split('.');
       assert.equal(parts.length, 5, 'compact JWE must have 5 segments');
 
@@ -337,8 +390,8 @@ describe('@vaultkeeper/wasm SDK', () => {
   it('multiple tokens have unique JTIs', async () => {
     await withTempDir(async (dir) => {
       const vault = await createTestVault(dir);
-      const token1 = vault.setup('key1', 'val1', { skipTrust: true });
-      const token2 = vault.setup('key2', 'val2', { skipTrust: true });
+      const token1 = await vault.setup('key1', 'val1', { skipTrust: true });
+      const token2 = await vault.setup('key2', 'val2', { skipTrust: true });
       const result1 = vault.authorize(token1);
       const result2 = vault.authorize(token2);
       assert.notEqual(result1.claims.jti, result2.claims.jti, 'JTIs must be unique');
@@ -350,7 +403,7 @@ describe('@vaultkeeper/wasm SDK', () => {
     await withTempDir(async (dir) => {
       const vault = await createTestVault(dir);
       // setup accepts empty name but authorize should reject (claims validation)
-      const token = vault.setup('', 'some-value', { skipTrust: true });
+      const token = await vault.setup('', 'some-value', { skipTrust: true });
       assert.throws(() => vault.authorize(token), /sub must not be empty/);
       vault.dispose();
     });
@@ -360,7 +413,7 @@ describe('@vaultkeeper/wasm SDK', () => {
     await withTempDir(async (dir) => {
       const vault = await createTestVault(dir);
       // setup accepts empty value but authorize should reject (claims validation)
-      const token = vault.setup('some-name', '', { skipTrust: true });
+      const token = await vault.setup('some-name', '', { skipTrust: true });
       assert.throws(() => vault.authorize(token), /val must not be empty/);
       vault.dispose();
     });
@@ -406,7 +459,7 @@ describe('@vaultkeeper/wasm SDK', () => {
   it('setup with explicit backend type', async () => {
     await withTempDir(async (dir) => {
       const vault = await createTestVault(dir);
-      const token = vault.setup('backend-key', 'backend-value', {
+      const token = await vault.setup('backend-key', 'backend-value', {
         backendType: 'file',
         skipTrust: true,
       });
@@ -422,7 +475,7 @@ describe('@vaultkeeper/wasm SDK', () => {
       // Create a token with a very short TTL that should be expired by the time we check
       // We can't easily test this without controlling time, but we can test that
       // the claims contain the expected TTL calculation
-      const token = vault.setup('ttl-test', 'ttl-value', { ttlMinutes: 1, skipTrust: true });
+      const token = await vault.setup('ttl-test', 'ttl-value', { ttlMinutes: 1, skipTrust: true });
       const result = vault.authorize(token);
       // exp should be iat + 60 seconds (1 minute)
       assert.equal(result.claims.exp - result.claims.iat, 60);
@@ -438,7 +491,7 @@ describe('@vaultkeeper/wasm security parity (issue #66)', () => {
   it('authorize() return shape contains no secret material', async () => {
     await withTempDir(async (dir) => {
       const vault = await createTestVault(dir);
-      const token = vault.setup('leak-key', 'test-secret-123', { skipTrust: true });
+      const token = await vault.setup('leak-key', 'test-secret-123', { skipTrust: true });
       const result = vault.authorize(token);
 
       // The pre-fix leak was at result.claims.val — it must be gone.
@@ -463,7 +516,7 @@ describe('@vaultkeeper/wasm security parity (issue #66)', () => {
   it('safe consumption path: one-time accessor reads the secret exactly once', async () => {
     await withTempDir(async (dir) => {
       const vault = await createTestVault(dir);
-      const token = vault.setup('accessor-key', 'accessor-secret', { skipTrust: true });
+      const token = await vault.setup('accessor-key', 'accessor-secret', { skipTrust: true });
       const result = vault.authorize(token);
 
       assert.equal(result.secret.available, true);
@@ -505,7 +558,7 @@ describe('@vaultkeeper/wasm security parity (issue #66)', () => {
   it('authorize() of a tampered token throws a typed InvalidTokenError', async () => {
     await withTempDir(async (dir) => {
       const vault = await createTestVault(dir);
-      const token = vault.setup('tamper-key', 'tamper-value', { skipTrust: true });
+      const token = await vault.setup('tamper-key', 'tamper-value', { skipTrust: true });
       const parts = token.split('.');
       const segment = parts[3];
       assert.ok(segment, 'JWE should have a 4th segment');
@@ -589,7 +642,7 @@ describe('@vaultkeeper/wasm setup() contract (issue #104)', () => {
       const vault = await createTestVault(dir);
       await vault.store('contract-key', 'stored-value');
 
-      const token = vault.setup('contract-key', 'argument-value', { skipTrust: true });
+      const token = await vault.setup('contract-key', 'argument-value', { skipTrust: true });
       const result = vault.authorize(token);
 
       assert.equal(
@@ -616,7 +669,7 @@ describe('@vaultkeeper/wasm setup() explicit-trust contract (issue #147)', () =>
   it('setup() without a trust choice throws ExecutableTrustRequiredError (missing-choice) — no silent token', async () => {
     await withTempDir(async (dir) => {
       const vault = await createTestVault(dir);
-      assert.throws(
+      await assert.rejects(
         // Omitting the trust choice compiles (options is optional) but is the
         // exact runtime defect under test — it must throw, not mint a token.
         () => vault.setup('no-choice', 'value'),
@@ -632,7 +685,7 @@ describe('@vaultkeeper/wasm setup() explicit-trust contract (issue #147)', () =>
   it('setup() with an empty options object still requires a choice (missing-choice)', async () => {
     await withTempDir(async (dir) => {
       const vault = await createTestVault(dir);
-      assert.throws(
+      await assert.rejects(
         () => vault.setup('empty-opts', 'value', {}),
         (err: unknown) =>
           err instanceof ExecutableTrustRequiredError && err.reason === 'missing-choice',
@@ -644,7 +697,7 @@ describe('@vaultkeeper/wasm setup() explicit-trust contract (issue #147)', () =>
   it('setup() with both executablePath and skipTrust throws (conflicting-choice)', async () => {
     await withTempDir(async (dir) => {
       const vault = await createTestVault(dir);
-      assert.throws(
+      await assert.rejects(
         () => vault.setup('both', 'value', { executablePath: '/usr/bin/node', skipTrust: true }),
         (err: unknown) =>
           err instanceof ExecutableTrustRequiredError && err.reason === 'conflicting-choice',
@@ -656,7 +709,7 @@ describe('@vaultkeeper/wasm setup() explicit-trust contract (issue #147)', () =>
   it("setup() with the retired 'dev' sentinel as executablePath throws (legacy-dev-sentinel)", async () => {
     await withTempDir(async (dir) => {
       const vault = await createTestVault(dir);
-      assert.throws(
+      await assert.rejects(
         () => vault.setup('legacy', 'value', { executablePath: 'dev' }),
         (err: unknown) =>
           err instanceof ExecutableTrustRequiredError && err.reason === 'legacy-dev-sentinel',
@@ -669,7 +722,7 @@ describe('@vaultkeeper/wasm setup() explicit-trust contract (issue #147)', () =>
     await withTempDir(async (dir) => {
       const vault = await createTestVault(dir);
       for (const bad of ['', '   ', '\t']) {
-        assert.throws(
+        await assert.rejects(
           () => vault.setup('empty-path', 'value', { executablePath: bad }),
           (err: unknown) =>
             err instanceof ExecutableTrustRequiredError && err.reason === 'missing-choice',
@@ -683,7 +736,7 @@ describe('@vaultkeeper/wasm setup() explicit-trust contract (issue #147)', () =>
   it('setup() with skipTrust: true opts out and mints a token bound to the dev identity', async () => {
     await withTempDir(async (dir) => {
       const vault = await createTestVault(dir);
-      const token = vault.setup('skip', 'value', { skipTrust: true });
+      const token = await vault.setup('skip', 'value', { skipTrust: true });
       const result = vault.authorize(token);
       // The 'dev' sentinel is the explicit no-binding identity.
       assert.equal(result.claims.exe, 'dev');
@@ -691,12 +744,15 @@ describe('@vaultkeeper/wasm setup() explicit-trust contract (issue #147)', () =>
     });
   });
 
-  it('setup() with an explicit executablePath binds that path into the token', async () => {
+  it('setup() with an explicit executablePath verifies it and binds the verified hash', async () => {
     await withTempDir(async (dir) => {
       const vault = await createTestVault(dir);
-      const token = vault.setup('bound-path', 'value', { executablePath: '/usr/bin/node' });
+      const exe = await writeFakeExecutable(dir, 'app.bin', 'fake-executable-contents');
+
+      const token = await vault.setup('bound-path', 'value', { executablePath: exe.path });
       const result = vault.authorize(token);
-      assert.equal(result.claims.exe, '/usr/bin/node');
+      // The exe claim holds the verified SHA-256 hash, not the raw path.
+      assert.equal(result.claims.exe, exe.hash);
       vault.dispose();
     });
   });
@@ -704,7 +760,7 @@ describe('@vaultkeeper/wasm setup() explicit-trust contract (issue #147)', () =>
   it("the thrown error's message uses the JS option names, not the Rust core's field names", async () => {
     await withTempDir(async (dir) => {
       const vault = await createTestVault(dir);
-      assert.throws(
+      await assert.rejects(
         () => vault.setup('js-names', 'value', {}),
         (err: unknown) => {
           assert.ok(err instanceof ExecutableTrustRequiredError);
@@ -716,6 +772,83 @@ describe('@vaultkeeper/wasm setup() explicit-trust contract (issue #147)', () =>
           return true;
         },
       );
+      vault.dispose();
+    });
+  });
+});
+
+// Executable-trust verification (issue #166): supplying executablePath must run
+// real trust verification through the host bridge — hashing + TOFU manifest I/O
+// — mirroring the TypeScript library's tiers and errors. Before this, the WASM
+// SDK bound the raw path with no hashing or manifest consultation.
+describe('@vaultkeeper/wasm setup() executable-trust verification (issue #166)', () => {
+  it('first encounter records the executable hash under TOFU', async () => {
+    await withTempDir(async (dir) => {
+      const vault = await createTestVault(dir);
+      const exe = await writeFakeExecutable(dir, 'app.bin', 'first-encounter-bytes');
+
+      await vault.setup('s', 'v', { executablePath: exe.path });
+
+      // The first encounter persisted the hash under the executable's namespace.
+      const recorded = await readApprovedHashes(dir, exe.path);
+      assert.deepEqual(recorded, [exe.hash]);
+      vault.dispose();
+    });
+  });
+
+  it('a matching hash on a later setup passes and binds the same hash', async () => {
+    await withTempDir(async (dir) => {
+      const vault = await createTestVault(dir);
+      const exe = await writeFakeExecutable(dir, 'app.bin', 'stable-bytes');
+
+      await vault.setup('s', 'v', { executablePath: exe.path });
+      const token = await vault.setup('s', 'v', { executablePath: exe.path });
+      const result = vault.authorize(token);
+      assert.equal(result.claims.exe, exe.hash);
+      vault.dispose();
+    });
+  });
+
+  it('a conflicting hash throws IdentityMismatchError and records nothing new', async () => {
+    await withTempDir(async (dir) => {
+      const vault = await createTestVault(dir);
+      const exe = await writeFakeExecutable(dir, 'app.bin', 'original-bytes');
+      const originalHash = exe.hash;
+
+      // First encounter records the original hash.
+      await vault.setup('s', 'v', { executablePath: exe.path });
+
+      // Tamper with the executable so its hash changes.
+      await writeFile(exe.path, 'tampered-bytes');
+      const tamperedHash = sha256Hex('tampered-bytes');
+
+      await assert.rejects(
+        () => vault.setup('s', 'v', { executablePath: exe.path }),
+        (err: unknown) =>
+          err instanceof IdentityMismatchError &&
+          err instanceof VaultError &&
+          err.previousHash === originalHash &&
+          err.currentHash === tamperedHash,
+      );
+
+      // #148: the failed setup wrote nothing new — only the original remains.
+      const recorded = await readApprovedHashes(dir, exe.path);
+      assert.deepEqual(recorded, [originalHash]);
+      vault.dispose();
+    });
+  });
+
+  it('#148 ordering: a setup that fails verification leaves the manifest unwritten', async () => {
+    await withTempDir(async (dir) => {
+      const vault = await createTestVault(dir);
+      // No file at this path, so hashing (and thus setup) fails before minting.
+      const missing = join(dir, 'nonexistent.bin');
+
+      await assert.rejects(() => vault.setup('s', 'v', { executablePath: missing }));
+
+      // Nothing was recorded for the executable.
+      const recorded = await readApprovedHashes(dir, missing);
+      assert.deepEqual(recorded, []);
       vault.dispose();
     });
   });

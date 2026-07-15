@@ -203,6 +203,14 @@ fn vault_error_to_js(e: &VaultError) -> JsValue {
             );
             set("reason", &JsValue::from_str(reason.as_str()));
         }
+        VaultError::IdentityMismatch {
+            previous_hash,
+            current_hash,
+            ..
+        } => {
+            set("previousHash", &JsValue::from_str(previous_hash));
+            set("currentHash", &JsValue::from_str(current_hash));
+        }
         VaultError::Filesystem {
             path,
             permission,
@@ -478,7 +486,12 @@ impl WasmVaultKeeper {
     }
 
     /// Create a JWE token encapsulating a secret.
-    pub fn setup(
+    ///
+    /// When `options.executablePath` is supplied, the executable is hashed and
+    /// run through trust verification (Sigstore → trust-manifest match → TOFU
+    /// first-encounter) via the host bridge; a first-encounter TOFU record is
+    /// persisted only after the token has minted (issue #148).
+    pub async fn setup(
         &self,
         secret_name: &str,
         secret_value: &str,
@@ -516,7 +529,13 @@ impl WasmVaultKeeper {
         };
 
         self.vault
-            .setup(secret_name, secret_value, setup_opts.as_ref())
+            .setup(
+                self.host.as_ref(),
+                secret_name,
+                secret_value,
+                setup_opts.as_ref(),
+            )
+            .await
             .map_err(|e| vault_error_to_js(&e))
     }
 

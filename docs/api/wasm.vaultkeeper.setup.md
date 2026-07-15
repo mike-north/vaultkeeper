@@ -9,7 +9,7 @@ Create a JWE token encapsulating a secret.
 **Signature:**
 
 ```typescript
-setup(secretName: string, secretValue: string, options?: SetupOptions): string;
+setup(secretName: string, secretValue: string, options?: SetupOptions): Promise<string>;
 ```
 
 ## Parameters
@@ -78,15 +78,19 @@ _(Optional)_
 
 **Returns:**
 
-string
+Promise&lt;string&gt;
 
 ## Exceptions
 
 [ExecutableTrustRequiredError](./wasm.executabletrustrequirederror.md) If neither `executablePath` nor `skipTrust: true` is provided, if both are, or if `executablePath` is the retired legacy `'dev'` opt-out sentinel (use `skipTrust: true`<!-- -->).
 
+[IdentityMismatchError](./wasm.identitymismatcherror.md) If `executablePath`<!-- -->'s current hash no longer matches a previously approved value (TOFU conflict).
+
 ## Remarks
 
-\*\*Explicit executable-trust choice required.\*\* Like the TypeScript `vaultkeeper` library's `setup()`<!-- -->, this method no longer defaults to skipping the executable-identity binding. The caller must make an unambiguous decision via [SetupOptions](./wasm.setupoptions.md)<!-- -->: provide exactly one of [SetupOptions.executablePath](./wasm.setupoptions.executablepath.md) (bind the calling executable's identity into the token) or [SetupOptions.skipTrust](./wasm.setupoptions.skiptrust.md) (`true` — a development-only opt-out). This binding records the declared identity into the token's `exe` claim; it does not itself run TOFU/manifest verification. Supplying neither — or both — or the retired `'dev'` sentinel as `executablePath` throws [ExecutableTrustRequiredError](./wasm.executabletrustrequirederror.md) rather than silently minting an unbound `'dev'` token. Inspect the error's `reason` (`'missing-choice'` \| `'conflicting-choice'` \| `'legacy-dev-sentinel'`<!-- -->) to distinguish the cases.
+\*\*Explicit executable-trust choice required.\*\* Like the TypeScript `vaultkeeper` library's `setup()`<!-- -->, this method no longer defaults to skipping the executable-identity binding. The caller must make an unambiguous decision via [SetupOptions](./wasm.setupoptions.md)<!-- -->: provide exactly one of [SetupOptions.executablePath](./wasm.setupoptions.executablepath.md) (verify and bind the calling executable's identity into the token) or [SetupOptions.skipTrust](./wasm.setupoptions.skiptrust.md) (`true` — a development-only opt-out). Supplying neither — or both — or the retired `'dev'` sentinel as `executablePath` throws [ExecutableTrustRequiredError](./wasm.executabletrustrequirederror.md) rather than silently minting an unbound `'dev'` token. Inspect the error's `reason` (`'missing-choice'` \| `'conflicting-choice'` \| `'legacy-dev-sentinel'`<!-- -->) to distinguish the cases.
+
+\*\*Executable-trust verification.\*\* When `executablePath` is supplied, the executable is hashed and run through trust verification (Sigstore → trust-manifest match → TOFU first-encounter), and the verified hash is bound into the token's `exe` claim. A hash that conflicts with a previously approved value throws [IdentityMismatchError](./wasm.identitymismatcherror.md)<!-- -->. The first-encounter TOFU record is persisted only after the token has been minted, so a failed `setup()` never leaves a premature trust record behind.
 
 \*\*Backend divergence.\*\* Unlike the TypeScript `vaultkeeper` library's `setup(secretName, options?)`<!-- -->, this method does not read from the backend — it mints the token directly from `secretValue`<!-- -->. It never calls [VaultKeeper.store()](./wasm.vaultkeeper.store.md) / [VaultKeeper.retrieve()](./wasm.vaultkeeper.retrieve.md) or looks at anything already persisted under `secretName`<!-- -->, so a prior `store()` call has no effect on what `setup()` encapsulates. This is an intentional divergence between the two SDKs' `setup()` contracts, not a bug.
 

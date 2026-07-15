@@ -234,6 +234,43 @@ export class ExecutableTrustRequiredError extends VaultError {
   }
 }
 
+/**
+ * Thrown by `setup()` when the executable at `executablePath` has a hash that
+ * conflicts with a value previously approved for it under trust-on-first-use.
+ *
+ * Mirrors the pure-TypeScript `vaultkeeper` library's `IdentityMismatchError`:
+ * the first encounter with an executable records its hash, and a later hash
+ * change (a rebuilt or substituted binary) surfaces here rather than silently
+ * re-approving. Re-approval is required before the executable can be bound
+ * again. Inspect {@link IdentityMismatchError.previousHash} and
+ * {@link IdentityMismatchError.currentHash} to see what changed.
+ */
+export class IdentityMismatchError extends VaultError {
+  /**
+   * The hash recorded at approval time (most-recently approved value).
+   * `undefined` only if the WASM boundary did not supply one — never
+   * fabricated, so its absence is distinguishable from a genuine hash.
+   */
+  readonly previousHash?: string;
+
+  /**
+   * The hash computed from the current executable. `undefined` only if the
+   * WASM boundary did not supply one — never fabricated.
+   */
+  readonly currentHash?: string;
+
+  constructor(message: string, previousHash?: string, currentHash?: string) {
+    super(message);
+    this.name = 'IdentityMismatchError';
+    if (previousHash !== undefined) {
+      this.previousHash = previousHash;
+    }
+    if (currentHash !== undefined) {
+      this.currentHash = currentHash;
+    }
+  }
+}
+
 /** Shape of the tagged error value thrown across the WASM boundary. */
 interface WasmErrorShape {
   vaultErrorCode: string;
@@ -243,6 +280,8 @@ interface WasmErrorShape {
   reason?: string;
   permission?: string;
   code?: string;
+  previousHash?: string;
+  currentHash?: string;
 }
 
 function isWasmErrorShape(value: unknown): value is WasmErrorShape {
@@ -308,6 +347,17 @@ export function mapWasmError(thrown: unknown): VaultError {
         return new AccessorConsumedError(message);
       case 'executable-trust-required':
         return new ExecutableTrustRequiredError(message, toTrustRequiredReason(thrown.reason));
+      case 'identity-mismatch': {
+        // Sanitize the hashes: a malformed boundary value (e.g. `null`) must not
+        // land as a non-string field and violate IdentityMismatchError's
+        // documented `string | undefined` contract — leave it honestly
+        // undefined, mirroring how `path`/`permission` are handled above.
+        const previousHash =
+          typeof thrown.previousHash === 'string' ? thrown.previousHash : undefined;
+        const currentHash =
+          typeof thrown.currentHash === 'string' ? thrown.currentHash : undefined;
+        return new IdentityMismatchError(message, previousHash, currentHash);
+      }
       default:
         return new VaultError(message);
     }

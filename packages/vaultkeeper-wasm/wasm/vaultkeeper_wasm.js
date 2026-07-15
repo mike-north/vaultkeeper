@@ -187,32 +187,23 @@ class WasmVaultKeeper {
     }
     /**
      * Create a JWE token encapsulating a secret.
+     *
+     * When `options.executablePath` is supplied, the executable is hashed and
+     * run through trust verification (Sigstore → trust-manifest match → TOFU
+     * first-encounter) via the host bridge; a first-encounter TOFU record is
+     * persisted only after the token has minted (issue #148).
      * @param {string} secret_name
      * @param {string} secret_value
      * @param {any} options
-     * @returns {string}
+     * @returns {Promise<string>}
      */
     setup(secret_name, secret_value, options) {
-        let deferred4_0;
-        let deferred4_1;
-        try {
-            const ptr0 = passStringToWasm0(secret_name, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
-            const len0 = WASM_VECTOR_LEN;
-            const ptr1 = passStringToWasm0(secret_value, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
-            const len1 = WASM_VECTOR_LEN;
-            const ret = wasm.wasmvaultkeeper_setup(this.__wbg_ptr, ptr0, len0, ptr1, len1, options);
-            var ptr3 = ret[0];
-            var len3 = ret[1];
-            if (ret[3]) {
-                ptr3 = 0; len3 = 0;
-                throw takeFromExternrefTable0(ret[2]);
-            }
-            deferred4_0 = ptr3;
-            deferred4_1 = len3;
-            return getStringFromWasm0(ptr3, len3);
-        } finally {
-            wasm.__wbindgen_free(deferred4_0, deferred4_1, 1);
-        }
+        const ptr0 = passStringToWasm0(secret_name, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ptr1 = passStringToWasm0(secret_value, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len1 = WASM_VECTOR_LEN;
+        const ret = wasm.wasmvaultkeeper_setup(this.__wbg_ptr, ptr0, len0, ptr1, len1, options);
+        return ret;
     }
     /**
      * Store a secret via the file backend.
@@ -463,7 +454,7 @@ function __wbg_get_imports() {
             return ret;
         },
         __wbindgen_cast_0000000000000001: function(arg0, arg1) {
-            // Cast intrinsic for `Closure(Closure { dtor_idx: 145, function: Function { arguments: [Externref], shim_idx: 146, ret: Result(Unit), inner_ret: Some(Result(Unit)) }, mutable: true }) -> Externref`.
+            // Cast intrinsic for `Closure(Closure { dtor_idx: 158, function: Function { arguments: [Externref], shim_idx: 159, ret: Result(Unit), inner_ret: Some(Result(Unit)) }, mutable: true }) -> Externref`.
             const ret = makeMutClosure(arg0, arg1, wasm.wasm_bindgen__closure__destroy__h1722208547e491cb, wasm_bindgen__convert__closures_____invoke__h8760ba3086f56474);
             return ret;
         },
