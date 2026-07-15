@@ -392,7 +392,8 @@ describe('loadConfig', () => {
   // (e.g. a permissions error) silently returned defaults instead of
   // surfacing the problem.
   it('should rethrow a non-ENOENT read error as a typed FilesystemError instead of silently defaulting (regression: issue #68 / #92 review)', async () => {
-    vi.mocked(readFile).mockRejectedValue(fsError('EACCES', 'permission denied'))
+    const cause = fsError('EACCES', 'permission denied')
+    vi.mocked(readFile).mockRejectedValue(cause)
     try {
       await loadConfig('/fake')
       expect.unreachable('loadConfig should have thrown, not silently defaulted')
@@ -404,12 +405,30 @@ describe('loadConfig', () => {
       expect(err.permission).toBe('read')
       expect(err.message).toContain('/fake/config.json')
       expect(err.message).toContain('vaultkeeper config init')
+      // Regression: issue #133 — the errno code and original error must
+      // survive the wrap as machine-readable `code`/`cause`, not just as
+      // text embedded in the message.
+      expect(err.code).toBe('EACCES')
+      expect(err.cause).toBe(cause)
     }
   })
 
+  // Regression: issue #133 — a non-permission errno (EISDIR) must also
+  // survive wrapping, proving `code`/`cause` propagation isn't specific to
+  // permission failures like EACCES/EPERM.
   it('should rethrow an EISDIR read error as a typed FilesystemError instead of silently defaulting', async () => {
-    vi.mocked(readFile).mockRejectedValue(fsError('EISDIR', 'illegal operation on a directory'))
-    await expect(loadConfig('/fake')).rejects.toBeInstanceOf(FilesystemError)
+    const cause = fsError('EISDIR', 'illegal operation on a directory')
+    vi.mocked(readFile).mockRejectedValue(cause)
+    try {
+      await loadConfig('/fake')
+      expect.unreachable('loadConfig should have thrown, not silently defaulted')
+    } catch (err) {
+      if (!(err instanceof FilesystemError)) {
+        throw err
+      }
+      expect(err.code).toBe('EISDIR')
+      expect(err.cause).toBe(cause)
+    }
   })
 })
 

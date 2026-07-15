@@ -33,7 +33,7 @@ Description
 </th></tr></thead>
 <tbody><tr><td>
 
-[(constructor)(message, filePath, permission)](./vaultkeeper.filesystemerror._constructor_.md)
+[(constructor)(message, filePath, permission, cause)](./vaultkeeper.filesystemerror._constructor_.md)
 
 
 </td><td>
@@ -71,6 +71,27 @@ Description
 
 </th></tr></thead>
 <tbody><tr><td>
+
+[code](./vaultkeeper.filesystemerror.code.md)
+
+
+</td><td>
+
+`readonly`
+
+
+</td><td>
+
+string \| undefined
+
+
+</td><td>
+
+The Node.js errno code from the underlying filesystem failure, for example EACCES, EPERM, ENOSPC, or EISDIR. Undefined when the error was constructed without an underlying cause, or when that cause did not expose a string errno code. Prefer this over parsing the message text, which is not a contractual format.
+
+
+</td></tr>
+<tr><td>
 
 [path](./vaultkeeper.filesystemerror.path.md)
 

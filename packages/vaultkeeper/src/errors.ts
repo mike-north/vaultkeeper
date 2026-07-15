@@ -485,12 +485,72 @@ export class FilesystemError extends VaultError {
    */
   readonly permission: string
 
-  constructor(message: string, filePath: string, permission: string) {
+  /**
+   * The Node.js errno code from the underlying filesystem failure, for
+   * example EACCES, EPERM, ENOSPC, or EISDIR. Undefined when the error was
+   * constructed without an underlying cause, or when that cause did not
+   * expose a string errno code. Prefer this over parsing the message text,
+   * which is not a contractual format.
+   */
+  readonly code: string | undefined
+
+  /**
+   * @param message - Human-readable description of the failure.
+   * @param filePath - The path of the file or directory that caused the error.
+   * @param permission - The permission level that was required but not
+   * available.
+   * @param cause - The underlying error that was caught, if any. Recorded as
+   * the standard `Error.cause` and used to populate `code` when it exposes a
+   * string errno code.
+   */
+  constructor(message: string, filePath: string, permission: string, cause?: unknown) {
     super(message)
     this.name = 'FilesystemError'
     this.path = filePath
     this.permission = permission
+    this.code = hasErrnoCode(cause) ? cause.code : undefined
+    if (cause !== undefined) {
+      this.cause = cause
+    }
   }
+}
+
+/**
+ * True when `err` is an `Error` carrying a Node.js-style string `code`
+ * property — the `NodeJS.ErrnoException` convention used by filesystem and
+ * other system-call failures.
+ */
+function hasErrnoCode(err: unknown): err is Error & { code: string } {
+  return err instanceof Error && 'code' in err && typeof err.code === 'string'
+}
+
+/**
+ * Build a typed FilesystemError from a caught Node.js filesystem failure,
+ * describing which resource and operation were involved. The original error
+ * is preserved as `cause`, and its errno code, when present, is copied onto
+ * the returned error for machine-readable discrimination.
+ *
+ * @param err - The value caught from the failed filesystem call.
+ * @param resourceLabel - A short noun phrase describing what was being
+ * accessed, for example 'secret file' or 'wrapping key file'.
+ * @param filePath - The path that was being accessed.
+ * @param permission - The operation being attempted, for example 'read',
+ * 'write', or 'delete'.
+ * @internal
+ */
+export function toFilesystemError(
+  err: unknown,
+  resourceLabel: string,
+  filePath: string,
+  permission: string,
+): FilesystemError {
+  const detail = err instanceof Error ? err.message : String(err)
+  return new FilesystemError(
+    `Failed to ${permission} ${resourceLabel} at ${filePath}: ${detail}`,
+    filePath,
+    permission,
+    err,
+  )
 }
 
 /**

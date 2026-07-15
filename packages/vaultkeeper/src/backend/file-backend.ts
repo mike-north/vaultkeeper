@@ -25,7 +25,12 @@
 import * as fs from 'node:fs/promises'
 import * as path from 'node:path'
 import * as os from 'node:os'
-import { SecretNotFoundError, FilesystemError, DecryptionError } from '../errors.js'
+import {
+  SecretNotFoundError,
+  FilesystemError,
+  DecryptionError,
+  toFilesystemError,
+} from '../errors.js'
 import { encryptGcm, decryptGcm, getOrCreateWrapKey } from '../util/at-rest.js'
 import { getDefaultConfigDir } from '../config.js'
 import type { ListableBackend } from './types.js'
@@ -78,6 +83,7 @@ async function ensureStorageDir(storageDir: string): Promise<void> {
         `Failed to create storage directory: ${storageDir}`,
         storageDir,
         'rwx',
+        err,
       )
     }
   }
@@ -85,22 +91,6 @@ async function ensureStorageDir(storageDir: string): Promise<void> {
 
 async function getOrCreateKey(storageDir: string): Promise<Buffer> {
   return getOrCreateWrapKey(path.join(storageDir, KEY_FILE))
-}
-
-/**
- * Re-throw a caught filesystem error as a typed {@link FilesystemError},
- * preserving the underlying message. `permission` should describe the
- * operation that was being attempted (e.g. `'read'`, `'write'`, `'delete'`) —
- * appropriate for `EACCES`/`EPERM` failures encountered while reading,
- * writing, or deleting a secret entry on disk.
- */
-function toFilesystemError(err: unknown, filePath: string, permission: string): FilesystemError {
-  const detail = err instanceof Error ? err.message : String(err)
-  return new FilesystemError(
-    `Failed to ${permission} secret file at ${filePath}: ${detail}`,
-    filePath,
-    permission,
-  )
 }
 
 /**
@@ -156,7 +146,7 @@ export class FileBackend implements ListableBackend {
     try {
       await fs.writeFile(entryPath, encrypted, { mode: 0o600 })
     } catch (err) {
-      throw toFilesystemError(err, entryPath, 'write')
+      throw toFilesystemError(err, 'secret file', entryPath, 'write')
     }
   }
 
@@ -175,7 +165,7 @@ export class FileBackend implements ListableBackend {
       if (err instanceof Error && 'code' in err && err.code === 'ENOENT') {
         return undefined
       }
-      throw toFilesystemError(err, entryPath, 'read')
+      throw toFilesystemError(err, 'secret file', entryPath, 'read')
     }
 
     const key = await getOrCreateKey(storageDir)
@@ -213,7 +203,7 @@ export class FileBackend implements ListableBackend {
       return
     } catch (err) {
       if (!(err instanceof Error && 'code' in err && err.code === 'ENOENT')) {
-        throw toFilesystemError(err, entryPath, 'delete')
+        throw toFilesystemError(err, 'secret file', entryPath, 'delete')
       }
     }
 
@@ -224,7 +214,7 @@ export class FileBackend implements ListableBackend {
         return
       } catch (err) {
         if (!(err instanceof Error && 'code' in err && err.code === 'ENOENT')) {
-          throw toFilesystemError(err, legacyEntryPath, 'delete')
+          throw toFilesystemError(err, 'secret file', legacyEntryPath, 'delete')
         }
       }
     }

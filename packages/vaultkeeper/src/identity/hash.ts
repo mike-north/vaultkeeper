@@ -33,6 +33,7 @@ export function hashExecutable(filePath: string): Promise<string> {
           `Cannot read executable at ${filePath}: ${err.message}`,
           filePath,
           'read',
+          err,
         ),
       )
     })
