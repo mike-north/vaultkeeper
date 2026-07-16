@@ -156,3 +156,41 @@ describe('corrupt / tampered state degrades safely', () => {
     expect(loaded?.current.id).toBe('k-new-bbbb')
   })
 })
+
+// Regression: issue #228. The first `store` persists key state before any
+// secret is written, so `saveKeyState` is the code path that creates the config
+// directory. When its parent is read-only, `fs.mkdir` fails with EACCES; that
+// failure previously propagated as a raw Node error and the CLI leaked
+// `EACCES: … mkdir '<path>'`. It must now surface as a typed FilesystemError
+// (permission 'create', errno code preserved) so the CLI can render it cleanly.
+describe('saveKeyState wraps a config-dir creation failure as a typed FilesystemError (issue #228)', () => {
+  // chmod-500 only denies mkdir on POSIX, and not for root (which bypasses
+  // permission bits) — mirror the CLI UAT guard.
+  const canTestDirPermissions =
+    process.platform !== 'win32' &&
+    !(typeof process.getuid === 'function' && process.getuid() === 0)
+
+  it.skipIf(!canTestDirPermissions)(
+    'throws FilesystemError (not a raw EACCES) when the parent dir is read-only',
+    async () => {
+      const parent = path.join(dir, 'ro')
+      await fs.mkdir(parent, { recursive: true })
+      await fs.chmod(parent, 0o500)
+      const target = path.join(parent, 'sub')
+
+      try {
+        await expect(saveKeyState(target, { current: makeKey('k-1-aaaa', 0x11) })).rejects.toEqual(
+          expect.objectContaining({
+            name: 'FilesystemError',
+            path: target,
+            permission: 'create',
+            code: 'EACCES',
+          }),
+        )
+      } finally {
+        // Restore write permission so afterEach can remove the temp tree.
+        await fs.chmod(parent, 0o755).catch(() => undefined)
+      }
+    },
+  )
+})

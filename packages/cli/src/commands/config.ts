@@ -6,6 +6,7 @@ import {
   defaultBackendType,
   platformNativeBackendType,
   loadConfig,
+  FilesystemError,
 } from 'vaultkeeper'
 import { formatError } from '../output.js'
 import { CONFIG_DIR_HELP_OPTION, CONFIG_DIR_HELP_ENV } from '../config-dir.js'
@@ -181,8 +182,22 @@ async function configInit(rest: string[], configDir: string): Promise<number> {
 
   try {
     const configPath = path.join(configDir, 'config.json')
-    // Create config directory with restrictive permissions.
-    await fs.mkdir(configDir, { recursive: true, mode: 0o700 })
+    // Create config directory with restrictive permissions. A failure here
+    // (e.g. the parent directory is read-only) must surface as a typed
+    // FilesystemError rendered by formatError, not the raw Node
+    // `EACCES: … mkdir '<path>'` text (issue #228).
+    try {
+      await fs.mkdir(configDir, { recursive: true, mode: 0o700 })
+    } catch (err) {
+      throw new FilesystemError(
+        `Failed to create config directory at ${configDir}: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+        configDir,
+        'create',
+        err,
+      )
+    }
 
     // Only a genuinely missing file (ENOENT, via configFileExists) is safe to
     // proceed over; any other access failure (e.g. EACCES) is a real problem
@@ -196,10 +211,21 @@ async function configInit(rest: string[], configDir: string): Promise<number> {
       return 1
     }
 
-    await fs.writeFile(configPath, buildConfig(backendType) + '\n', {
-      encoding: 'utf8',
-      mode: 0o600,
-    })
+    try {
+      await fs.writeFile(configPath, buildConfig(backendType) + '\n', {
+        encoding: 'utf8',
+        mode: 0o600,
+      })
+    } catch (err) {
+      throw new FilesystemError(
+        `Failed to write config file at ${configPath}: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+        configPath,
+        'write',
+        err,
+      )
+    }
     process.stdout.write(`Config created at ${configPath}\n`)
 
     if (requestedBackend === undefined) {

@@ -2,6 +2,7 @@ import * as crypto from 'node:crypto'
 import * as fs from 'node:fs/promises'
 import * as path from 'node:path'
 import * as os from 'node:os'
+import { FilesystemError } from 'vaultkeeper'
 
 /**
  * Resolve the cache directory for JWE tokens.
@@ -73,13 +74,49 @@ export async function writeCachedToken(
   jwe: string,
 ): Promise<void> {
   const dir = getCacheDir()
-  await fs.mkdir(dir, { recursive: true, mode: 0o700 })
+  // Split try/catches so each failure blames the path/operation that actually
+  // failed (issue #228's audit: a shared catch would misattribute a mkdir
+  // EACCES as a failed token write).
+  try {
+    await fs.mkdir(dir, { recursive: true, mode: 0o700 })
+  } catch (err) {
+    throw new FilesystemError(
+      `Failed to create token-cache directory at ${dir}: ${
+        err instanceof Error ? err.message : String(err)
+      }`,
+      dir,
+      'create',
+      err,
+    )
+  }
   const filePath = path.join(dir, cacheFileName(callerPath, secretName))
   // Atomic write: write to a temp file with correct permissions,
   // then rename into place. rename() is atomic on POSIX filesystems.
   const tmpPath = filePath + `.${crypto.randomUUID()}.tmp`
-  await fs.writeFile(tmpPath, jwe, { encoding: 'utf8', mode: 0o600 })
-  await fs.rename(tmpPath, filePath)
+  try {
+    await fs.writeFile(tmpPath, jwe, { encoding: 'utf8', mode: 0o600 })
+  } catch (err) {
+    throw new FilesystemError(
+      `Failed to write cached token at ${tmpPath}: ${
+        err instanceof Error ? err.message : String(err)
+      }`,
+      tmpPath,
+      'write',
+      err,
+    )
+  }
+  try {
+    await fs.rename(tmpPath, filePath)
+  } catch (err) {
+    throw new FilesystemError(
+      `Failed to write cached token at ${filePath}: ${
+        err instanceof Error ? err.message : String(err)
+      }`,
+      filePath,
+      'write',
+      err,
+    )
+  }
 }
 
 /**

@@ -253,6 +253,11 @@ const FS_OPERATION_VERB: Record<string, string> = {
   // it fails to create its storage directory, so map it to the operation that
   // actually failed rather than the generic "accessed" fallback.
   rwx: 'created',
+  // Directory-creation failures (config init / first store creating the config
+  // dir, issue #228) use the `'create'` permission and get directory-specific
+  // wording in `formatFilesystemError`; this verb is the fallback if that
+  // branch is ever bypassed.
+  create: 'created',
 }
 
 /**
@@ -294,9 +299,42 @@ function classifyFilesystemError(err: FilesystemError): 'missing' | 'denied' | '
  * carries no next step (issue #150). Mirrors the fix-oriented shape of the
  * config-error and identity-mismatch messages.
  */
-function formatFilesystemError(err: FilesystemError): string {
+function formatFilesystemError(err: FilesystemError, configDir: string): string {
   const quotedPath = `\`${err.path}\``
   const kind = classifyFilesystemError(err)
+  // Directory-creation failures (`config init` / first `store` creating the
+  // config dir, issue #228) get directory-specific wording and a
+  // parent-directory hint, rather than the file-oriented messages below —
+  // the thing that could not be created is a directory, and the fix lives in
+  // the parent directory's permissions (or choosing a writable location).
+  // `rwx` is FileBackend's legacy label for the same failure class (its
+  // storage-directory mkdir), so it gets the same directory wording.
+  if (err.permission === 'create' || err.permission === 'rwx') {
+    // The --config-dir hint only helps when the failing directory actually
+    // lives under the configured config dir — a token-cache dir (XDG runtime)
+    // or an explicitly configured backend storage dir would not move with it.
+    // Resolve both sides (and fold case on Windows, matching the
+    // isPlatformDefaultConfigDir normalization) so a relative spelling or
+    // trailing separator can't flip the hint.
+    const normalizePath = (p: string): string => {
+      const resolved = path.resolve(p)
+      return process.platform === 'win32' ? resolved.toLowerCase() : resolved
+    }
+    const errPath = normalizePath(err.path)
+    const confDir = normalizePath(configDir)
+    const underConfigDir = errPath === confDir || errPath.startsWith(confDir + path.sep)
+    const relocationHint = underConfigDir ? ', or choose a writable location with --config-dir' : ''
+    if (kind === 'denied') {
+      return (
+        `${err.name}: The directory at ${quotedPath} could not be created (permission denied). ` +
+        `Check that its parent directory is writable${relocationHint}, then try again.`
+      )
+    }
+    return (
+      `${err.name}: The directory at ${quotedPath} could not be created. ` +
+      'Check that its parent directory exists and is writable, then try again.'
+    )
+  }
   if (kind === 'missing') {
     return (
       `${err.name}: The file at ${quotedPath} does not exist. ` +
@@ -391,7 +429,7 @@ export function formatError(err: unknown, configDir: string): string {
     return formatConfigReadError(err)
   }
   if (err instanceof FilesystemError) {
-    return formatFilesystemError(err)
+    return formatFilesystemError(err, configDir)
   }
   if (err instanceof Error) {
     return `${err.name}: ${err.message}`
