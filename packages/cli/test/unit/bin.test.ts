@@ -31,15 +31,20 @@ function runCli(args: string[]): Promise<CliResult> {
 }
 
 describe('bin.ts entry point', () => {
-  // Regression: issue #151 — a bare invocation previously printed help to
-  // stdout and exited 0, which let `vaultkeeper && next_step` proceed as if a
-  // command had succeeded. It is now a usage error: usage on stderr, exit 2.
-  it('should print usage to stderr and exit 2 when no arguments are given', async () => {
+  // Issue #202: a bare invocation renders the same full help as `--help` and
+  // exits 0 — it is a help request, not a usage error. (This reverses #151,
+  // which had exited 2 on stderr; a plain `vaultkeeper` prints identical help
+  // to `--help`, so treating it as a failure was a false negative for scripts
+  // checking the exit code.) Genuine misuse — unknown command/flag, missing
+  // args — still exits 2 (see below).
+  it('should print full help to stdout and exit 0 when no arguments are given', async () => {
     const result = await runCli([])
-    expect(result.exitCode).toBe(2)
-    expect(result.stderr).toContain('Usage: vaultkeeper [--config-dir <path>] <command>')
-    expect(result.stderr).toContain('exec')
-    expect(result.stderr).toContain('doctor')
+    expect(result.exitCode).toBe(0)
+    expect(result.stdout).toContain('Usage: vaultkeeper [--config-dir <path>] <command>')
+    expect(result.stdout).toContain('exec')
+    expect(result.stdout).toContain('doctor')
+    // A help render is not an error: nothing goes to stderr.
+    expect(result.stderr).toBe('')
   })
 
   it('should print help and exit 0 for --help', async () => {
@@ -101,6 +106,23 @@ describe('bin.ts entry point', () => {
       const result = await runCli(['-V'])
       expect(result.exitCode).toBe(0)
       expect(result.stdout.trim()).toMatch(/^\d+\.\d+\.\d+/)
+    })
+
+    // Issue #202: `-v` (the commonly-guessed short form) previously errored as
+    // an unknown flag; it is now wired to the same version output as `-V`.
+    it('should print the package version and exit 0 for -v', async () => {
+      const result = await runCli(['-v'])
+      expect(result.exitCode).toBe(0)
+      expect(result.stdout.trim()).toMatch(/^\d+\.\d+\.\d+/)
+    })
+
+    // Issue #202: `--version` must be discoverable from `--help`, not only by
+    // guessing — the Global options block previously listed only --config-dir.
+    it('should list --version in the --help Global options block', async () => {
+      const result = await runCli(['--help'])
+      expect(result.exitCode).toBe(0)
+      expect(result.stdout).toContain('Global options:')
+      expect(result.stdout).toContain('--version')
     })
   })
 

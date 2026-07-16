@@ -15,14 +15,16 @@ describe('help and usage', () => {
     }
   })
 
-  it('should print usage to stderr and exit 2 when no arguments are given', async () => {
-    // A bare invocation is a usage error, not success (issue #151): usage goes
-    // to stderr and the exit code is 2 so `vaultkeeper && next_step` does not
-    // proceed as if a command had succeeded. An explicit --help/-h still exits 0.
+  it('should print full help to stdout and exit 0 when no arguments are given', async () => {
+    // A bare invocation renders the identical help `--help` prints, so it is a
+    // help request, not a usage error (issue #202, reversing #151): help goes
+    // to stdout and the exit code is 0. Genuine misuse (unknown command/flag,
+    // missing args) still exits 2 — see the cases below.
     env = await createCliTestEnv()
     const result = await env.run([])
-    expect(result.exitCode).toBe(2)
-    expect(result.stderr).toContain('Usage: vaultkeeper [--config-dir <path>] <command>')
+    expect(result.exitCode).toBe(0)
+    expect(result.stdout).toContain('Usage: vaultkeeper [--config-dir <path>] <command>')
+    expect(result.stderr).toBe('')
   })
 
   it('should print help and exit 0 for --help', async () => {
@@ -71,6 +73,24 @@ describe('help and usage', () => {
     const result = await env.run(['-V'])
     expect(result.exitCode).toBe(0)
     expect(result.stdout.trim()).toMatch(/^\d+\.\d+\.\d+/)
+  })
+
+  // Issue #202: `-v` (commonly guessed) is wired to the same version output.
+  it('should print version and exit 0 for -v', async () => {
+    env = await createCliTestEnv()
+    const result = await env.run(['-v'])
+    expect(result.exitCode).toBe(0)
+    expect(result.stdout.trim()).toMatch(/^\d+\.\d+\.\d+/)
+  })
+
+  // Issue #202: --version must be listed in the top-level Global options so it
+  // is discoverable from --help, not only by guessing.
+  it('should list --version under Global options in --help', async () => {
+    env = await createCliTestEnv()
+    const result = await env.run(['--help'])
+    expect(result.exitCode).toBe(0)
+    expect(result.stdout).toContain('Global options:')
+    expect(result.stdout).toContain('--version')
   })
 
   it('should list all expected commands in help output', async () => {
