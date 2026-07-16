@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { validateClaims, blockToken, isBlocked, clearBlocklist } from '../../../src/jwe/claims.js'
 import type { VaultClaims } from '../../../src/types.js'
 import {
@@ -102,11 +102,26 @@ describe('validateClaims', () => {
       }).not.toThrow()
     })
 
-    it('accepts future expiry one second from now', () => {
-      const now = Math.floor(Date.now() / 1000)
-      expect(() => {
-        validateClaims(makeValidClaims({ exp: now + 1 }))
-      }).not.toThrow()
+    describe('future expiry (fixed clock)', () => {
+      // Regression test for #208: this test previously read Date.now() once to
+      // build a claim expiring 1 second in the future, then let validateClaims()
+      // read Date.now() again independently. If the real clock crossed a second
+      // boundary between those two reads, the claim would appear expired,
+      // flaking CI. Fake timers pin the clock so both reads see the same instant.
+      beforeEach(() => {
+        vi.useFakeTimers()
+        vi.setSystemTime(new Date('2024-01-15T10:00:00.000Z'))
+      })
+      afterEach(() => {
+        vi.useRealTimers()
+      })
+
+      it('accepts future expiry one second from now', () => {
+        const now = Math.floor(Date.now() / 1000)
+        expect(() => {
+          validateClaims(makeValidClaims({ exp: now + 1 }))
+        }).not.toThrow()
+      })
     })
   })
 
