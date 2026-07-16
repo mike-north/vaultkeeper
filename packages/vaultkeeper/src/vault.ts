@@ -24,8 +24,13 @@ import { loadConfig, getDefaultConfigDir } from './config.js'
 import { KeyManager } from './keys/manager.js'
 import { loadKeyState, saveKeyState } from './keys/storage.js'
 import { BackendRegistry } from './backend/registry.js'
-import { isSigningBackend } from './backend/types.js'
-import type { SecretBackend, SigningBackend } from './backend/types.js'
+import { isSigningBackend, getBackendCapabilities } from './backend/types.js'
+import type {
+  SecretBackend,
+  SigningBackend,
+  BackendCapabilities,
+  PresenceOperation,
+} from './backend/types.js'
 import { createToken, decryptToken, extractKid, validateClaims, blockToken } from './jwe/index.js'
 import { verifyTrustPending, commitTrust } from './identity/trust.js'
 import { hashExecutable } from './identity/hash.js'
@@ -51,6 +56,7 @@ import {
   VaultError,
   KeyRevokedError,
   SigningNotSupportedError,
+  NotCapableError,
 } from './errors.js'
 
 /**
@@ -143,13 +149,37 @@ export interface VaultKeeperOptions {
 }
 
 /**
+ * Options common to every backend-touching operation that can be gated on a
+ * fresh, per-use human presence action.
+ *
+ * @remarks
+ * When `requirePresencePerUse` is `true`, the operation refuses — with a
+ * {@link NotCapableError}, before any credential, session, or device is touched
+ * — unless the active backend's configured instance advertises
+ * {@link BackendCapabilities.presencePerUse}. When the backend is capable, the
+ * operation proceeds through the backend's ordinary path, which (by the meaning
+ * of the capability) forces a distinct fresh human action for this specific
+ * call; a cached or session-unlocked state can never satisfy it. Capabilities
+ * are queried fresh on every call and never cached across operations.
+ *
+ * @public
+ */
+export interface PresenceRequirementOptions {
+  /**
+   * Require the active backend to force a fresh, per-use human presence action
+   * for this operation. Defaults to `false` (no presence requirement).
+   */
+  requirePresencePerUse?: boolean | undefined
+}
+
+/**
  * Options for {@link VaultKeeper.setup} that are independent of the mandatory
  * executable-trust choice. Intersected with that choice to form
  * {@link SetupOptions}.
  *
  * @public
  */
-export interface SetupOptionsBase {
+export interface SetupOptionsBase extends PresenceRequirementOptions {
   /** TTL in minutes for the JWE. */
   ttlMinutes?: number | undefined
   /** Usage limit (null for unlimited). */
@@ -274,6 +304,21 @@ export interface ExecutableTrustStatus {
  * registered backend on an error path).
  */
 const BUILTIN_SIGNING_BACKENDS = ['file'] as const
+
+/**
+ * Human-readable guidance naming the kinds of backends that can satisfy a
+ * presence-per-use requirement. Surfaced in {@link NotCapableError} messages so
+ * a caller whose configured backend cannot provide the guarantee is pointed at
+ * ones that can. Deliberately describes qualifying *configurations* (not a fixed
+ * type list), since the capability is per configured instance — a custom
+ * backend may also qualify.
+ */
+const PRESENCE_PER_USE_QUALIFYING_BACKENDS =
+  'A qualifying backend forces a distinct, fresh human action per operation — ' +
+  'e.g. a YubiKey slot with a touch-per-operation policy or a gpg smartcard with ' +
+  'touch-to-sign (both cover every operation), or 1Password in per-access mode ' +
+  '(which enforces presence for reads only today, not writes). Switch to (or ' +
+  'reconfigure) such a backend, or drop the presence requirement.'
 
 /** Usage tracking for tokens with use limits. */
 const usageCounts = new Map<string, number>()
@@ -436,6 +481,30 @@ export class VaultKeeper {
   }
 
   /**
+   * Report the {@link BackendCapabilities} of the active backend's configured
+   * instance — the same backend {@link VaultKeeper.store}, {@link VaultKeeper.setup},
+   * and {@link VaultKeeper.sign} operate on.
+   *
+   * @remarks
+   * Unlike the pure {@link VaultKeeper.activeBackendType} getter, this resolves
+   * (instantiates) the backend, because capabilities are a property of the
+   * configured instance, not of the type. The answer reflects configured/live
+   * state — e.g. a YubiKey slot's touch policy or 1Password's access mode — and
+   * a backend that does not implement {@link PresenceCapableBackend} reports the
+   * safe default (`{ presencePerUse: false }`) via {@link getBackendCapabilities}.
+   * Reading this never triggers a human-presence prompt.
+   *
+   * @returns The active backend instance's capabilities.
+   * @throws A {@link BackendUnavailableError} if no backend is enabled or the
+   *   configured backend cannot be built.
+   * @public
+   */
+  async getActiveBackendCapabilities(): Promise<BackendCapabilities> {
+    const backend = this.#requireBackend()
+    return getBackendCapabilities(backend)
+  }
+
+  /**
    * Store a secret in the configured backend.
    *
    * This is a convenience method that delegates to the active backend's
@@ -446,12 +515,19 @@ export class VaultKeeper {
    *   character is reserved for the internal `signing-key:` namespace, so a
    *   secret name can never collide with a signing key.
    * @param value - The secret value to store.
+   * @param options - Optional {@link PresenceRequirementOptions}. When
+   *   `requirePresencePerUse` is set, the store is refused with a
+   *   {@link NotCapableError} before the backend is touched unless the active
+   *   backend forces a fresh per-use human action.
    * @throws {VaultError} If `name` is empty or contains `':'`.
+   * @throws {@link NotCapableError} If `options.requirePresencePerUse` is set
+   *   and the active backend is not presence-per-use capable.
    * @public
    */
-  async store(name: string, value: string): Promise<void> {
+  async store(name: string, value: string, options?: PresenceRequirementOptions): Promise<void> {
     VaultKeeper.#validateName(name, 'secret')
     const backend = this.#requireBackend()
+    await this.#enforcePresenceRequirement(backend, 'store', options?.requirePresencePerUse)
     await backend.store(name, value)
   }
 
@@ -462,12 +538,19 @@ export class VaultKeeper {
    * `delete()` method.
    *
    * @param name - Identifier for the secret to delete.
+   * @param options - Optional {@link PresenceRequirementOptions}. When
+   *   `requirePresencePerUse` is set, the delete is refused with a
+   *   {@link NotCapableError} before the backend is touched unless the active
+   *   backend forces a fresh per-use human action.
+   * @throws {@link NotCapableError} If `options.requirePresencePerUse` is set
+   *   and the active backend is not presence-per-use capable.
    * @public
    */
-  async delete(name: string): Promise<void> {
+  async delete(name: string, options?: PresenceRequirementOptions): Promise<void> {
     // Permissive: a legacy secret whose name contains ':' must remain deletable.
     VaultKeeper.#validateName(name, 'secret', false)
     const backend = this.#requireBackend()
+    await this.#enforcePresenceRequirement(backend, 'delete', options?.requirePresencePerUse)
     await backend.delete(name)
   }
 
@@ -550,6 +633,14 @@ export class VaultKeeper {
     // issue #148 (a failed setup() must never durably pre-seed TOFU trust).
     const { exeIdentity, commit: commitExecutableTrust } =
       await this.#resolveExecutableIdentity(options)
+
+    // Enforce a presence-per-use requirement before the backend secret read
+    // below — an unsatisfiable requirement fails fast with a NotCapableError
+    // without ever touching a credential/session. This runs after the trust
+    // resolution above (which throws for a missing choice), so `options` is
+    // guaranteed present here and no credential has been touched yet. The
+    // operation is 'read' — setup reads the stored secret to mint a token.
+    await this.#enforcePresenceRequirement(backend, 'read', options.requirePresencePerUse)
 
     const backendType = VaultKeeper.#resolveBackendTypeHint(backend, options.backendType)
     const ttlMinutes = options.ttlMinutes ?? this.#config.defaults.ttlMinutes
@@ -820,16 +911,25 @@ export class VaultKeeper {
    *
    * @param token - A signing-key `CapabilityToken` from {@link VaultKeeper.authorizeSigningKey}.
    * @param request - The payload to sign.
+   * @param options - Optional {@link PresenceRequirementOptions}. When
+   *   `requirePresencePerUse` is set, the signature is refused with a
+   *   {@link NotCapableError} before the backend is touched unless the active
+   *   backend forces a fresh per-use human action. When capable, a fresh
+   *   backend `signWithKey` round-trip is performed for this call — no cached
+   *   key material can satisfy it (the private key never leaves the backend).
    * @returns The detached compact JWS and vault metadata.
    * @throws {AuthorizationDeniedError} If `token` is invalid or is not a
    *   signing-key token (e.g. an ordinary secret token).
    * @throws {SigningNotSupportedError} If the active backend cannot sign.
    * @throws {SigningKeyNotFoundError} If the referenced key no longer exists.
+   * @throws {@link NotCapableError} If `options.requirePresencePerUse` is set
+   *   and the active backend is not presence-per-use capable.
    * @public
    */
   async sign(
     token: CapabilityToken,
     request: SignRequest,
+    options?: PresenceRequirementOptions,
   ): Promise<{ result: SignResult; vaultResponse: VaultResponse }> {
     const claims = validateCapabilityToken(token)
     if (!isSigningClaims(claims)) {
@@ -839,6 +939,7 @@ export class VaultKeeper {
       )
     }
     const backend = this.#requireSigningBackend()
+    await this.#enforcePresenceRequirement(backend, 'sign', options?.requirePresencePerUse)
     const jws = await createDetachedJws(claims.kid, request.payload, (data) =>
       backend.signWithKey(claims.backendRef, data),
     )
@@ -887,6 +988,69 @@ export class VaultKeeper {
       )
     }
     return backend
+  }
+
+  /**
+   * Shared enforcement for a presence-per-use requirement, called at the top of
+   * every backend-touching access path ({@link VaultKeeper.store},
+   * {@link VaultKeeper.delete}, {@link VaultKeeper.setup}, {@link VaultKeeper.sign}).
+   *
+   * @remarks
+   * This is the single, non-bypassable point of enforcement — deliberately not
+   * duplicated per CLI command. When `require` is not `true` it is a no-op.
+   * Otherwise it queries the backend's capabilities **fresh on every call**
+   * (never cached across operations, so a prior satisfied call can never
+   * satisfy a later one) and throws {@link NotCapableError} — before the caller
+   * performs any credential/session/device operation — when the configured
+   * instance does not advertise {@link BackendCapabilities.presencePerUse}, **or**
+   * advertises it but does not force a fresh action for **this** `operation` (see
+   * {@link BackendCapabilities.presenceEnforcedOperations}). The latter makes
+   * enforcement operation-aware and fail-closed: e.g. 1Password `per-access`
+   * forces presence for reads but not `store`/`delete`, so a flagged write is
+   * refused here rather than silently passing through the cached session client.
+   *
+   * When the backend *is* capable for this operation, this returns and the
+   * caller proceeds to the backend's ordinary operation, which by the meaning of
+   * the capability forces a distinct fresh human action for this specific call.
+   * The presence action itself (and any {@link PresenceDeclinedError}/
+   * {@link PresenceTimeoutError}) therefore surfaces from that backend operation,
+   * not from here — so two consecutive required-presence operations each drive
+   * their own backend call and each demand their own fresh action.
+   *
+   * @throws {@link NotCapableError} If `require` is `true` and the backend either
+   *   is not presence-per-use capable or does not force presence for `operation`.
+   */
+  async #enforcePresenceRequirement(
+    backend: SecretBackend,
+    operation: PresenceOperation,
+    require: boolean | undefined,
+  ): Promise<void> {
+    if (require !== true) {
+      return
+    }
+    const capabilities = await getBackendCapabilities(backend)
+    if (!capabilities.presencePerUse) {
+      throw new NotCapableError(
+        `This operation required presence-per-use, but the active backend ` +
+          `('${backend.type}') cannot guarantee it. ${PRESENCE_PER_USE_QUALIFYING_BACKENDS}`,
+        backend.type,
+        'presencePerUse',
+      )
+    }
+    // Operation-aware, fail-closed: a capable instance that only forces presence
+    // for some operations (an explicit `presenceEnforcedOperations` list) must
+    // refuse a flagged operation it does not cover, rather than passing without a
+    // fresh action. An omitted list means "all keyed operations" (a touch device).
+    const enforced = capabilities.presenceEnforcedOperations
+    if (enforced !== undefined && !enforced.includes(operation)) {
+      throw new NotCapableError(
+        `This '${operation}' operation required presence-per-use, but the active backend ` +
+          `('${backend.type}') only enforces a fresh per-use action for ` +
+          `[${enforced.join(', ')}] — not '${operation}'. ${PRESENCE_PER_USE_QUALIFYING_BACKENDS}`,
+        backend.type,
+        'presencePerUse',
+      )
+    }
   }
 
   /** Map a caller-facing signing key name to its namespaced backend id. */

@@ -26,11 +26,7 @@ export class RedactingStream extends Transform {
     this.#tail = ''
   }
 
-  override _transform(
-    chunk: Buffer,
-    _encoding: BufferEncoding,
-    callback: TransformCallback,
-  ): void {
+  override _transform(chunk: Buffer, _encoding: BufferEncoding, callback: TransformCallback): void {
     if (this.#secret.length === 0) {
       this.push(chunk)
       callback()

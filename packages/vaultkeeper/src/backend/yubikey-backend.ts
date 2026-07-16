@@ -26,7 +26,7 @@ import {
   SetupError,
   ExecError,
 } from '../errors.js'
-import type { ListableBackend } from './types.js'
+import type { ListableBackend, PresenceCapableBackend, BackendCapabilities } from './types.js'
 
 const YKMAN_INSTALL_URL = 'https://developers.yubico.com/yubikey-manager/'
 const STORAGE_DIR_NAME = path.join('.vaultkeeper', 'yubikey')
@@ -265,19 +265,51 @@ function decryptGcm(key: Buffer, encoded: string, path: string): string {
  *
  * @internal
  */
-export class YubikeyBackend implements ListableBackend {
+export class YubikeyBackend implements ListableBackend, PresenceCapableBackend {
   readonly type = 'yubikey'
   readonly displayName = 'YubiKey'
 
   readonly #storageDir: string
 
   /**
+   * Whether the configured challenge-response slot enforces a touch for every
+   * operation. When `true`, each `store`/`retrieve`/`delete` requires a fresh
+   * physical tap (see {@link YubikeyBackend.getCapabilities}). Sourced from
+   * configuration, not hardcoded by type — a slot without a touch policy
+   * reports `false`.
+   */
+  readonly #requireTouch: boolean
+
+  /**
    * @param storageDir - Directory in which encrypted secrets and metadata are
    *   stored. Sourced from `BackendConfig.path`. Defaults to
    *   `$HOME/.vaultkeeper/yubikey`.
+   * @param requireTouch - Whether the configured challenge-response slot
+   *   enforces a touch-per-operation policy. Defaults to `false`. Sourced from
+   *   the operator's configuration and must match the physical slot's policy
+   *   (verify with `ykman otp info`); it governs the value reported by
+   *   {@link YubikeyBackend.getCapabilities}.
    */
-  constructor(storageDir?: string) {
+  constructor(storageDir?: string, requireTouch = false) {
     this.#storageDir = resolveStorageDir(storageDir)
+    this.#requireTouch = requireTouch
+  }
+
+  /**
+   * Report this instance's capabilities.
+   *
+   * @remarks
+   * `presencePerUse` is `true` only when the configured slot enforces a
+   * touch-per-operation policy (`requireTouch`), in which case every
+   * challenge-response — and therefore every `store`/`retrieve`/`delete` — forces
+   * a fresh physical tap that cannot be satisfied from any cached state. A slot
+   * without a touch policy reports `false`; the answer is never derived from the
+   * backend `type` alone. Truth-basis: the reported value comes from the
+   * operator-declared `touchPolicy` configuration; confirm it matches the
+   * physical slot with `ykman otp info` (a manual verification).
+   */
+  getCapabilities(): Promise<BackendCapabilities> {
+    return Promise.resolve({ presencePerUse: this.#requireTouch })
   }
 
   async isAvailable(): Promise<boolean> {

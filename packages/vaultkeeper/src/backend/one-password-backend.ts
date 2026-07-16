@@ -10,6 +10,14 @@
  * - `per-access`: The `retrieve()` operation spawns a child process that creates a fresh
  *   SDK client (triggering biometric auth) for each retrieval. Other operations still use
  *   the cached session client.
+ *
+ * Presence-per-use follows directly from this: in `per-access` mode the instance
+ * forces a fresh biometric only for reads, so {@link OnePasswordBackend.getCapabilities}
+ * reports `presencePerUse: true` scoped to `presenceEnforcedOperations: ['read']`.
+ * A `--require-presence-per-use` `store`/`delete` is therefore refused with a
+ * `NotCapableError` (fail closed) rather than passing through the cached session
+ * client — the guarantee is enforced for the covered operation and never silently
+ * bypassed for an uncovered one. `session` mode reports `false`.
  */
 
 import { spawn } from 'node:child_process'
@@ -23,7 +31,7 @@ import {
   AuthorizationDeniedError,
   ConfigValidationError,
 } from '../errors.js'
-import type { ListableBackend } from './types.js'
+import type { ListableBackend, PresenceCapableBackend, BackendCapabilities } from './types.js'
 
 // ---- SDK type imports (runtime-dynamic, not static imports) ----
 // We import the SDK dynamically so that the backend degrades gracefully
@@ -103,7 +111,7 @@ function isWorkerResponse(value: unknown): value is WorkerResponse {
  *
  * @internal
  */
-export class OnePasswordBackend implements ListableBackend {
+export class OnePasswordBackend implements ListableBackend, PresenceCapableBackend {
   readonly type = '1password'
   readonly displayName = '1Password'
 
@@ -143,6 +151,39 @@ export class OnePasswordBackend implements ListableBackend {
   async isAvailable(): Promise<boolean> {
     const sdk = await this.tryLoadSdk()
     return sdk !== null
+  }
+
+  /**
+   * Report this instance's capabilities.
+   *
+   * @remarks
+   * `presencePerUse` is `true` only in `per-access` mode, where each
+   * `retrieve()` spawns a fresh worker process that creates a new SDK client and
+   * triggers a per-read biometric approval that cannot be satisfied from the
+   * cached session client. In the default `session` mode a single client is
+   * cached for all operations, so operations ride one earlier unlock — that mode
+   * reports `false`.
+   *
+   * **Operation coverage:** the per-access biometric path gates `retrieve()`
+   * only (the read behind `setup`/`exec`); `store`/`delete` route through the
+   * cached session client and are **not** presence-forced. To keep the
+   * guarantee non-bypassable, this reports `presenceEnforcedOperations: ['read']`
+   * so a `--require-presence-per-use` `store`/`delete` is refused with a
+   * `NotCapableError` (fail closed) rather than silently passing. Callers
+   * requiring presence for writes should use a touch device.
+   *
+   * **Truth-basis / cached-OS-unlock caveat:** even for reads the fresh action
+   * is "a fresh SDK client plus whatever the OS enforces at that moment" — a
+   * "fresh process/SDK client" is **not** the same as a guaranteed fresh
+   * hardware action. A per-access read can still ride a cached OS-level Touch ID
+   * / Windows Hello unlock if the OS does not re-prompt. The strongest per-use
+   * hardware guarantee comes from a touch device (YubiKey / gpg smartcard).
+   */
+  getCapabilities(): Promise<BackendCapabilities> {
+    if (this.accessMode === 'per-access') {
+      return Promise.resolve({ presencePerUse: true, presenceEnforcedOperations: ['read'] })
+    }
+    return Promise.resolve({ presencePerUse: false })
   }
 
   // ---- Session client management ----

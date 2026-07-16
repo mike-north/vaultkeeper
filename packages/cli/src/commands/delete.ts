@@ -14,6 +14,10 @@ function printDeleteHelp(): void {
       'Options:\n' +
       '  --name <name>      Name of the secret to delete. Must be non-empty\n' +
       '                     and contain only letters, digits, and . _ - /\n' +
+      '  --require-presence-per-use\n' +
+      '                     Refuse unless the active backend forces a fresh, per-use\n' +
+      '                     human action for this delete. A non-qualifying backend\n' +
+      '                     fails before any credential is touched.\n' +
       '  --skip-doctor      Skip doctor preflight checks\n' +
       CONFIG_DIR_HELP_OPTION +
       '  -h, --help         Show this help message\n\n' +
@@ -30,13 +34,14 @@ export async function deleteCommand(args: string[], configDir: string): Promise<
     return 0
   }
 
-  let values: { name?: string; 'skip-doctor': boolean }
+  let values: { name?: string; 'skip-doctor': boolean; 'require-presence-per-use': boolean }
   try {
     ;({ values } = parseArgs({
       args,
       options: {
         name: { type: 'string' },
         'skip-doctor': { type: 'boolean', default: false },
+        'require-presence-per-use': { type: 'boolean', default: false },
       },
       strict: true,
     }))
@@ -85,7 +90,9 @@ export async function deleteCommand(args: string[], configDir: string): Promise<
     const vault = await VaultKeeper.init({ configDir, skipDoctor })
 
     try {
-      await vault.delete(values.name)
+      await vault.delete(values.name, {
+        requirePresencePerUse: values['require-presence-per-use'],
+      })
     } catch (deleteErr) {
       // Every backend's delete() throws SecretNotFoundError for a missing
       // secret, but each words it differently (e.g. the file backend's

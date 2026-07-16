@@ -185,10 +185,7 @@ function formatConfigReadError(err: FilesystemError): string {
  * the library's "install @vaultkeeper/cli" text to a user already running
  * the CLI.
  */
-export function formatPreflightConfigError(
-  error: PreflightCheckError,
-  configDir: string,
-): string {
+export function formatPreflightConfigError(error: PreflightCheckError, configDir: string): string {
   // A read failure (permission/EISDIR/etc.) has a different remediation from a
   // parse/validation failure: `config init --force` cannot repair a config the
   // process cannot read, so point at the file's permissions instead, sharing

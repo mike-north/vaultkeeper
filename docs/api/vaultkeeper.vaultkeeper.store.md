@@ -11,7 +11,7 @@ This is a convenience method that delegates to the active backend's `store()` me
 **Signature:**
 
 ```typescript
-store(name: string, value: string): Promise<void>;
+store(name: string, value: string, options?: PresenceRequirementOptions): Promise<void>;
 ```
 
 ## Parameters
@@ -64,6 +64,22 @@ The secret value to store.
 
 
 </td></tr>
+<tr><td>
+
+options
+
+
+</td><td>
+
+[PresenceRequirementOptions](./vaultkeeper.presencerequirementoptions.md)
+
+
+</td><td>
+
+_(Optional)_ Optional [PresenceRequirementOptions](./vaultkeeper.presencerequirementoptions.md)<!-- -->. When `requirePresencePerUse` is set, the store is refused with a [NotCapableError](./vaultkeeper.notcapableerror.md) before the backend is touched unless the active backend forces a fresh per-use human action.
+
+
+</td></tr>
 </tbody></table>
 
 **Returns:**
@@ -73,4 +89,6 @@ Promise&lt;void&gt;
 ## Exceptions
 
 {<!-- -->VaultError<!-- -->} If `name` is empty or contains `':'`<!-- -->.
+
+[NotCapableError](./vaultkeeper.notcapableerror.md) If `options.requirePresencePerUse` is set and the active backend is not presence-per-use capable.
 

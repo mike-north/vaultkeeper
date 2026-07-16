@@ -99,6 +99,140 @@ export function isListableBackend(backend: SecretBackend): backend is ListableBa
 }
 
 /**
+ * A keyed backend operation that a presence-per-use requirement can gate.
+ *
+ * @remarks
+ * Used by {@link BackendCapabilities.presenceEnforcedOperations} to express that
+ * an instance forces a fresh per-use action for only *some* operations. `'read'`
+ * covers the secret read behind `setup`/`exec`; `'store'`, `'delete'`, and
+ * `'sign'` are the write, removal, and signing paths.
+ *
+ * @public
+ */
+export type PresenceOperation = 'read' | 'store' | 'delete' | 'sign'
+
+/**
+ * The set of security capabilities a configured backend instance advertises.
+ *
+ * @remarks
+ * Capabilities describe what a **specific configured instance** guarantees, not
+ * what its backend *type* is generally able to do. Two instances of the same
+ * backend type can report different capabilities depending on their
+ * configuration (e.g. a YubiKey slot with a touch policy vs. one without, or
+ * 1Password in `per-access` vs. `session` mode). Never derive a capability from
+ * the backend's `type` alone.
+ *
+ * The shape is intentionally open to extension: new capability flags may be
+ * added over time, so consumers should read only the fields they understand and
+ * treat a missing/unknown field as absent.
+ *
+ * @public
+ */
+export interface BackendCapabilities {
+  /**
+   * `true` when this configured instance can force a distinct, fresh physical
+   * human action (e.g. a YubiKey touch, a gpg-smartcard tap, or a 1Password
+   * per-use biometric approval) — a deliberate action taken *for this operation,
+   * right now*, not merely "a vault was unlocked at some point."
+   *
+   * The guarantee is **operation-scoped**, not blanket: when `presencePerUse` is
+   * `true`, that fresh action is available and **non-bypassably enforced** for
+   * exactly the operations listed in
+   * {@link BackendCapabilities.presenceEnforcedOperations} (all keyed operations
+   * when that field is omitted). For a covered operation, a
+   * {@link https://github.com/mike-north/vaultkeeper/issues/122 | `--require-presence-per-use`}
+   * request drives a fresh action that cannot be satisfied from a cached or
+   * session-unlocked state. For an operation **outside** that set, the request is
+   * **refused** with a `NotCapableError` — it is never silently satisfied from a
+   * cached unlock. A backend that only caches an unlock, or that is
+   * encryption-only with no per-use action, reports `false`.
+   *
+   * Backends that do not implement {@link PresenceCapableBackend} are treated as
+   * `false` by {@link getBackendCapabilities} — an unknown backend never
+   * silently claims presence.
+   */
+  readonly presencePerUse: boolean
+
+  /**
+   * The keyed operations for which this instance actually forces a fresh per-use
+   * human action. When **omitted**, a `presencePerUse: true` instance is taken
+   * to force presence for **all** keyed operations — the default for a touch
+   * device (e.g. a YubiKey whose challenge-response touch fires on every
+   * `store`/`retrieve`/`delete`).
+   *
+   * A backend that can force presence for only *some* operations must list
+   * exactly those, so a `--require-presence-per-use` request for an **uncovered**
+   * operation fails closed with a `NotCapableError` rather than silently passing
+   * without a fresh action. For example, 1Password `per-access` forces a fresh
+   * biometric on reads (`setup`/`exec`) but routes `store`/`delete` through the
+   * cached session client, so it reports `['read']` — a flagged `store`/`delete`
+   * is then correctly refused.
+   *
+   * Ignored when {@link BackendCapabilities.presencePerUse} is `false`.
+   */
+  readonly presenceEnforcedOperations?: readonly PresenceOperation[]
+}
+
+/**
+ * Backend that can report its security {@link BackendCapabilities} for its
+ * configured instance.
+ *
+ * @remarks
+ * This is an optional extension interface, mirroring {@link ListableBackend} and
+ * {@link SigningBackend}: it is **not** a required member of
+ * {@link SecretBackend}. Prefer {@link getBackendCapabilities} over calling
+ * {@link PresenceCapableBackend.getCapabilities} directly, so a backend that
+ * does not implement the interface safely defaults to no capabilities rather
+ * than being assumed to have them.
+ *
+ * {@link PresenceCapableBackend.getCapabilities} is asynchronous and describes
+ * the **current configured/live state** of the instance — it must reflect
+ * configuration (or a live device/session probe) rather than a hardcoded
+ * per-type answer, and must not itself trigger a human-presence prompt.
+ *
+ * @public
+ */
+export interface PresenceCapableBackend extends SecretBackend {
+  /**
+   * Report the capabilities of this configured instance.
+   * @returns The instance's {@link BackendCapabilities}.
+   */
+  getCapabilities(): Promise<BackendCapabilities>
+}
+
+/**
+ * Type guard for backends that implement the capability-reporting contract.
+ * @public
+ */
+export function isPresenceCapableBackend(
+  backend: SecretBackend,
+): backend is PresenceCapableBackend {
+  return 'getCapabilities' in backend && typeof backend.getCapabilities === 'function'
+}
+
+/**
+ * Resolve a backend's {@link BackendCapabilities}, defaulting safely for
+ * backends that do not implement {@link PresenceCapableBackend}.
+ *
+ * @remarks
+ * A backend without the capability interface reports `{ presencePerUse: false }`
+ * — an unknown backend never silently claims a security guarantee it cannot
+ * prove. This is the only supported way to query capabilities; callers must not
+ * assume a capability from a backend's `type`.
+ *
+ * @param backend - The backend instance to query.
+ * @returns The instance's capabilities, or the safe default for a backend that
+ *   does not implement {@link PresenceCapableBackend}.
+ * @public
+ */
+export async function getBackendCapabilities(backend: SecretBackend): Promise<BackendCapabilities> {
+  if (isPresenceCapableBackend(backend)) {
+    return backend.getCapabilities()
+  }
+  return { presencePerUse: false }
+}
+
+/**
  * Backend that can enroll and use signing keys entirely on its own side.
  *
  * @remarks

@@ -175,7 +175,14 @@ function printExecHelp(): void {
       '                     trusted caller reuses it without re-minting. The token\n' +
       "                     is reusable until it expires (the secret's TTL); after\n" +
       '                     that, or after a key rotation/revocation, exec mints a\n' +
-      '                     fresh one automatically\n' +
+      '                     fresh one automatically. Ignored when\n' +
+      '                     --require-presence-per-use is set (a cached token would\n' +
+      '                     bypass the fresh per-use action)\n' +
+      '  --require-presence-per-use\n' +
+      '                     Refuse unless the active backend forces a fresh, per-use\n' +
+      '                     human action for this secret read. A non-qualifying\n' +
+      '                     backend fails before any credential is touched; a cached\n' +
+      '                     token is never reused under this flag\n' +
       '  --no-redact        Do not redact the secret from output\n' +
       '  --skip-doctor      Skip doctor preflight checks\n' +
       CONFIG_DIR_HELP_OPTION +
@@ -236,6 +243,7 @@ export async function execCommand(args: string[], configDir: string): Promise<nu
     cache: boolean
     'no-redact': boolean
     'skip-doctor': boolean
+    'require-presence-per-use': boolean
   }
   try {
     ;({ values } = parseArgs({
@@ -249,6 +257,7 @@ export async function execCommand(args: string[], configDir: string): Promise<nu
         cache: { type: 'boolean', default: false },
         'no-redact': { type: 'boolean', default: false },
         'skip-doctor': { type: 'boolean', default: false },
+        'require-presence-per-use': { type: 'boolean', default: false },
       },
       strict: true,
     }))
@@ -304,7 +313,11 @@ export async function execCommand(args: string[], configDir: string): Promise<nu
 
   const callerPath = path.resolve(caller)
   // parseArgs with default: false types these as boolean (never undefined)
-  const useCache: boolean = values.cache
+  const requirePresencePerUse: boolean = values['require-presence-per-use']
+  // A presence-per-use requirement forbids reusing a cached token: the whole
+  // point is a fresh human action for THIS invocation, which a cached JWE
+  // (minted from an earlier action) would bypass. Force a fresh mint.
+  const useCache: boolean = values.cache && !requirePresencePerUse
   const noRedact: boolean = values['no-redact']
   const skipDoctor = shouldSkipDoctor(values['skip-doctor'])
   const autoApprove = shouldAutoApprove(values.yes)
@@ -355,7 +368,12 @@ export async function execCommand(args: string[], configDir: string): Promise<nu
     }
 
     if (jwe === undefined) {
-      jwe = await vault.setup(secret, { executablePath: callerPath })
+      // Only forward the presence requirement when set, so the common call
+      // shape stays { executablePath } — the flag defaults off.
+      jwe = await vault.setup(secret, {
+        executablePath: callerPath,
+        ...(requirePresencePerUse ? { requirePresencePerUse: true } : {}),
+      })
 
       // Cache if requested
       if (useCache) {
@@ -388,7 +406,10 @@ export async function execCommand(args: string[], configDir: string): Promise<nu
       process.stderr.write(
         `Cached token could not be authorized (${describeAuthzFailure(err)}); re-authenticating...\n`,
       )
-      jwe = await vault.setup(secret, { executablePath: callerPath })
+      jwe = await vault.setup(secret, {
+        executablePath: callerPath,
+        ...(requirePresencePerUse ? { requirePresencePerUse: true } : {}),
+      })
       // Write the new token back to cache so subsequent invocations benefit
       await writeCachedToken(callerPath, secret, jwe)
       const retryResult = await vault.authorize(jwe)

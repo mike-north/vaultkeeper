@@ -22,6 +22,10 @@ function printSignHelp(): void {
       '  --name <name>      Signing key to use. ' +
       SECRET_NAME_RULE +
       '\n' +
+      '  --require-presence-per-use\n' +
+      '                     Refuse unless the active backend forces a fresh, per-use\n' +
+      '                     human action (e.g. a YubiKey touch) for this signature.\n' +
+      '                     A non-qualifying backend fails before any key is touched.\n' +
       '  --skip-doctor      Skip doctor preflight checks\n' +
       CONFIG_DIR_HELP_OPTION +
       '  -h, --help         Show this help message\n\n' +
@@ -37,13 +41,14 @@ export async function signCommand(args: string[], configDir: string): Promise<nu
     return 0
   }
 
-  let values: { name?: string; 'skip-doctor': boolean }
+  let values: { name?: string; 'skip-doctor': boolean; 'require-presence-per-use': boolean }
   try {
     ;({ values } = parseArgs({
       args,
       options: {
         name: { type: 'string' },
         'skip-doctor': { type: 'boolean', default: false },
+        'require-presence-per-use': { type: 'boolean', default: false },
       },
       strict: true,
     }))
@@ -78,7 +83,11 @@ export async function signCommand(args: string[], configDir: string): Promise<nu
     }
     const vault = await VaultKeeper.init({ configDir, skipDoctor })
     const token = await vault.authorizeSigningKey(name)
-    const { result } = await vault.sign(token, { payload })
+    const { result } = await vault.sign(
+      token,
+      { payload },
+      { requirePresencePerUse: values['require-presence-per-use'] },
+    )
     // Exactly the detached signature on stdout, terminated with a single
     // newline. Nothing else — status already went to stderr above.
     process.stdout.write(`${result.jws}\n`)

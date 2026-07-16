@@ -99,6 +99,7 @@ function printHelp(stream: NodeJS.WritableStream = process.stdout): void {
       '  dev-mode     Toggle development mode for a script\n' +
       '  store        Store a secret (reads from stdin)\n' +
       '  delete       Delete a secret\n' +
+      '  backend      Inspect registered backends (e.g. capabilities)\n' +
       '  key          Manage signing keys (create, export)\n' +
       '  sign         Sign stdin with a signing key (detached JWS to stdout)\n' +
       '  verify       Verify a detached signature offline (exit 3 = invalid)\n' +
@@ -201,6 +202,10 @@ async function main(): Promise<number> {
     case 'delete': {
       const { deleteCommand } = await import('./commands/delete.js')
       return deleteCommand(commandArgs, configDir)
+    }
+    case 'backend': {
+      const { backendCommand } = await import('./commands/backend.js')
+      return backendCommand(commandArgs, configDir)
     }
     case 'key': {
       const { keyCommand } = await import('./commands/key.js')

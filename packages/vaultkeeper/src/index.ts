@@ -12,6 +12,9 @@ export {
   BackendLockedError,
   DeviceNotPresentError,
   AuthorizationDeniedError,
+  NotCapableError,
+  PresenceDeclinedError,
+  PresenceTimeoutError,
   BackendUnavailableError,
   PluginNotFoundError,
   SecretNotFoundError,
@@ -67,6 +70,9 @@ export type {
   BackendFactory,
   ListableBackend,
   SigningBackend,
+  PresenceCapableBackend,
+  BackendCapabilities,
+  PresenceOperation,
 } from './backend/index.js'
 export type {
   SetupQuestion,
@@ -74,7 +80,13 @@ export type {
   SetupResult,
   BackendSetupFactory,
 } from './backend/index.js'
-export { BackendRegistry, isListableBackend, isSigningBackend } from './backend/index.js'
+export {
+  BackendRegistry,
+  isListableBackend,
+  isSigningBackend,
+  isPresenceCapableBackend,
+  getBackendCapabilities,
+} from './backend/index.js'
 
 export { CapabilityToken } from './identity/index.js'
 
@@ -83,6 +95,7 @@ export type {
   VaultKeeperOptions,
   SetupOptions,
   SetupOptionsBase,
+  PresenceRequirementOptions,
   SecretTokenMap,
   ExecutableTrustStatus,
 } from './vault.js'

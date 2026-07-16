@@ -154,8 +154,7 @@ describe('createKeychainSetup', () => {
     const gen = createKeychainSetup()
 
     await expect(gen.next()).rejects.toSatisfy(
-      (err): err is SetupError =>
-        err instanceof SetupError && err.dependency === 'macOS Keychain',
+      (err): err is SetupError => err instanceof SetupError && err.dependency === 'macOS Keychain',
     )
   })
 

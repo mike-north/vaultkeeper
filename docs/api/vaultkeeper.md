@@ -251,12 +251,45 @@ Thrown when the encryption key that was used to create a JWE has since been rota
 </td></tr>
 <tr><td>
 
+[NotCapableError](./vaultkeeper.notcapableerror.md)
+
+
+</td><td>
+
+Thrown when an operation requires a backend capability (e.g. presence-per-use) that the active backend cannot provide.
+
+
+</td></tr>
+<tr><td>
+
 [PluginNotFoundError](./vaultkeeper.pluginnotfounderror.md)
 
 
 </td><td>
 
 Thrown when a required backend plugin (e.g. a third-party credential manager) is not installed on the current system.
+
+
+</td></tr>
+<tr><td>
+
+[PresenceDeclinedError](./vaultkeeper.presencedeclinederror.md)
+
+
+</td><td>
+
+Thrown when a required fresh, per-use human presence action was explicitly declined by the human (e.g. a biometric or touch prompt was cancelled).
+
+
+</td></tr>
+<tr><td>
+
+[PresenceTimeoutError](./vaultkeeper.presencetimeouterror.md)
+
+
+</td><td>
+
+Thrown when a required fresh, per-use human presence action did not happen within the allotted time — the device was present and ready, but no touch, tap, or biometric approval was performed before the timeout elapsed.
 
 
 </td></tr>
@@ -409,6 +442,17 @@ The backend type vaultkeeper uses by default when no backend is explicitly confi
 </td></tr>
 <tr><td>
 
+[getBackendCapabilities(backend)](./vaultkeeper.getbackendcapabilities.md)
+
+
+</td><td>
+
+Resolve a backend's [BackendCapabilities](./vaultkeeper.backendcapabilities.md)<!-- -->, defaulting safely for backends that do not implement [PresenceCapableBackend](./vaultkeeper.presencecapablebackend.md)<!-- -->.
+
+
+</td></tr>
+<tr><td>
+
 [getDefaultConfigDir()](./vaultkeeper.getdefaultconfigdir.md)
 
 
@@ -443,6 +487,17 @@ Unlike `getDefaultConfigDir`<!-- -->, this deliberately does not consult `VAULTK
 </td><td>
 
 Type guard for backends that support listing.
+
+
+</td></tr>
+<tr><td>
+
+[isPresenceCapableBackend(backend)](./vaultkeeper.ispresencecapablebackend.md)
+
+
+</td><td>
+
+Type guard for backends that implement the capability-reporting contract.
 
 
 </td></tr>
@@ -527,6 +582,17 @@ Description
 
 </th></tr></thead>
 <tbody><tr><td>
+
+[BackendCapabilities](./vaultkeeper.backendcapabilities.md)
+
+
+</td><td>
+
+The set of security capabilities a configured backend instance advertises.
+
+
+</td></tr>
+<tr><td>
 
 [BackendConfig](./vaultkeeper.backendconfig.md)
 
@@ -632,6 +698,28 @@ The `reason` field intentionally keeps the library's own remediation text (which
 </td><td>
 
 Aggregated result from all preflight checks.
+
+
+</td></tr>
+<tr><td>
+
+[PresenceCapableBackend](./vaultkeeper.presencecapablebackend.md)
+
+
+</td><td>
+
+Backend that can report its security [BackendCapabilities](./vaultkeeper.backendcapabilities.md) for its configured instance.
+
+
+</td></tr>
+<tr><td>
+
+[PresenceRequirementOptions](./vaultkeeper.presencerequirementoptions.md)
+
+
+</td><td>
+
+Options common to every backend-touching operation that can be gated on a fresh, per-use human presence action.
 
 
 </td></tr>
@@ -927,6 +1015,17 @@ The kind of error that made a preflight check fail, as a stable machine-readable
 Status of a preflight check.
 
 `'invalid'` applies specifically to the `config` check: the config file exists but fails to parse or fails schema validation (see issue \#68).
+
+
+</td></tr>
+<tr><td>
+
+[PresenceOperation](./vaultkeeper.presenceoperation.md)
+
+
+</td><td>
+
+A keyed backend operation that a presence-per-use requirement can gate.
 
 
 </td></tr>

@@ -127,14 +127,10 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function jsonContains(haystack: unknown, needle: unknown): boolean {
   if (isRecord(haystack) && isRecord(needle)) {
-    return Object.entries(needle).every(
-      ([k, v]) => k in haystack && jsonContains(haystack[k], v),
-    )
+    return Object.entries(needle).every(([k, v]) => k in haystack && jsonContains(haystack[k], v))
   }
   if (Array.isArray(haystack) && Array.isArray(needle)) {
-    return needle.every((nv: unknown) =>
-      haystack.some((hv: unknown) => jsonContains(hv, nv)),
-    )
+    return needle.every((nv: unknown) => haystack.some((hv: unknown) => jsonContains(hv, nv)))
   }
   return haystack === needle
 }
@@ -148,17 +144,13 @@ interface RunResult {
 }
 
 async function runCase(testCase: ConformanceCase): Promise<RunResult> {
-  const configDir = await fs.mkdtemp(
-    path.join(os.tmpdir(), 'vk-conformance-'),
-  )
+  const configDir = await fs.mkdtemp(path.join(os.tmpdir(), 'vk-conformance-'))
 
   try {
     if (testCase.needsConfig) {
-      await fs.writeFile(
-        path.join(configDir, 'config.json'),
-        DEFAULT_CONFIG + '\n',
-        { mode: 0o600 },
-      )
+      await fs.writeFile(path.join(configDir, 'config.json'), DEFAULT_CONFIG + '\n', {
+        mode: 0o600,
+      })
     }
 
     return await new Promise<RunResult>((resolve) => {
@@ -166,9 +158,7 @@ async function runCase(testCase: ConformanceCase): Promise<RunResult> {
       if (!bin) throw new Error('Rust binary not found')
 
       // Substitute __SELF_BINARY__ with the actual vaultkeeper binary path
-      const args = testCase.command.map((arg) =>
-        arg === '__SELF_BINARY__' ? bin : arg,
-      )
+      const args = testCase.command.map((arg) => (arg === '__SELF_BINARY__' ? bin : arg))
 
       const child = execFile(
         bin,
@@ -185,8 +175,7 @@ async function runCase(testCase: ConformanceCase): Promise<RunResult> {
           if (error !== null) {
             // Node's ExecException puts the exit code in `code` as a number
             // when the process exits non-zero
-            exitCode =
-              typeof error.code === 'number' ? error.code : 1
+            exitCode = typeof error.code === 'number' ? error.code : 1
           }
           resolve({ stdout, stderr, exitCode })
         },
@@ -221,10 +210,7 @@ describe.skipIf(RUST_BIN === null)('Rust CLI conformance', () => {
       const errors: string[] = []
 
       // Check exit code (-1 means don't check)
-      if (
-        testCase.expectedExitCode !== -1 &&
-        result.exitCode !== testCase.expectedExitCode
-      ) {
+      if (testCase.expectedExitCode !== -1 && result.exitCode !== testCase.expectedExitCode) {
         errors.push(
           `exit code: expected ${String(testCase.expectedExitCode)}, got ${String(result.exitCode)}`,
         )
