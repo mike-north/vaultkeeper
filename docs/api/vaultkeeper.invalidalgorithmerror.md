@@ -4,7 +4,7 @@
 
 ## InvalidAlgorithmError class
 
-Thrown when a caller requests a signing/verification algorithm that is not in the allowed set (e.g. `'md5'`<!-- -->).
+Thrown when a caller requests a signing key algorithm that is not a supported JOSE algorithm identifier. The signing algorithm registry uses strict JOSE identifiers (currently `'EdDSA'`<!-- -->); an unrecognized value is rejected rather than defaulted.
 
 **Signature:**
 

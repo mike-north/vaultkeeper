@@ -6,7 +6,7 @@
  * the consumer adding an explicit `"types": ["node"]` override to their
  * tsconfig.
  *
- * `SecretAccessor.read()`, `SignRequest.data`, and `VerifyRequest.data`
+ * `SecretAccessor.read()`, `SignRequest.payload`, and `VerifyRequest.payload`
  * reference `Buffer`. Before the fix for #72, the rollup relied on the
  * ambient global `Buffer` type. Confirmed against a real `npm pack` + `npm
  * install` consumer (not just this fixture harness): with a strict NodeNext
@@ -127,11 +127,11 @@ const consumerSource = [
   `}`,
   ``,
   `function useSignRequest(req: SignRequest): string | Buffer {`,
-  `  return req.data`,
+  `  return req.payload`,
   `}`,
   ``,
   `function useVerifyRequest(req: VerifyRequest): string | Buffer {`,
-  `  return req.data`,
+  `  return req.payload`,
   `}`,
   ``,
   `async function useTestVault(): Promise<TestVault> {`,

@@ -44,7 +44,7 @@ string
 
 </td><td>
 
-Identifier for the secret.
+Identifier for the secret. Must not contain `':'` — that character is reserved for the internal `signing-key:` namespace, so a secret name can never collide with a signing key.
 
 
 </td></tr>
@@ -69,4 +69,8 @@ The secret value to store.
 **Returns:**
 
 Promise&lt;void&gt;
+
+## Exceptions
+
+{<!-- -->VaultError<!-- -->} If `name` is empty or contains `':'`<!-- -->.
 

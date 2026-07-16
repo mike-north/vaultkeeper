@@ -201,7 +201,7 @@ Callers must re-approve the executable before a new token can be issued for it.
 
 </td><td>
 
-Thrown when a caller requests a signing/verification algorithm that is not in the allowed set (e.g. `'md5'`<!-- -->).
+Thrown when a caller requests a signing key algorithm that is not a supported JOSE algorithm identifier. The signing algorithm registry uses strict JOSE identifiers (currently `'EdDSA'`<!-- -->); an unrecognized value is rejected rather than defaulted.
 
 
 </td></tr>
@@ -212,7 +212,7 @@ Thrown when a caller requests a signing/verification algorithm that is not in th
 
 </td><td>
 
-Thrown when a stored secret is used as signing key material but is not valid PEM or DER private key data (e.g. `crypto.createPrivateKey()` rejects it). Signing raises this error; verification instead returns `false` for invalid key material. The message never echoes any part of the secret.
+Thrown when signing-key material cannot be parsed. Two paths raise it. During verification, the supplied public key is not a structurally parseable SPKI PEM public key (or a private key was passed where a public key is required); this is an operational fault distinct from a signature that simply does not verify, which returns `false`<!-- -->. During key use, a stored signing key decrypts cleanly but is not valid private key material — corrupt or tampered on disk — when exporting its public half or signing with it (`getPublicKey`<!-- -->/`signWithKey`<!-- -->). The message never echoes any part of the key material.
 
 
 </td></tr>
@@ -290,6 +290,39 @@ Thrown when a requested secret does not exist in the backend store.
 </td><td>
 
 Thrown during initialization when a required system dependency (e.g. OpenSSL or a native credential helper) is missing or incompatible.
+
+
+</td></tr>
+<tr><td>
+
+[SigningKeyAlreadyExistsError](./vaultkeeper.signingkeyalreadyexistserror.md)
+
+
+</td><td>
+
+Thrown when `key create` (or `createSigningKey`<!-- -->) is asked to enroll a signing key under a name that already exists. Enrollment never silently overwrites an existing key, because a regenerated keypair would invalidate every public key that was previously exported and pinned by a verifier.
+
+
+</td></tr>
+<tr><td>
+
+[SigningKeyNotFoundError](./vaultkeeper.signingkeynotfounderror.md)
+
+
+</td><td>
+
+Thrown when a named signing key does not exist in the active backend — for example `key export` or `sign` is asked for a name that was never enrolled with `key create`<!-- -->. This is distinct from [SecretNotFoundError](./vaultkeeper.secretnotfounderror.md)<!-- -->: signing keys occupy their own namespace and are never returned as ordinary secrets.
+
+
+</td></tr>
+<tr><td>
+
+[SigningNotSupportedError](./vaultkeeper.signingnotsupportederror.md)
+
+
+</td><td>
+
+Thrown when a signing operation (`key create`<!-- -->, `key export`<!-- -->, `sign`<!-- -->) is requested against a backend that does not implement the signing contract. Signing is never silently emulated on a backend that cannot perform it in a key-stays-backend-side manner; inspect [SigningNotSupportedError.builtInSigningBackends](./vaultkeeper.signingnotsupportederror.builtinsigningbackends.md) for the built-in backend types that do.
 
 
 </td></tr>
@@ -410,6 +443,17 @@ Unlike `getDefaultConfigDir`<!-- -->, this deliberately does not consult `VAULTK
 </td><td>
 
 Type guard for backends that support listing.
+
+
+</td></tr>
+<tr><td>
+
+[isSigningBackend(backend)](./vaultkeeper.issigningbackend.md)
+
+
+</td><td>
+
+Type guard for backends that implement the signing contract.
 
 
 </td></tr>
@@ -683,14 +727,38 @@ Result returned when a backend setup generator completes.
 </td></tr>
 <tr><td>
 
+[SigningBackend](./vaultkeeper.signingbackend.md)
+
+
+</td><td>
+
+Backend that can enroll and use signing keys entirely on its own side.
+
+
+</td></tr>
+<tr><td>
+
+[SigningPublicKey](./vaultkeeper.signingpublickey.md)
+
+
+</td><td>
+
+The public half of an enrolled signing key.
+
+Returned by `key create` / `key export` and used to verify detached signatures independently of vaultkeeper.
+
+
+</td></tr>
+<tr><td>
+
 [SignRequest](./vaultkeeper.signrequest.md)
 
 
 </td><td>
 
-Request for delegated signing.
+Request to sign a caller-supplied payload with a named signing key.
 
-The `data` field is the payload to sign. Strings are UTF-8-encoded before signing.
+The `payload` is arbitrary bytes to be signed with detachment (RFC 7797) — it is never stored and never treated as a secret. Strings are UTF-8-encoded before signing.
 
 
 </td></tr>
@@ -701,7 +769,9 @@ The `data` field is the payload to sign. Strings are UTF-8-encoded before signin
 
 </td><td>
 
-Result from a delegated signing operation.
+Result of a signing operation.
+
+The signature is a detached-payload Compact JWS (RFC 7515 §7.2.2 + RFC 7797 `b64:false`<!-- -->, `crit:["b64"]`<!-- -->): `<protected>..<signature>`<!-- -->, with the payload omitted. Any standards-compliant JOSE library can verify it given the detached payload and the public key.
 
 
 </td></tr>
@@ -745,9 +815,9 @@ Response from a vault access operation.
 
 </td><td>
 
-Request for signature verification.
+Request for detached-signature verification.
 
-This is a static operation that only requires public key material — no VaultKeeper instance or capability token is needed.
+This is a fully offline operation that only requires public key material — no VaultKeeper instance, backend, config, or capability token is needed.
 
 
 </td></tr>
@@ -881,6 +951,19 @@ Use with `exec()` or `fetch()` to inject multiple secrets into a single request.
 </td><td>
 
 Options for the setup operation.
+
+
+</td></tr>
+<tr><td>
+
+[SigningAlgorithm](./vaultkeeper.signingalgorithm.md)
+
+
+</td><td>
+
+A signing algorithm identifier from the strict JOSE registry (RFC 7518).
+
+Only `'EdDSA'` (Ed25519) is supported today; the identifier is intentionally a strict JOSE `alg` value so future algorithms (`'ES256'`<!-- -->, `'RS256'`<!-- -->, …) each bind to their proper curve/key type rather than an ambiguous label.
 
 
 </td></tr>

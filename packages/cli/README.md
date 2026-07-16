@@ -126,20 +126,48 @@ rules.
 
 ## Exit codes
 
-Every command exits with one of three codes, so scripts and CI pipelines can branch on the class
-of failure without parsing stderr:
+Every command exits with one of the codes below, so scripts and CI pipelines can branch on the
+class of failure without parsing stderr:
 
-| Code | Meaning       | Example                                                               |
-| ---- | ------------- | --------------------------------------------------------------------- |
-| `0`  | Success       | `vaultkeeper doctor` when all required dependencies are present       |
-| `1`  | Runtime error | `vaultkeeper delete --name DOES_NOT_EXIST` — the secret doesn't exist |
-| `2`  | Usage error   | `vaultkeeper --bogus` or `vaultkeeper some-unknown-command`           |
+| Code | Meaning                                 | Example                                                                          |
+| ---- | --------------------------------------- | -------------------------------------------------------------------------------- |
+| `0`  | Success                                 | `vaultkeeper doctor` when all required dependencies are present                  |
+| `1`  | Runtime error                           | `vaultkeeper delete --name DOES_NOT_EXIST` — the secret doesn't exist            |
+| `2`  | Usage error                             | `vaultkeeper --bogus`, `vaultkeeper some-unknown-command`, empty stdin to `sign` |
+| `3`  | `verify` only: signature did not verify | `vaultkeeper verify` on a tampered payload, the wrong key, or a malformed JWS    |
+
+Exit `3` is a deliberate, documented exception to the `0/1/2` taxonomy, scoped to `verify` alone
+(precedent: `gpg --verify`, `ssh-keygen -Y verify`). It lets a script tell "the signature is bad"
+from "the tool broke" without parsing stderr — `verify` reserves `1` for operational faults (an
+unreadable file, a structurally unparseable public key), never for a bad signature.
+
+## Signing keys, sign, and verify
+
+Signing keys are a distinct resource from secrets — private key material never leaves the backend
+and is never readable as a secret. Enroll a key, export its public half, sign an arbitrary payload
+from stdin (the detached signature is the only thing on stdout, so it is pipeline-safe), and verify
+fully offline:
+
+```sh
+vaultkeeper key create --name approval-signing-key --type ed25519   # unknown --type exits 2
+vaultkeeper key export --name approval-signing-key > approval.pub   # SPKI PEM public key
+printf '%s' "$CHALLENGE" | vaultkeeper sign --name approval-signing-key > sig
+vaultkeeper verify --public-key approval.pub --signature sig <<<"$CHALLENGE"   # exit 0 = valid
+```
+
+The signature is a detached-payload Compact JWS (algorithm `EdDSA` / Ed25519; base64url without
+padding, [RFC 7515](https://www.rfc-editor.org/rfc/rfc7515); detached payload via
+[RFC 7797](https://www.rfc-editor.org/rfc/rfc7797) `b64:false`, `crit:["b64"]`), so any standard
+JOSE library can verify it independently. `verify` needs no config, backend, or key store — only
+the public key, the payload on stdin, and the signature.
 
 ## Available commands
 
-`doctor`, `config init` / `config show`, `store`, `delete`, `exec`, `approve`, `dev-mode`,
-`rotate-key`, `revoke-key`. The native Rust CLI (`vaultkeeper-cli`, installable via
-`cargo install vaultkeeper-cli`) shares this same command surface.
+`doctor`, `config init` / `config show`, `store`, `delete`, `key create` / `key export`, `sign`,
+`verify`, `exec`, `approve`, `dev-mode`, `rotate-key`, `revoke-key`. The native Rust CLI
+(`vaultkeeper-cli`, installable via `cargo install vaultkeeper-cli`) shares the secret-management
+command surface; signing (`key`/`sign`/`verify`) currently ships in the Node CLI, with Rust parity
+tracked separately.
 
 ## Full documentation
 

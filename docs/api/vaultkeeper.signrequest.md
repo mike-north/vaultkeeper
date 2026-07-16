@@ -4,9 +4,9 @@
 
 ## SignRequest interface
 
-Request for delegated signing.
+Request to sign a caller-supplied payload with a named signing key.
 
-The `data` field is the payload to sign. Strings are UTF-8-encoded before signing.
+The `payload` is arbitrary bytes to be signed with detachment (RFC 7797) — it is never stored and never treated as a secret. Strings are UTF-8-encoded before signing.
 
 **Signature:**
 
@@ -39,26 +39,7 @@ Description
 </th></tr></thead>
 <tbody><tr><td>
 
-[algorithm?](./vaultkeeper.signrequest.algorithm.md)
-
-
-</td><td>
-
-
-</td><td>
-
-string \| undefined
-
-
-</td><td>
-
-_(Optional)_ Override the hash algorithm (`'sha256'`<!-- -->, `'sha384'`<!-- -->, or `'sha512'`<!-- -->). Ignored for Ed25519/Ed448 keys where the algorithm is implicit. Non-Edwards keys (RSA, EC) default to `'sha256'` when omitted. Weak algorithms (e.g. `'md5'`<!-- -->, `'sha1'`<!-- -->) are rejected.
-
-
-</td></tr>
-<tr><td>
-
-[data](./vaultkeeper.signrequest.data.md)
+[payload](./vaultkeeper.signrequest.payload.md)
 
 
 </td><td>
@@ -71,7 +52,7 @@ string \| Buffer
 
 </td><td>
 
-The data to sign. Strings are treated as UTF-8.
+The payload bytes to sign. Strings are treated as UTF-8.
 
 
 </td></tr>

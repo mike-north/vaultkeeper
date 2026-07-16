@@ -170,9 +170,11 @@ const authHeader = accessor.read((buf) => `Bearer ${buf.toString('utf8')}`)
 // accessor.read(...) // <- calling read() again throws AccessorConsumedError
 ```
 
-`sign()`/`verify()` are a fourth pattern for signing/verifying data with a stored private key
-without ever exposing it — see [Signing and verification](#signing-and-verification) below. See the
-`SecretAccessor` and `ExecRequest` types in the package's shipped `.d.ts` for their full signatures.
+`createSigningKey()`/`sign()`/`verify()` are a fourth pattern: signing keys are a distinct resource
+whose private half never leaves the backend, and signatures are detached-payload Compact JWS values
+any JOSE library can verify — see [Signing and verification](#signing-and-verification) below. See
+the `SecretAccessor` and `ExecRequest` types in the package's shipped `.d.ts` for their full
+signatures.
 
 ## Multiple secrets in one request
 
@@ -332,84 +334,47 @@ await vault.setDevelopmentMode('/path/to/my-dev-tool', false)
 
 ## Signing and verification
 
-`sign()`/`verify()` are a fourth access pattern: they let you sign or verify data with a stored
-private/public key without the private key ever leaving `VaultKeeper` internals.
+Signing keys are a distinct resource from secrets. A signing key's private half never flows through
+`store()`/`retrieve()`/`fetch()`/`exec()` or a capability token's claims: the backend generates the
+key, exposes only its public half, and performs each signature itself, so the key never leaves the
+backend. Signatures are detached-payload Compact JWS values verifiable by any JOSE library.
 
-> **Precondition — the stored secret must be a PEM private key, not an arbitrary string.** `sign()`
-> feeds the stored secret string straight to `crypto.createPrivateKey()`, which treats a string as
-> **PEM**, so the value you `store()` must be **PEM-encoded private-key material** (e.g. a PKCS#8
-> PEM). Because secrets are stored as text, raw binary DER is not directly storable — convert DER to
-> PEM first. A plain string like the quick start's `'my-secret-value'` is **not** a key — signing a
-> token minted over one throws `InvalidKeyMaterialError`. Do not reuse the quick start's plain-string
-> secret here; store a real key first, as the worked example below does. (`verify()` takes a
-> **public** key and never reads a stored secret, so it never throws `InvalidKeyMaterialError`.)
+**Name rule.** Signing keys live under a reserved internal `signing-key:<name>` namespace, so a
+secret name and a signing-key name can never collide. To keep that guarantee, name-creating and
+name-binding calls — `store()`, `setup()`, `createSigningKey()`, `exportPublicKey()`,
+`authorizeSigningKey()` — reject a `name` containing `':'` with a `VaultError`. Read/delete/existence
+calls (`delete()`, `secretExists()`) stay permissive, so a legacy secret whose name happens to
+contain `':'` remains reachable for inspection and cleanup.
 
 ```ts
-// Sign — requires a capability token, like fetch()/exec()/getSecret(). The token
-// must have been minted over a stored PEM PRIVATE key (see the precondition
-// above and the worked example below), not a plain-string secret.
-const { result } = await vault.sign(token, { data: 'order-42:refund:1999' })
-console.log(result.signature, result.algorithm) // base64 signature + algorithm label
+// 1. Enroll a signing key (backend-side; the `file` backend supports this today)
+const { publicKeyPem, kid } = await vault.createSigningKey('approval-signing-key', 'EdDSA')
 
-// Verify — a static method: no VaultKeeper instance, secret, or token needed.
-// `publicKey` is the SPKI PEM matching the private key that signed the data.
-const isValid = VaultKeeper.verify({
-  data: 'order-42:refund:1999',
-  signature: result.signature,
-  publicKey: myPublicKeyPem,
+// 2. Export the SPKI PEM public key any time
+const pub = await vault.exportPublicKey('approval-signing-key')
+
+// 3. Sign an arbitrary payload. authorizeSigningKey() mints a token carrying
+//    only { kid, backendRef, keyType } — never key material.
+const token = await vault.authorizeSigningKey('approval-signing-key')
+const { result } = await vault.sign(token, { payload: 'payload-to-sign' })
+console.log(result.jws) // detached compact JWS: <protected>..<signature>
+
+// 4. Verify — a static, offline method: no instance, backend, secret, or token
+const isValid = await VaultKeeper.verify({
+  payload: 'payload-to-sign',
+  jws: result.jws,
+  publicKey: pub.publicKeyPem,
 })
 ```
 
-### End-to-end: generate a key, store it, sign, and verify
-
-A complete round-trip — generate an RSA key pair with Node's `crypto`, store the **private** key as
-the secret, mint a token over it, sign, then verify with the **public** key. Runnable as written:
-
-```ts
-import { generateKeyPairSync } from 'node:crypto'
-import { VaultKeeper } from 'vaultkeeper'
-
-// 1. Generate a key pair. The PRIVATE key (PEM) is the secret sign() needs;
-//    the PUBLIC key (PEM) is what verify() checks the signature against.
-const { privateKey, publicKey } = generateKeyPairSync('rsa', {
-  modulusLength: 2048,
-  publicKeyEncoding: { type: 'spki', format: 'pem' },
-  privateKeyEncoding: { type: 'pkcs8', format: 'pem' },
-})
-
-const vault = await VaultKeeper.init()
-
-// 2. Store the PEM private key as the secret — NOT a plain string.
-await vault.store('SIGNING_KEY', privateKey)
-
-// 3. Mint a capability token over it and authorize. `{ skipTrust: true }`
-//    (development only) keeps this example runnable on every rebuild; in
-//    production pass a stable `executablePath` to bind the caller's identity
-//    (see "Trust tiers").
-const jwe = await vault.setup('SIGNING_KEY', { skipTrust: true })
-const { token } = await vault.authorize(jwe)
-
-// 4. Sign — the private key never leaves the vault.
-const { result } = await vault.sign(token, { data: 'order-42:refund:1999' })
-
-// 5. Verify with the PUBLIC key — static and synchronous.
-const isValid = VaultKeeper.verify({
-  data: 'order-42:refund:1999',
-  signature: result.signature,
-  publicKey,
-})
-console.log(isValid) // true
-```
-
-`verify()` is synchronous and returns `false` for invalid key material, malformed signatures, or a
-failed verification — except a disallowed algorithm (e.g. `'md5'`), which throws
-`InvalidAlgorithmError` immediately (not via a rejected `Promise`), so wrap the call in a regular
-`try`/`catch`, not `.catch()`.
-
-The disallowed-algorithm throw applies only to RSA and EC keys. For **Ed25519 / Ed448** keys the
-signing algorithm is implicit in the key itself, so a `request.algorithm` override is ignored and
-an otherwise-disallowed value does **not** throw `InvalidAlgorithmError` — the same caveat applies
-to `sign()`.
+The signature format is a detached-payload Compact JWS — algorithm `EdDSA` (Ed25519); base64url
+without padding ([RFC 7515](https://www.rfc-editor.org/rfc/rfc7515)); detached payload via
+[RFC 7797](https://www.rfc-editor.org/rfc/rfc7797) `b64:false`, `crit:["b64"]` — so any
+standards-compliant JOSE library can verify it without vaultkeeper. `verify()` returns `false` for a
+signature that does not check out (tampered payload, wrong key, malformed JWS) and throws
+`InvalidKeyMaterialError` only when the public key itself is unparseable. A backend that cannot sign
+fails with a typed `SigningNotSupportedError` naming the backends that can — never a silent
+emulation.
 
 ## Backends
 
@@ -495,13 +460,16 @@ read-only properties for machine-readable context.
 
 **Access patterns**
 
-| Class                     | When thrown                                                                                                                                                                                                                                                  |
-| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `FetchError`              | Delegated `fetch()` failed before a `Response` (malformed URL, network failure) (field: `url`).                                                                                                                                                              |
-| `ExecError`               | `exec()` request was invalid, or the command could not be started (field: `command`).                                                                                                                                                                        |
-| `AccessorConsumedError`   | `SecretAccessor.read()` called after it was already consumed.                                                                                                                                                                                                |
-| `InvalidAlgorithmError`   | Signing/verifying with a disallowed algorithm (fields: `algorithm`, `allowed`; see [Signing and verification](#signing-and-verification)).                                                                                                                   |
-| `InvalidKeyMaterialError` | `sign()` could not parse the stored secret as **PEM private-key** material (secrets are stored as text, so raw binary DER must be converted to PEM first). Specific to `sign()` — `VaultKeeper.verify()` does not read stored secrets and never throws this. |
+| Class                          | When thrown                                                                                                                                                                                           |
+| ------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `FetchError`                   | Delegated `fetch()` failed before a `Response` (malformed URL, network failure) (field: `url`).                                                                                                       |
+| `ExecError`                    | `exec()` request was invalid, or the command could not be started (field: `command`).                                                                                                                 |
+| `AccessorConsumedError`        | `SecretAccessor.read()` called after it was already consumed.                                                                                                                                         |
+| `SigningKeyNotFoundError`      | A named signing key does not exist (field: `keyName`); distinct from `SecretNotFoundError` — signing keys occupy their own namespace (see [Signing and verification](#signing-and-verification)).     |
+| `SigningKeyAlreadyExistsError` | Enrolling a signing key whose name already exists (field: `keyName`); enrollment never overwrites (that would break pinned public keys).                                                              |
+| `SigningNotSupportedError`     | The active backend does not implement the signing contract; names the built-in backend that does — a custom backend may implement `SigningBackend` (fields: `backendType`, `builtInSigningBackends`). |
+| `InvalidAlgorithmError`        | `createSigningKey()` with an unsupported signing algorithm — strict JOSE identifiers, only `EdDSA` today (fields: `algorithm`, `allowed`).                                                            |
+| `InvalidKeyMaterialError`      | `verify()` given an unparseable public key, or a corrupt/tampered stored signing key — an operational fault, distinct from a signature that simply does not verify.                                   |
 
 **Config, filesystem & key rotation**
 

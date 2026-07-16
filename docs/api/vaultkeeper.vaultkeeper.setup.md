@@ -42,7 +42,7 @@ string
 
 </td><td>
 
-Identifier for the secret
+Identifier for the secret. Must not contain `':'` (the reserved `signing-key:` namespace separator).
 
 
 </td></tr>
@@ -71,6 +71,8 @@ Promise&lt;string&gt;
 Compact JWE string
 
 ## Exceptions
+
+{<!-- -->VaultError<!-- -->} If `secretName` is empty or contains `':'`<!-- -->.
 
 [ExecutableTrustRequiredError](./vaultkeeper.executabletrustrequirederror.md) If neither `executablePath` nor `skipTrust: true` is provided, if both are, or if `executablePath` is the retired legacy `'dev'` opt-out sentinel (use `skipTrust: true`<!-- -->).
 

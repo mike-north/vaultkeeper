@@ -4,7 +4,9 @@
 
 ## SignResult interface
 
-Result from a delegated signing operation.
+Result of a signing operation.
+
+The signature is a detached-payload Compact JWS (RFC 7515 §7.2.2 + RFC 7797 `b64:false`<!-- -->, `crit:["b64"]`<!-- -->): `<protected>..<signature>`<!-- -->, with the payload omitted. Any standards-compliant JOSE library can verify it given the detached payload and the public key.
 
 **Signature:**
 
@@ -37,7 +39,7 @@ Description
 </th></tr></thead>
 <tbody><tr><td>
 
-[algorithm](./vaultkeeper.signresult.algorithm.md)
+[jws](./vaultkeeper.signresult.jws.md)
 
 
 </td><td>
@@ -50,26 +52,7 @@ string
 
 </td><td>
 
-Algorithm label describing how the signature was produced. For Edwards keys this is the key type (e.g. `'ed25519'`<!-- -->). For other keys this matches the `algorithm` field from the request (or the default `'sha256'`<!-- -->).
-
-
-</td></tr>
-<tr><td>
-
-[signature](./vaultkeeper.signresult.signature.md)
-
-
-</td><td>
-
-
-</td><td>
-
-string
-
-
-</td><td>
-
-Base64-encoded signature.
+The detached-payload compact JWS (`<protected>..<signature>`<!-- -->).
 
 
 </td></tr>
