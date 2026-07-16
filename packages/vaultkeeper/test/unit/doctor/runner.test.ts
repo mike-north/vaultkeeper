@@ -825,7 +825,11 @@ describe('runDoctor with configDir', () => {
     mockCheckYkman.mockReturnValue(mockMissing('ykman'))
     // A FilesystemError with no underlying errno cause (the pre-#141 shape).
     mockLoadConfig.mockRejectedValue(
-      new FilesystemError('Cannot read config file at /fake/config.json.', '/fake/config.json', 'read'),
+      new FilesystemError(
+        'Cannot read config file at /fake/config.json.',
+        '/fake/config.json',
+        'read',
+      ),
     )
 
     const result = await runDoctor({ platform: 'linux', configDir: '/fake' })

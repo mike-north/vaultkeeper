@@ -11,7 +11,7 @@ The signature is produced backend-side via [SigningBackend.signWithKey()](./vaul
 **Signature:**
 
 ```typescript
-sign(token: CapabilityToken, request: SignRequest): Promise<{
+sign(token: CapabilityToken, request: SignRequest, options?: PresenceRequirementOptions): Promise<{
         result: SignResult;
         vaultResponse: VaultResponse;
     }>;
@@ -67,6 +67,22 @@ The payload to sign.
 
 
 </td></tr>
+<tr><td>
+
+options
+
+
+</td><td>
+
+[PresenceRequirementOptions](./vaultkeeper.presencerequirementoptions.md)
+
+
+</td><td>
+
+_(Optional)_ Optional [PresenceRequirementOptions](./vaultkeeper.presencerequirementoptions.md)<!-- -->. When `requirePresencePerUse` is set, the signature is refused with a [NotCapableError](./vaultkeeper.notcapableerror.md) before the backend is touched unless the active backend forces a fresh per-use human action. When capable, a fresh backend `signWithKey` round-trip is performed for this call — no cached key material can satisfy it (the private key never leaves the backend).
+
+
+</td></tr>
 </tbody></table>
 
 **Returns:**
@@ -82,4 +98,6 @@ The detached compact JWS and vault metadata.
 {<!-- -->SigningNotSupportedError<!-- -->} If the active backend cannot sign.
 
 {<!-- -->SigningKeyNotFoundError<!-- -->} If the referenced key no longer exists.
+
+[NotCapableError](./vaultkeeper.notcapableerror.md) If `options.requirePresencePerUse` is set and the active backend is not presence-per-use capable.
 

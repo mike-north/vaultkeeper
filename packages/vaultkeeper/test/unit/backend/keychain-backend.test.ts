@@ -201,10 +201,7 @@ describe('KeychainBackend', () => {
     })
 
     it('should return an empty array when no vaultkeeper entries exist', async () => {
-      const dumpOutput = [
-        'class: "genp"',
-        '    0x00000007 <blob>="some-other-service"',
-      ].join('\n')
+      const dumpOutput = ['class: "genp"', '    0x00000007 <blob>="some-other-service"'].join('\n')
       mockExecCommandFull.mockResolvedValue(makeResult(0, dumpOutput))
 
       const result = await backend.list()

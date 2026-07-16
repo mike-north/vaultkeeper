@@ -11,7 +11,11 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { BackendRegistry } from '../../../src/backend/registry.js'
 import { BackendUnavailableError } from '../../../src/errors.js'
 import type { SecretBackend } from '../../../src/backend/types.js'
-import type { BackendSetupFactory, SetupQuestion, SetupResult } from '../../../src/backend/setup-types.js'
+import type {
+  BackendSetupFactory,
+  SetupQuestion,
+  SetupResult,
+} from '../../../src/backend/setup-types.js'
 
 import { registerBuiltinBackends } from '../../../src/backend/register-builtins.js'
 
@@ -183,7 +187,6 @@ describe('BackendRegistry', () => {
       expect(Array.isArray(BackendRegistry.getTypes())).toBe(true)
     })
   })
-
 })
 
 /**

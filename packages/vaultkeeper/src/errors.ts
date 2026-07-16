@@ -61,6 +61,91 @@ export class AuthorizationDeniedError extends VaultError {
 }
 
 /**
+ * Thrown when an operation requires a backend capability (e.g.
+ * presence-per-use) that the active backend cannot provide.
+ *
+ * @remarks
+ * This is a configuration/backend mismatch, not a runtime authorization
+ * failure: the requirement was asserted against a backend whose configured
+ * instance does not advertise the capability, so no credential, session, or
+ * device is ever touched before this is thrown. It is fixable by switching to
+ * (or reconfiguring) a backend that provides the capability — inspect
+ * {@link NotCapableError.capability} for which one was required and
+ * {@link NotCapableError.backendType} for the backend that lacked it. Distinct
+ * from {@link AuthorizationDeniedError} (a human/token rejection) and
+ * {@link PresenceDeclinedError} (a human declined a fresh action).
+ *
+ * @public
+ */
+export class NotCapableError extends VaultError {
+  /** The `type` identifier of the active backend that lacked the capability. */
+  readonly backendType: string
+
+  /**
+   * The machine-readable capability key that was required but not advertised
+   * (e.g. `'presencePerUse'`).
+   */
+  readonly capability: string
+
+  constructor(message: string, backendType: string, capability: string) {
+    super(message)
+    this.name = 'NotCapableError'
+    this.backendType = backendType
+    this.capability = capability
+  }
+}
+
+/**
+ * Thrown when a required fresh, per-use human presence action was explicitly
+ * declined by the human (e.g. a biometric or touch prompt was cancelled).
+ *
+ * @remarks
+ * Distinct from {@link AuthorizationDeniedError}, which signals a token or
+ * capability rejection, and from {@link PresenceTimeoutError}, which signals the
+ * device was present but no action happened in time. A declined presence action
+ * means the human was asked and said no.
+ *
+ * @public
+ */
+export class PresenceDeclinedError extends VaultError {
+  /** The `type` identifier of the backend that requested the presence action. */
+  readonly backendType: string
+
+  constructor(message: string, backendType: string) {
+    super(message)
+    this.name = 'PresenceDeclinedError'
+    this.backendType = backendType
+  }
+}
+
+/**
+ * Thrown when a required fresh, per-use human presence action did not happen
+ * within the allotted time — the device was present and ready, but no touch,
+ * tap, or biometric approval was performed before the timeout elapsed.
+ *
+ * @remarks
+ * Distinct from {@link DeviceNotPresentError} (the device itself was absent) and
+ * from {@link PresenceDeclinedError} (the human actively declined). Inspect
+ * {@link PresenceTimeoutError.timeoutMs} for how long the operation waited.
+ *
+ * @public
+ */
+export class PresenceTimeoutError extends VaultError {
+  /** The `type` identifier of the backend that requested the presence action. */
+  readonly backendType: string
+
+  /** How long (in milliseconds) the operation waited for the presence action. */
+  readonly timeoutMs: number
+
+  constructor(message: string, backendType: string, timeoutMs: number) {
+    super(message)
+    this.name = 'PresenceTimeoutError'
+    this.backendType = backendType
+    this.timeoutMs = timeoutMs
+  }
+}
+
+/**
  * Thrown when no configured backend is available or reachable.
  * Inspect `reason` for a machine-readable cause and `attempted` for the list
  * of backend types that were tried.

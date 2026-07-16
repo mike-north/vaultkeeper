@@ -9,8 +9,9 @@ Options for [VaultKeeper.setup()](./vaultkeeper.vaultkeeper.setup.md) that are i
 **Signature:**
 
 ```typescript
-interface SetupOptionsBase 
+interface SetupOptionsBase extends PresenceRequirementOptions 
 ```
+**Extends:** [PresenceRequirementOptions](./vaultkeeper.presencerequirementoptions.md)
 
 ## Properties
 

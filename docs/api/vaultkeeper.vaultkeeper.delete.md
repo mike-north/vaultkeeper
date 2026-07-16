@@ -11,7 +11,7 @@ This is a convenience method that delegates to the active backend's `delete()` m
 **Signature:**
 
 ```typescript
-delete(name: string): Promise<void>;
+delete(name: string, options?: PresenceRequirementOptions): Promise<void>;
 ```
 
 ## Parameters
@@ -48,9 +48,29 @@ Identifier for the secret to delete.
 
 
 </td></tr>
+<tr><td>
+
+options
+
+
+</td><td>
+
+[PresenceRequirementOptions](./vaultkeeper.presencerequirementoptions.md)
+
+
+</td><td>
+
+_(Optional)_ Optional [PresenceRequirementOptions](./vaultkeeper.presencerequirementoptions.md)<!-- -->. When `requirePresencePerUse` is set, the delete is refused with a [NotCapableError](./vaultkeeper.notcapableerror.md) before the backend is touched unless the active backend forces a fresh per-use human action.
+
+
+</td></tr>
 </tbody></table>
 
 **Returns:**
 
 Promise&lt;void&gt;
+
+## Exceptions
+
+[NotCapableError](./vaultkeeper.notcapableerror.md) If `options.requirePresencePerUse` is set and the active backend is not presence-per-use capable.
 

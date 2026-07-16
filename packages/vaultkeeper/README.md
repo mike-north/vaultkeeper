@@ -388,6 +388,69 @@ With no explicit `path`, the `file` backend stores secrets under `<configDir>/fi
 resolved config directory (`~/.config/vaultkeeper` by default) that holds `config.json` and key
 material.
 
+## Presence-per-use (require a fresh human action)
+
+Some operations should only proceed when a **fresh, deliberate human action happens for that
+operation, right now** — a distinct touch or biometric approval that can never be satisfied from a
+cached or session-unlocked state. This is stronger than "a vault was unlocked at some point": a
+cached unlock would let an automated or compromised caller ride a human action taken for something
+else.
+
+vaultkeeper models this as a per-configured-instance backend capability, `presencePerUse`, and lets
+you require it for a specific operation.
+
+**Query a backend's capabilities:**
+
+```ts
+const caps = await vault.getActiveBackendCapabilities()
+if (!caps.presencePerUse) {
+  // the active backend cannot force a fresh per-use action
+}
+
+// Or, for any backend instance, without assuming from its type:
+import { getBackendCapabilities } from 'vaultkeeper'
+const { presencePerUse } = await getBackendCapabilities(someBackend)
+```
+
+`getBackendCapabilities()` returns `{ presencePerUse: false }` for any backend that does not
+implement the capability interface — an unknown backend never silently claims presence.
+
+**Require it for an operation:** pass `requirePresencePerUse: true` to `store`, `delete`, `setup`,
+or `sign`. When the active backend cannot guarantee it, the call throws `NotCapableError` **before
+any credential, session, or device is touched**. When the backend is capable, the operation forces a
+fresh human action for that specific call (a declined action throws `PresenceDeclinedError`; a
+timeout throws `PresenceTimeoutError`):
+
+```ts
+// Presence-gated signing: each sign performs a fresh backend round-trip, so no
+// cached key material can satisfy it (the private key never leaves the backend).
+const token = await vault.authorizeSigningKey('approval')
+const { result } = await vault.sign(token, { payload }, { requirePresencePerUse: true })
+```
+
+Capabilities are queried **fresh on every call** and never cached across operations, so two
+consecutive required-presence operations each demand their own distinct fresh action.
+
+### Per-backend truth basis
+
+| Backend                                    | `presencePerUse`                                                                                      | Basis                                                                                                                                                         |
+| ------------------------------------------ | ----------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `file`, `keychain`, `dpapi`, `secret-tool` | always `false`                                                                                        | Encryption-only or a cached/unattended unlock — no distinct per-use human action.                                                                             |
+| `yubikey`                                  | `true` only when the configured slot enforces touch-per-operation (`options.touchPolicy: "required"`) | Every challenge-response forces a physical tap. Verify the slot's real policy with `ykman otp info`. Derived from configuration, never from the backend type. |
+| `1password`                                | `true` only in `per-access` mode (`options.accessMode: "per-access"`)                                 | A fresh worker/SDK client triggers a per-read biometric approval instead of reusing the cached session client.                                                |
+
+> **Cached-OS-unlock caveat.** A "fresh process / SDK client" is **not** the same as a guaranteed
+> fresh hardware action. 1Password `per-access` re-creates the client per read, but the OS may still
+> satisfy the biometric from a cached Touch ID / Windows Hello unlock without re-prompting — so its
+> guarantee is "fresh SDK client plus whatever the OS enforces at that moment." The strongest per-use
+> guarantee comes from a dedicated touch device (YubiKey / gpg smartcard), where the tap is intrinsic
+> to the cryptographic operation. Additionally, 1Password's per-access biometric currently gates
+> reads (`setup`/`exec`); `store`/`delete` route through the cached session client, so prefer a touch
+> device when those operations must be presence-gated.
+
+Real-hardware confirmation for each backend is documented as a manual verification test in
+[`docs/manual-tests/presence-per-use.md`](../../docs/manual-tests/presence-per-use.md).
+
 ## Doctor / preflight checks
 
 `VaultKeeper.init()` runs a preflight check pass (the same checks the `runDoctor()` export and the

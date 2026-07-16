@@ -258,7 +258,9 @@ describe('createOnePasswordSetup', () => {
       mockCreateClient.mockRejectedValueOnce(new Error('biometric auth failed'))
 
       const gen = createOnePasswordSetup()
-      await expect(driveGenerator(gen, ['my-account', 'session'])).rejects.toBeInstanceOf(SetupError)
+      await expect(driveGenerator(gen, ['my-account', 'session'])).rejects.toBeInstanceOf(
+        SetupError,
+      )
     })
 
     it('SetupError for client creation failure has dependency "1Password SDK"', async () => {
@@ -274,14 +276,18 @@ describe('createOnePasswordSetup', () => {
       mockCreateClient.mockRejectedValueOnce(new Error('biometric auth failed'))
 
       const gen = createOnePasswordSetup()
-      await expect(driveGenerator(gen, ['my-account', 'session'])).rejects.toThrow('biometric auth failed')
+      await expect(driveGenerator(gen, ['my-account', 'session'])).rejects.toThrow(
+        'biometric auth failed',
+      )
     })
 
     it('throws SetupError when vault listing fails', async () => {
       mockVaultsList.mockRejectedValueOnce(new Error('network timeout'))
 
       const gen = createOnePasswordSetup()
-      await expect(driveGenerator(gen, ['my-account', 'session'])).rejects.toBeInstanceOf(SetupError)
+      await expect(driveGenerator(gen, ['my-account', 'session'])).rejects.toBeInstanceOf(
+        SetupError,
+      )
     })
 
     it('SetupError for vault listing failure has dependency "1Password SDK"', async () => {
@@ -297,14 +303,18 @@ describe('createOnePasswordSetup', () => {
       mockVaultsList.mockRejectedValueOnce(new Error('network timeout'))
 
       const gen = createOnePasswordSetup()
-      await expect(driveGenerator(gen, ['my-account', 'session'])).rejects.toThrow('network timeout')
+      await expect(driveGenerator(gen, ['my-account', 'session'])).rejects.toThrow(
+        'network timeout',
+      )
     })
 
     it('throws SetupError when no vaults are found', async () => {
       mockVaultsList.mockResolvedValueOnce([])
 
       const gen = createOnePasswordSetup()
-      await expect(driveGenerator(gen, ['my-account', 'session'])).rejects.toBeInstanceOf(SetupError)
+      await expect(driveGenerator(gen, ['my-account', 'session'])).rejects.toBeInstanceOf(
+        SetupError,
+      )
     })
 
     it('SetupError for no vaults has dependency "1Password SDK"', async () => {

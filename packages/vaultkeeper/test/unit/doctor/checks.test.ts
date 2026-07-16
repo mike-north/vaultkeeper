@@ -119,9 +119,7 @@ describe('checkSecurity', () => {
   })
 
   it('returns ok when security exits non-zero but error message mentions security', async () => {
-    mockExecCommand.mockRejectedValue(
-      new Error('Command failed: security Usage: security ...'),
-    )
+    mockExecCommand.mockRejectedValue(new Error('Command failed: security Usage: security ...'))
     const result = await checkSecurity()
     expect(result.status).toBe('ok')
   })

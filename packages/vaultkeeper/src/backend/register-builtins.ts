@@ -53,7 +53,16 @@ export function registerBuiltinBackends(): void {
     }
     return new OnePasswordBackend(opOptions)
   })
-  BackendRegistry.register('yubikey', (config?: BackendConfig) => new YubikeyBackend(config?.path))
+  BackendRegistry.register(
+    'yubikey',
+    (config?: BackendConfig) =>
+      // `touchPolicy: 'required'` in the backend options declares that the
+      // configured challenge-response slot enforces a touch per operation, which
+      // is what makes the instance presence-per-use capable (see
+      // YubikeyBackend.getCapabilities). Any other value (or absent) reports
+      // false — presence is never assumed from the backend type alone.
+      new YubikeyBackend(config?.path, config?.options?.touchPolicy === 'required'),
+  )
 }
 
 registerBuiltinBackends()

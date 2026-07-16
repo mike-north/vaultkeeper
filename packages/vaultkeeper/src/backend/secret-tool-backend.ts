@@ -40,11 +40,9 @@ export class SecretToolBackend implements ListableBackend {
 
   async store(id: string, secret: string): Promise<void> {
     const label = `${LABEL_PREFIX}${id}`
-    await execCommand(
-      'secret-tool',
-      ['store', '--label', label, ATTRIBUTE_KEY, id],
-      { stdin: secret },
-    )
+    await execCommand('secret-tool', ['store', '--label', label, ATTRIBUTE_KEY, id], {
+      stdin: secret,
+    })
   }
 
   async retrieve(id: string): Promise<string> {
@@ -68,11 +66,7 @@ export class SecretToolBackend implements ListableBackend {
   }
 
   async list(): Promise<string[]> {
-    const result = await execCommandFull('secret-tool', [
-      'search',
-      ATTRIBUTE_KEY,
-      '',
-    ])
+    const result = await execCommandFull('secret-tool', ['search', ATTRIBUTE_KEY, ''])
     if (result.exitCode !== 0) {
       return []
     }

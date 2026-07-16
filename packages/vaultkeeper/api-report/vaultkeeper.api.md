@@ -19,6 +19,11 @@ export class AuthorizationDeniedError extends VaultError {
 }
 
 // @public
+export interface BackendCapabilities {
+    readonly presencePerUse: boolean;
+}
+
+// @public
 export interface BackendConfig {
     enabled: boolean;
     options?: Record<string, string> | undefined;
@@ -156,6 +161,9 @@ export class FilesystemError extends VaultError {
 }
 
 // @public
+export function getBackendCapabilities(backend: SecretBackend): Promise<BackendCapabilities>;
+
+// @public
 export function getDefaultConfigDir(): string;
 
 // @public
@@ -189,6 +197,9 @@ export class InvalidTokenError extends VaultError {
 export function isListableBackend(backend: SecretBackend): backend is ListableBackend;
 
 // @public
+export function isPresenceCapableBackend(backend: SecretBackend): backend is PresenceCapableBackend;
+
+// @public
 export function isSigningBackend(backend: SecretBackend): backend is SigningBackend;
 
 // @public
@@ -211,6 +222,13 @@ export interface ListableBackend extends SecretBackend {
 
 // @public
 export function loadConfig(configDir?: string): Promise<VaultConfig>;
+
+// @public
+export class NotCapableError extends VaultError {
+    constructor(message: string, backendType: string, capability: string);
+    readonly backendType: string;
+    readonly capability: string;
+}
 
 // @public
 export type Platform = 'darwin' | 'win32' | 'linux';
@@ -254,6 +272,29 @@ export interface PreflightResult {
     nextSteps: string[];
     ready: boolean;
     warnings: string[];
+}
+
+// @public
+export interface PresenceCapableBackend extends SecretBackend {
+    getCapabilities(): Promise<BackendCapabilities>;
+}
+
+// @public
+export class PresenceDeclinedError extends VaultError {
+    constructor(message: string, backendType: string);
+    readonly backendType: string;
+}
+
+// @public
+export interface PresenceRequirementOptions {
+    requirePresencePerUse?: boolean | undefined;
+}
+
+// @public
+export class PresenceTimeoutError extends VaultError {
+    constructor(message: string, backendType: string, timeoutMs: number);
+    readonly backendType: string;
+    readonly timeoutMs: number;
 }
 
 // @public
@@ -328,7 +369,7 @@ export type SetupOptions = SetupOptionsBase & ({
 });
 
 // @public
-export interface SetupOptionsBase {
+export interface SetupOptionsBase extends PresenceRequirementOptions {
     backendType?: string | undefined;
     trustTier?: TrustTier | undefined;
     ttlMinutes?: number | undefined;
@@ -444,7 +485,7 @@ export class VaultKeeper {
     authorizeSigningKey(name: string): Promise<CapabilityToken>;
     checkExecutableTrust(executablePath: string): Promise<ExecutableTrustStatus>;
     createSigningKey(name: string, algorithm: SigningAlgorithm): Promise<SigningPublicKey>;
-    delete(name: string): Promise<void>;
+    delete(name: string, options?: PresenceRequirementOptions): Promise<void>;
     static doctor(options?: RunDoctorOptions): Promise<PreflightResult>;
     exec(token: CapabilityToken | SecretTokenMap, request: ExecRequest): Promise<{
         result: ExecResult;
@@ -455,6 +496,7 @@ export class VaultKeeper {
         response: Response;
         vaultResponse: VaultResponse;
     }>;
+    getActiveBackendCapabilities(): Promise<BackendCapabilities>;
     getSecret(token: CapabilityToken): SecretAccessor;
     static init(options?: VaultKeeperOptions): Promise<VaultKeeper>;
     revokeKey(): Promise<void>;
@@ -462,11 +504,11 @@ export class VaultKeeper {
     secretExists(name: string): Promise<boolean>;
     setDevelopmentMode(executablePath: string, enabled: boolean): Promise<void>;
     setup(secretName: string, options: SetupOptions): Promise<string>;
-    sign(token: CapabilityToken, request: SignRequest): Promise<{
+    sign(token: CapabilityToken, request: SignRequest, options?: PresenceRequirementOptions): Promise<{
         result: SignResult;
         vaultResponse: VaultResponse;
     }>;
-    store(name: string, value: string): Promise<void>;
+    store(name: string, value: string, options?: PresenceRequirementOptions): Promise<void>;
     static verify(request: VerifyRequest): Promise<boolean>;
 }
 

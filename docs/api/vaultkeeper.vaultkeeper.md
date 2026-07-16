@@ -158,7 +158,7 @@ The keypair is generated and stored entirely backend-side (see [SigningBackend](
 </td></tr>
 <tr><td>
 
-[delete(name)](./vaultkeeper.vaultkeeper.delete.md)
+[delete(name, options)](./vaultkeeper.vaultkeeper.delete.md)
 
 
 </td><td>
@@ -243,6 +243,20 @@ Execute a delegated HTTP fetch, injecting secrets from the token(s).
 \*\*Token map ([SecretTokenMap](./vaultkeeper.secrettokenmap.md)<!-- -->):\*\* every `{{secret:name}}` placeholder is replaced with the secret from the corresponding named token.
 
 The raw secret is never exposed in the return value.
+
+
+</td></tr>
+<tr><td>
+
+[getActiveBackendCapabilities()](./vaultkeeper.vaultkeeper.getactivebackendcapabilities.md)
+
+
+</td><td>
+
+
+</td><td>
+
+Report the [BackendCapabilities](./vaultkeeper.backendcapabilities.md) of the active backend's configured instance — the same backend [VaultKeeper.store()](./vaultkeeper.vaultkeeper.store.md)<!-- -->, [VaultKeeper.setup()](./vaultkeeper.vaultkeeper.setup.md)<!-- -->, and [VaultKeeper.sign()](./vaultkeeper.vaultkeeper.sign.md) operate on.
 
 
 </td></tr>
@@ -358,7 +372,7 @@ Read a stored secret from the backend and mint a JWE token that encapsulates it.
 </td></tr>
 <tr><td>
 
-[sign(token, request)](./vaultkeeper.vaultkeeper.sign.md)
+[sign(token, request, options)](./vaultkeeper.vaultkeeper.sign.md)
 
 
 </td><td>
@@ -374,7 +388,7 @@ The signature is produced backend-side via [SigningBackend.signWithKey()](./vaul
 </td></tr>
 <tr><td>
 
-[store(name, value)](./vaultkeeper.vaultkeeper.store.md)
+[store(name, value, options)](./vaultkeeper.vaultkeeper.store.md)
 
 
 </td><td>

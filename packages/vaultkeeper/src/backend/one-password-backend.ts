@@ -23,7 +23,7 @@ import {
   AuthorizationDeniedError,
   ConfigValidationError,
 } from '../errors.js'
-import type { ListableBackend } from './types.js'
+import type { ListableBackend, PresenceCapableBackend, BackendCapabilities } from './types.js'
 
 // ---- SDK type imports (runtime-dynamic, not static imports) ----
 // We import the SDK dynamically so that the backend degrades gracefully
@@ -103,7 +103,7 @@ function isWorkerResponse(value: unknown): value is WorkerResponse {
  *
  * @internal
  */
-export class OnePasswordBackend implements ListableBackend {
+export class OnePasswordBackend implements ListableBackend, PresenceCapableBackend {
   readonly type = '1password'
   readonly displayName = '1Password'
 
@@ -143,6 +143,33 @@ export class OnePasswordBackend implements ListableBackend {
   async isAvailable(): Promise<boolean> {
     const sdk = await this.tryLoadSdk()
     return sdk !== null
+  }
+
+  /**
+   * Report this instance's capabilities.
+   *
+   * @remarks
+   * `presencePerUse` is `true` only in `per-access` mode, where each
+   * `retrieve()` spawns a fresh worker process that creates a new SDK client and
+   * triggers a per-read biometric approval that cannot be satisfied from the
+   * cached session client. In the default `session` mode a single client is
+   * cached for all operations, so operations ride one earlier unlock — that mode
+   * reports `false`.
+   *
+   * **Truth-basis / cached-OS-unlock caveat:** even in `per-access` mode the
+   * fresh action is "a fresh SDK client plus whatever the OS enforces at that
+   * moment" — a "fresh process/SDK client" is **not** the same as a guaranteed
+   * fresh hardware action. A per-access read can still ride a cached OS-level
+   * Touch ID / Windows Hello unlock if the OS does not re-prompt. The strongest
+   * per-use hardware guarantee comes from a touch device (YubiKey/gpg smartcard);
+   * 1Password `per-access` is presence-per-use to the extent the OS re-prompts.
+   * Additionally, the per-access biometric path currently gates `retrieve()`
+   * (used by `exec`/`setup`); `store`/`delete` route through the cached session
+   * client. Callers requiring presence for those operations should prefer a
+   * touch device.
+   */
+  getCapabilities(): Promise<BackendCapabilities> {
+    return Promise.resolve({ presencePerUse: this.accessMode === 'per-access' })
   }
 
   // ---- Session client management ----

@@ -33,10 +33,7 @@ class SecretAccessorTarget implements SecretAccessorInternal {
   readonly read: <T>(callback: (buf: Buffer) => T) => T
   readonly [INSPECT_CUSTOM]: () => string
 
-  constructor(
-    readImpl: <T>(callback: (buf: Buffer) => T) => T,
-    inspectImpl: () => string,
-  ) {
+  constructor(readImpl: <T>(callback: (buf: Buffer) => T) => T, inspectImpl: () => string) {
     this.read = readImpl
     this[INSPECT_CUSTOM] = inspectImpl
   }
@@ -63,7 +60,9 @@ export function createSecretAccessor(secretValue: string): SecretAccessor {
   // returning the raw buffer would only ever yield zeroed bytes.
   function readImpl<T>(callback: (buf: Buffer) => T): T {
     if (consumed) {
-      throw new AccessorConsumedError('SecretAccessor has already been consumed — call getSecret() again to obtain a new accessor')
+      throw new AccessorConsumedError(
+        'SecretAccessor has already been consumed — call getSecret() again to obtain a new accessor',
+      )
     }
     consumed = true
 

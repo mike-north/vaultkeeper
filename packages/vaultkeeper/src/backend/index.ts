@@ -2,8 +2,20 @@
  * Backend abstraction layer barrel export.
  */
 
-export type { SecretBackend, BackendFactory, ListableBackend, SigningBackend } from './types.js'
-export { isListableBackend, isSigningBackend } from './types.js'
+export type {
+  SecretBackend,
+  BackendFactory,
+  ListableBackend,
+  SigningBackend,
+  PresenceCapableBackend,
+  BackendCapabilities,
+} from './types.js'
+export {
+  isListableBackend,
+  isSigningBackend,
+  isPresenceCapableBackend,
+  getBackendCapabilities,
+} from './types.js'
 export type { SetupQuestion, SetupChoice, SetupResult, BackendSetupFactory } from './setup-types.js'
 export { BackendRegistry } from './registry.js'
 export { KeychainBackend } from './keychain-backend.js'
