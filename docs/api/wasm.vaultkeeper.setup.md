@@ -9,7 +9,7 @@ Create a JWE token encapsulating a secret.
 **Signature:**
 
 ```typescript
-setup(secretName: string, secretValue: string, options?: SetupOptions): Promise<string>;
+setup(secretName: string, secretValue: string, options: SetupOptions): Promise<string>;
 ```
 
 ## Parameters
@@ -70,8 +70,6 @@ options
 
 </td><td>
 
-_(Optional)_
-
 
 </td></tr>
 </tbody></table>
@@ -90,7 +88,7 @@ TypeError If `secretName` or `secretValue` is not a string (guards the WASM boun
 
 ## Remarks
 
-\*\*Explicit executable-trust choice required.\*\* Like the TypeScript `vaultkeeper` library's `setup()`<!-- -->, this method no longer defaults to skipping the executable-identity binding. The caller must make an unambiguous decision via [SetupOptions](./wasm.setupoptions.md)<!-- -->: provide exactly one of [SetupOptions.executablePath](./wasm.setupoptions.executablepath.md) (verify and bind the calling executable's identity into the token) or [SetupOptions.skipTrust](./wasm.setupoptions.skiptrust.md) (`true` — a development-only opt-out). Supplying neither — or both — or the retired `'dev'` sentinel as `executablePath` throws [ExecutableTrustRequiredError](./wasm.executabletrustrequirederror.md) rather than silently minting an unbound `'dev'` token. Inspect the error's `reason` (`'missing-choice'` \| `'conflicting-choice'` \| `'legacy-dev-sentinel'`<!-- -->) to distinguish the cases.
+\*\*Explicit executable-trust choice required.\*\* Like the TypeScript `vaultkeeper` library's `setup()`<!-- -->, this method no longer defaults to skipping the executable-identity binding. The caller must make an unambiguous decision via [SetupOptions](./wasm.setupoptions.md)<!-- -->: provide exactly one of `executablePath` (verify and bind the calling executable's identity into the token) or `skipTrust` (`true` — a development-only opt-out). Supplying neither — or both — or the retired `'dev'` sentinel as `executablePath` throws [ExecutableTrustRequiredError](./wasm.executabletrustrequirederror.md) rather than silently minting an unbound `'dev'` token. Inspect the error's `reason` (`'missing-choice'` \| `'conflicting-choice'` \| `'legacy-dev-sentinel'`<!-- -->) to distinguish the cases.
 
 \*\*Executable-trust verification.\*\* When `executablePath` is supplied, the executable is hashed and run through trust verification (Sigstore → trust-manifest match → TOFU first-encounter), and the verified hash is bound into the token's `exe` claim. A hash that conflicts with a previously approved value throws [IdentityMismatchError](./wasm.identitymismatcherror.md)<!-- -->. The first-encounter TOFU record is persisted only after the token has been minted, so a failed `setup()` never leaves a premature trust record behind.
 

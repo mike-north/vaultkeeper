@@ -29,6 +29,7 @@ export type {
   WasmHostPlatform,
   VaultKeeperOptions,
   SetupOptions,
+  SetupOptionsBase,
   TrustTier,
   KeyStatus,
   VaultClaims,
@@ -235,8 +236,8 @@ export class VaultKeeper {
    * `vaultkeeper` library's `setup()`, this method no longer defaults to
    * skipping the executable-identity binding. The caller must make an
    * unambiguous decision via {@link SetupOptions}: provide exactly one of
-   * {@link SetupOptions.executablePath} (verify and bind the calling
-   * executable's identity into the token) or {@link SetupOptions.skipTrust}
+   * `executablePath` (verify and bind the calling executable's identity into
+   * the token) or `skipTrust`
    * (`true` — a development-only opt-out). Supplying neither — or both — or the
    * retired `'dev'` sentinel as `executablePath` throws
    * {@link ExecutableTrustRequiredError} rather than silently minting an unbound
@@ -267,10 +268,13 @@ export class VaultKeeper {
    * @throws TypeError If `secretName` or `secretValue` is not a string (guards
    *   the WASM boundary against a native memory fault).
    */
-  async setup(secretName: string, secretValue: string, options?: SetupOptions): Promise<string> {
+  async setup(secretName: string, secretValue: string, options: SetupOptions): Promise<string> {
     ensureStringArg(secretName, 'setup() secretName')
     ensureStringArg(secretValue, 'setup() secretValue')
-    return callAsync(() => this.#inner.setup(secretName, secretValue, options ?? {}))
+    // A plain-JavaScript caller can pass no options despite the required type;
+    // the WASM core still throws ExecutableTrustRequiredError('missing-choice')
+    // for an absent or empty choice, preserving the runtime backstop.
+    return callAsync(() => this.#inner.setup(secretName, secretValue, options))
   }
 
   /**

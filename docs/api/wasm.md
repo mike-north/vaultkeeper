@@ -319,14 +319,12 @@ Mirrors the `getSecret()` pattern in the TypeScript library: the plaintext secre
 </td></tr>
 <tr><td>
 
-[SetupOptions](./wasm.setupoptions.md)
+[SetupOptionsBase](./wasm.setupoptionsbase.md)
 
 
 </td><td>
 
-Options for the setup (token creation) operation.
-
-`setup()` requires an explicit executable-trust decision: provide exactly one of [SetupOptions.executablePath](./wasm.setupoptions.executablepath.md) or [SetupOptions.skipTrust](./wasm.setupoptions.skiptrust.md)<!-- -->. Supplying neither, both, or the retired `'dev'` sentinel as `executablePath` throws `ExecutableTrustRequiredError`<!-- -->.
+Options for [VaultKeeper.setup()](./wasm.vaultkeeper.setup.md) that are independent of the mandatory executable-trust choice. Intersected with that choice to form [SetupOptions](./wasm.setupoptions.md)<!-- -->.
 
 
 </td></tr>
@@ -434,6 +432,17 @@ Key status in the vault response.
 </td><td>
 
 Preflight check status (Rust kebab-case serialization).
+
+
+</td></tr>
+<tr><td>
+
+[SetupOptions](./wasm.setupoptions.md)
+
+
+</td><td>
+
+Options for the setup (token creation) operation.
 
 
 </td></tr>

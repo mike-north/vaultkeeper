@@ -694,8 +694,11 @@ describe('@vaultkeeper/wasm setup() explicit-trust contract (issue #147)', () =>
     await withTempDir(async (dir) => {
       const vault = await createTestVault(dir)
       await assert.rejects(
-        // Omitting the trust choice compiles (options is optional) but is the
-        // exact runtime defect under test — it must throw, not mint a token.
+        // Omitting the trust choice is now a compile error for typed callers
+        // (issue #201); we suppress it to exercise the runtime backstop that
+        // still guards untyped (plain-JavaScript) callers — it must throw, not
+        // mint a token.
+        // @ts-expect-error -- deliberately omit the required options argument to reach the untyped-JS runtime backstop
         () => vault.setup('no-choice', 'value'),
         (err: unknown) =>
           err instanceof ExecutableTrustRequiredError &&
@@ -710,6 +713,7 @@ describe('@vaultkeeper/wasm setup() explicit-trust contract (issue #147)', () =>
     await withTempDir(async (dir) => {
       const vault = await createTestVault(dir)
       await assert.rejects(
+        // @ts-expect-error -- {} satisfies neither trust-choice branch; typed callers get a compile error, so this reaches the untyped-JS runtime backstop
         () => vault.setup('empty-opts', 'value', {}),
         (err: unknown) =>
           err instanceof ExecutableTrustRequiredError && err.reason === 'missing-choice',
@@ -722,6 +726,7 @@ describe('@vaultkeeper/wasm setup() explicit-trust contract (issue #147)', () =>
     await withTempDir(async (dir) => {
       const vault = await createTestVault(dir)
       await assert.rejects(
+        // @ts-expect-error -- executablePath and skipTrust are mutually exclusive; typed callers get a compile error, so this reaches the untyped-JS runtime backstop
         () => vault.setup('both', 'value', { executablePath: '/usr/bin/node', skipTrust: true }),
         (err: unknown) =>
           err instanceof ExecutableTrustRequiredError && err.reason === 'conflicting-choice',
@@ -785,6 +790,7 @@ describe('@vaultkeeper/wasm setup() explicit-trust contract (issue #147)', () =>
     await withTempDir(async (dir) => {
       const vault = await createTestVault(dir)
       await assert.rejects(
+        // @ts-expect-error -- {} satisfies neither trust-choice branch; typed callers get a compile error, so this reaches the untyped-JS runtime backstop
         () => vault.setup('js-names', 'value', {}),
         (err: unknown) => {
           assert.ok(err instanceof ExecutableTrustRequiredError)
