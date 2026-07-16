@@ -6,11 +6,11 @@ and subprocess execution.
 
 The public API is not a drop-in replacement for the TypeScript library — some function signatures
 differ (e.g. `setup(secretName, secretValue, ...)` here, vs. the TS library's
-`setup(secretName, options?)`).
+`setup(secretName, options)`).
 
-**`setup()` does not read from the backend.** This package's `setup(secretName, secretValue, options?)`
+**`setup()` does not read from the backend.** This package's `setup(secretName, secretValue, options)`
 mints a JWE directly from the `secretValue` argument — it never calls `store()`/`retrieve()` or reads
-whatever is already persisted under `secretName`. The TS library's `setup(secretName, options?)` has
+whatever is already persisted under `secretName`. The TS library's `setup(secretName, options)` has
 no `secretValue` parameter at all and always reads the current value from the configured backend.
 `store()` and `setup()` are independent operations here; calling `store()` first has no effect on
 what `setup()` encapsulates.
@@ -80,6 +80,34 @@ vault.dispose()
 ```
 
 This package ships a committed `.wasm` binary — no `wasm-pack` install step required to consume it.
+
+## API methods
+
+The `VaultKeeper` surface mixes **async** (Promise-returning — `await` them) and **synchronous**
+methods. Anything that touches the file backend or runs the preflight pass is async; the in-memory
+token/key/config operations are synchronous. Forgetting to `await` an async method (especially
+`setup()`) is the most common mistake — a runtime guard rejects a Promise passed where a string is
+expected, but the table below is the quick reference:
+
+| Method                                    | Kind      | What it does                                             |
+| ----------------------------------------- | --------- | -------------------------------------------------------- |
+| `createVaultKeeper(options?, configDir?)` | **async** | Load the WASM module and construct a vault instance      |
+| `setup(secretName, secretValue, options)` | **async** | Mint a JWE token directly from `secretValue`             |
+| `store(id, secret)`                       | **async** | Persist a secret through the `file` backend              |
+| `retrieve(id)`                            | **async** | Read a stored secret from the `file` backend             |
+| `delete(id)`                              | **async** | Remove a stored secret from the `file` backend           |
+| `doctor()`                                | **async** | Run the preflight checks                                 |
+| `authorize(jwe)`                          | sync      | Decrypt and validate a token; expose the one-time secret |
+| `config()`                                | sync      | Return the resolved vault configuration                  |
+| `rotateKey()`                             | sync      | Rotate the encryption key                                |
+| `revokeKey()`                             | sync      | Emergency key revocation                                 |
+| `dispose()`                               | sync      | Release the underlying WASM resources                    |
+
+`setup()`'s `options` argument is **required** — it must carry exactly one executable-trust choice,
+either `executablePath` (production) or `skipTrust: true` (development only). An options object with
+neither (or both), and a 2-argument `setup(name, value)` call, are compile-time type errors — the
+type system enforces the choice, with `ExecutableTrustRequiredError` as a runtime backstop for plain
+JavaScript callers.
 
 ## Doctor / preflight checks
 
