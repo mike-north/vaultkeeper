@@ -17,6 +17,19 @@
  *   each package's built `.d.ts`, so a snippet with a wrong signature (e.g. a
  *   2-arg `setup()`) fails CI.
  *
+ * ## Running a TS/JS fence (not just type-checking it)
+ *
+ * A type-only check misses runtime-only breakage: a snippet can compile yet
+ * throw before it does anything useful — e.g. calling `setup()` on a secret it
+ * forgot to `store()` first (issue #227). Mark a *self-contained* TS/JS fence
+ * with `<!-- readme-example: run -->` and it is additionally *executed* against
+ * the built package with `tsx`, in an isolated `VAULTKEEPER_CONFIG_DIR`, with
+ * the network boundary stubbed (`globalThis.fetch` returns a canned 200 without
+ * leaving the process). The run must exit `0`, so a fence that throws on
+ * argument construction — or on a missing store/setup step — before reaching the
+ * stubbed `fetch` fails CI. A `run` fence must be self-contained (its own
+ * `import` + `VaultKeeper.init()`); it is still type-checked as well.
+ *
  * ## Opting a fence out
  *
  * Many fenced examples are intentionally illustrative fragments, not runnable
@@ -43,7 +56,7 @@ import { spawnSync } from 'node:child_process'
 import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 
 /** Repo root, resolved from this file (packages/cli-tests/test/e2e/). */
 export const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..', '..')
@@ -68,9 +81,14 @@ export interface Fence {
   skipped: boolean
   /** The free-form reason from the skip marker, if any. */
   skipReason: string | undefined
+  /** True if a `readme-example: run` marker precedes the fence. */
+  run: boolean
+  /** The free-form reason from the run marker, if any. */
+  runReason: string | undefined
 }
 
 const SKIP_MARKER = /<!--\s*readme-example:\s*skip\b[ \t-]*(.*?)\s*-->/i
+const RUN_MARKER = /<!--\s*readme-example:\s*run\b[ \t-]*(.*?)\s*-->/i
 
 /**
  * Extract every fenced code block from `markdown`, recording each fence's
@@ -95,17 +113,25 @@ export function extractFences(markdown: string, readme: string): Fence[] {
       body.push(lines[j] ?? '')
       j += 1
     }
-    // Look back over blank lines for a skip marker on the preceding line.
+    // Look back over blank lines for a skip/run marker on the preceding line.
     let k = i - 1
     while (k >= 0 && (lines[k] ?? '').trim() === '') k -= 1
-    const marker = k >= 0 ? SKIP_MARKER.exec(lines[k] ?? '') : null
+    const markerLine = k >= 0 ? (lines[k] ?? '') : ''
+    const skipMarker = SKIP_MARKER.exec(markerLine)
+    // Skip takes precedence over run: an explicitly opted-out fence must never
+    // execute, even if the same marker line also carries a `run` marker.
+    const runMarker = skipMarker !== null ? null : RUN_MARKER.exec(markerLine)
+    const reasonOf = (m: RegExpExecArray): string | undefined =>
+      m[1] === undefined || m[1] === '' ? undefined : m[1]
     out.push({
       readme,
       lang,
       code: body.join('\n'),
       startLine,
-      skipped: marker !== null,
-      skipReason: marker !== null ? (marker[1] === undefined || marker[1] === '' ? undefined : marker[1]) : undefined,
+      skipped: skipMarker !== null,
+      skipReason: skipMarker !== null ? reasonOf(skipMarker) : undefined,
+      run: runMarker !== null,
+      runReason: runMarker !== null ? reasonOf(runMarker) : undefined,
     })
     i = j + 1
   }
@@ -289,5 +315,87 @@ export function typecheckCodeFence(fence: Fence): TypecheckResult {
     }
   } finally {
     fs.rmSync(scratch, { recursive: true, force: true })
+  }
+}
+
+/** Result of executing a `run`-marked TS/JS fence. */
+export interface RunResult {
+  exitCode: number
+  stdout: string
+  stderr: string
+}
+
+/**
+ * The network-stub preload installed before a `run` fence executes. Replaces
+ * `globalThis.fetch` with a canned 200 response so execution stops at the fetch
+ * boundary instead of making a real request — a fence that constructs its fetch
+ * arguments wrong, or omits a required `store()`/`setup()`, throws *before* this
+ * is reached and the process exits non-zero. Kept as a plain `.mjs` module (no
+ * TS transform) so it loads via node's `--import` before the ESM snippet runs.
+ */
+const RUN_FETCH_STUB = [
+  "globalThis.fetch = () =>",
+  "  Promise.resolve(new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } }))",
+  '',
+].join('\n')
+
+/**
+ * Execute a `run`-marked TS/JS fence against the *built* package. The snippet is
+ * written into `packages/cli-tests/` (so NodeNext resolution finds each package's
+ * built output through its `exports` map, exactly as an external consumer would)
+ * and run with `tsx`, with {@link RUN_FETCH_STUB} preloaded so the network is
+ * never touched. It runs in a fresh, ambient-free `VAULTKEEPER_CONFIG_DIR` so
+ * `store()`/`setup()` are hermetic and reproducible. Returns the process exit
+ * code and output; a non-zero exit means the documented example threw at
+ * runtime — the class of bug a type-only check misses (issue #227).
+ */
+export function runCodeFence(fence: Fence): RunResult {
+  const scratch = fs.mkdtempSync(path.join(REPO_ROOT, 'packages', 'cli-tests', '.readme-run-'))
+  const configRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'vk-readme-run-'))
+  try {
+    const ext = JS_LANGS.has(fence.lang) ? 'js' : 'ts'
+    const snippet = path.join(scratch, `snippet.${ext}`)
+    fs.writeFileSync(snippet, fence.code, 'utf8')
+    const preload = path.join(scratch, 'network-stub.mjs')
+    fs.writeFileSync(preload, RUN_FETCH_STUB, 'utf8')
+
+    const configDir = path.join(configRoot, 'config')
+    fs.mkdirSync(configDir, { recursive: true })
+    // Ambient-free env (mirrors runShellFence): a run fence must not depend on
+    // the developer's VAULTKEEPER_* toggles, and CI secrets must not leak in.
+    const env: NodeJS.ProcessEnv = {
+      PATH: process.env.PATH ?? '',
+      HOME: configRoot,
+      VAULTKEEPER_CONFIG_DIR: configDir,
+    }
+    for (const key of ['LANG', 'LC_ALL', 'LC_CTYPE', 'TMPDIR', 'TERM']) {
+      const value = process.env[key]
+      if (value !== undefined) {
+        env[key] = value
+      }
+    }
+
+    const tsx = path.join(REPO_ROOT, 'node_modules', '.bin', 'tsx')
+    const result = spawnSync(tsx, ['--import', pathToFileURL(preload).href, snippet], {
+      cwd: REPO_ROOT,
+      env,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+      timeout: 120_000,
+    })
+    // spawnSync could not start tsx at all: surface it instead of a vacuous pass.
+    if (result.error) {
+      throw new Error(
+        `Failed to run a run-marked fence from ${fence.readme}:${String(fence.startLine)}: ${result.error.message}`,
+      )
+    }
+    return {
+      exitCode: result.status ?? (result.signal !== null ? 1 : 0),
+      stdout: result.stdout,
+      stderr: result.stderr,
+    }
+  } finally {
+    fs.rmSync(scratch, { recursive: true, force: true })
+    fs.rmSync(configRoot, { recursive: true, force: true })
   }
 }
