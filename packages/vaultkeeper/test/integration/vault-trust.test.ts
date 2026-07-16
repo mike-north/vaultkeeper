@@ -74,10 +74,17 @@ async function writeExecutable(name: string, contents: string): Promise<string> 
 }
 
 async function manifestExists(): Promise<boolean> {
-  return fs
-    .access(path.join(configDir, 'trust-manifest.json'))
-    .then(() => true)
-    .catch(() => false)
+  try {
+    await fs.access(path.join(configDir, 'trust-manifest.json'))
+    return true
+  } catch (err) {
+    // Only a missing file means "does not exist" — any other failure (e.g.
+    // EACCES) is a real problem and must not be silently reported as absence.
+    if (typeof err === 'object' && err !== null && 'code' in err && err.code === 'ENOENT') {
+      return false
+    }
+    throw err
+  }
 }
 
 async function readManifestEntries(): Promise<Record<string, unknown>> {

@@ -51,15 +51,15 @@ async function trySigstore(execPath: string): Promise<boolean> {
  * executable's hash and classifies it against the existing manifest state,
  * but a first-encounter (Tier 3) or Sigstore (Tier 1) result — which would
  * otherwise record a new hash — is only staged on
- * {@link PendingTrust.manifestToSave}. Nothing is persisted until the caller
+ * {@link PendingTrust.pendingWrite}. Nothing is persisted until the caller
  * invokes {@link commitTrust} with the returned value, which callers should do
  * only once the operation the trust decision was gating (e.g. reading the
  * secret) has actually succeeded. This prevents a failed operation from
  * durably pre-seeding TOFU trust for an executable that never completed a
  * legitimate first encounter.
  *
- * A TOFU conflict never stages a write (`manifestToSave` is `undefined`) —
- * the pre-existing manifest state is authoritative and a conflict must always
+ * A TOFU conflict never stages a write (`pendingWrite` is `undefined`) — the
+ * pre-existing manifest state is authoritative and a conflict must always
  * fail without recording the new, unapproved hash.
  *
  * @param execPath - Path to the executable, or `"dev"` to enable dev-mode bypass.
@@ -79,7 +79,7 @@ export async function verifyTrustPending(
       tofuConflict: false,
       approvedHashes: [],
       reason: 'Dev mode — hash verification skipped',
-      manifestToSave: undefined,
+      pendingWrite: undefined,
       configDir,
     }
   }
@@ -104,7 +104,7 @@ export async function verifyTrustPending(
         tofuConflict: false,
         approvedHashes,
         reason: 'Sigstore bundle verified',
-        manifestToSave: addTrustedHash(manifest, namespace, currentHash),
+        pendingWrite: { namespace, hash: currentHash },
         configDir,
       }
     }
@@ -117,7 +117,7 @@ export async function verifyTrustPending(
       tofuConflict: false,
       approvedHashes,
       reason: 'Hash found in trust manifest',
-      manifestToSave: undefined,
+      pendingWrite: undefined,
       configDir,
     }
   }
@@ -132,7 +132,7 @@ export async function verifyTrustPending(
       tofuConflict: true,
       approvedHashes,
       reason: `Hash changed from a previously approved value — re-approval required`,
-      manifestToSave: undefined,
+      pendingWrite: undefined,
       configDir,
     }
   }
@@ -143,26 +143,36 @@ export async function verifyTrustPending(
     tofuConflict: false,
     approvedHashes,
     reason: 'First encounter — hash recorded via TOFU',
-    manifestToSave: addTrustedHash(manifest, namespace, currentHash),
+    pendingWrite: { namespace, hash: currentHash },
     configDir,
   }
 }
 
 /**
  * Commit phase of the verify/commit split: persist a {@link PendingTrust}'s
- * staged manifest update, if any.
+ * staged namespace/hash entry, if any.
  *
- * A no-op when {@link PendingTrust.manifestToSave} is `undefined` (a registry
+ * A no-op when {@link PendingTrust.pendingWrite} is `undefined` (a registry
  * match, a TOFU conflict, or dev-mode bypass never write).
+ *
+ * Verification and commit are not atomic — another process can write to the
+ * manifest in between (e.g. approving a different executable, or the same
+ * one). To avoid clobbering that concurrent write, this reloads the manifest
+ * from disk immediately before saving and unions `pendingWrite` into the
+ * *current* state, rather than persisting the snapshot captured back in
+ * {@link verifyTrustPending}.
  *
  * @param pending - The result of {@link verifyTrustPending} to commit.
  * @internal
  */
 export async function commitTrust(pending: PendingTrust): Promise<void> {
-  if (pending.manifestToSave === undefined) {
+  if (pending.pendingWrite === undefined) {
     return
   }
-  await saveManifest(pending.configDir, pending.manifestToSave)
+  const { namespace, hash } = pending.pendingWrite
+  const current = await loadManifest(pending.configDir)
+  const merged = addTrustedHash(current, namespace, hash)
+  await saveManifest(pending.configDir, merged)
 }
 
 /**

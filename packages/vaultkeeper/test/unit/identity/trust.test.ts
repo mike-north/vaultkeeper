@@ -3,7 +3,7 @@ import * as fs from 'node:fs/promises'
 import * as os from 'node:os'
 import * as path from 'node:path'
 import { verifyTrust, verifyTrustPending, commitTrust } from '../../../src/identity/trust.js'
-import { loadManifest } from '../../../src/identity/manifest.js'
+import { loadManifest, addTrustedHash, saveManifest } from '../../../src/identity/manifest.js'
 
 async function withTempDir(fn: (dir: string) => Promise<void>): Promise<void> {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'vaultkeeper-trust-'))
@@ -190,8 +190,7 @@ describe('verifyTrustPending / commitTrust — verify/commit split (#148)', () =
 
       expect(pending.identity.trustTier).toBe(3)
       expect(pending.tofuConflict).toBe(false)
-      expect(pending.manifestToSave).toBeDefined()
-      expect(pending.manifestToSave?.has('my-tool')).toBe(true)
+      expect(pending.pendingWrite).toEqual({ namespace: 'my-tool', hash: pending.identity.hash })
 
       // Nothing was written by the verify phase alone.
       const manifest = await loadManifest(configDir)
@@ -216,7 +215,7 @@ describe('verifyTrustPending / commitTrust — verify/commit split (#148)', () =
     })
   })
 
-  it('commitTrust is a no-op when manifestToSave is undefined (e.g. a TOFU conflict)', async () => {
+  it('commitTrust is a no-op when pendingWrite is undefined (e.g. a TOFU conflict)', async () => {
     await withTempDir(async (dir) => {
       const execPath = await createTempBinary(dir, 'tampered', 'original')
       const configDir = path.join(dir, 'config')
@@ -232,7 +231,7 @@ describe('verifyTrustPending / commitTrust — verify/commit split (#148)', () =
         skipSigstore: true,
       })
       expect(pending.tofuConflict).toBe(true)
-      expect(pending.manifestToSave).toBeUndefined()
+      expect(pending.pendingWrite).toBeUndefined()
 
       // Committing a conflict result must not throw and must not write.
       await commitTrust(pending)
@@ -254,7 +253,43 @@ describe('verifyTrustPending / commitTrust — verify/commit split (#148)', () =
         skipSigstore: true,
       })
       expect(pending.identity.trustTier).toBe(2)
-      expect(pending.manifestToSave).toBeUndefined()
+      expect(pending.pendingWrite).toBeUndefined()
+    })
+  })
+
+  // Verification and commit are not atomic: another process can write to the
+  // manifest in between (e.g. approving a different executable while our
+  // setup() call is still retrieving its secret). commitTrust must reload the
+  // manifest at commit time and merge the staged entry in, not persist the
+  // stale snapshot captured during verifyTrustPending — otherwise the
+  // concurrent write would be silently clobbered.
+  it('commitTrust merges with a concurrent manifest write instead of clobbering it', async () => {
+    await withTempDir(async (dir) => {
+      const execPath = await createTempBinary(dir, 'my-tool', 'binary-content-v1')
+      const configDir = path.join(dir, 'config')
+
+      const pending = await verifyTrustPending(execPath, {
+        configDir,
+        namespace: 'my-tool',
+        skipSigstore: true,
+      })
+
+      // Simulate a concurrent process approving a different executable
+      // between our verify phase and our commit.
+      const concurrentManifest = await loadManifest(configDir)
+      const withConcurrentEntry = addTrustedHash(
+        concurrentManifest,
+        'other-tool',
+        'concurrent-hash',
+      )
+      await saveManifest(configDir, withConcurrentEntry)
+
+      await commitTrust(pending)
+
+      // Both the concurrent entry and our staged entry must survive.
+      const manifest = await loadManifest(configDir)
+      expect(manifest.get('other-tool')?.hashes).toEqual(['concurrent-hash'])
+      expect(manifest.has('my-tool')).toBe(true)
     })
   })
 
