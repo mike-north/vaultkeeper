@@ -83,14 +83,17 @@ export async function verifyCommand(args: string[]): Promise<number> {
     return 2
   }
 
-  const payload = await readStdinBytes()
-  if (payload.length === 0) {
-    process.stderr.write('Error: no payload provided on stdin\n')
-    // Exit code 2: usage error (empty stdin).
-    return 2
-  }
-
   try {
+    // Inside the try so any readStdinBytes() failure (it guards against stdin
+    // being in string mode) flows through this command's error handling (exit 1)
+    // rather than the top-level fatal handler.
+    const payload = await readStdinBytes()
+    if (payload.length === 0) {
+      process.stderr.write('Error: no payload provided on stdin\n')
+      // Exit code 2: usage error (empty stdin).
+      return 2
+    }
+
     const publicKey = await readFileForVerify(publicKeyPath, 'public key')
     const jws = await readFileForVerify(signaturePath, 'signature')
 

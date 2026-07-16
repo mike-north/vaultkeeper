@@ -60,17 +60,19 @@ export async function signCommand(args: string[], configDir: string): Promise<nu
     return 2
   }
   const name = values.name
-
-  const payload = await readStdinBytes()
-  if (payload.length === 0) {
-    process.stderr.write('Error: no payload provided on stdin\n')
-    // Exit code 2: usage error (empty stdin).
-    return 2
-  }
-
   const skipDoctor = shouldSkipDoctor(values['skip-doctor'])
 
   try {
+    // Inside the try so any readStdinBytes() failure (it guards against stdin
+    // being in string mode) flows through this command's error handling rather
+    // than the top-level fatal handler.
+    const payload = await readStdinBytes()
+    if (payload.length === 0) {
+      process.stderr.write('Error: no payload provided on stdin\n')
+      // Exit code 2: usage error (empty stdin).
+      return 2
+    }
+
     if (!(await configFileExists(configDir))) {
       process.stderr.write(noConfigMessage(defaultBackendType()))
     }
