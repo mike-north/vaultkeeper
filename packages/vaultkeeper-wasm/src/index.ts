@@ -260,6 +260,25 @@ export class VaultKeeper {
    * no effect on what `setup()` encapsulates. This is an intentional divergence
    * between the two SDKs' `setup()` contracts, not a bug.
    *
+   * **Seeing a compile error here?** A bare `vault.setup('NAME', 'value')` or
+   * `vault.setup('NAME', 'value', {})` fails to typecheck (e.g. TS2554
+   * "Expected 3 arguments, but got 2" or TS2345 "Argument … is not assignable")
+   * precisely because the mandatory trust choice is missing. The fix is to add
+   * **exactly one** of `executablePath: '<path>'` (verify the caller —
+   * production) or `skipTrust: true` (skip verification — development only).
+   * Supplying both fails to typecheck for the same reason.
+   *
+   * @example
+   * ```ts
+   * // Production: bind the token to the calling executable's identity.
+   * const token = await vault.setup('MY_API_KEY', 'secret-value', {
+   *   executablePath: '/usr/local/bin/my-tool',
+   * })
+   *
+   * // Local development: skip executable-trust verification.
+   * const devToken = await vault.setup('MY_API_KEY', 'secret-value', { skipTrust: true })
+   * ```
+   *
    * @throws {@link ExecutableTrustRequiredError} If neither `executablePath` nor
    *   `skipTrust: true` is provided, if both are, or if `executablePath` is the
    *   retired legacy `'dev'` opt-out sentinel (use `skipTrust: true`).

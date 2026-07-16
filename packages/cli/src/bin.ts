@@ -35,6 +35,7 @@ import {
   CONFIG_DIR_HELP_OPTION,
   CONFIG_DIR_HELP_ENV,
 } from './config-dir.js'
+import { suggestCommand } from './suggest.js'
 
 // Read the package version at startup so --version doesn't need an async import.
 // We read and parse the package.json synchronously to avoid a dynamic import()
@@ -232,11 +233,24 @@ async function main(): Promise<number> {
       const { revokeKeyCommand } = await import('./commands/revoke-key.js')
       return revokeKeyCommand(commandArgs, configDir)
     }
-    default:
+    default: {
       process.stderr.write(`Unknown command: ${subcommand}\n`)
+      // Offer the closest known command (npm/git/cargo-style) when the typo is
+      // close enough to be a confident guess (e.g. `doctro` → `doctor`).
+      const suggestion = suggestCommand(subcommand)
+      if (suggestion !== undefined) {
+        process.stderr.write(`Did you mean '${suggestion}'?\n`)
+      }
+      // A one-line discovery pointer so tarball-only users always have a next
+      // step even when no suggestion is close enough.
+      process.stderr.write(
+        "Run 'vaultkeeper --help' for the full command list, or see " +
+          'https://github.com/mike-north/vaultkeeper#readme\n',
+      )
       printHelp()
       // Exit code 2: usage error (unknown command)
       return 2
+    }
   }
 }
 

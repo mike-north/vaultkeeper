@@ -587,6 +587,14 @@ export class VaultKeeper {
    * argument is required); {@link ExecutableTrustRequiredError} is the runtime
    * backstop for untyped callers.
    *
+   * **Seeing a compile error here?** A bare `vault.setup('NAME')` or
+   * `vault.setup('NAME', {})` fails to typecheck (e.g. TS2554 "Expected 2
+   * arguments, but got 1" or TS2345 "Argument … is not assignable") precisely
+   * because the mandatory trust choice is missing. The fix is to add **exactly
+   * one** of `executablePath: '<path>'` (verify the caller — production) or
+   * `skipTrust: true` (skip verification — development only). Supplying both
+   * fails to typecheck for the same reason.
+   *
    * @example
    * ```ts
    * // Production: bind the token to a STABLE executable so a swapped binary is

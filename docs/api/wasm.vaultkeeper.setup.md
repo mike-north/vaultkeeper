@@ -94,3 +94,18 @@ TypeError If `secretName` or `secretValue` is not a string (guards the WASM boun
 
 \*\*Backend divergence.\*\* Unlike the TypeScript `vaultkeeper` library's `setup(secretName, options?)`<!-- -->, this method does not read from the backend — it mints the token directly from `secretValue`<!-- -->. It never calls [VaultKeeper.store()](./wasm.vaultkeeper.store.md) / [VaultKeeper.retrieve()](./wasm.vaultkeeper.retrieve.md) or looks at anything already persisted under `secretName`<!-- -->, so a prior `store()` call has no effect on what `setup()` encapsulates. This is an intentional divergence between the two SDKs' `setup()` contracts, not a bug.
 
+\*\*Seeing a compile error here?\*\* A bare `vault.setup('NAME', 'value')` or `vault.setup('NAME', 'value', {})` fails to typecheck (e.g. TS2554 "Expected 3 arguments, but got 2" or TS2345 "Argument … is not assignable") precisely because the mandatory trust choice is missing. The fix is to add \*\*exactly one\*\* of `executablePath: '<path>'` (verify the caller — production) or `skipTrust: true` (skip verification — development only). Supplying both fails to typecheck for the same reason.
+
+## Example
+
+
+```ts
+// Production: bind the token to the calling executable's identity.
+const token = await vault.setup('MY_API_KEY', 'secret-value', {
+  executablePath: '/usr/local/bin/my-tool',
+})
+
+// Local development: skip executable-trust verification.
+const devToken = await vault.setup('MY_API_KEY', 'secret-value', { skipTrust: true })
+```
+

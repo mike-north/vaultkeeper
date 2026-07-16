@@ -67,7 +67,24 @@ export async function verifyCommand(args: string[]): Promise<number> {
       strict: true,
     }))
   } catch (err) {
-    if (err instanceof Error) {
+    // node's parseArgs rejects a space-separated value that begins with `-`
+    // (e.g. an inline PEM `--public-key -----BEGIN…`) as "argument is
+    // ambiguous". These flags take a file PATH, not inline key material, so
+    // point the caller at the file-path contract and the `=` escape for a value
+    // that legitimately starts with a dash.
+    const isAmbiguous =
+      err instanceof Error &&
+      'code' in err &&
+      err.code === 'ERR_PARSE_ARGS_INVALID_OPTION_VALUE'
+    if (isAmbiguous) {
+      process.stderr.write(
+        'Error: --public-key and --signature take a file PATH, not an inline value. ' +
+          'A value beginning with "-" (including an inline PEM, which starts with ' +
+          '"-----BEGIN") is read as another option. Write the key/signature to a file ' +
+          'and pass its path; if the path itself begins with "-", use the equals form ' +
+          '(--public-key=<path> / --signature=<path>).\n',
+      )
+    } else if (err instanceof Error) {
       process.stderr.write(`Error: ${err.message}\n`)
     }
     process.stderr.write(
@@ -80,7 +97,36 @@ export async function verifyCommand(args: string[]): Promise<number> {
   const signaturePath = values.signature
   if (publicKeyPath === undefined || signaturePath === undefined) {
     process.stderr.write('Error: --public-key and --signature are both required\n')
+    process.stderr.write(
+      'Usage: vaultkeeper verify --public-key <pem-path> --signature <sig-path> < payload\n',
+    )
     return 2
+  }
+
+  // Catch the equals-form inline PEM (`--public-key=-----BEGIN…-----END…`),
+  // which parses cleanly but is inline key material, not a path — reading it as
+  // a file would fail with a confusing ENOENT. These flags are file-path-only.
+  //
+  // Require BOTH the `-----BEGIN` and `-----END` markers rather than the prefix
+  // alone: a real PEM has both (and is multi-line), whereas a legitimate file
+  // path is a single token that could conceivably begin with `-----BEGIN` but
+  // will never also contain `-----END`. This avoids misclassifying an unusual
+  // (dash-leading) path as inline key material.
+  const inlineFlags: { flag: string; value: string }[] = [
+    { flag: '--public-key', value: publicKeyPath },
+    { flag: '--signature', value: signaturePath },
+  ]
+  for (const { flag, value } of inlineFlags) {
+    if (value.includes('-----BEGIN') && value.includes('-----END')) {
+      process.stderr.write(
+        `Error: ${flag} takes a file PATH, not inline key material. ` +
+          'Write the PEM/signature to a file and pass its path instead.\n',
+      )
+      process.stderr.write(
+        'Usage: vaultkeeper verify --public-key <pem-path> --signature <sig-path> < payload\n',
+      )
+      return 2
+    }
   }
 
   try {

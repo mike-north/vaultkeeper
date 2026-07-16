@@ -84,6 +84,8 @@ Compact JWE string
 
 `setup()` requires an explicit executable-trust decision — it has no default and never silently skips verification. Pass `executablePath` (the calling executable's real path) to run trust-on-first-use verification, or `skipTrust: true` to deliberately skip it in development. The [SetupOptions](./vaultkeeper.setupoptions.md) type enforces this choice at compile time (exactly one, and the options argument is required); [ExecutableTrustRequiredError](./vaultkeeper.executabletrustrequirederror.md) is the runtime backstop for untyped callers.
 
+\*\*Seeing a compile error here?\*\* A bare `vault.setup('NAME')` or `vault.setup('NAME', {})` fails to typecheck (e.g. TS2554 "Expected 2 arguments, but got 1" or TS2345 "Argument … is not assignable") precisely because the mandatory trust choice is missing. The fix is to add \*\*exactly one\*\* of `executablePath: '<path>'` (verify the caller — production) or `skipTrust: true` (skip verification — development only). Supplying both fails to typecheck for the same reason.
+
 ## Example
 
 

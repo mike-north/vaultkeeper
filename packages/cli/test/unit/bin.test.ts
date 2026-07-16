@@ -71,6 +71,37 @@ describe('bin.ts entry point', () => {
     expect(result.stdout).toContain('Usage: vaultkeeper [--config-dir <path>] <command>')
   })
 
+  // Issue #216, item 5: unknown subcommands get an npm/git/cargo-style
+  // "did you mean …?" suggestion plus a one-line discovery pointer.
+  describe('unknown-command suggestion (did you mean …?)', () => {
+    it("should suggest 'doctor' for the typo 'doctro'", async () => {
+      const result = await runCli(['doctro'])
+      expect(result.exitCode).toBe(2)
+      expect(result.stderr).toContain('Unknown command: doctro')
+      expect(result.stderr).toContain("Did you mean 'doctor'?")
+    })
+
+    it("should suggest 'exec' for the typo 'exce'", async () => {
+      const result = await runCli(['exce'])
+      expect(result.exitCode).toBe(2)
+      expect(result.stderr).toContain("Did you mean 'exec'?")
+    })
+
+    it('should not offer a misleading suggestion for a wildly unrelated command', async () => {
+      const result = await runCli(['frobnicate'])
+      expect(result.exitCode).toBe(2)
+      expect(result.stderr).toContain('Unknown command: frobnicate')
+      expect(result.stderr).not.toContain('Did you mean')
+    })
+
+    it('should always print a discovery pointer to --help and the docs', async () => {
+      const result = await runCli(['frobnicate'])
+      expect(result.exitCode).toBe(2)
+      expect(result.stderr).toContain("Run 'vaultkeeper --help'")
+      expect(result.stderr).toContain('github.com/mike-north/vaultkeeper')
+    })
+  })
+
   it('should list all known commands in the help output', async () => {
     const result = await runCli(['--help'])
     const knownCommands = [
