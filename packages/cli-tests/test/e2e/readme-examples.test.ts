@@ -44,11 +44,18 @@ function fencesFor(readme: string): Fence[] {
 }
 
 const EXEC_FENCES = EXEC_READMES.flatMap(fencesFor).filter(isShellFence)
-const TYPECHECK_FENCES = TYPECHECK_READMES.flatMap(fencesFor).filter(isCodeFence)
 /** `run`-marked TS/JS fences across every README — executed against the built package. */
 const RUN_FENCES = [...EXEC_READMES, ...TYPECHECK_READMES]
   .flatMap(fencesFor)
   .filter((f) => isCodeFence(f) && f.run)
+// Type-check every TS/JS fence in the library READMEs, plus every run fence
+// wherever it lives — running a fence implies it must also compile clean, so a
+// run-marked fence in a non-typecheck README is still type-checked (keeps the
+// "run fences are still type-checked" invariant true, not just for library READMEs).
+const TYPECHECK_FENCES = [
+  ...TYPECHECK_READMES.flatMap(fencesFor).filter(isCodeFence),
+  ...RUN_FENCES.filter((f) => !TYPECHECK_READMES.includes(f.readme)),
+]
 
 /** A fence is a sign/verify walkthrough if it drives both `sign` and `verify`. */
 function isSignVerifyFence(fence: Fence): boolean {
@@ -154,6 +161,18 @@ describe('coverage guards (non-vacuous)', () => {
     }
   })
 
+  it('type-checks every run fence (run implies compile-clean)', () => {
+    // Invariant: a fence that is executed is also type-checked, regardless of
+    // which README it lives in — so the harness docs' claim holds for all run
+    // fences, not just those in the library READMEs.
+    for (const runFence of RUN_FENCES) {
+      expect(
+        TYPECHECK_FENCES.some((f) => f.readme === runFence.readme && f.startLine === runFence.startLine),
+        `run fence ${runFence.readme}:${String(runFence.startLine)} must also be in the type-checked set`,
+      ).toBe(true)
+    }
+  })
+
   it('type-checks a quick-start fence in each library README', () => {
     for (const readme of TYPECHECK_READMES) {
       expect(
@@ -194,6 +213,14 @@ describe('harness: fence extraction and classification', () => {
     expect(fence?.run).toBe(true)
     expect(fence?.skipped).toBe(false)
     expect(fence?.runReason).toBe('self-contained')
+  })
+
+  it('lets a skip marker take precedence over a run marker on the same line', () => {
+    // A line carrying both markers must opt the fence out entirely — never run it.
+    const md = ['<!-- readme-example: skip run - both present -->', '```ts', 'await main()', '```'].join('\n')
+    const [fence] = extractFences(md, 'X.md')
+    expect(fence?.skipped).toBe(true)
+    expect(fence?.run).toBe(false)
   })
 
   it('auto-skips an install-only fence but not a real command sequence', () => {

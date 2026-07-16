@@ -118,7 +118,9 @@ export function extractFences(markdown: string, readme: string): Fence[] {
     while (k >= 0 && (lines[k] ?? '').trim() === '') k -= 1
     const markerLine = k >= 0 ? (lines[k] ?? '') : ''
     const skipMarker = SKIP_MARKER.exec(markerLine)
-    const runMarker = RUN_MARKER.exec(markerLine)
+    // Skip takes precedence over run: an explicitly opted-out fence must never
+    // execute, even if the same marker line also carries a `run` marker.
+    const runMarker = skipMarker !== null ? null : RUN_MARKER.exec(markerLine)
     const reasonOf = (m: RegExpExecArray): string | undefined =>
       m[1] === undefined || m[1] === '' ? undefined : m[1]
     out.push({
