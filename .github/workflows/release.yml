@@ -142,15 +142,15 @@ jobs:
 
       # Only vaultkeeper-core can be pre-verified here. Packaging
       # vaultkeeper-cli requires vaultkeeper-core to already exist on the
-      # crates.io index (its manifest carries `vaultkeeper-core = { path,
-      # version = "<X>" }`, and `cargo package` — even with --no-verify —
+      # crates.io index (its manifest carries `vaultkeeper-core = { path =
+      # "...", version = "<X>" }`, and `cargo package` — even with --no-verify —
       # resolves that dependency against the registry). At release time the
       # just-bumped core version has not been published yet, so packaging
       # cli here always failed with "no matching package named
       # vaultkeeper-core found". cli packaging is instead exercised by its
       # own publish step below, which retries to absorb index propagation
       # after core is published.
-      - name: Verify crate packaging
+      - name: Verify vaultkeeper-core packaging
         run: |
           cargo package -p vaultkeeper-core --no-verify
 
