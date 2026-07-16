@@ -103,15 +103,21 @@ export async function verifyCommand(args: string[]): Promise<number> {
     return 2
   }
 
-  // Catch the equals-form inline PEM (`--public-key=-----BEGIN…`), which parses
-  // cleanly but is inline key material, not a path — reading it as a file would
-  // fail with a confusing ENOENT. These flags are file-path-only.
+  // Catch the equals-form inline PEM (`--public-key=-----BEGIN…-----END…`),
+  // which parses cleanly but is inline key material, not a path — reading it as
+  // a file would fail with a confusing ENOENT. These flags are file-path-only.
+  //
+  // Require BOTH the `-----BEGIN` and `-----END` markers rather than the prefix
+  // alone: a real PEM has both (and is multi-line), whereas a legitimate file
+  // path is a single token that could conceivably begin with `-----BEGIN` but
+  // will never also contain `-----END`. This avoids misclassifying an unusual
+  // (dash-leading) path as inline key material.
   const inlineFlags: { flag: string; value: string }[] = [
     { flag: '--public-key', value: publicKeyPath },
     { flag: '--signature', value: signaturePath },
   ]
   for (const { flag, value } of inlineFlags) {
-    if (value.startsWith('-----BEGIN')) {
+    if (value.includes('-----BEGIN') && value.includes('-----END')) {
       process.stderr.write(
         `Error: ${flag} takes a file PATH, not inline key material. ` +
           'Write the PEM/signature to a file and pass its path instead.\n',

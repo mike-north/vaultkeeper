@@ -31,6 +31,14 @@ vi.mock('vaultkeeper', async (importOriginal) => {
   })
 })
 
+// Provide a non-empty stdin payload so that a value which is NOT classified as
+// inline PEM proceeds past the guard into the real file-read path (rather than
+// bailing on empty stdin) — this is what lets the "path starting with
+// -----BEGIN but no -----END" case reach the file-read failure.
+vi.mock('../../../src/stdin.js', () => ({
+  readStdinBytes: vi.fn(() => Promise.resolve(Buffer.from('challenge-payload'))),
+}))
+
 const { verifyCommand } = await import('../../../src/commands/verify.js')
 
 describe('verify --public-key/--signature reject inline PEM with a clear usage error', () => {
@@ -76,6 +84,22 @@ describe('verify --public-key/--signature reject inline PEM with a clear usage e
     const code = await verifyCommand(['--public-key', '/tmp/pub.pem', `--signature=${INLINE_PEM}`])
     expect(code).toBe(2)
     expect(stderrOutput).toContain('--signature takes a file PATH')
+  })
+
+  // The inline-PEM guard keys on BOTH the -----BEGIN and -----END markers (real
+  // PEM content), not the -----BEGIN prefix alone. A single-token file path that
+  // merely starts with "-----BEGIN" (no -----END) must NOT be misclassified as
+  // inline key material — it is a legitimate (if unusual, dash-leading) path and
+  // must flow through to the real file-read path instead.
+  it('does not misclassify a path starting with -----BEGIN (no -----END) as inline PEM', async () => {
+    const dashyPath = '-----BEGIN-not-really-a-pem.pub'
+    const code = await verifyCommand([`--public-key=${dashyPath}`, '--signature=/tmp/sig'])
+    // Treated as a path: it reaches the file read and fails there (exit 1),
+    // rather than being rejected by the inline-PEM guard (exit 2).
+    expect(code).toBe(1)
+    expect(stderrOutput).not.toContain('takes a file PATH, not inline key material')
+    expect(stderrOutput).toContain('Failed to read public key')
+    expect(stderrOutput).toContain(dashyPath)
   })
 
   it('still points at the file-path usage line for an unknown flag', async () => {
