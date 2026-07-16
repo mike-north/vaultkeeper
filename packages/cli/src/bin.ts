@@ -14,9 +14,10 @@
  *   1 — a valid invocation that failed at runtime (e.g. SecretNotFoundError)
  *   2 — a bad invocation: usage / argument-validation error. Covers an unknown
  *       command, an unknown top-level flag, a missing/invalid required
- *       argument, empty stdin for `store`/`sign`/`verify`, and a bare invocation
- *       with no subcommand (which prints usage to stderr rather than exiting 0,
- *       so `vaultkeeper && next_step` does not proceed as if it succeeded).
+ *       argument, and empty stdin for `store`/`sign`/`verify`. A bare
+ *       invocation with no arguments is NOT a usage error — it renders the
+ *       same full help as `--help` and exits 0 (issue #202); only a token
+ *       that looks like a command/flag but isn't recognized exits 2.
  *   3 — `verify` only: signature did not verify (deliberate, documented
  *       exception to the 0/1/2 taxonomy so scripts can tell a bad signature
  *       from a broken tool — see commands/verify.ts)
@@ -105,7 +106,9 @@ function printHelp(stream: NodeJS.WritableStream = process.stdout): void {
       '  rotate-key   Rotate the encryption key\n' +
       '  revoke-key   Emergency key revocation\n\n' +
       'Global options:\n' +
+      '  --version, -V, -v    Print the version number and exit\n' +
       CONFIG_DIR_HELP_OPTION +
+      '  -h, --help           Show this help message\n' +
       '\n' +
       'Environment variables:\n' +
       CONFIG_DIR_HELP_ENV,
@@ -119,10 +122,12 @@ async function main(): Promise<number> {
     return 2
   }
 
-  // Handle --version / -V before subcommand dispatch.
+  // Handle --version / -V / -v before subcommand dispatch.
   // parseArgs treats these as option values (not positionals) with strict:false,
-  // so we inspect the first filtered token directly to detect them.
-  if (firstArg === '--version' || firstArg === '-V') {
+  // so we inspect the first filtered token directly to detect them. Both the
+  // conventional `-V` and the commonly-guessed `-v` are accepted (issue #202):
+  // the CLI has no verbose flag, so there's no `-v` collision to worry about.
+  if (firstArg === '--version' || firstArg === '-V' || firstArg === '-v') {
     process.stdout.write(`${packageVersion}\n`)
     return 0
   }
@@ -134,16 +139,17 @@ async function main(): Promise<number> {
     return 0
   }
 
-  // A bare invocation (no arguments at all) is a usage error, not success:
-  // print usage to stderr and exit 2 so that `vaultkeeper && next_step` does
-  // not proceed as if a command had succeeded (issue #151). This matches the
-  // exit CODE of the unknown-command case (both 2); the output STREAM
-  // deliberately differs — a bare invocation has no error line, so its usage
-  // goes to stderr, whereas unknown-command writes its "Unknown command"
-  // error to stderr and the usage that follows to stdout.
+  // A bare invocation (no arguments at all) renders the full help and exits 0
+  // (issue #202). It prints the identical text `--help` does, so it is a help
+  // request, not a usage error — exiting 2 here (as #151 originally did) made a
+  // plain `vaultkeeper` read as a failure to scripts checking the exit code,
+  // even though nothing was misused. A genuine misuse still exits 2: an
+  // unrecognized flag (below), an unknown command, or a missing/invalid
+  // argument — none of which reach this branch, which fires only for truly
+  // empty argv.
   if (filteredArgv.length === 0) {
-    printHelp(process.stderr)
-    return 2
+    printHelp()
+    return 0
   }
 
   // A first token that looks like a flag (starts with '-') but isn't a
@@ -160,9 +166,10 @@ async function main(): Promise<number> {
   }
 
   // Defensive fallback: parseArgs with allowPositionals should always set
-  // subcommand to firstArg when firstArg doesn't start with '-', but if it
-  // somehow didn't, treat it the same as a bare invocation — a usage error
-  // (issue #151), not a successful help print.
+  // subcommand to firstArg when firstArg doesn't start with '-', and the
+  // truly-empty argv case is already handled above. If we somehow reach here
+  // with no subcommand despite a non-empty argv, treat it conservatively as a
+  // usage error (exit 2) rather than silently succeeding.
   if (subcommand === undefined) {
     printHelp(process.stderr)
     return 2

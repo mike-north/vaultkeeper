@@ -10,15 +10,17 @@
  * History:
  *   - Issue #69 established the taxonomy and fixed bad-flag stragglers.
  *   - Issue #118 normalized empty-stdin `store` from 1 → 2.
- *   - Issue #151 normalized a bare invocation (no subcommand) from 0 → 2:
- *     printing help with exit 0 let `vaultkeeper && next_step` proceed as if a
- *     command had succeeded. A bare invocation is a bad invocation, like an
- *     unknown command, and now exits 2 with usage on stderr. An explicit
- *     `--help` / `-h` is still a successful usage request (exit 0, stdout).
+ *   - Issue #151 normalized a bare invocation (no subcommand) from 0 → 2, on
+ *     the theory that `vaultkeeper && next_step` should not proceed.
+ *   - Issue #202 reversed that: a bare invocation renders the identical full
+ *     help that `--help` does, so it is a help request, not a usage error, and
+ *     exits 0 (help on stdout). Genuine misuse — unknown command/flag, missing
+ *     required arg, empty-stdin `store` — still exits 2.
  *
  * @see https://github.com/mike-north/vaultkeeper/issues/69
  * @see https://github.com/mike-north/vaultkeeper/issues/118
  * @see https://github.com/mike-north/vaultkeeper/issues/151
+ * @see https://github.com/mike-north/vaultkeeper/issues/202
  */
 import { describe, it, expect, afterEach } from 'vitest'
 import { createCliTestEnv } from '@vaultkeeper/cli-test-helpers'
@@ -76,15 +78,6 @@ describe('exit-code matrix', () => {
     expect(result.stderr).toContain('Usage:')
   })
 
-  // Regression: issue #151 — a bare invocation previously exited 0, which let
-  // `vaultkeeper && next_step` proceed as if a command had succeeded.
-  it('a bare invocation (no arguments) exits 2 with usage on stderr', async () => {
-    env = await createCliTestEnv()
-    const result = await env.run([])
-    expect(result.exitCode).toBe(2)
-    expect(result.stderr).toContain('Usage: vaultkeeper [--config-dir <path>] <command>')
-  })
-
   // --- 1: valid invocation that failed at runtime ---
 
   it('deleting a secret that does not exist exits 1 (runtime error)', async () => {
@@ -95,6 +88,16 @@ describe('exit-code matrix', () => {
   })
 
   // --- 0: success ---
+
+  // Issue #202: a bare invocation is a help render (identical text to
+  // `--help`), so it exits 0 with help on stdout — not a usage error.
+  it('a bare invocation (no arguments) exits 0 with full help on stdout', async () => {
+    env = await createCliTestEnv()
+    const result = await env.run([])
+    expect(result.exitCode).toBe(0)
+    expect(result.stdout).toContain('Usage: vaultkeeper [--config-dir <path>] <command>')
+    expect(result.stderr).toBe('')
+  })
 
   it('a successful store exits 0', async () => {
     env = await createCliTestEnv({ env: { VAULTKEEPER_SKIP_DOCTOR: '1' } })

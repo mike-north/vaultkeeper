@@ -180,6 +180,28 @@ describe('doctor command', () => {
     expect(result.stdout).not.toContain('System ready.')
   })
 
+  // Issue #202: for a schema-invalid (but JSON-valid) config, doctor's
+  // Next-steps must name the offending field — the validation analogue of the
+  // line/column detail it gives a parse error — so the user knows what was
+  // wrong, not just that "the config is invalid". `backends: []` fails the
+  // "at least one backend" rule with field `backends`.
+  it('should name the offending field in the remediation for a schema-invalid config (issue #202)', async () => {
+    env = await createCliTestEnv()
+    await fs.writeFile(
+      path.join(env.configDir, 'config.json'),
+      JSON.stringify({ version: 1, backends: [] }),
+      'utf8',
+    )
+    const result = await env.run(['doctor'])
+    expect(result.exitCode).not.toBe(0)
+    // The field-level detail is surfaced, backtick-wrapped, in the invalid
+    // message — matching how a parse error surfaces "(at line N, column N)".
+    expect(result.stdout).toContain('is invalid (`backends`)')
+    expect(result.stdout).toContain('vaultkeeper config init --force')
+    expect(result.stdout).not.toContain('install @vaultkeeper/cli')
+    expect(result.stdout).not.toContain('System ready.')
+  })
+
   // No-config story (issue #68): doctor falls back to the default backend and
   // says so, uniformly with store/delete/exec/config show, rather than
   // silently defaulting or erroring. Issue #98: that default is the safe file

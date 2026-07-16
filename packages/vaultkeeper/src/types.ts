@@ -59,6 +59,16 @@ export interface PreflightCheckError {
    */
   location?: string | undefined
   /**
+   * The dotted/bracketed path to the offending config field (for example
+   * `backends` or `backends[0].path`), present only for a
+   * `'config-validation'` failure. This is the validation analogue of
+   * `location`: it lets a consumer point the user at exactly which field
+   * failed schema validation, the way `location` points at a parse position,
+   * without reusing the human-readable `reason` prose (which carries the
+   * library's own "install @vaultkeeper/cli" remediation).
+   */
+  field?: string | undefined
+  /**
    * The Node.js errno code (for example `EACCES`, `EPERM`, `EISDIR`) from the
    * underlying filesystem failure, present only for a `'config-read'` failure
    * and only when the cause exposed a string errno code. Lets a consumer

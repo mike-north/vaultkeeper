@@ -741,7 +741,7 @@ describe('runDoctor with configDir', () => {
     })
   })
 
-  it('attaches structured config-validation error context (no location) on a schema failure', async () => {
+  it('attaches structured config-validation error context (field, no location) on a schema failure', async () => {
     mockCheckOpenssl.mockReturnValue(mockOk('openssl'))
     mockCheckBash.mockReturnValue(mockOk('bash'))
     mockCheckSecretTool.mockReturnValue(mockOk('secret-tool'))
@@ -758,9 +758,13 @@ describe('runDoctor with configDir', () => {
     const result = await runDoctor({ platform: 'linux', configDir: '/fake' })
 
     const configCheck = result.checks.find((c) => c.name === 'config')
+    // Issue #202: the offending `field` is carried in the structured context so
+    // a consumer can render field-level detail (the validation analogue of a
+    // parse failure's `location`) without parsing the `reason` prose.
     expect(configCheck?.error).toEqual({
       kind: 'config-validation',
       configPath: '/fake/config.json',
+      field: 'version',
     })
     // Validation failures have no parse location.
     expect(configCheck?.error?.location).toBeUndefined()
