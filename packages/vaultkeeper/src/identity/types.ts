@@ -43,6 +43,24 @@ export interface TrustVerificationResult {
 }
 
 /**
+ * Result of the verify-only phase of trust verification (see
+ * {@link verifyTrustPending}). No manifest write has happened yet — pass this
+ * to {@link commitTrust} once the caller's operation has actually succeeded to
+ * persist the pending update, or discard it to leave the manifest untouched.
+ * @internal
+ */
+export interface PendingTrust extends TrustVerificationResult {
+  /**
+   * The manifest state to persist once the caller's operation succeeds, or
+   * `undefined` when this verification produced no manifest change — a
+   * registry (Tier 2) match, a TOFU conflict, or dev-mode bypass never write.
+   */
+  readonly manifestToSave: TrustManifest | undefined
+  /** Directory {@link commitTrust} writes `manifestToSave` to, if present. */
+  readonly configDir: string
+}
+
+/**
  * Options controlling how trust verification is performed.
  * @internal
  */

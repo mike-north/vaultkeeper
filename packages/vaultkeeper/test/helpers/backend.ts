@@ -3,6 +3,7 @@
  */
 
 import type { SecretBackend } from '../../src/backend/types.js'
+import { SecretNotFoundError } from '../../src/errors.js'
 
 /**
  * Create a fully in-memory `SecretBackend` suitable for unit and e2e tests.
@@ -21,7 +22,10 @@ export function createInMemoryBackend(): SecretBackend {
     retrieve: (id: string) => {
       const val = store.get(id)
       if (val === undefined) {
-        return Promise.reject(new Error(`Secret not found: ${id}`))
+        // Match the SecretBackend.retrieve contract (@throws SecretNotFoundError)
+        // that every real backend implementation honors, so tests exercising
+        // this helper observe the same typed error callers rely on.
+        return Promise.reject(new SecretNotFoundError(`Secret not found: ${id}`))
       }
       return Promise.resolve(val)
     },

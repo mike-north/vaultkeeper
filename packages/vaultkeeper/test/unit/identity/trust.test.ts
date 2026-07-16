@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import * as fs from 'node:fs/promises'
 import * as os from 'node:os'
 import * as path from 'node:path'
-import { verifyTrust } from '../../../src/identity/trust.js'
+import { verifyTrust, verifyTrustPending, commitTrust } from '../../../src/identity/trust.js'
 import { loadManifest } from '../../../src/identity/manifest.js'
 
 async function withTempDir(fn: (dir: string) => Promise<void>): Promise<void> {
@@ -172,6 +172,106 @@ describe('verifyTrust — namespace handling', () => {
       const manifest = await loadManifest(configDir)
       expect(manifest.has('custom-namespace')).toBe(true)
       expect(manifest.has(execPath)).toBe(false)
+    })
+  })
+})
+
+describe('verifyTrustPending / commitTrust — verify/commit split (#148)', () => {
+  it('verifyTrustPending stages a first-encounter hash but does not write it', async () => {
+    await withTempDir(async (dir) => {
+      const execPath = await createTempBinary(dir, 'my-tool', 'binary-content-v1')
+      const configDir = path.join(dir, 'config')
+
+      const pending = await verifyTrustPending(execPath, {
+        configDir,
+        namespace: 'my-tool',
+        skipSigstore: true,
+      })
+
+      expect(pending.identity.trustTier).toBe(3)
+      expect(pending.tofuConflict).toBe(false)
+      expect(pending.manifestToSave).toBeDefined()
+      expect(pending.manifestToSave?.has('my-tool')).toBe(true)
+
+      // Nothing was written by the verify phase alone.
+      const manifest = await loadManifest(configDir)
+      expect(manifest.size).toBe(0)
+    })
+  })
+
+  it('commitTrust persists a staged first-encounter hash', async () => {
+    await withTempDir(async (dir) => {
+      const execPath = await createTempBinary(dir, 'my-tool', 'binary-content-v1')
+      const configDir = path.join(dir, 'config')
+
+      const pending = await verifyTrustPending(execPath, {
+        configDir,
+        namespace: 'my-tool',
+        skipSigstore: true,
+      })
+      await commitTrust(pending)
+
+      const manifest = await loadManifest(configDir)
+      expect(manifest.has('my-tool')).toBe(true)
+    })
+  })
+
+  it('commitTrust is a no-op when manifestToSave is undefined (e.g. a TOFU conflict)', async () => {
+    await withTempDir(async (dir) => {
+      const execPath = await createTempBinary(dir, 'tampered', 'original')
+      const configDir = path.join(dir, 'config')
+
+      // Record the original hash so the next call is a conflict, not a first
+      // encounter.
+      await verifyTrust(execPath, { configDir, namespace: 'tampered', skipSigstore: true })
+      await fs.writeFile(execPath, 'tampered-content', 'utf8')
+
+      const pending = await verifyTrustPending(execPath, {
+        configDir,
+        namespace: 'tampered',
+        skipSigstore: true,
+      })
+      expect(pending.tofuConflict).toBe(true)
+      expect(pending.manifestToSave).toBeUndefined()
+
+      // Committing a conflict result must not throw and must not write.
+      await commitTrust(pending)
+      const manifest = await loadManifest(configDir)
+      expect(manifest.get('tampered')?.hashes).toEqual([pending.approvedHashes.at(-1)])
+    })
+  })
+
+  it('a registry (Tier 2) match stages nothing to commit', async () => {
+    await withTempDir(async (dir) => {
+      const execPath = await createTempBinary(dir, 'trusted-tool', 'trusted-binary-content')
+      const configDir = path.join(dir, 'config')
+
+      await verifyTrust(execPath, { configDir, namespace: 'trusted-tool', skipSigstore: true })
+
+      const pending = await verifyTrustPending(execPath, {
+        configDir,
+        namespace: 'trusted-tool',
+        skipSigstore: true,
+      })
+      expect(pending.identity.trustTier).toBe(2)
+      expect(pending.manifestToSave).toBeUndefined()
+    })
+  })
+
+  it('verifyTrust (eager wrapper) still verifies and commits in one call', async () => {
+    await withTempDir(async (dir) => {
+      const execPath = await createTempBinary(dir, 'my-tool', 'binary-content-v1')
+      const configDir = path.join(dir, 'config')
+
+      const result = await verifyTrust(execPath, {
+        configDir,
+        namespace: 'my-tool',
+        skipSigstore: true,
+      })
+
+      expect(result.identity.trustTier).toBe(3)
+      const manifest = await loadManifest(configDir)
+      expect(manifest.has('my-tool')).toBe(true)
     })
   })
 })
