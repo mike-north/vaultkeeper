@@ -39,7 +39,12 @@ import {
   getIntegrationVersion,
   isModuleNotFoundError,
 } from './one-password-constants.js'
-import { storeSecretItem, deleteSecretItem } from './one-password-item-ops.js'
+import {
+  storeSecretItem,
+  deleteSecretItem,
+  TAG,
+  PASSWORD_FIELD_TITLE,
+} from './one-password-item-ops.js'
 
 interface RetrieveSuccessResponse {
   value: string
@@ -255,7 +260,7 @@ async function main(): Promise<void> {
 
   let targetId: string | undefined
   for (const overview of overviews) {
-    if (overview.title === secretId && overview.tags.includes('vaultkeeper')) {
+    if (overview.title === secretId && overview.tags.includes(TAG)) {
       targetId = overview.id
       break
     }
@@ -276,7 +281,7 @@ async function main(): Promise<void> {
 
   let secretValue: string | undefined
   for (const field of item.fields) {
-    if (field.title === 'password') {
+    if (field.title === PASSWORD_FIELD_TITLE) {
       secretValue = field.value
       break
     }

@@ -1035,6 +1035,21 @@ describe('OnePasswordBackend', () => {
       await expect(backend.store('my-secret', 'v')).rejects.toBeInstanceOf(BackendUnavailableError)
     })
 
+    // Regression for the PR #222 review thread (comment 3592005272): a
+    // malformed worker response carrying BOTH `ok: false` and an error/code
+    // pair passes the response-shape guard via its failure branch. The
+    // success narrowing must check ok's VALUE, not mere key presence — this
+    // response is a failed write and must never be classified as success.
+    it('treats an { ok: false, error, code } worker response as a failure, never success', async () => {
+      const backend = makePerAccessBackend()
+      const proc = makeWorkerWriteProcess(
+        JSON.stringify({ ok: false, error: 'write exploded', code: 'INTERNAL' }),
+      )
+      mockSpawn.mockReturnValue(proc)
+
+      await expect(backend.store('my-secret', 'v')).rejects.toBeInstanceOf(BackendUnavailableError)
+    })
+
     it('should throw a typed BackendUnavailableError when the worker crashes with no stdout', async () => {
       const backend = makePerAccessBackend()
       const proc = makeWorkerWriteProcess({ stdout: '', stderr: '', exitCode: 137 })

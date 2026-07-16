@@ -117,7 +117,11 @@ interface WorkerWriteSuccess {
 type WorkerWriteResponse = WorkerWriteSuccess | WorkerFailure
 
 function isWorkerWriteSuccess(res: WorkerWriteResponse): res is WorkerWriteSuccess {
-  return 'ok' in res
+  // Check the VALUE, not just key presence: a malformed/buggy worker response
+  // like `{ ok: false, error, code }` passes isWorkerWriteResponse via its
+  // failure branch and must never be classified as a successful write.
+  const record: Record<string, unknown> = { ...res }
+  return record.ok === true
 }
 
 function isWorkerWriteResponse(value: unknown): value is WorkerWriteResponse {
