@@ -9,6 +9,7 @@ export type {
   SigningBackend,
   PresenceCapableBackend,
   BackendCapabilities,
+  PresenceOperation,
 } from './types.js'
 export {
   isListableBackend,

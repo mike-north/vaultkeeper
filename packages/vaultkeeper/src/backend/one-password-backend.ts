@@ -156,20 +156,26 @@ export class OnePasswordBackend implements ListableBackend, PresenceCapableBacke
    * cached for all operations, so operations ride one earlier unlock — that mode
    * reports `false`.
    *
-   * **Truth-basis / cached-OS-unlock caveat:** even in `per-access` mode the
-   * fresh action is "a fresh SDK client plus whatever the OS enforces at that
-   * moment" — a "fresh process/SDK client" is **not** the same as a guaranteed
-   * fresh hardware action. A per-access read can still ride a cached OS-level
-   * Touch ID / Windows Hello unlock if the OS does not re-prompt. The strongest
-   * per-use hardware guarantee comes from a touch device (YubiKey/gpg smartcard);
-   * 1Password `per-access` is presence-per-use to the extent the OS re-prompts.
-   * Additionally, the per-access biometric path currently gates `retrieve()`
-   * (used by `exec`/`setup`); `store`/`delete` route through the cached session
-   * client. Callers requiring presence for those operations should prefer a
-   * touch device.
+   * **Operation coverage:** the per-access biometric path gates `retrieve()`
+   * only (the read behind `setup`/`exec`); `store`/`delete` route through the
+   * cached session client and are **not** presence-forced. To keep the
+   * guarantee non-bypassable, this reports `presenceEnforcedOperations: ['read']`
+   * so a `--require-presence-per-use` `store`/`delete` is refused with a
+   * `NotCapableError` (fail closed) rather than silently passing. Callers
+   * requiring presence for writes should use a touch device.
+   *
+   * **Truth-basis / cached-OS-unlock caveat:** even for reads the fresh action
+   * is "a fresh SDK client plus whatever the OS enforces at that moment" — a
+   * "fresh process/SDK client" is **not** the same as a guaranteed fresh
+   * hardware action. A per-access read can still ride a cached OS-level Touch ID
+   * / Windows Hello unlock if the OS does not re-prompt. The strongest per-use
+   * hardware guarantee comes from a touch device (YubiKey / gpg smartcard).
    */
   getCapabilities(): Promise<BackendCapabilities> {
-    return Promise.resolve({ presencePerUse: this.accessMode === 'per-access' })
+    if (this.accessMode === 'per-access') {
+      return Promise.resolve({ presencePerUse: true, presenceEnforcedOperations: ['read'] })
+    }
+    return Promise.resolve({ presencePerUse: false })
   }
 
   // ---- Session client management ----

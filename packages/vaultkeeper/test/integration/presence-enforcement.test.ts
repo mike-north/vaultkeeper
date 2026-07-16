@@ -229,6 +229,63 @@ describe('presence-gated signing (AC7)', () => {
   })
 })
 
+describe('operation-aware, fail-closed enforcement (1Password per-access shape)', () => {
+  // Models 1Password per-access: presence-capable, but only the 'read'
+  // operation forces a fresh action — store/delete route through a cached
+  // session. A flagged store/delete must fail closed (NotCapableError), never
+  // silently pass without a fresh action. There is no third outcome.
+  function readOnlyPresenceBackend(): MockPresenceBackend {
+    return new MockPresenceBackend({ presencePerUse: true, enforcedOperations: ['read'] })
+  }
+
+  it('a flagged store is refused with NotCapableError, before any fresh action', async () => {
+    const backend = readOnlyPresenceBackend()
+    const vault = await vaultWith(backend)
+
+    const err = await vault
+      .store('k', 'v', { requirePresencePerUse: true })
+      .then(() => undefined)
+      .catch((e: unknown) => e)
+
+    expect(err).toBeInstanceOf(NotCapableError)
+    if (err instanceof NotCapableError) {
+      expect(err.backendType).toBe('mock-presence')
+      // The message names the covered operation and the refused one.
+      expect(err.message).toContain('read')
+      expect(err.message).toContain('store')
+    }
+    // Fail closed: no fresh action was demanded and nothing was stored.
+    expect(backend.freshActionDemands).toBe(0)
+  })
+
+  it('a flagged delete is refused with NotCapableError', async () => {
+    const backend = readOnlyPresenceBackend()
+    const vault = await vaultWith(backend)
+    await expect(vault.delete('k', { requirePresencePerUse: true })).rejects.toBeInstanceOf(
+      NotCapableError,
+    )
+    expect(backend.freshActionDemands).toBe(0)
+  })
+
+  it('a flagged read (setup) is covered: it forces a fresh action and succeeds', async () => {
+    const backend = readOnlyPresenceBackend()
+    const vault = await vaultWith(backend)
+
+    // Seed the secret through an unflagged store (still needs a primed action —
+    // the mock is a touch device — but no presence *requirement* is asserted).
+    backend.arm('approve')
+    await vault.store('k', 'v')
+
+    // The read IS covered, so enforcement passes and the retrieve forces its own
+    // fresh action; setup returns a JWE.
+    backend.arm('approve')
+    const jwe = await vault.setup('k', { skipTrust: true, requirePresencePerUse: true })
+    expect(typeof jwe).toBe('string')
+    // One action for the seed store, one for the presence-gated read.
+    expect(backend.freshActionDemands).toBe(2)
+  })
+})
+
 describe('getActiveBackendCapabilities introspection (AC8)', () => {
   it('reports the active backend instance capabilities (capable)', async () => {
     const vault = await vaultWith(new MockPresenceBackend({ presencePerUse: true }))

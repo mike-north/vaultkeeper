@@ -99,6 +99,19 @@ export function isListableBackend(backend: SecretBackend): backend is ListableBa
 }
 
 /**
+ * A keyed backend operation that a presence-per-use requirement can gate.
+ *
+ * @remarks
+ * Used by {@link BackendCapabilities.presenceEnforcedOperations} to express that
+ * an instance forces a fresh per-use action for only *some* operations. `'read'`
+ * covers the secret read behind `setup`/`exec`; `'store'`, `'delete'`, and
+ * `'sign'` are the write, removal, and signing paths.
+ *
+ * @public
+ */
+export type PresenceOperation = 'read' | 'store' | 'delete' | 'sign'
+
+/**
  * The set of security capabilities a configured backend instance advertises.
  *
  * @remarks
@@ -117,10 +130,12 @@ export function isListableBackend(backend: SecretBackend): backend is ListableBa
  */
 export interface BackendCapabilities {
   /**
-   * `true` when **every** operation that uses a key in this configured instance
-   * forces a distinct, fresh physical human action (e.g. a YubiKey touch, a
-   * gpg-smartcard tap, or a 1Password per-use biometric approval) that can
-   * **never** be satisfied from a cached or session-unlocked state.
+   * `true` when this configured instance can force a distinct, fresh physical
+   * human action (e.g. a YubiKey touch, a gpg-smartcard tap, or a 1Password
+   * per-use biometric approval) that can **never** be satisfied from a cached or
+   * session-unlocked state — for the operations named in
+   * {@link BackendCapabilities.presenceEnforcedOperations} (all keyed operations
+   * when that field is omitted).
    *
    * This is the property {@link https://github.com/mike-north/vaultkeeper/issues/122 | `--require-presence-per-use`}
    * gates on: a fresh, deliberate human action taken *for this operation, right
@@ -133,6 +148,25 @@ export interface BackendCapabilities {
    * silently claims presence.
    */
   readonly presencePerUse: boolean
+
+  /**
+   * The keyed operations for which this instance actually forces a fresh per-use
+   * human action. When **omitted**, a `presencePerUse: true` instance is taken
+   * to force presence for **all** keyed operations — the default for a touch
+   * device (e.g. a YubiKey whose challenge-response touch fires on every
+   * `store`/`retrieve`/`delete`).
+   *
+   * A backend that can force presence for only *some* operations must list
+   * exactly those, so a `--require-presence-per-use` request for an **uncovered**
+   * operation fails closed with a `NotCapableError` rather than silently passing
+   * without a fresh action. For example, 1Password `per-access` forces a fresh
+   * biometric on reads (`setup`/`exec`) but routes `store`/`delete` through the
+   * cached session client, so it reports `['read']` — a flagged `store`/`delete`
+   * is then correctly refused.
+   *
+   * Ignored when {@link BackendCapabilities.presencePerUse} is `false`.
+   */
+  readonly presenceEnforcedOperations?: readonly PresenceOperation[]
 }
 
 /**

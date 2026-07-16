@@ -43,6 +43,31 @@ Description
 </th></tr></thead>
 <tbody><tr><td>
 
+[presenceEnforcedOperations?](./vaultkeeper.backendcapabilities.presenceenforcedoperations.md)
+
+
+</td><td>
+
+`readonly`
+
+
+</td><td>
+
+readonly [PresenceOperation](./vaultkeeper.presenceoperation.md)<!-- -->\[\]
+
+
+</td><td>
+
+_(Optional)_ The keyed operations for which this instance actually forces a fresh per-use human action. When \*\*omitted\*\*, a `presencePerUse: true` instance is taken to force presence for \*\*all\*\* keyed operations — the default for a touch device (e.g. a YubiKey whose challenge-response touch fires on every `store`<!-- -->/`retrieve`<!-- -->/`delete`<!-- -->).
+
+A backend that can force presence for only \*some\* operations must list exactly those, so a `--require-presence-per-use` request for an \*\*uncovered\*\* operation fails closed with a `NotCapableError` rather than silently passing without a fresh action. For example, 1Password `per-access` forces a fresh biometric on reads (`setup`<!-- -->/`exec`<!-- -->) but routes `store`<!-- -->/`delete` through the cached session client, so it reports `['read']` — a flagged `store`<!-- -->/`delete` is then correctly refused.
+
+Ignored when [BackendCapabilities.presencePerUse](./vaultkeeper.backendcapabilities.presenceperuse.md) is `false`<!-- -->.
+
+
+</td></tr>
+<tr><td>
+
 [presencePerUse](./vaultkeeper.backendcapabilities.presenceperuse.md)
 
 
@@ -58,7 +83,7 @@ boolean
 
 </td><td>
 
-`true` when \*\*every\*\* operation that uses a key in this configured instance forces a distinct, fresh physical human action (e.g. a YubiKey touch, a gpg-smartcard tap, or a 1Password per-use biometric approval) that can \*\*never\*\* be satisfied from a cached or session-unlocked state.
+`true` when this configured instance can force a distinct, fresh physical human action (e.g. a YubiKey touch, a gpg-smartcard tap, or a 1Password per-use biometric approval) that can \*\*never\*\* be satisfied from a cached or session-unlocked state — for the operations named in [BackendCapabilities.presenceEnforcedOperations](./vaultkeeper.backendcapabilities.presenceenforcedoperations.md) (all keyed operations when that field is omitted).
 
 This is the property [\`--require-presence-per-use\`](https://github.com/mike-north/vaultkeeper/issues/122) gates on: a fresh, deliberate human action taken \*for this operation, right now\* — not merely "a vault was unlocked at some point." A backend that only caches an unlock, or that is encryption-only with no per-use action, reports `false`<!-- -->.
 

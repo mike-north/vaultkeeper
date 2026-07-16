@@ -49,14 +49,20 @@ enabled; config sets `{ "type": "1password", "enabled": true, "options": { "acce
 4. Cancel the biometric prompt → expect the read to fail (surfaced as an
    authorization/decline failure from the 1Password worker).
 
+5. Confirm writes fail closed: `vaultkeeper store --name S --require-presence-per-use`
+   (and the same for `delete`) → expect an immediate `NotCapableError` (exit 1)
+   with a message that presence-per-use is enforced for `read` only on this
+   backend. No biometric prompt should appear, and nothing should be written.
+
 > **Cached-OS-unlock caveat.** 1Password `per-access` creates a fresh SDK client
 > per read, but the OS may satisfy the biometric from a cached Touch ID / Windows
 > Hello unlock without re-prompting. If step 3 does **not** re-prompt, that is the
 > OS caching the unlock, not a vaultkeeper defect — the guarantee for 1Password is
 > "fresh SDK client plus whatever the OS enforces at that moment." For a hard
-> per-tap guarantee, use a touch device. Note also that `store`/`delete` route
-> through the cached session client, so only reads (`exec`/`setup`) are presence-
-> gated on 1Password.
+> per-tap guarantee, use a touch device. `store`/`delete` route through the cached
+> session client, so presence is enforced for reads only; a flagged write is
+> **refused** (`NotCapableError`), never silently allowed — verified by step 5 and
+> by the automated `operation-aware, fail-closed enforcement` test.
 
 ## gpg smartcard (touch-to-sign) — if/when a backend ships
 

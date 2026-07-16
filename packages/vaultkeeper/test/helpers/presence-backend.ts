@@ -24,6 +24,7 @@ import type {
   SigningBackend,
   PresenceCapableBackend,
   BackendCapabilities,
+  PresenceOperation,
 } from '../../src/backend/types.js'
 import type { SigningAlgorithm, SigningPublicKey } from '../../src/types.js'
 import {
@@ -48,6 +49,15 @@ export interface MockPresenceBackendOptions {
    * refuses a require-presence operation before ever reaching them).
    */
   presencePerUse?: boolean
+  /**
+   * The operations this instance forces presence for, surfaced as
+   * {@link BackendCapabilities.presenceEnforcedOperations}. Omit to model a
+   * touch device that forces presence for every operation (the field is left
+   * undefined). Set to e.g. `['read']` to model 1Password per-access, whose
+   * writes route through a cached session — a flagged `store`/`delete` must then
+   * fail closed.
+   */
+  enforcedOperations?: PresenceOperation[]
   /** Reported timeout for an unprimed presence demand. Defaults to 1000ms. */
   timeoutMs?: number
 }
@@ -64,6 +74,7 @@ export class MockPresenceBackend implements SigningBackend, PresenceCapableBacke
   readonly displayName = 'Mock Presence Backend'
 
   readonly #presencePerUse: boolean
+  readonly #enforcedOperations: PresenceOperation[] | undefined
   readonly #timeoutMs: number
   readonly #secrets = new Map<string, string>()
   readonly #signingKeys = new Map<string, crypto.KeyObject>()
@@ -83,6 +94,7 @@ export class MockPresenceBackend implements SigningBackend, PresenceCapableBacke
 
   constructor(options: MockPresenceBackendOptions = {}) {
     this.#presencePerUse = options.presencePerUse ?? true
+    this.#enforcedOperations = options.enforcedOperations
     this.#timeoutMs = options.timeoutMs ?? 1000
   }
 
@@ -99,6 +111,12 @@ export class MockPresenceBackend implements SigningBackend, PresenceCapableBacke
 
   getCapabilities(): Promise<BackendCapabilities> {
     this.getCapabilitiesCalls++
+    if (this.#enforcedOperations !== undefined) {
+      return Promise.resolve({
+        presencePerUse: this.#presencePerUse,
+        presenceEnforcedOperations: this.#enforcedOperations,
+      })
+    }
     return Promise.resolve({ presencePerUse: this.#presencePerUse })
   }
 

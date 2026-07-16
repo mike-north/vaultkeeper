@@ -72,6 +72,7 @@ export type {
   SigningBackend,
   PresenceCapableBackend,
   BackendCapabilities,
+  PresenceOperation,
 } from './backend/index.js'
 export type {
   SetupQuestion,

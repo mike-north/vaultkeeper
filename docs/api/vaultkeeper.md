@@ -1020,6 +1020,17 @@ Status of a preflight check.
 </td></tr>
 <tr><td>
 
+[PresenceOperation](./vaultkeeper.presenceoperation.md)
+
+
+</td><td>
+
+A keyed backend operation that a presence-per-use requirement can gate.
+
+
+</td></tr>
+<tr><td>
+
 [SecretTokenMap](./vaultkeeper.secrettokenmap.md)
 
 

@@ -20,6 +20,7 @@ export class AuthorizationDeniedError extends VaultError {
 
 // @public
 export interface BackendCapabilities {
+    readonly presenceEnforcedOperations?: readonly PresenceOperation[];
     readonly presencePerUse: boolean;
 }
 
@@ -284,6 +285,9 @@ export class PresenceDeclinedError extends VaultError {
     constructor(message: string, backendType: string);
     readonly backendType: string;
 }
+
+// @public
+export type PresenceOperation = 'read' | 'store' | 'delete' | 'sign';
 
 // @public
 export interface PresenceRequirementOptions {
