@@ -22,7 +22,8 @@
  * Many fenced examples are intentionally illustrative fragments, not runnable
  * programs (they reference a `vault` bound in a previous fence, a placeholder
  * path like `/usr/local/bin/my-tool`, or a network endpoint). Mark such a fence
- * with an HTML comment on the line immediately preceding its opening fence:
+ * with an HTML comment preceding its opening fence — the extractor scans backward
+ * over any intervening blank lines, so the marker need not be immediately adjacent:
  *
  * ```md
  * <!-- readme-example: skip - references a vault from an earlier fence -->
@@ -200,6 +201,14 @@ export function runShellFence(fence: Fence): ShellRunResult {
       stdio: ['ignore', 'pipe', 'pipe'],
       timeout: 60_000,
     })
+    // spawnSync could not start bash at all (missing binary, permission, etc.):
+    // status and signal are both null. Fail loudly instead of reporting a vacuous
+    // exitCode 0 that would let the fence check pass without running anything.
+    if (result.error) {
+      throw new Error(
+        `Failed to run shell fence from ${fence.readme}:${String(fence.startLine)}: ${result.error.message}`,
+      )
+    }
     return {
       exitCode: result.status ?? (result.signal !== null ? 1 : 0),
       stdout: result.stdout,
