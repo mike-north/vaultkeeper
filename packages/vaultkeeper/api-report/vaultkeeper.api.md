@@ -236,15 +236,17 @@ export interface PreflightCheck {
 
 // @public
 export interface PreflightCheckError {
+    backendType?: string | undefined;
     code?: string | undefined;
     configPath: string;
     field?: string | undefined;
     kind: PreflightCheckErrorKind;
+    knownBackendTypes?: readonly string[] | undefined;
     location?: string | undefined;
 }
 
 // @public
-export type PreflightCheckErrorKind = 'config-parse' | 'config-validation' | 'config-read';
+export type PreflightCheckErrorKind = 'config-parse' | 'config-validation' | 'config-unknown-backend' | 'config-read';
 
 // @public
 export type PreflightCheckStatus = 'ok' | 'missing' | 'version-unsupported' | 'invalid';
@@ -407,6 +409,13 @@ export class TokenRevokedError extends VaultError {
 
 // @public
 export type TrustTier = 1 | 2 | 3;
+
+// @public
+export class UnknownBackendTypeError extends ConfigValidationError {
+    constructor(message: string, field: string, backendType: string, knownTypes: string[], configFilePath?: string);
+    readonly backendType: string;
+    readonly knownTypes: string[];
+}
 
 // @public
 export class UsageLimitExceededError extends VaultError {

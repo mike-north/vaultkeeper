@@ -202,6 +202,58 @@ describe('doctor command', () => {
     expect(result.stdout).not.toContain('System ready.')
   })
 
+  // Issue #215 repro: a config with an unknown `backends[].type` parses as
+  // valid JSON and is structurally valid, so doctor previously reported
+  // "System ready." with exit 0 — while the next real command threw
+  // BackendUnavailableError. doctor must now fail the config check, name the
+  // offending type and the valid options (the same guidance the runtime error
+  // gives), and exit non-zero.
+  it('should fail the config check and name the invalid type + valid options for an unknown backend type (issue #215)', async () => {
+    env = await createCliTestEnv()
+    await fs.writeFile(
+      path.join(env.configDir, 'config.json'),
+      JSON.stringify({
+        version: 1,
+        backends: [{ type: 'not-a-real-backend', enabled: true }],
+        keyRotation: { gracePeriodDays: 7 },
+        defaults: { ttlMinutes: 60, trustTier: 3 },
+      }),
+      'utf8',
+    )
+    const result = await env.run(['doctor'])
+    expect(result.exitCode).not.toBe(0)
+    expect(result.stdout).toContain('✗')
+    expect(result.stdout).toContain('config')
+    expect(result.stdout).toContain('not-a-real-backend')
+    // The valid options mirror the runtime BackendUnavailableError guidance.
+    expect(result.stdout).toContain('file, keychain, dpapi, secret-tool, 1password, yubikey')
+    expect(result.stdout).toContain('vaultkeeper config init --force')
+    expect(result.stdout).not.toContain('install @vaultkeeper/cli')
+    expect(result.stdout).not.toContain('System ready.')
+  })
+
+  // The other half of issue #215's acceptance: a valid file-backend config
+  // must still pass the config check (no false failure from the new backend-
+  // type validation). Asserts the `config` check renders with ✓ and no
+  // unknown-backend remediation — not overall readiness, which can legitimately
+  // fail on a host missing a core tool like openssl (see the note above).
+  it('should still pass the config check for a valid file-backend config (issue #215)', async () => {
+    env = await createCliTestEnv()
+    await fs.writeFile(
+      path.join(env.configDir, 'config.json'),
+      JSON.stringify({
+        version: 1,
+        backends: [{ type: 'file', enabled: true }],
+        keyRotation: { gracePeriodDays: 7 },
+        defaults: { ttlMinutes: 60, trustTier: 3 },
+      }),
+      'utf8',
+    )
+    const result = await env.run(['doctor'])
+    expect(result.stdout).toMatch(/✓\s*config/)
+    expect(result.stdout).not.toContain('unknown backend type')
+  })
+
   // No-config story (issue #68): doctor falls back to the default backend and
   // says so, uniformly with store/delete/exec/config show, rather than
   // silently defaulting or erroring. Issue #98: that default is the safe file

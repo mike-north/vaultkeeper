@@ -6,7 +6,13 @@ import * as fs from 'node:fs/promises'
 import * as path from 'node:path'
 import * as os from 'node:os'
 import type { VaultConfig, BackendConfig, TrustTier } from './types.js'
-import { ConfigValidationError, ConfigParseError, FilesystemError } from './errors.js'
+import {
+  ConfigValidationError,
+  ConfigParseError,
+  FilesystemError,
+  UnknownBackendTypeError,
+} from './errors.js'
+import { BackendRegistry } from './backend/registry.js'
 
 /**
  * Remediation hint appended to every config-loading error message so a user
@@ -215,6 +221,25 @@ function validateBackendEntry(entry: unknown, index: number): BackendConfig {
   if (typeof entry.type !== 'string' || entry.type.trim() === '') {
     throw new ConfigValidationError(`${base}.type must be a non-empty string`, `${base}.type`)
   }
+  // A structurally-valid type string that names a backend nobody registered is
+  // still an unusable config: the next real command would throw
+  // BackendUnavailableError at backend-creation time. Reject it here, in the
+  // shared validation path, so `loadConfig` and `doctor` agree instead of
+  // doctor reporting "System ready." for a config the first store/fetch will
+  // reject (issue #215). The valid set is the live registry — which includes
+  // any custom backends a consumer registered — not a hardcoded list. Guard on
+  // a populated registry so isolated callers that validate a config before the
+  // built-in backends have been registered are not told every type is invalid.
+  const knownTypes = BackendRegistry.getTypes()
+  if (knownTypes.length > 0 && !knownTypes.includes(entry.type)) {
+    throw new UnknownBackendTypeError(
+      `${base}.type is an unknown backend type: "${entry.type}". ` +
+        `Available types: ${knownTypes.join(', ')}`,
+      `${base}.type`,
+      entry.type,
+      knownTypes,
+    )
+  }
   if (typeof entry.enabled !== 'boolean') {
     throw new ConfigValidationError(`${base}.enabled must be a boolean`, `${base}.enabled`)
   }
@@ -418,6 +443,19 @@ export async function loadConfig(configDir?: string): Promise<VaultConfig> {
   try {
     return validateConfig(parsed)
   } catch (err) {
+    // Preserve the concrete subclass so its machine-readable context survives
+    // the file-path re-wrap: doctor maps an UnknownBackendTypeError to a
+    // richer preflight error (invalid type + valid options) than a plain
+    // schema failure (issue #215).
+    if (err instanceof UnknownBackendTypeError) {
+      throw new UnknownBackendTypeError(
+        `Invalid config at ${configPath}: ${err.message}. ${CONFIG_REMEDIATION_HINT}`,
+        err.field,
+        err.backendType,
+        err.knownTypes,
+        configPath,
+      )
+    }
     if (err instanceof ConfigValidationError) {
       // Regression: issue #118 — this previously joined the diagnosis and the
       // remediation hint with only a space (`...non-empty string

@@ -350,6 +350,19 @@ Thrown when a JWE token has been explicitly blocked (e.g. after a single-use tok
 </td></tr>
 <tr><td>
 
+[UnknownBackendTypeError](./vaultkeeper.unknownbackendtypeerror.md)
+
+
+</td><td>
+
+Thrown when a config's `backends[].type` names a backend that is not registered with the [BackendRegistry](./vaultkeeper.backendregistry.md)<!-- -->.
+
+A specialization of [ConfigValidationError](./vaultkeeper.configvalidationerror.md)<!-- -->: an unknown backend type is a semantic schema failure (the config parses and is structurally valid, but names a backend that cannot be created), so it fails config validation the same way `version !== 1` does. It carries the offending `backendType` and the set of `knownTypes` so a consumer — notably `doctor` — can give the same "Available types: …" guidance the runtime [BackendUnavailableError](./vaultkeeper.backendunavailableerror.md) gives, without parsing the human-readable message. This closes the gap where a config with an unknown backend type parsed as valid JSON and passed `doctor` with a false "System ready.", only for the next real command to throw [BackendUnavailableError](./vaultkeeper.backendunavailableerror.md) (issue \#215).
+
+
+</td></tr>
+<tr><td>
+
 [UsageLimitExceededError](./vaultkeeper.usagelimitexceedederror.md)
 
 
@@ -913,7 +926,7 @@ The OS platform identifier used for platform-specific behavior.
 
 </td><td>
 
-The kind of error that made a preflight check fail, as a stable machine-readable discriminant. `'config-parse'` means the config file could not be parsed as JSON; `'config-validation'` means it parsed but failed schema validation; `'config-read'` means the config file could not be read at all (for example a permission failure on the file or its parent directory) — a different remediation from parse/validation, since overwriting the file (`config init --force`<!-- -->) cannot fix a read-permission problem.
+The kind of error that made a preflight check fail, as a stable machine-readable discriminant. `'config-parse'` means the config file could not be parsed as JSON; `'config-validation'` means it parsed but failed schema validation; `'config-unknown-backend'` is a specific validation failure where `backends[].type` names a backend that is not registered, carrying the offending type and the valid options; `'config-read'` means the config file could not be read at all (for example a permission failure on the file or its parent directory) — a different remediation from parse/validation, since overwriting the file with `config init --force` cannot fix a read-permission problem.
 
 
 </td></tr>
