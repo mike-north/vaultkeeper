@@ -15,7 +15,8 @@
 import { describe, it, expect } from 'vitest'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
-import { readFile } from 'node:fs/promises'
+import { mkdtemp, readFile, rm } from 'node:fs/promises'
+import * as os from 'node:os'
 import * as path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -193,6 +194,47 @@ async function runNpmPackDryRun(packageDir: string): Promise<NpmPackResult> {
   return first
 }
 
+interface NpmPackJsonEntry {
+  filename: string
+}
+
+function isNpmPackJsonEntry(value: unknown): value is NpmPackJsonEntry {
+  return isPlainObject(value) && typeof value.filename === 'string'
+}
+
+/**
+ * Packs the given package for real (not `--dry-run`) into a throwaway temp
+ * directory, then extracts README.md from the resulting tarball and returns
+ * its text content. `--dry-run` only reports the file list, so it cannot
+ * prove that a guaranteed section survived intact — only that a file named
+ * README.md is present.
+ */
+async function readPackedReadme(packageDir: string): Promise<string> {
+  const cwd = path.join(repoRoot, 'packages', packageDir)
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), 'vaultkeeper-pack-'))
+  try {
+    const { stdout } = await execFileAsync(
+      'npm',
+      ['pack', '--json', '--pack-destination', tmpDir],
+      { cwd },
+    )
+    const parsed: unknown = JSON.parse(stdout)
+    const first: unknown = Array.isArray(parsed) ? parsed[0] : undefined
+    if (!isNpmPackJsonEntry(first)) {
+      throw new Error(`Unexpected npm pack output for ${packageDir}: ${stdout}`)
+    }
+    const tarballPath = path.join(tmpDir, first.filename)
+    const { stdout: readmeContent } = await execFileAsync('tar', [
+      '-xOf',
+      tarballPath,
+      'package/README.md',
+    ])
+    return readmeContent
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true })
+  }
+}
+
 describe.each(publishablePackageDirs)('packaging: packages/%s', (packageDir) => {
   it('includes README.md in the published tarball', async () => {
     const pack = await runNpmPackDryRun(packageDir)
@@ -246,6 +288,31 @@ describe.each(publishablePackageDirs)('packaging: packages/%s', (packageDir) => 
         filePaths,
         `${packageDir}: declared path "${declaredPath}" missing from tarball`,
       ).toContain(normalized)
+    }
+  })
+})
+
+/**
+ * Regression guard for https://github.com/mike-north/vaultkeeper/issues/179:
+ * the tarball-inclusion test above only proves README.md exists in the
+ * packed `vaultkeeper` tarball, not that its guaranteed content survived — a
+ * future edit could silently strip a section (e.g. the error hierarchy or
+ * the full `VaultConfig` reference) while every existing packaging assertion
+ * kept passing. Each sentinel anchors a section that must ship intact.
+ */
+describe('packaging: packages/vaultkeeper README content', () => {
+  it('retains guaranteed sections in the packed tarball', async () => {
+    const readme = await readPackedReadme('vaultkeeper')
+
+    const sentinels = [
+      'Multiple secrets in one request', // dedicated section heading
+      'InvalidKeyMaterialError', // error hierarchy entry
+      'gracePeriodDays', // full VaultConfig field reference
+      'Doctor / preflight checks', // doctor section heading
+    ]
+
+    for (const sentinel of sentinels) {
+      expect(readme, `packed vaultkeeper README missing "${sentinel}"`).toContain(sentinel)
     }
   })
 })
