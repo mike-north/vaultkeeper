@@ -40,8 +40,7 @@ pub struct PendingTrust {
     pub approved_hashes: Vec<String>,
     /// The namespace/hash entry staged for [`PendingTrust::commit`] to merge into
     /// the on-disk manifest, or `None` when this decision records nothing (a
-    /// registry/Sigstore-already-recorded match, the dev bypass, or a TOFU
-    /// conflict).
+    /// registry match, the dev bypass, or a TOFU conflict).
     ///
     /// Deliberately *not* a whole-manifest snapshot: verification and commit are
     /// not atomic, so persisting a snapshot captured back in
@@ -56,18 +55,25 @@ impl PendingTrust {
     /// nothing to record.
     ///
     /// Call this only after the overall operation has otherwise succeeded (e.g.
-    /// the token has been minted) so a failure never leaves a premature TOFU record
-    /// behind (issue #148).
+    /// the token has been minted) so a failure never leaves a premature
+    /// trust-manifest record behind (issue #148).
     ///
     /// Verification and commit are not atomic — another process can write to the
     /// manifest in between (e.g. approving a different executable, or the same
     /// one). To avoid clobbering that concurrent write, this reloads the manifest
     /// from disk immediately before saving and merges the staged `(namespace,
     /// hash)` entry into the *current* state, rather than persisting a snapshot
-    /// captured back in [`verify_trust_pending`] (issue #209).
+    /// captured back in [`verify_trust_pending`] (issue #209). If the freshly
+    /// reloaded manifest already trusts the staged hash — e.g. a concurrent
+    /// commit for the same executable landed first — this is a no-op: skipping
+    /// the redundant `save_manifest` avoids unnecessary I/O and shrinks the
+    /// window in which a last-writer-wins save could race another writer.
     pub async fn commit(&self, host: &dyn HostPlatform) -> Result<(), VaultError> {
         if let Some((namespace, hash)) = &self.pending_write {
             let current = load_manifest(host).await?;
+            if is_trusted(&current, namespace, hash) {
+                return Ok(());
+            }
             let merged = add_trusted_hash(&current, namespace, hash);
             save_manifest(host, &merged).await?;
         }
@@ -225,11 +231,15 @@ mod tests {
     use std::collections::HashMap;
     use std::path::{Path, PathBuf};
     use std::sync::Mutex;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     /// A mock HostPlatform that stores files in memory.
     struct MockHost {
         files: Mutex<HashMap<PathBuf, Vec<u8>>>,
         config_dir: PathBuf,
+        /// Number of `write_file` calls observed, for tests asserting a redundant
+        /// save was skipped rather than merely idempotent.
+        write_count: AtomicUsize,
     }
 
     impl MockHost {
@@ -237,6 +247,7 @@ mod tests {
             Self {
                 files: Mutex::new(HashMap::new()),
                 config_dir: PathBuf::from("/mock/config"),
+                write_count: AtomicUsize::new(0),
             }
         }
 
@@ -245,6 +256,10 @@ mod tests {
                 .lock()
                 .unwrap()
                 .insert(PathBuf::from(path), content.to_vec());
+        }
+
+        fn write_count(&self) -> usize {
+            self.write_count.load(Ordering::SeqCst)
         }
     }
 
@@ -278,6 +293,7 @@ mod tests {
             content: &[u8],
             _mode: u32,
         ) -> Result<(), VaultError> {
+            self.write_count.fetch_add(1, Ordering::SeqCst);
             self.files
                 .lock()
                 .unwrap()
@@ -523,5 +539,41 @@ mod tests {
             "/usr/bin/my-tool",
             &pending.identity.hash
         ));
+    }
+
+    /// `commit` must not re-save the manifest when the staged hash is already
+    /// trusted in the freshly reloaded state (e.g. a concurrent commit for the
+    /// same executable landed first): re-saving identical content is wasted I/O
+    /// and needlessly widens the last-writer-wins window. Asserted via the host's
+    /// write count rather than manifest content, since a redundant save would be
+    /// content-idempotent but still a real (avoidable) write.
+    #[tokio::test]
+    async fn commit_skips_save_when_staged_entry_already_trusted() {
+        let host = MockHost::new();
+        host.add_file("/usr/bin/my-tool", b"binary-content-v1");
+
+        let pending = verify_trust_pending(&host, "/usr/bin/my-tool", None)
+            .await
+            .unwrap();
+
+        // Simulate a concurrent commit for the same executable landing first —
+        // the staged (namespace, hash) is already present by the time our
+        // commit reloads the manifest.
+        let concurrent_manifest = load_manifest(&host).await.unwrap();
+        let already_committed = add_trusted_hash(
+            &concurrent_manifest,
+            "/usr/bin/my-tool",
+            &pending.identity.hash,
+        );
+        save_manifest(&host, &already_committed).await.unwrap();
+        let writes_before_commit = host.write_count();
+
+        pending.commit(&host).await.unwrap();
+
+        assert_eq!(
+            host.write_count(),
+            writes_before_commit,
+            "commit must not write when the staged entry is already trusted"
+        );
     }
 }
