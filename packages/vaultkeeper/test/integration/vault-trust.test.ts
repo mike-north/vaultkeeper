@@ -14,6 +14,7 @@
  * @see ../../src/identity/manifest.ts
  * @see https://github.com/mike-north/vaultkeeper/issues/57
  * @see https://github.com/mike-north/vaultkeeper/issues/123
+ * @see https://github.com/mike-north/vaultkeeper/issues/148
  */
 
 import * as crypto from 'node:crypto'
@@ -29,6 +30,7 @@ import {
   ExecutableTrustRequiredError,
   FilesystemError,
   BackendUnavailableError,
+  SecretNotFoundError,
 } from '../../src/index.js'
 import type { VaultConfig, SecretBackend } from '../../src/index.js'
 import { createInMemoryBackend } from '../helpers/backend.js'
@@ -69,6 +71,20 @@ async function writeExecutable(name: string, contents: string): Promise<string> 
   const p = path.join(scratchDir, name)
   await fs.writeFile(p, contents, { mode: 0o755 })
   return p
+}
+
+async function manifestExists(): Promise<boolean> {
+  try {
+    await fs.access(path.join(configDir, 'trust-manifest.json'))
+    return true
+  } catch (err) {
+    // Only a missing file means "does not exist" — any other failure (e.g.
+    // EACCES) is a real problem and must not be silently reported as absence.
+    if (typeof err === 'object' && err !== null && 'code' in err && err.code === 'ENOENT') {
+      return false
+    }
+    throw err
+  }
 }
 
 async function readManifestEntries(): Promise<Record<string, unknown>> {
@@ -267,14 +283,85 @@ describe('exec approval recording (setup) → subsequent trust', () => {
   })
 })
 
-describe('setup() requires an explicit executable-trust choice (#123)', () => {
-  async function manifestExists(): Promise<boolean> {
-    return fs
-      .access(path.join(configDir, 'trust-manifest.json'))
-      .then(() => true)
-      .catch(() => false)
-  }
+describe('setup() defers the TOFU manifest write until the operation succeeds (#148)', () => {
+  // AC2 + AC3: the exact scenario from #148. Previously #resolveExecutableIdentity
+  // ran verifyTrust() — which records a first-encounter (or Sigstore) hash
+  // immediately — before backend.retrieve(); a SecretNotFoundError from a
+  // nonexistent secret therefore still left the caller's hash durably recorded,
+  // letting an attacker (or a typo'd script) pre-seed TOFU trust without ever
+  // completing a legitimate first encounter. The manifest write must now be
+  // deferred until setup() actually succeeds.
+  it('throws SecretNotFoundError for a nonexistent secret and leaves the manifest untouched', async () => {
+    const caller = await writeExecutable('caller', 'first-encounter-bytes\n')
+    const vault = await createVault()
+    // Deliberately no backend.store() call — 'MISSING_SECRET' does not exist.
 
+    await expect(vault.setup('MISSING_SECRET', { executablePath: caller })).rejects.toBeInstanceOf(
+      SecretNotFoundError,
+    )
+
+    // The failed call must not have pre-seeded TOFU trust for `caller`: no
+    // manifest file at all, and a later legitimate first encounter is still
+    // untrusted rather than silently matching the pre-seeded hash.
+    expect(await manifestExists()).toBe(false)
+    expect((await vault.checkExecutableTrust(caller)).trusted).toBe(false)
+  })
+
+  // The write is deferred, not removed: a setup() call that actually succeeds
+  // still records the first-encounter hash exactly as before.
+  it('still records the first-encounter hash when the secret exists and setup() succeeds', async () => {
+    await backend.store('API_KEY', 's3cr3t')
+    const caller = await writeExecutable('caller', 'success-bytes\n')
+    const vault = await createVault()
+
+    await vault.setup('API_KEY', { executablePath: caller })
+
+    const entries = await readManifestEntries()
+    expect(Object.keys(entries)).toEqual([path.resolve(caller)])
+    expect((await vault.checkExecutableTrust(caller)).trusted).toBe(true)
+  })
+
+  // A matching re-encounter (Tier 2 registry match) has nothing to stage —
+  // it must keep succeeding and must not rewrite the manifest.
+  it('a matching re-encounter succeeds without rewriting the manifest', async () => {
+    await backend.store('API_KEY', 's3cr3t')
+    const caller = await writeExecutable('caller', 'stable-bytes\n')
+    const vault = await createVault()
+
+    await vault.setup('API_KEY', { executablePath: caller })
+    const entriesAfterFirst = await readManifestEntries()
+
+    const jwe = await vault.setup('API_KEY', { executablePath: caller })
+    expect(jwe.split('.')).toHaveLength(5)
+
+    const entriesAfterSecond = await readManifestEntries()
+    expect(entriesAfterSecond).toEqual(entriesAfterFirst)
+  })
+
+  // AC4: TOFU-conflict detection must keep using the pre-existing manifest
+  // state and fail before any write — even though the secret exists and
+  // setup() would otherwise succeed, the new (unapproved) hash must never be
+  // recorded.
+  it('a hash conflict throws IdentityMismatchError and never records the new hash', async () => {
+    await backend.store('API_KEY', 's3cr3t')
+    const caller = await writeExecutable('caller', 'v1\n')
+    const approvedHash = sha256Hex('v1\n')
+    const vault = await createVault()
+
+    await vault.setup('API_KEY', { executablePath: caller })
+    await fs.writeFile(caller, 'v2\n', { mode: 0o755 })
+
+    await expect(vault.setup('API_KEY', { executablePath: caller })).rejects.toBeInstanceOf(
+      IdentityMismatchError,
+    )
+
+    // The manifest must still hold only the originally approved hash.
+    const entries = await readManifestEntries()
+    expect(entries[path.resolve(caller)]).toEqual({ hashes: [approvedHash], trustTier: 3 })
+  })
+})
+
+describe('setup() requires an explicit executable-trust choice (#123)', () => {
   // AC1 + AC5: omitting the trust choice throws a typed VaultError subclass —
   // never a plain Error, and never a silent 'dev' fallback. Regression for #123.
   it('throws ExecutableTrustRequiredError when neither executablePath nor skipTrust is given', async () => {

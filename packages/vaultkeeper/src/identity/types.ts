@@ -43,6 +43,32 @@ export interface TrustVerificationResult {
 }
 
 /**
+ * Result of the verify-only phase of trust verification (see
+ * {@link verifyTrustPending}). No manifest write has happened yet — pass this
+ * to {@link commitTrust} once the caller's operation has actually succeeded to
+ * persist the pending update, or discard it to leave the manifest untouched.
+ * @internal
+ */
+export interface PendingTrust extends TrustVerificationResult {
+  /**
+   * The namespace/hash entry to add to the manifest once the caller's
+   * operation succeeds, or `undefined` when this verification has nothing to
+   * record — a registry (Tier 2) match, a TOFU conflict, or dev-mode bypass
+   * never write.
+   *
+   * {@link commitTrust} reloads the manifest from disk at commit time and
+   * unions this entry in, rather than persisting a snapshot captured during
+   * verification. That matters because verification and commit are not
+   * atomic: another process could approve a *different* executable (or the
+   * same one) in between. Persisting a stale snapshot would silently drop
+   * that concurrent write; merging preserves it.
+   */
+  readonly pendingWrite: { readonly namespace: string; readonly hash: string } | undefined
+  /** Directory {@link commitTrust} writes to, if `pendingWrite` is present. */
+  readonly configDir: string
+}
+
+/**
  * Options controlling how trust verification is performed.
  * @internal
  */

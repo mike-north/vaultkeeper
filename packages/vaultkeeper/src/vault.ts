@@ -27,7 +27,7 @@ import { BackendRegistry } from './backend/registry.js'
 import { isSigningBackend } from './backend/types.js'
 import type { SecretBackend, SigningBackend } from './backend/types.js'
 import { createToken, decryptToken, extractKid, validateClaims, blockToken } from './jwe/index.js'
-import { verifyTrust } from './identity/trust.js'
+import { verifyTrustPending, commitTrust } from './identity/trust.js'
 import { hashExecutable } from './identity/hash.js'
 import { loadManifest, saveManifest, addTrustedHash, isTrusted } from './identity/manifest.js'
 import {
@@ -543,7 +543,13 @@ export class VaultKeeper {
     // (plain-JavaScript) caller can pass `undefined` despite the required type,
     // and this call throws ExecutableTrustRequiredError instead of dereferencing
     // `undefined`. Past this point `options` is guaranteed present.
-    const exeIdentity = await this.#resolveExecutableIdentity(options)
+    //
+    // This only *verifies* trust; a first-encounter (TOFU) or Sigstore hash is
+    // staged, not written yet. The manifest write is deferred via
+    // `commitExecutableTrust` until the whole operation succeeds below — see
+    // issue #148 (a failed setup() must never durably pre-seed TOFU trust).
+    const { exeIdentity, commit: commitExecutableTrust } =
+      await this.#resolveExecutableIdentity(options)
 
     const backendType = VaultKeeper.#resolveBackendTypeHint(backend, options.backendType)
     const ttlMinutes = options.ttlMinutes ?? this.#config.defaults.ttlMinutes
@@ -567,7 +573,15 @@ export class VaultKeeper {
     }
 
     const currentKey = this.#keyManager.getCurrentKey()
-    return createToken(currentKey.key, claims, { kid: currentKey.id })
+    const token = createToken(currentKey.key, claims, { kid: currentKey.id })
+
+    // Only now that the secret was retrieved and the token minted does a
+    // first-encounter (or Sigstore) trust decision become a durable manifest
+    // write. A failure anywhere above (e.g. SecretNotFoundError) leaves the
+    // trust manifest untouched.
+    await commitExecutableTrust()
+
+    return token
   }
 
   /**
@@ -1154,16 +1168,28 @@ export class VaultKeeper {
    *
    * Returns the sentinel `'dev'` (no executable binding) when trust is
    * deliberately skipped or the path is on the development-mode allowlist;
-   * otherwise runs TOFU verification and returns the verified hash.
+   * otherwise runs TOFU *verification only* and returns the verified hash
+   * together with a `commit` callback. Verification never writes to the trust
+   * manifest by itself — `commit` stages that write, and the caller
+   * ({@link VaultKeeper.setup}) must invoke it only after the operation trust
+   * was gating has actually succeeded. This is the fail-fast/defer-write split
+   * from issue #148: shape validation (missing/conflicting/legacy-sentinel)
+   * still throws immediately here, before any backend read, but a
+   * first-encounter or Sigstore hash is not durably recorded until `commit`
+   * runs.
    *
    * @throws {ExecutableTrustRequiredError} If neither `executablePath` nor
    *   `skipTrust: true` is provided, if both are, or if `executablePath` is the
    *   retired legacy `'dev'` opt-out sentinel.
-   * @throws {IdentityMismatchError} On a TOFU hash conflict.
+   * @throws {IdentityMismatchError} On a TOFU hash conflict. Conflicts never
+   *   stage a manifest write regardless of whether `commit` is later called.
    */
-  async #resolveExecutableIdentity(options: TrustChoiceInput | undefined): Promise<string> {
+  async #resolveExecutableIdentity(
+    options: TrustChoiceInput | undefined,
+  ): Promise<{ exeIdentity: string; commit: () => Promise<void> }> {
     const executablePath = options?.executablePath
     const skipTrust = options?.skipTrust === true
+    const noCommit = (): Promise<void> => Promise.resolve()
 
     if (skipTrust && executablePath !== undefined) {
       throw new ExecutableTrustRequiredError(
@@ -1178,7 +1204,7 @@ export class VaultKeeper {
     if (skipTrust) {
       // Explicit, greppable development-only opt-out: no executable identity is
       // bound. See the security warning on SetupOptions.skipTrust.
-      return 'dev'
+      return { exeIdentity: 'dev', commit: noCommit }
     }
 
     if (executablePath === undefined) {
@@ -1210,27 +1236,33 @@ export class VaultKeeper {
     // A real path may still be exempted via the established development-mode
     // allowlist (setDevelopmentMode); otherwise run full TOFU verification.
     if (this.#isDevModeExecutable(executablePath)) {
-      return 'dev'
+      return { exeIdentity: 'dev', commit: noCommit }
     }
 
     // Resolve to an absolute path before verification so the manifest is keyed
     // consistently with approveExecutable() and checkExecutableTrust(), both of
     // which resolve. A relative path approved earlier (stored under its absolute
     // key) therefore matches here too.
-    const trustResult = await verifyTrust(path.resolve(executablePath), {
+    //
+    // verifyTrustPending only *verifies* — a first-encounter or Sigstore hash
+    // is staged on the returned value, not written. Committing it is deferred
+    // to the caller (see #148).
+    const pending = await verifyTrustPending(path.resolve(executablePath), {
       configDir: this.#configDir,
     })
-    if (trustResult.tofuConflict) {
+    if (pending.tofuConflict) {
       // On a conflict the manifest holds at least one prior approved hash;
-      // report the most recently approved one as the previous hash.
-      const previousHash = trustResult.approvedHashes.at(-1) ?? trustResult.identity.hash
+      // report the most recently approved one as the previous hash. Nothing
+      // was staged for this conflict (verifyTrustPending never stages a write
+      // on tofuConflict), so there is nothing to avoid committing here.
+      const previousHash = pending.approvedHashes.at(-1) ?? pending.identity.hash
       throw new IdentityMismatchError(
         'Executable hash changed — re-approval required',
         previousHash,
-        trustResult.identity.hash,
+        pending.identity.hash,
       )
     }
-    return trustResult.identity.hash
+    return { exeIdentity: pending.identity.hash, commit: () => commitTrust(pending) }
   }
 
   async #decryptWithKeyResolution(

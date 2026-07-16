@@ -2,8 +2,8 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import * as fs from 'node:fs/promises'
 import * as os from 'node:os'
 import * as path from 'node:path'
-import { verifyTrust } from '../../../src/identity/trust.js'
-import { loadManifest } from '../../../src/identity/manifest.js'
+import { verifyTrust, verifyTrustPending, commitTrust } from '../../../src/identity/trust.js'
+import { loadManifest, addTrustedHash, saveManifest } from '../../../src/identity/manifest.js'
 
 async function withTempDir(fn: (dir: string) => Promise<void>): Promise<void> {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'vaultkeeper-trust-'))
@@ -172,6 +172,149 @@ describe('verifyTrust — namespace handling', () => {
       const manifest = await loadManifest(configDir)
       expect(manifest.has('custom-namespace')).toBe(true)
       expect(manifest.has(execPath)).toBe(false)
+    })
+  })
+})
+
+describe('verifyTrustPending / commitTrust — verify/commit split (#148)', () => {
+  it('verifyTrustPending stages a first-encounter hash but does not write it', async () => {
+    await withTempDir(async (dir) => {
+      const execPath = await createTempBinary(dir, 'my-tool', 'binary-content-v1')
+      const configDir = path.join(dir, 'config')
+
+      const pending = await verifyTrustPending(execPath, {
+        configDir,
+        namespace: 'my-tool',
+        skipSigstore: true,
+      })
+
+      expect(pending.identity.trustTier).toBe(3)
+      expect(pending.tofuConflict).toBe(false)
+      expect(pending.pendingWrite).toEqual({ namespace: 'my-tool', hash: pending.identity.hash })
+      // The verify phase hasn't written anything yet, so `reason` must not
+      // claim persistence — it describes staging, not recording.
+      expect(pending.reason).toContain('staged')
+      expect(pending.reason).not.toContain('recorded')
+
+      // Nothing was written by the verify phase alone.
+      const manifest = await loadManifest(configDir)
+      expect(manifest.size).toBe(0)
+    })
+  })
+
+  it('commitTrust persists a staged first-encounter hash', async () => {
+    await withTempDir(async (dir) => {
+      const execPath = await createTempBinary(dir, 'my-tool', 'binary-content-v1')
+      const configDir = path.join(dir, 'config')
+
+      const pending = await verifyTrustPending(execPath, {
+        configDir,
+        namespace: 'my-tool',
+        skipSigstore: true,
+      })
+      await commitTrust(pending)
+
+      const manifest = await loadManifest(configDir)
+      expect(manifest.has('my-tool')).toBe(true)
+    })
+  })
+
+  it('commitTrust is a no-op when pendingWrite is undefined (e.g. a TOFU conflict)', async () => {
+    await withTempDir(async (dir) => {
+      const execPath = await createTempBinary(dir, 'tampered', 'original')
+      const configDir = path.join(dir, 'config')
+
+      // Record the original hash so the next call is a conflict, not a first
+      // encounter.
+      await verifyTrust(execPath, { configDir, namespace: 'tampered', skipSigstore: true })
+      await fs.writeFile(execPath, 'tampered-content', 'utf8')
+
+      const pending = await verifyTrustPending(execPath, {
+        configDir,
+        namespace: 'tampered',
+        skipSigstore: true,
+      })
+      expect(pending.tofuConflict).toBe(true)
+      expect(pending.pendingWrite).toBeUndefined()
+
+      // Committing a conflict result must not throw and must not write.
+      await commitTrust(pending)
+      const manifest = await loadManifest(configDir)
+      expect(manifest.get('tampered')?.hashes).toEqual([pending.approvedHashes.at(-1)])
+    })
+  })
+
+  it('a registry (Tier 2) match stages nothing to commit', async () => {
+    await withTempDir(async (dir) => {
+      const execPath = await createTempBinary(dir, 'trusted-tool', 'trusted-binary-content')
+      const configDir = path.join(dir, 'config')
+
+      await verifyTrust(execPath, { configDir, namespace: 'trusted-tool', skipSigstore: true })
+
+      const pending = await verifyTrustPending(execPath, {
+        configDir,
+        namespace: 'trusted-tool',
+        skipSigstore: true,
+      })
+      expect(pending.identity.trustTier).toBe(2)
+      expect(pending.pendingWrite).toBeUndefined()
+    })
+  })
+
+  // Verification and commit are not atomic: another process can write to the
+  // manifest in between (e.g. approving a different executable while our
+  // setup() call is still retrieving its secret). commitTrust must reload the
+  // manifest at commit time and merge the staged entry in, not persist the
+  // stale snapshot captured during verifyTrustPending — otherwise the
+  // concurrent write would be silently clobbered.
+  it('commitTrust merges with a concurrent manifest write instead of clobbering it', async () => {
+    await withTempDir(async (dir) => {
+      const execPath = await createTempBinary(dir, 'my-tool', 'binary-content-v1')
+      const configDir = path.join(dir, 'config')
+
+      const pending = await verifyTrustPending(execPath, {
+        configDir,
+        namespace: 'my-tool',
+        skipSigstore: true,
+      })
+
+      // Simulate a concurrent process approving a different executable
+      // between our verify phase and our commit.
+      const concurrentManifest = await loadManifest(configDir)
+      const withConcurrentEntry = addTrustedHash(
+        concurrentManifest,
+        'other-tool',
+        'concurrent-hash',
+      )
+      await saveManifest(configDir, withConcurrentEntry)
+
+      await commitTrust(pending)
+
+      // Both the concurrent entry and our staged entry must survive.
+      const manifest = await loadManifest(configDir)
+      expect(manifest.get('other-tool')?.hashes).toEqual(['concurrent-hash'])
+      expect(manifest.has('my-tool')).toBe(true)
+    })
+  })
+
+  it('verifyTrust (eager wrapper) still verifies and commits in one call', async () => {
+    await withTempDir(async (dir) => {
+      const execPath = await createTempBinary(dir, 'my-tool', 'binary-content-v1')
+      const configDir = path.join(dir, 'config')
+
+      const result = await verifyTrust(execPath, {
+        configDir,
+        namespace: 'my-tool',
+        skipSigstore: true,
+      })
+
+      expect(result.identity.trustTier).toBe(3)
+      const manifest = await loadManifest(configDir)
+      expect(manifest.has('my-tool')).toBe(true)
+      // A write actually happened by the time this eager wrapper returns, so
+      // external callers should keep seeing the pre-split, persisted-tense
+      // wording — not the verify phase's "staged" language.
+      expect(result.reason).toBe('First encounter — hash recorded via TOFU')
     })
   })
 })
