@@ -22,13 +22,19 @@ export type PreflightCheckStatus = 'ok' | 'missing' | 'version-unsupported' | 'i
  * The kind of error that made a preflight check fail, as a stable
  * machine-readable discriminant. `'config-parse'` means the config file
  * could not be parsed as JSON; `'config-validation'` means it parsed but
- * failed schema validation; `'config-read'` means the config file could not
- * be read at all (for example a permission failure on the file or its parent
- * directory) — a different remediation from parse/validation, since
- * overwriting the file (`config init --force`) cannot fix a read-permission
- * problem.
+ * failed schema validation; `'config-unknown-backend'` is a specific
+ * validation failure where `backends[].type` names a backend that is not
+ * registered, carrying the offending type and the valid options;
+ * `'config-read'` means the config file could not be read at all (for example
+ * a permission failure on the file or its parent directory) — a different
+ * remediation from parse/validation, since overwriting the file with
+ * `config init --force` cannot fix a read-permission problem.
  */
-export type PreflightCheckErrorKind = 'config-parse' | 'config-validation' | 'config-read'
+export type PreflightCheckErrorKind =
+  | 'config-parse'
+  | 'config-validation'
+  | 'config-unknown-backend'
+  | 'config-read'
 
 /**
  * Structured, remediation-free error context for a failed preflight check.
@@ -60,14 +66,27 @@ export interface PreflightCheckError {
   location?: string | undefined
   /**
    * The dotted/bracketed path to the offending config field (for example
-   * `backends` or `backends[0].path`), present only for a
-   * `'config-validation'` failure. This is the validation analogue of
+   * `backends` or `backends[0].path`), present for a `'config-validation'` or
+   * `'config-unknown-backend'` failure. This is the validation analogue of
    * `location`: it lets a consumer point the user at exactly which field
    * failed schema validation, the way `location` points at a parse position,
    * without reusing the human-readable `reason` prose (which carries the
    * library's own "install @vaultkeeper/cli" remediation).
    */
   field?: string | undefined
+  /**
+   * The unregistered backend type named in `backends[].type`, present only for
+   * a `'config-unknown-backend'` failure. Lets a consumer echo the offending
+   * type in its remediation without parsing the `reason` prose.
+   */
+  backendType?: string | undefined
+  /**
+   * The backend type identifiers that were registered when validation ran —
+   * the valid options — present only for a `'config-unknown-backend'` failure.
+   * Lets a consumer offer the same "Available types: …" guidance the runtime
+   * `BackendUnavailableError` gives.
+   */
+  knownBackendTypes?: readonly string[] | undefined
   /**
    * The Node.js errno code (for example `EACCES`, `EPERM`, `EISDIR`) from the
    * underlying filesystem failure, present only for a `'config-read'` failure

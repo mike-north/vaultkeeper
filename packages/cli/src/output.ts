@@ -78,12 +78,38 @@ function configRemediation(
   // command would create a fresh default config and leave the diagnosed file
   // corrupt (issue #149). Carry an explicit `--config-dir` so the command
   // repairs the exact file it complained about.
-  const dirFlag = isPlatformDefaultConfigDir(configDir)
-    ? ''
-    : ` --config-dir ${shellQuote(configDir)}`
   return (
     `The config at \`${configPath}\` is invalid${detailSuffix} — ` +
-    `run \`vaultkeeper config init --force${dirFlag}\` to overwrite it.`
+    `run \`vaultkeeper config init --force${configInitDirFlag(configDir)}\` to overwrite it.`
+  )
+}
+
+/**
+ * The `--config-dir` suffix a printed `config init --force` command needs so it
+ * repairs the exact file that was diagnosed rather than the machine default: an
+ * empty string when `configDir` already is the platform default, otherwise a
+ * shell-quoted ` --config-dir <dir>` (issue #149).
+ */
+function configInitDirFlag(configDir: string): string {
+  return isPlatformDefaultConfigDir(configDir) ? '' : ` --config-dir ${shellQuote(configDir)}`
+}
+
+/**
+ * CLI-native remediation for a `config-unknown-backend` doctor failure: name
+ * the offending backend type and the valid options — the same guidance the
+ * runtime `BackendUnavailableError` gives — then point at `config init --force`
+ * (issue #215). The valid options come from the structured
+ * `knownBackendTypes`; on the off chance they are absent, the message still
+ * names the bad type and the recovery command.
+ */
+function configUnknownBackendRemediation(error: PreflightCheckError, configDir: string): string {
+  const known = error.knownBackendTypes ?? []
+  const typeLabel = error.backendType !== undefined ? ` "${error.backendType}"` : ''
+  const available = known.length > 0 ? ` Available types: ${known.join(', ')}.` : ''
+  return (
+    `The config at \`${error.configPath}\` names an unknown backend type${typeLabel}.${available} ` +
+    `Run \`vaultkeeper config init --force${configInitDirFlag(configDir)}\` to overwrite it, ` +
+    `or edit the config to use a valid backend type.`
   )
 }
 
@@ -192,6 +218,12 @@ export function formatPreflightConfigError(error: PreflightCheckError, configDir
   // the exact wording of `formatError`'s unreadable-`config.json` message.
   if (error.kind === 'config-read') {
     return configReadRemediation(error.configPath, error.code)
+  }
+  // An unknown backend type gets the same "valid types" guidance the runtime
+  // BackendUnavailableError gives, so `doctor` names both the offending type
+  // and the valid options instead of a bare "invalid" (issue #215).
+  if (error.kind === 'config-unknown-backend') {
+    return configUnknownBackendRemediation(error, configDir)
   }
   // Surface the field-level detail the same way `formatConfigError` does for a
   // non-doctor validation error: a parse failure carries a `location`

@@ -353,6 +353,42 @@ describe('formatPreflightConfigError', () => {
     expect(formatted).not.toContain('install @vaultkeeper/cli')
   })
 
+  // Issue #215: an unknown backend type gets the same "valid types" guidance
+  // the runtime BackendUnavailableError gives, so doctor names both the
+  // offending type and the valid options rather than a bare "invalid".
+  it('names the offending type and lists the valid options for a config-unknown-backend failure', () => {
+    const error: PreflightCheckError = {
+      kind: 'config-unknown-backend',
+      configPath,
+      field: 'backends[0].type',
+      backendType: 'not-a-real-backend',
+      knownBackendTypes: ['file', 'keychain', 'dpapi', 'secret-tool', '1password', 'yubikey'],
+    }
+
+    const formatted = formatPreflightConfigError(error, configDir)
+
+    expect(formatted).toContain(configPath)
+    expect(formatted).toContain('not-a-real-backend')
+    // The valid options mirror the runtime BackendUnavailableError guidance.
+    expect(formatted).toContain('file, keychain, dpapi, secret-tool, 1password, yubikey')
+    expect(formatted).toContain('vaultkeeper config init --force')
+    expect(formatted).not.toContain('install @vaultkeeper/cli')
+  })
+
+  it('still names the bad type and recovery command when known types are absent', () => {
+    const error: PreflightCheckError = {
+      kind: 'config-unknown-backend',
+      configPath,
+      field: 'backends[0].type',
+      backendType: 'nope',
+    }
+
+    const formatted = formatPreflightConfigError(error, configDir)
+
+    expect(formatted).toContain('nope')
+    expect(formatted).toContain('vaultkeeper config init --force')
+  })
+
   // Issue #169: a config-read failure (config file unreadable, e.g. EACCES on
   // the file or its parent dir) has a different remediation from parse/
   // validation — `config init --force` cannot fix a read-permission problem —

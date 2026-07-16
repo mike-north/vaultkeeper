@@ -4,10 +4,10 @@
 
 ## PreflightCheckErrorKind type
 
-The kind of error that made a preflight check fail, as a stable machine-readable discriminant. `'config-parse'` means the config file could not be parsed as JSON; `'config-validation'` means it parsed but failed schema validation; `'config-read'` means the config file could not be read at all (for example a permission failure on the file or its parent directory) — a different remediation from parse/validation, since overwriting the file (`config init --force`<!-- -->) cannot fix a read-permission problem.
+The kind of error that made a preflight check fail, as a stable machine-readable discriminant. `'config-parse'` means the config file could not be parsed as JSON; `'config-validation'` means it parsed but failed schema validation; `'config-unknown-backend'` is a specific validation failure where `backends[].type` names a backend that is not registered, carrying the offending type and the valid options; `'config-read'` means the config file could not be read at all (for example a permission failure on the file or its parent directory) — a different remediation from parse/validation, since overwriting the file with `config init --force` cannot fix a read-permission problem.
 
 **Signature:**
 
 ```typescript
-type PreflightCheckErrorKind = 'config-parse' | 'config-validation' | 'config-read';
+type PreflightCheckErrorKind = 'config-parse' | 'config-validation' | 'config-unknown-backend' | 'config-read';
 ```

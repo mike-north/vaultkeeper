@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach, beforeAll, afterAll } from 'vitest'
 import {
   validateConfig,
   loadConfig,
@@ -7,7 +7,21 @@ import {
   defaultBackendType,
   platformNativeBackendType,
 } from '../../src/config.js'
-import { ConfigValidationError, ConfigParseError, FilesystemError } from '../../src/errors.js'
+import {
+  ConfigValidationError,
+  ConfigParseError,
+  FilesystemError,
+  UnknownBackendTypeError,
+} from '../../src/errors.js'
+import { BackendRegistry } from '../../src/backend/registry.js'
+import { registerBuiltinBackends } from '../../src/backend/register-builtins.js'
+
+// Importing `register-builtins` runs its module side effect (it registers all
+// built-ins on load), which would populate the process-global registry for the
+// whole file. Most tests here validate configs with the registry empty — where
+// the backend-type check is intentionally a no-op — so start from a clean slate
+// and let only the backend-type describes register built-ins explicitly.
+BackendRegistry.clearBackends()
 
 vi.mock('node:fs/promises', () => ({
   readFile: vi.fn(),
@@ -260,6 +274,97 @@ describe('validateConfig', () => {
 })
 
 // ---------------------------------------------------------------------------
+// Backend-type validation (issue #215)
+//
+// A config whose `backends[].type` names a backend nobody registered parses as
+// valid JSON and is structurally valid, but the next real command would throw
+// BackendUnavailableError at backend-creation time. Validation must reject it
+// in the shared path so `loadConfig` and `doctor` agree. These tests register
+// the built-in backends first, since the type check is a no-op when the
+// registry is empty (an isolated caller can't know the valid set).
+// ---------------------------------------------------------------------------
+
+describe('validateConfig backend-type validation', () => {
+  beforeAll(() => {
+    BackendRegistry.clearBackends()
+    registerBuiltinBackends()
+  })
+
+  afterAll(() => {
+    // Restore the empty-registry state the rest of this file assumes (e.g. the
+    // `type: 'custom'` acceptance test relies on the no-known-types skip).
+    BackendRegistry.clearBackends()
+  })
+
+  it('rejects an unknown backend type with UnknownBackendTypeError', () => {
+    const input = validConfigJson()
+    input.backends = [{ type: 'not-a-real-backend', enabled: true }]
+    expect(() => validateConfig(input)).toThrow(UnknownBackendTypeError)
+  })
+
+  it('names the invalid type and lists the valid options', () => {
+    const input = validConfigJson()
+    input.backends = [{ type: 'not-a-real-backend', enabled: true }]
+    try {
+      validateConfig(input)
+      expect.unreachable('validateConfig should have rejected the unknown type')
+    } catch (err) {
+      if (!(err instanceof UnknownBackendTypeError)) {
+        throw err
+      }
+      expect(err.backendType).toBe('not-a-real-backend')
+      expect(err.field).toBe('backends[0].type')
+      // The valid options mirror the runtime BackendUnavailableError guidance.
+      expect(err.knownTypes).toEqual([
+        'file',
+        'keychain',
+        'dpapi',
+        'secret-tool',
+        '1password',
+        'yubikey',
+      ])
+      expect(err.message).toContain('not-a-real-backend')
+      expect(err.message).toContain('file')
+      expect(err.message).toContain('yubikey')
+    }
+  })
+
+  it('is a ConfigValidationError subclass so existing catch sites still handle it', () => {
+    const input = validConfigJson()
+    input.backends = [{ type: 'nope', enabled: true }]
+    expect(() => validateConfig(input)).toThrow(ConfigValidationError)
+  })
+
+  it('rejects an unknown type even when that backend entry is disabled', () => {
+    // An unusable backend is a config defect regardless of `enabled` — leaving
+    // it in place lets a later `enabled` flip silently break the vault.
+    const input = validConfigJson()
+    input.backends = [
+      { type: 'file', enabled: true },
+      { type: 'bogus', enabled: false },
+    ]
+    expect(() => validateConfig(input)).toThrow(UnknownBackendTypeError)
+  })
+
+  it('accepts every registered built-in backend type', () => {
+    for (const type of ['file', 'keychain', 'dpapi', 'secret-tool', '1password', 'yubikey']) {
+      const input = validConfigJson()
+      input.backends = [{ type, enabled: true }]
+      expect(() => validateConfig(input)).not.toThrow()
+    }
+  })
+
+  it('accepts a custom backend type once it is registered', () => {
+    BackendRegistry.register('acme-vault', () => {
+      throw new Error('factory not needed for validation')
+    })
+    const input = validConfigJson()
+    input.backends = [{ type: 'acme-vault', enabled: true }]
+    expect(() => validateConfig(input)).not.toThrow()
+  })
+})
+
+// ---------------------------------------------------------------------------
 // getDefaultConfigDir
 // ---------------------------------------------------------------------------
 
@@ -484,6 +589,50 @@ describe('loadConfig', () => {
       expect(err.code).toBe('EISDIR')
       expect(err.cause).toBe(cause)
     }
+  })
+})
+
+// ---------------------------------------------------------------------------
+// loadConfig backend-type validation (issue #215)
+// ---------------------------------------------------------------------------
+
+describe('loadConfig backend-type validation', () => {
+  beforeAll(() => {
+    BackendRegistry.clearBackends()
+    registerBuiltinBackends()
+  })
+
+  afterEach(() => {
+    vi.mocked(readFile).mockReset()
+  })
+
+  afterAll(() => {
+    BackendRegistry.clearBackends()
+  })
+
+  it('rejects a config file with an unknown backend type, preserving the subclass', async () => {
+    const onDisk = { ...validConfigJson(), backends: [{ type: 'not-a-real-backend', enabled: true }] }
+    vi.mocked(readFile).mockResolvedValue(JSON.stringify(onDisk))
+    try {
+      await loadConfig('/fake')
+      expect.unreachable('loadConfig should have rejected the unknown backend type')
+    } catch (err) {
+      // The file-path re-wrap must keep the concrete subclass and its context.
+      if (!(err instanceof UnknownBackendTypeError)) {
+        throw err
+      }
+      expect(err.backendType).toBe('not-a-real-backend')
+      expect(err.knownTypes).toContain('file')
+      expect(err.configFilePath).toBe('/fake/config.json')
+      expect(err.message).toContain('Invalid config at /fake/config.json')
+      expect(err.message).toContain('not-a-real-backend')
+    }
+  })
+
+  it('loads a valid file-backend config unchanged', async () => {
+    vi.mocked(readFile).mockResolvedValue(JSON.stringify(validConfigJson()))
+    const config = await loadConfig('/fake')
+    expect(config.backends[0]?.type).toBe('file')
   })
 })
 

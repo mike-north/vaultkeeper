@@ -14,7 +14,12 @@ import {
 } from './checks.js'
 import { currentPlatform } from '../util/platform.js'
 import { loadConfig } from '../config.js'
-import { ConfigParseError, ConfigValidationError, FilesystemError } from '../errors.js'
+import {
+  ConfigParseError,
+  ConfigValidationError,
+  FilesystemError,
+  UnknownBackendTypeError,
+} from '../errors.js'
 import type {
   BackendConfig,
   PreflightCheck,
@@ -174,6 +179,20 @@ export async function runDoctor(options?: RunDoctorOptions): Promise<PreflightRe
 function toPreflightConfigError(err: unknown, configPath: string): PreflightCheckError | undefined {
   if (err instanceof ConfigParseError) {
     return { kind: 'config-parse', configPath: err.path, location: err.location }
+  }
+  if (err instanceof UnknownBackendTypeError) {
+    // A backend type that names no registered backend — a distinct, richer
+    // failure than a generic schema violation. Carry the offending type and
+    // the valid options so a consumer can give the same "Available types: …"
+    // guidance the runtime BackendUnavailableError gives (issue #215). Checked
+    // before ConfigValidationError since it is a subclass.
+    return {
+      kind: 'config-unknown-backend',
+      configPath: err.configFilePath ?? configPath,
+      field: err.field,
+      backendType: err.backendType,
+      knownBackendTypes: err.knownTypes,
+    }
   }
   if (err instanceof ConfigValidationError) {
     // Carry the structured `field` (e.g. `backends`) so a consumer can render

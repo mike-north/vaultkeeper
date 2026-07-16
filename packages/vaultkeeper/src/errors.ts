@@ -588,6 +588,45 @@ export class ConfigValidationError extends VaultError {
 }
 
 /**
+ * Thrown when a config's `backends[].type` names a backend that is not
+ * registered with the {@link BackendRegistry}.
+ *
+ * A specialization of {@link ConfigValidationError}: an unknown backend type is
+ * a semantic schema failure (the config parses and is structurally valid, but
+ * names a backend that cannot be created), so it fails config validation the
+ * same way `version !== 1` does. It carries the offending `backendType` and the
+ * set of `knownTypes` so a consumer — notably `doctor` — can give the same
+ * "Available types: …" guidance the runtime {@link BackendUnavailableError}
+ * gives, without parsing the human-readable message. This closes the gap where
+ * a config with an unknown backend type parsed as valid JSON and passed
+ * `doctor` with a false "System ready.", only for the next real command to
+ * throw {@link BackendUnavailableError} (issue #215).
+ */
+export class UnknownBackendTypeError extends ConfigValidationError {
+  /** The unregistered backend type named in the config. */
+  readonly backendType: string
+
+  /**
+   * The backend type identifiers that were registered when validation ran —
+   * the valid options to offer in remediation.
+   */
+  readonly knownTypes: string[]
+
+  constructor(
+    message: string,
+    field: string,
+    backendType: string,
+    knownTypes: string[],
+    configFilePath?: string,
+  ) {
+    super(message, field, configFilePath)
+    this.name = 'UnknownBackendTypeError'
+    this.backendType = backendType
+    this.knownTypes = knownTypes
+  }
+}
+
+/**
  * Thrown when a config file's contents cannot be parsed as JSON.
  *
  * The `message` already embeds the file path, the parse location (when the

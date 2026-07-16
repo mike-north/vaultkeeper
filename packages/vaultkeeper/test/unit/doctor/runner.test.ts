@@ -21,7 +21,12 @@ vi.mock('../../../src/config.js', () => ({
 }))
 
 import { loadConfig } from '../../../src/config.js'
-import { ConfigParseError, ConfigValidationError, FilesystemError } from '../../../src/errors.js'
+import {
+  ConfigParseError,
+  ConfigValidationError,
+  FilesystemError,
+  UnknownBackendTypeError,
+} from '../../../src/errors.js'
 import {
   checkOpenssl,
   checkBash,
@@ -768,6 +773,43 @@ describe('runDoctor with configDir', () => {
     })
     // Validation failures have no parse location.
     expect(configCheck?.error?.location).toBeUndefined()
+  })
+
+  // Issue #215: an unknown `backends[].type` is a distinct, richer validation
+  // failure than a generic schema error. The runner maps the
+  // UnknownBackendTypeError to a `config-unknown-backend` preflight error that
+  // carries the offending type and the valid options, so a CLI consumer can
+  // give the same "Available types: …" guidance the runtime
+  // BackendUnavailableError gives — and the config check fails (not ready).
+  it('attaches structured config-unknown-backend error context on an unknown backend type', async () => {
+    mockCheckOpenssl.mockReturnValue(mockOk('openssl'))
+    mockCheckBash.mockReturnValue(mockOk('bash'))
+    mockCheckSecretTool.mockReturnValue(mockOk('secret-tool'))
+    mockCheckOp.mockReturnValue(mockMissing('op'))
+    mockCheckYkman.mockReturnValue(mockMissing('ykman'))
+    mockLoadConfig.mockRejectedValue(
+      new UnknownBackendTypeError(
+        'Invalid config at /fake/config.json: backends[0].type is an unknown backend type: "not-a-real-backend". Available types: file, keychain, dpapi, secret-tool, 1password, yubikey. Fix the file ...',
+        'backends[0].type',
+        'not-a-real-backend',
+        ['file', 'keychain', 'dpapi', 'secret-tool', '1password', 'yubikey'],
+        '/fake/config.json',
+      ),
+    )
+
+    const result = await runDoctor({ platform: 'linux', configDir: '/fake' })
+
+    const configCheck = result.checks.find((c) => c.name === 'config')
+    expect(configCheck?.status).toBe('invalid')
+    expect(configCheck?.required).toBe(true)
+    expect(result.ready).toBe(false)
+    expect(configCheck?.error).toEqual({
+      kind: 'config-unknown-backend',
+      configPath: '/fake/config.json',
+      field: 'backends[0].type',
+      backendType: 'not-a-real-backend',
+      knownBackendTypes: ['file', 'keychain', 'dpapi', 'secret-tool', '1password', 'yubikey'],
+    })
   })
 
   it('falls back to the configDir-derived path when a validation error has no file path', async () => {

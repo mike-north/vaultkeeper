@@ -41,6 +41,25 @@ Description
 </th></tr></thead>
 <tbody><tr><td>
 
+[backendType?](./vaultkeeper.preflightcheckerror.backendtype.md)
+
+
+</td><td>
+
+
+</td><td>
+
+string \| undefined
+
+
+</td><td>
+
+_(Optional)_ The unregistered backend type named in `backends[].type`<!-- -->, present only for a `'config-unknown-backend'` failure. Lets a consumer echo the offending type in its remediation without parsing the `reason` prose.
+
+
+</td></tr>
+<tr><td>
+
 [code?](./vaultkeeper.preflightcheckerror.code.md)
 
 
@@ -92,7 +111,7 @@ string \| undefined
 
 </td><td>
 
-_(Optional)_ The dotted/bracketed path to the offending config field (for example `backends` or `backends[0].path`<!-- -->), present only for a `'config-validation'` failure. This is the validation analogue of `location`<!-- -->: it lets a consumer point the user at exactly which field failed schema validation, the way `location` points at a parse position, without reusing the human-readable `reason` prose (which carries the library's own "install @<!-- -->vaultkeeper/cli" remediation).
+_(Optional)_ The dotted/bracketed path to the offending config field (for example `backends` or `backends[0].path`<!-- -->), present for a `'config-validation'` or `'config-unknown-backend'` failure. This is the validation analogue of `location`<!-- -->: it lets a consumer point the user at exactly which field failed schema validation, the way `location` points at a parse position, without reusing the human-readable `reason` prose (which carries the library's own "install @<!-- -->vaultkeeper/cli" remediation).
 
 
 </td></tr>
@@ -112,6 +131,25 @@ _(Optional)_ The dotted/bracketed path to the offending config field (for exampl
 </td><td>
 
 The kind of failure, as a stable machine-readable discriminant.
+
+
+</td></tr>
+<tr><td>
+
+[knownBackendTypes?](./vaultkeeper.preflightcheckerror.knownbackendtypes.md)
+
+
+</td><td>
+
+
+</td><td>
+
+readonly string\[\] \| undefined
+
+
+</td><td>
+
+_(Optional)_ The backend type identifiers that were registered when validation ran — the valid options — present only for a `'config-unknown-backend'` failure. Lets a consumer offer the same "Available types: …" guidance the runtime `BackendUnavailableError` gives.
 
 
 </td></tr>
