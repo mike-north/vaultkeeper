@@ -2,135 +2,24 @@
 
 [Home](./index.md) &gt; [@vaultkeeper/wasm](./wasm.md) &gt; [SetupOptions](./wasm.setupoptions.md)
 
-## SetupOptions interface
+## SetupOptions type
 
 Options for the setup (token creation) operation.
-
-`setup()` requires an explicit executable-trust decision: provide exactly one of [SetupOptions.executablePath](./wasm.setupoptions.executablepath.md) or [SetupOptions.skipTrust](./wasm.setupoptions.skiptrust.md)<!-- -->. Supplying neither, both, or the retired `'dev'` sentinel as `executablePath` throws `ExecutableTrustRequiredError`<!-- -->.
 
 **Signature:**
 
 ```typescript
-export interface SetupOptions 
+export type SetupOptions = SetupOptionsBase & ({
+    executablePath: string;
+    skipTrust?: never;
+} | {
+    skipTrust: true;
+    executablePath?: never;
+});
 ```
+**References:** [SetupOptionsBase](./wasm.setupoptionsbase.md)
 
-## Properties
+## Remarks
 
-<table><thead><tr><th>
-
-Property
-
-
-</th><th>
-
-Modifiers
-
-
-</th><th>
-
-Type
-
-
-</th><th>
-
-Description
-
-
-</th></tr></thead>
-<tbody><tr><td>
-
-[backendType?](./wasm.setupoptions.backendtype.md)
-
-
-</td><td>
-
-
-</td><td>
-
-string
-
-
-</td><td>
-
-_(Optional)_ Backend identifier recorded as a claim label in the minted token's `bkd` claim. This is a label only: it does not select, connect to, or route through a functional backend. Setting `'keychain'`<!-- -->, for example, records the string `'keychain'` in the token without performing any keychain access. This WASM SDK's `setup()` mints the token directly from the supplied secret value and never reads from a backend.
-
-
-</td></tr>
-<tr><td>
-
-[executablePath?](./wasm.setupoptions.executablepath.md)
-
-
-</td><td>
-
-
-</td><td>
-
-string
-
-
-</td><td>
-
-_(Optional)_ The calling executable's real path. When supplied, `setup()` hashes the executable and runs trust-on-first-use verification (Sigstore → trust-manifest match → TOFU first-encounter), binding the verified hash into the minted token's `exe` claim; a hash conflicting with a previously approved value throws `IdentityMismatchError`<!-- -->. Mutually exclusive with [SetupOptions.skipTrust](./wasm.setupoptions.skiptrust.md)<!-- -->. The retired `'dev'` sentinel is rejected — use `skipTrust: true` to skip verification instead.
-
-
-</td></tr>
-<tr><td>
-
-[skipTrust?](./wasm.setupoptions.skiptrust.md)
-
-
-</td><td>
-
-
-</td><td>
-
-boolean
-
-
-</td><td>
-
-_(Optional)_ Development-only opt-out that deliberately skips binding a real executable identity, producing a `'dev'`<!-- -->-bound token (no executable identity bound). Mutually exclusive with [SetupOptions.executablePath](./wasm.setupoptions.executablepath.md)<!-- -->.
-
-
-</td></tr>
-<tr><td>
-
-[ttlMinutes?](./wasm.setupoptions.ttlminutes.md)
-
-
-</td><td>
-
-
-</td><td>
-
-number
-
-
-</td><td>
-
-_(Optional)_
-
-
-</td></tr>
-<tr><td>
-
-[useLimit?](./wasm.setupoptions.uselimit.md)
-
-
-</td><td>
-
-
-</td><td>
-
-number
-
-
-</td><td>
-
-_(Optional)_
-
-
-</td></tr>
-</tbody></table>
+The executable-trust choice is \*\*mandatory and mutually exclusive\*\*, and the type system enforces it: `SetupOptions` is [SetupOptionsBase](./wasm.setupoptionsbase.md) intersected with a choice of \*\*exactly one\*\* of `executablePath` (run trust-on-first-use verification — the production choice) or `skipTrust: true` (deliberately skip verification — development only). An options object with \*\*neither\*\* field, or with \*\*both\*\*, fails to typecheck; and because [VaultKeeper.setup()](./wasm.vaultkeeper.setup.md)<!-- -->'s options argument is required, a 2-argument `vault.setup(name, value)` call and a `vault.setup(name, value, {})` call are compile-time type errors rather than runtime-only failures. `ExecutableTrustRequiredError` remains a runtime backstop for callers without static typing (e.g. plain JavaScript), and is still thrown if `executablePath` is the retired legacy `'dev'` sentinel. This mirrors the TypeScript `vaultkeeper` library's `SetupOptions`<!-- -->.
 

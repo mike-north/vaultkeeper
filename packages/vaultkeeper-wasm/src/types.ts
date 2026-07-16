@@ -25,32 +25,13 @@ export interface VaultKeeperOptions {
 }
 
 /**
- * Options for the setup (token creation) operation.
- *
- * `setup()` requires an explicit executable-trust decision: provide exactly one
- * of {@link SetupOptions.executablePath} or {@link SetupOptions.skipTrust}.
- * Supplying neither, both, or the retired `'dev'` sentinel as `executablePath`
- * throws `ExecutableTrustRequiredError`.
+ * Options for {@link VaultKeeper.setup} that are independent of the mandatory
+ * executable-trust choice. Intersected with that choice to form
+ * {@link SetupOptions}.
  */
-export interface SetupOptions {
+export interface SetupOptionsBase {
   ttlMinutes?: number
   useLimit?: number
-  /**
-   * The calling executable's real path. When supplied, `setup()` hashes the
-   * executable and runs trust-on-first-use verification (Sigstore →
-   * trust-manifest match → TOFU first-encounter), binding the verified hash into
-   * the minted token's `exe` claim; a hash conflicting with a previously
-   * approved value throws `IdentityMismatchError`. Mutually exclusive with
-   * {@link SetupOptions.skipTrust}. The retired `'dev'` sentinel is rejected —
-   * use `skipTrust: true` to skip verification instead.
-   */
-  executablePath?: string
-  /**
-   * Development-only opt-out that deliberately skips binding a real executable
-   * identity, producing a `'dev'`-bound token (no executable identity bound).
-   * Mutually exclusive with {@link SetupOptions.executablePath}.
-   */
-  skipTrust?: boolean
   /**
    * Backend identifier recorded as a claim label in the minted token's `bkd`
    * claim. This is a label only: it does not select, connect to, or route
@@ -61,6 +42,50 @@ export interface SetupOptions {
    */
   backendType?: string
 }
+
+/**
+ * Options for the setup (token creation) operation.
+ *
+ * @remarks
+ * The executable-trust choice is **mandatory and mutually exclusive**, and the
+ * type system enforces it: `SetupOptions` is {@link SetupOptionsBase}
+ * intersected with a choice of **exactly one** of `executablePath` (run
+ * trust-on-first-use verification — the production choice) or `skipTrust: true`
+ * (deliberately skip verification — development only). An options object with
+ * **neither** field, or with **both**, fails to typecheck; and because
+ * {@link VaultKeeper.setup}'s options argument is required, a 2-argument
+ * `vault.setup(name, value)` call and a `vault.setup(name, value, {})` call are
+ * compile-time type errors rather than runtime-only failures.
+ * `ExecutableTrustRequiredError` remains a
+ * runtime backstop for callers without static typing (e.g. plain JavaScript),
+ * and is still thrown if `executablePath` is the retired legacy `'dev'`
+ * sentinel. This mirrors the TypeScript `vaultkeeper` library's `SetupOptions`.
+ */
+export type SetupOptions = SetupOptionsBase &
+  (
+    | {
+        /**
+         * The calling executable's real path. When supplied, `setup()` hashes
+         * the executable and runs trust-on-first-use verification (Sigstore →
+         * trust-manifest match → TOFU first-encounter), binding the verified
+         * hash into the minted token's `exe` claim; a hash conflicting with a
+         * previously approved value throws `IdentityMismatchError`. Mutually
+         * exclusive with `skipTrust`. The retired `'dev'` sentinel is rejected —
+         * use `skipTrust: true` to skip verification instead.
+         */
+        executablePath: string
+        skipTrust?: never
+      }
+    | {
+        /**
+         * Development-only opt-out that deliberately skips binding a real
+         * executable identity, producing a `'dev'`-bound token (no executable
+         * identity bound). Mutually exclusive with `executablePath`.
+         */
+        skipTrust: true
+        executablePath?: never
+      }
+  )
 
 /** Trust tier classification. */
 export type TrustTier = '1' | '2' | '3'

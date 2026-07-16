@@ -119,10 +119,17 @@ export class SecretNotFoundError extends VaultError {
 }
 
 // @public
-export interface SetupOptions {
+export type SetupOptions = SetupOptionsBase & ({
+    executablePath: string;
+    skipTrust?: never;
+} | {
+    skipTrust: true;
+    executablePath?: never;
+});
+
+// @public
+export interface SetupOptionsBase {
     backendType?: string;
-    executablePath?: string;
-    skipTrust?: boolean;
     // (undocumented)
     ttlMinutes?: number;
     // (undocumented)
@@ -211,7 +218,7 @@ export class VaultKeeper {
     retrieve(id: string): Promise<string>;
     revokeKey(): void;
     rotateKey(): void;
-    setup(secretName: string, secretValue: string, options?: SetupOptions): Promise<string>;
+    setup(secretName: string, secretValue: string, options: SetupOptions): Promise<string>;
     store(id: string, secret: string): Promise<void>;
 }
 
