@@ -72,6 +72,8 @@ jobs:
 
       - run: pnpm check:api-report
 
+      - run: pnpm check:readme-examples
+
       - run: pnpm check:api-docs
 
       - name: Download Rust binary

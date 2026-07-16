@@ -49,6 +49,10 @@
       "inputs": ["production", "^production"],
       "outputs": ["{projectRoot}/api-report"]
     },
+    "check:readme-examples": {
+      "dependsOn": ["^build"],
+      "cache": false
+    },
     "generate:api-report": {
       "dependsOn": ["build"],
       "cache": true,

@@ -145,6 +145,8 @@ vite.config.ts.timestamp-*
 
 # Build artifacts
 tmp/
+# Transient scratch dirs from the README-example type-check harness
+**/.readme-tc-*/
 
 # Nx
 .nx/

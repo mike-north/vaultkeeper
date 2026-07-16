@@ -6,6 +6,7 @@
   "type": "module",
   "scripts": {
     "test": "vitest run",
+    "check:readme-examples": "vitest run test/e2e/readme-examples.test.ts",
     "check:typecheck": "tsc --noEmit",
     "check:lint-ts": "eslint .",
     "check": "pnpm check:typecheck && pnpm check:lint-ts"

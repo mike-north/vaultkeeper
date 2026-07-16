@@ -69,6 +69,7 @@ export default tseslint.config(
       'prettier.config.js',
       '**/scratch/**',
       '**/tmp/**',
+      '**/.readme-tc-*/**',
       '**/wasm/**',
     ],
   },
