@@ -54,11 +54,11 @@ describe('README shell examples run clean against the built CLI', () => {
   for (const fence of EXEC_FENCES) {
     const id = `${fence.readme}:${String(fence.startLine)}`
     if (fence.skipped) {
-      it.skip(`${id} (opted out${fence.skipReason !== undefined ? `: ${fence.skipReason}` : ''})`, () => {})
+      it.skip(`${id} (opted out${fence.skipReason !== undefined ? `: ${fence.skipReason}` : ''})`, () => { /* opted out */ })
       continue
     }
     if (isInstallOnlyFence(fence)) {
-      it.skip(`${id} (install-only, needs network)`, () => {})
+      it.skip(`${id} (install-only, needs network)`, () => { /* opted out */ })
       continue
     }
     it(`${id} exits 0`, () => {
@@ -76,7 +76,7 @@ describe('README TypeScript/JavaScript examples type-check against the built typ
   for (const fence of TYPECHECK_FENCES) {
     const id = `${fence.readme}:${String(fence.startLine)}`
     if (fence.skipped) {
-      it.skip(`${id} (opted out${fence.skipReason !== undefined ? `: ${fence.skipReason}` : ''})`, () => {})
+      it.skip(`${id} (opted out${fence.skipReason !== undefined ? `: ${fence.skipReason}` : ''})`, () => { /* opted out */ })
       continue
     }
     it(`${id} (${fence.lang}) compiles`, () => {

@@ -413,6 +413,8 @@ you require it for a specific operation.
 
 **Query a backend's capabilities:**
 
+<!-- readme-example: skip - fragment; `vault` comes from the quick-start fence above -->
+
 ```ts
 const caps = await vault.getActiveBackendCapabilities()
 if (!caps.presencePerUse) {
@@ -432,6 +434,8 @@ or `sign`. When the active backend cannot guarantee it, the call throws `NotCapa
 any credential, session, or device is touched**. When the backend is capable, the operation forces a
 fresh human action for that specific call (a declined action throws `PresenceDeclinedError`; a
 timeout throws `PresenceTimeoutError`):
+
+<!-- readme-example: skip - fragment; `vault` comes from the quick-start fence above -->
 
 ```ts
 // Presence-gated signing: each sign performs a fresh backend round-trip, so no

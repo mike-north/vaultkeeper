@@ -155,7 +155,7 @@ CHALLENGE="hello-challenge"
 vaultkeeper key create --name approval-signing-key --type ed25519   # unknown --type exits 2
 vaultkeeper key export --name approval-signing-key > approval.pub   # SPKI PEM public key
 printf '%s' "$CHALLENGE" | vaultkeeper sign --name approval-signing-key > sig
-vaultkeeper verify --public-key approval.pub --signature sig <<<"$CHALLENGE"   # exit 0 = valid
+printf '%s' "$CHALLENGE" | vaultkeeper verify --public-key approval.pub --signature sig   # exit 0 = valid
 ```
 
 Feed `sign` and `verify` the payload the **same way** — here, `printf '%s'` piped into
@@ -174,6 +174,8 @@ the public key, the payload on stdin, and the signature.
 
 Discover which backends can force a **fresh, per-use human action** (a distinct touch/biometric that
 no cached or session unlock can satisfy), then require it for an operation:
+
+<!-- readme-example: skip - fragment; reuses the approval-signing-key and $CHALLENGE created in the sign/verify fence above -->
 
 ```sh
 # List each registered backend and whether it forces a fresh per-use action.

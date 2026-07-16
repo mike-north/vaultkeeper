@@ -202,8 +202,8 @@ export function runShellFence(fence: Fence): ShellRunResult {
     })
     return {
       exitCode: result.status ?? (result.signal !== null ? 1 : 0),
-      stdout: result.stdout ?? '',
-      stderr: result.stderr ?? '',
+      stdout: result.stdout,
+      stderr: result.stderr,
     }
   } finally {
     fs.rmSync(root, { recursive: true, force: true })
@@ -258,7 +258,7 @@ export function typecheckCodeFence(fence: Fence): TypecheckResult {
     })
     return {
       exitCode: result.status ?? 1,
-      output: `${result.stdout ?? ''}${result.stderr ?? ''}`,
+      output: `${result.stdout}${result.stderr}`,
     }
   } finally {
     fs.rmSync(scratch, { recursive: true, force: true })
