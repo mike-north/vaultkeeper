@@ -185,8 +185,16 @@ export async function saveKeyState(configDir: string, snapshot: KeyStateSnapshot
 
   const statePath = path.join(configDir, KEY_STATE_FILE)
   const tmpPath = `${statePath}.${String(process.pid)}.tmp`
+  // Keep the write and the rename in separate try/catch blocks so the reported
+  // FilesystemError path matches whichever step actually failed: the temp file
+  // on a write failure (e.g. EACCES/ENOSPC creating it), the final state file
+  // on a rename failure. A single shared catch would always blame `statePath`.
   try {
     await fs.writeFile(tmpPath, envelope, { encoding: 'utf8', mode: 0o600 })
+  } catch (err) {
+    throw toFilesystemError(err, 'key state file', tmpPath, 'write')
+  }
+  try {
     await fs.rename(tmpPath, statePath)
   } catch (err) {
     throw toFilesystemError(err, 'key state file', statePath, 'write')
