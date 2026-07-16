@@ -153,6 +153,45 @@ packages/cli-tests/test/
 
 Tests use vitest (except `@vaultkeeper/wasm` which uses `node:test`). Coverage collected with `v8`.
 
+### Type-level tests
+
+For "this must not typecheck" assertions (verifying a type constraint is enforced at compile time,
+not just at runtime), the canonical convention for any package that uses vitest is **vitest's
+built-in typecheck mode**:
+
+- A `test/types/<name>.test-d.ts` file, using `describe`/`it` from vitest with `expectTypeOf` for
+  structural assertions and `@ts-expect-error` immediately above the line that must fail to
+  compile. See `packages/vaultkeeper/test/types/setup-options.test-d.ts` for the reference example.
+- Gated by a package-local `tsconfig.test-d.json` (narrowly scoped to `src` plus `test/types`, not
+  the whole `test` tree), wired into the package's `vitest.config.ts` via:
+  ```ts
+  test: {
+    typecheck: {
+      enabled: true,
+      tsconfig: './tsconfig.test-d.json',
+      include: ['test/**/*.test-d.ts'],
+    },
+  }
+  ```
+  This runs automatically as part of the package's ordinary `vitest run` (`pnpm test`) and CI — no
+  separate script or nx target is needed.
+- Do not add `tsd` as a dependency anywhere in this repo. Vitest's `expectTypeOf`/`@ts-expect-error`
+  already cover the same ground `tsd`'s `expectType`/`expectError` would, and a package here already
+  uses vitest for runtime tests — introducing a second type-only test runner would recreate the
+  inconsistency this convention exists to resolve (see issue #199).
+- Prefer this over a bare `tsc --noEmit -p tsconfig.test.json` script: both catch a stale
+  `@ts-expect-error` (TS2578 fires either way), but vitest's typecheck mode runs as part of the
+  package's normal `vitest run`/CI invocation — no separate script or nx target to add, wire into
+  `check`, and keep in sync — and reports type-level results alongside the runtime tests in one
+  `describe`/`it`/`expectTypeOf` structure instead of a second, differently-shaped fixture file.
+
+**Exception — `@vaultkeeper/wasm`:** this package deliberately uses `node:test`, not vitest, for
+runtime tests, so it cannot host vitest's typecheck mode. Its type-only `*.test-d.ts` fixtures
+instead live under `src/test/` (e.g. `packages/vaultkeeper-wasm/src/test/setup-options.test-d.ts`)
+and are gated by the package's ordinary `check:typecheck` (`tsc --noEmit`), since `src/test` already
+falls under the package's main `tsconfig.json` include. This is the one place in the repo where the
+plain-`tsc`-only style is intentional rather than a convention to migrate away from.
+
 ### Rust tests
 
 - `crates/vaultkeeper-core/tests/` — unit tests (47 tests)
