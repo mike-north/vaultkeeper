@@ -39,7 +39,14 @@ import {
   getIntegrationVersion,
   isModuleNotFoundError,
 } from './one-password-constants.js'
-import { storeSecretItem, deleteSecretItem } from './one-password-item-ops.js'
+import {
+  findItemOverviewByTitle,
+  extractPasswordField,
+  storeSecretItem,
+  deleteSecretItem,
+} from './one-password-item-ops.js'
+
+type ItemOverview = import('@1password/sdk').ItemOverview
 
 interface RetrieveSuccessResponse {
   value: string
@@ -244,43 +251,34 @@ async function main(): Promise<void> {
     return
   }
 
-  // op === 'retrieve' — unchanged read path.
-  let overviews
+  // op === 'retrieve' — unchanged read path, behavior-for-behavior. Now reuses
+  // the same lookup/extract helpers (and their TAG/PASSWORD_FIELD_TITLE
+  // conventions) the store/delete paths use via one-password-item-ops.ts,
+  // instead of re-hardcoding the tag and field title here — so the read and
+  // write paths can't drift on those conventions.
+  let overview: ItemOverview | undefined
   try {
-    overviews = await client.items.list(vaultId)
+    overview = await findItemOverviewByTitle(client, vaultId, secretId)
   } catch (err) {
     writeFailure(`Failed to list items: ${String(err)}`, 'INTERNAL')
     process.exit(1)
+    return
   }
 
-  let targetId: string | undefined
-  for (const overview of overviews) {
-    if (overview.title === secretId && overview.tags.includes('vaultkeeper')) {
-      targetId = overview.id
-      break
-    }
-  }
-
-  if (targetId === undefined) {
+  if (overview === undefined) {
     writeFailure(`Secret not found: ${secretId}`, 'NOT_FOUND')
     process.exit(1)
   }
 
   let item
   try {
-    item = await client.items.get(vaultId, targetId)
+    item = await client.items.get(vaultId, overview.id)
   } catch (err) {
     writeFailure(`Failed to retrieve item: ${String(err)}`, 'NOT_FOUND')
     process.exit(1)
   }
 
-  let secretValue: string | undefined
-  for (const field of item.fields) {
-    if (field.title === 'password') {
-      secretValue = field.value
-      break
-    }
-  }
+  const secretValue = extractPasswordField(item)
 
   if (secretValue === undefined) {
     writeFailure(`Item found but missing password field: ${secretId}`, 'NOT_FOUND')

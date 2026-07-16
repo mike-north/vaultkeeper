@@ -1027,6 +1027,22 @@ describe('OnePasswordBackend', () => {
       expect(error instanceof Error ? error.message : '').toContain('unexpected failure')
     })
 
+    // Regression: a malformed/adversarial worker response that carries an
+    // `ok` key alongside `error`/`code` (e.g. `{ ok: false, error, code }`)
+    // must never be misclassified as success — `isWorkerWriteSuccess` must
+    // not treat mere *presence* of `ok` as success.
+    it('should surface the mapped typed error, never success, when the worker reports ok: false alongside error/code', async () => {
+      const backend = makePerAccessBackend()
+      const proc = makeWorkerWriteProcess(
+        JSON.stringify({ ok: false, error: 'unexpected failure', code: 'INTERNAL' }),
+      )
+      mockSpawn.mockReturnValue(proc)
+
+      const error = await backend.store('my-secret', 'v').catch((err: unknown) => err)
+      expect(error).toBeInstanceOf(BackendUnavailableError)
+      expect(error instanceof Error ? error.message : '').toContain('unexpected failure')
+    })
+
     it('should throw a typed BackendUnavailableError when worker output is unparseable', async () => {
       const backend = makePerAccessBackend()
       const proc = makeWorkerWriteProcess('not-valid-json{{')

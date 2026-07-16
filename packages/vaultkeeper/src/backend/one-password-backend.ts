@@ -117,7 +117,13 @@ interface WorkerWriteSuccess {
 type WorkerWriteResponse = WorkerWriteSuccess | WorkerFailure
 
 function isWorkerWriteSuccess(res: WorkerWriteResponse): res is WorkerWriteSuccess {
-  return 'ok' in res
+  // Deliberately does NOT check `'ok' in res` — a malformed/adversarial worker
+  // response could carry `{ ok: false, error, code }` (an `ok` key that is
+  // present but false), which `'ok' in res` alone would misclassify as
+  // success. `error` is unique to `WorkerFailure` and is the one field a
+  // genuine failure always has (see `isWorkerWriteResponse`'s validation), so
+  // its absence is the reliable success discriminant.
+  return !('error' in res)
 }
 
 function isWorkerWriteResponse(value: unknown): value is WorkerWriteResponse {
