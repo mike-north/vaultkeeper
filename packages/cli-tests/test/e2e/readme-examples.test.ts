@@ -44,10 +44,14 @@ function fencesFor(readme: string): Fence[] {
 }
 
 const EXEC_FENCES = EXEC_READMES.flatMap(fencesFor).filter(isShellFence)
-/** `run`-marked TS/JS fences across every README — executed against the built package. */
-const RUN_FENCES = [...EXEC_READMES, ...TYPECHECK_READMES]
-  .flatMap(fencesFor)
-  .filter((f) => isCodeFence(f) && f.run)
+/**
+ * Every README this harness tracks. A `readme-example: run` marker only takes
+ * effect in a README listed here — add new READMEs to one of the lists above
+ * or their fences will silently never execute.
+ */
+const TRACKED_READMES = [...EXEC_READMES, ...TYPECHECK_READMES]
+/** `run`-marked TS/JS fences across the tracked READMEs — executed against the built package. */
+const RUN_FENCES = TRACKED_READMES.flatMap(fencesFor).filter((f) => isCodeFence(f) && f.run)
 // Type-check every TS/JS fence in the library READMEs, plus every run fence
 // wherever it lives — running a fence implies it must also compile clean, so a
 // run-marked fence in a non-typecheck README is still type-checked (keeps the
@@ -66,11 +70,15 @@ describe('README shell examples run clean against the built CLI', () => {
   for (const fence of EXEC_FENCES) {
     const id = `${fence.readme}:${String(fence.startLine)}`
     if (fence.skipped) {
-      it.skip(`${id} (opted out${fence.skipReason !== undefined ? `: ${fence.skipReason}` : ''})`, () => { /* opted out */ })
+      it.skip(`${id} (opted out${fence.skipReason !== undefined ? `: ${fence.skipReason}` : ''})`, () => {
+        /* opted out */
+      })
       continue
     }
     if (isInstallOnlyFence(fence)) {
-      it.skip(`${id} (install-only, needs network)`, () => { /* opted out */ })
+      it.skip(`${id} (install-only, needs network)`, () => {
+        /* opted out */
+      })
       continue
     }
     it(`${id} exits 0`, () => {
@@ -88,7 +96,9 @@ describe('README TypeScript/JavaScript examples type-check against the built typ
   for (const fence of TYPECHECK_FENCES) {
     const id = `${fence.readme}:${String(fence.startLine)}`
     if (fence.skipped) {
-      it.skip(`${id} (opted out${fence.skipReason !== undefined ? `: ${fence.skipReason}` : ''})`, () => { /* opted out */ })
+      it.skip(`${id} (opted out${fence.skipReason !== undefined ? `: ${fence.skipReason}` : ''})`, () => {
+        /* opted out */
+      })
       continue
     }
     it(`${id} (${fence.lang}) compiles`, () => {
@@ -167,7 +177,9 @@ describe('coverage guards (non-vacuous)', () => {
     // fences, not just those in the library READMEs.
     for (const runFence of RUN_FENCES) {
       expect(
-        TYPECHECK_FENCES.some((f) => f.readme === runFence.readme && f.startLine === runFence.startLine),
+        TYPECHECK_FENCES.some(
+          (f) => f.readme === runFence.readme && f.startLine === runFence.startLine,
+        ),
         `run fence ${runFence.readme}:${String(runFence.startLine)} must also be in the type-checked set`,
       ).toBe(true)
     }
@@ -185,16 +197,21 @@ describe('coverage guards (non-vacuous)', () => {
 
 describe('harness: fence extraction and classification', () => {
   it('records a skip marker (and its reason) on the immediately preceding line', () => {
-    const md = ['<!-- readme-example: skip - references an earlier vault -->', '```ts', 'await vault.x()', '```'].join(
-      '\n',
-    )
+    const md = [
+      '<!-- readme-example: skip - references an earlier vault -->',
+      '```ts',
+      'await vault.x()',
+      '```',
+    ].join('\n')
     const [fence] = extractFences(md, 'X.md')
     expect(fence?.skipped).toBe(true)
     expect(fence?.skipReason).toBe('references an earlier vault')
   })
 
   it('detects a skip marker across intervening blank lines', () => {
-    const md = ['<!-- readme-example: skip -->', '', '```sh', 'vaultkeeper exec ...', '```'].join('\n')
+    const md = ['<!-- readme-example: skip -->', '', '```sh', 'vaultkeeper exec ...', '```'].join(
+      '\n',
+    )
     const [fence] = extractFences(md, 'X.md')
     expect(fence?.skipped).toBe(true)
     expect(fence?.skipReason).toBeUndefined()
@@ -208,7 +225,13 @@ describe('harness: fence extraction and classification', () => {
   })
 
   it('records a run marker (and its reason) across intervening blank lines', () => {
-    const md = ['<!-- readme-example: run - self-contained -->', '', '```ts', 'await main()', '```'].join('\n')
+    const md = [
+      '<!-- readme-example: run - self-contained -->',
+      '',
+      '```ts',
+      'await main()',
+      '```',
+    ].join('\n')
     const [fence] = extractFences(md, 'X.md')
     expect(fence?.run).toBe(true)
     expect(fence?.skipped).toBe(false)
@@ -217,16 +240,27 @@ describe('harness: fence extraction and classification', () => {
 
   it('lets a skip marker take precedence over a run marker on the same line', () => {
     // A line carrying both markers must opt the fence out entirely — never run it.
-    const md = ['<!-- readme-example: skip run - both present -->', '```ts', 'await main()', '```'].join('\n')
+    const md = [
+      '<!-- readme-example: skip run - both present -->',
+      '```ts',
+      'await main()',
+      '```',
+    ].join('\n')
     const [fence] = extractFences(md, 'X.md')
     expect(fence?.skipped).toBe(true)
     expect(fence?.run).toBe(false)
   })
 
   it('auto-skips an install-only fence but not a real command sequence', () => {
-    const [install] = extractFences(['```sh', 'pnpm add -g @vaultkeeper/cli', '```'].join('\n'), 'X.md')
+    const [install] = extractFences(
+      ['```sh', 'pnpm add -g @vaultkeeper/cli', '```'].join('\n'),
+      'X.md',
+    )
     expect(install && isInstallOnlyFence(install)).toBe(true)
-    const [run] = extractFences(['```sh', '# install first', 'vaultkeeper doctor', '```'].join('\n'), 'X.md')
+    const [run] = extractFences(
+      ['```sh', '# install first', 'vaultkeeper doctor', '```'].join('\n'),
+      'X.md',
+    )
     expect(run && isInstallOnlyFence(run)).toBe(false)
   })
 
