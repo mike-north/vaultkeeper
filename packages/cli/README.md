@@ -152,7 +152,7 @@ fully offline:
 
 ```sh
 CHALLENGE="hello-challenge"
-vaultkeeper key create --name approval-signing-key --type ed25519   # unknown --type exits 2
+vaultkeeper key create --name approval-signing-key --type ed25519   # an unknown --type value exits 2
 vaultkeeper key export --name approval-signing-key > approval.pub   # SPKI PEM public key
 printf '%s' "$CHALLENGE" | vaultkeeper sign --name approval-signing-key > sig
 printf '%s' "$CHALLENGE" | vaultkeeper verify --public-key approval.pub --signature sig   # exit 0 = valid

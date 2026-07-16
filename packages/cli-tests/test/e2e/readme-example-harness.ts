@@ -265,6 +265,13 @@ export function typecheckCodeFence(fence: Fence): TypecheckResult {
       stdio: ['ignore', 'pipe', 'pipe'],
       timeout: 120_000,
     })
+    // spawnSync could not start tsc at all (missing/non-executable binary, etc.):
+    // surface the underlying error instead of a silent, hard-to-diagnose failure.
+    if (result.error) {
+      throw new Error(
+        `Failed to run tsc for a TS/JS fence: ${result.error.message}`,
+      )
+    }
     return {
       exitCode: result.status ?? 1,
       output: `${result.stdout}${result.stderr}`,
