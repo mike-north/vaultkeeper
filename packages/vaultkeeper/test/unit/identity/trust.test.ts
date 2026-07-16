@@ -365,6 +365,39 @@ describe('verifyTrustPending / commitTrust — verify/commit split (#148)', () =
     })
   })
 
+  // Mirrors Rust's commit_skips_save_when_staged_entry_already_trusted: when a
+  // concurrent commit of the SAME hash landed first, the staged entry is
+  // already trusted — commit must no-op without a redundant save (the
+  // last-writer-wins window shrinks when we skip the write entirely).
+  it('commitTrust no-ops without rewriting when the staged hash is already trusted', async () => {
+    await withTempDir(async (dir) => {
+      const execPath = await createTempBinary(dir, 'my-tool', 'binary-content-v1')
+      const configDir = path.join(dir, 'config')
+
+      const pending = await verifyTrustPending(execPath, {
+        configDir,
+        namespace: 'my-tool',
+        skipSigstore: true,
+      })
+      const stagedHash = pending.identity.hash
+
+      // Simulate a concurrent commit of the SAME executable landing first.
+      const concurrentManifest = await loadManifest(configDir)
+      await saveManifest(configDir, addTrustedHash(concurrentManifest, 'my-tool', stagedHash))
+      const manifestPath = path.join(configDir, 'trust-manifest.json')
+      const before = await fs.stat(manifestPath)
+
+      await expect(commitTrust(pending)).resolves.toBeUndefined()
+
+      // No redundant save: the file was not rewritten, and the namespace still
+      // holds exactly one copy of the hash.
+      const after = await fs.stat(manifestPath)
+      expect(after.mtimeMs).toBe(before.mtimeMs)
+      const manifest = await loadManifest(configDir)
+      expect(manifest.get('my-tool')?.hashes).toEqual([stagedHash])
+    })
+  })
+
   it('verifyTrust (eager wrapper) still verifies and commits in one call', async () => {
     await withTempDir(async (dir) => {
       const execPath = await createTempBinary(dir, 'my-tool', 'binary-content-v1')
