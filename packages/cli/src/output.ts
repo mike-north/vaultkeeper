@@ -307,7 +307,9 @@ function formatFilesystemError(err: FilesystemError): string {
   // parent-directory hint, rather than the file-oriented messages below —
   // the thing that could not be created is a directory, and the fix lives in
   // the parent directory's permissions (or choosing a writable location).
-  if (err.permission === 'create') {
+  // `rwx` is FileBackend's legacy label for the same failure class (its
+  // storage-directory mkdir), so it gets the same directory wording.
+  if (err.permission === 'create' || err.permission === 'rwx') {
     if (kind === 'denied') {
       return (
         `${err.name}: The directory at ${quotedPath} could not be created (permission denied). ` +

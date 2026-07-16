@@ -692,8 +692,10 @@ describe('formatError renders FilesystemError without raw OS text (issue #150)',
 
   // FileBackend throws `permission: 'rwx'` when it can't create its storage
   // directory — a permission SET, not an operation verb. It must still read
-  // as the operation that failed (created), not the generic "accessed".
-  it("renders a storage-directory creation failure (permission 'rwx') as 'created'", () => {
+  // as a DIRECTORY-creation failure: 'rwx' is FileBackend's legacy label for
+  // the same failure class as 'create' (its storage-dir mkdir), so it gets the
+  // same directory-oriented wording (review follow-up on issue #228).
+  it("renders a storage-directory creation failure (permission 'rwx') with the directory wording", () => {
     const dir = '/tmp/vk-store/secrets'
     const err = new FilesystemError(
       `Failed to create storage directory: ${dir}: EACCES`,
@@ -704,8 +706,8 @@ describe('formatError renders FilesystemError without raw OS text (issue #150)',
     const formatted = formatError(err, CONFIG_DIR)
 
     expect(formatted).toBe(
-      `FilesystemError: The file at \`${dir}\` cannot be created (permission denied). ` +
-        "Check the file's permissions and try again.",
+      `FilesystemError: The directory at \`${dir}\` could not be created (permission denied). ` +
+        'Check that its parent directory is writable, or choose a writable location with --config-dir, then try again.',
     )
     expect(formatted).not.toContain('accessed')
     expect(formatted).not.toContain('EACCES')

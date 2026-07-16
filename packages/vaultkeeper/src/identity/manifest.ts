@@ -4,7 +4,7 @@
 
 import * as fs from 'node:fs/promises'
 import * as path from 'node:path'
-import { FilesystemError } from '../errors.js'
+import { FilesystemError, toFilesystemError } from '../errors.js'
 import type { TrustManifest, TrustManifestEntry } from './types.js'
 
 const MANIFEST_FILENAME = 'trust-manifest.json'
@@ -102,13 +102,20 @@ export async function loadManifest(configDir: string): Promise<TrustManifest> {
  */
 export async function saveManifest(configDir: string, manifest: TrustManifest): Promise<void> {
   const manifestPath = path.join(configDir, MANIFEST_FILENAME)
+  // Split try/catches so each failure blames the path and operation that
+  // actually failed: a shared catch would report a config-dir mkdir EACCES
+  // as a failed manifest *write* at manifestPath (issue #228 audit).
   try {
     await fs.mkdir(configDir, { recursive: true })
-    const entries: Record<string, TrustManifestEntry> = {}
-    for (const [namespace, entry] of manifest) {
-      entries[namespace] = entry
-    }
-    const raw: RawManifest = { version: 1, entries }
+  } catch (err) {
+    throw toFilesystemError(err, 'trust-manifest directory', configDir, 'create')
+  }
+  const entries: Record<string, TrustManifestEntry> = {}
+  for (const [namespace, entry] of manifest) {
+    entries[namespace] = entry
+  }
+  const raw: RawManifest = { version: 1, entries }
+  try {
     await fs.writeFile(manifestPath, JSON.stringify(raw, null, 2), 'utf8')
   } catch (err) {
     const detail = err instanceof Error ? err.message : String(err)
