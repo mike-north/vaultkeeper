@@ -283,7 +283,7 @@ function makeWorkerErrorProcess(spawnErr: Error): MockChildProcess {
   // Present so a write-path spawn error (store, which writes to stdin before
   // the 'error' event fires) doesn't throw on a missing `.stdin` — retrieve
   // and delete never touch it.
-  const stdin = { write: vi.fn(), end: vi.fn() }
+  const stdin = { on: vi.fn(), write: vi.fn(), end: vi.fn() }
 
   const proc: MockChildProcess = {
     stdout,
@@ -347,6 +347,7 @@ function makeWorkerWriteProcess(
     }),
   }
   const stdin = {
+    on: vi.fn(),
     write: vi.fn((chunk: string) => {
       stdinRecorder?.writes.push(chunk)
     }),

@@ -487,6 +487,14 @@ export class OnePasswordBackend implements ListableBackend, PresenceCapableBacke
       })
 
       if (needsStdin && child.stdin !== null) {
+        // A worker that exits before draining stdin (e.g. a protocol
+        // validation failure) makes this write raise EPIPE, which without a
+        // handler becomes an unhandled 'error' event and crashes the parent.
+        // The worker's own failure is already reported through the close
+        // handler below, so the stream error itself is safe to swallow.
+        child.stdin.on('error', () => {
+          /* reported via the close handler */
+        })
         child.stdin.write(secret, 'utf8')
         child.stdin.end()
       }

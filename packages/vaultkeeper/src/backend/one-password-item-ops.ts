@@ -44,7 +44,9 @@ export async function findItemOverviewByTitle(
 }
 
 /**
- * Fetch the full item for a given secret id. Returns `undefined` if not found.
+ * Fetch the full item for a given secret id. Returns `undefined` when no
+ * tagged item with that title exists; rejects if the item fetch itself fails
+ * (the overview was found but `items.get` errored).
  */
 export async function findItemByTitle(
   client: Client,
