@@ -711,6 +711,54 @@ describe('formatError renders FilesystemError without raw OS text (issue #150)',
     expect(formatted).not.toContain('EACCES')
   })
 
+  // Config-dir CREATION failures (`config init` / first `store`) use
+  // `permission: 'create'` and must read as a DIRECTORY that could not be
+  // created, with a parent-directory fix hint — not the file-oriented wording
+  // above (issue #228).
+  it("renders a config-dir creation EACCES (permission 'create') as a directory + parent hint", () => {
+    const dir = '/tmp/readonly/sub'
+    const cause = Object.assign(new Error("EACCES: permission denied, mkdir '/tmp/readonly/sub'"), {
+      code: 'EACCES',
+    })
+    const err = new FilesystemError(
+      `Failed to create config directory at ${dir}: ${cause.message}`,
+      dir,
+      'create',
+      cause,
+    )
+
+    const formatted = formatError(err, CONFIG_DIR)
+
+    expect(formatted).toBe(
+      `FilesystemError: The directory at \`${dir}\` could not be created (permission denied). ` +
+        'Check that its parent directory is writable, or choose a writable location with --config-dir, then try again.',
+    )
+    expect(formatted).not.toContain('EACCES')
+    expect(formatted).not.toContain('mkdir')
+    // Directory wording, never "The file at".
+    expect(formatted).not.toContain('The file at')
+  })
+
+  it("renders a non-permission config-dir creation failure (permission 'create') without a permission claim", () => {
+    const dir = '/tmp/readonly/sub'
+    const cause = Object.assign(new Error('EROFS: read-only file system'), { code: 'EROFS' })
+    const err = new FilesystemError(
+      `Failed to create config directory at ${dir}: ${cause.message}`,
+      dir,
+      'create',
+      cause,
+    )
+
+    const formatted = formatError(err, CONFIG_DIR)
+
+    expect(formatted).toBe(
+      `FilesystemError: The directory at \`${dir}\` could not be created. ` +
+        'Check that its parent directory exists and is writable, then try again.',
+    )
+    expect(formatted).not.toContain('permission denied')
+    expect(formatted).not.toContain('EROFS')
+  })
+
   it('falls back to a clean generic message for an unrecognized OS code', () => {
     const p = '/tmp/busy'
     const err = new FilesystemError(`Failed to read at ${p}: EBUSY: resource busy`, p, 'read')

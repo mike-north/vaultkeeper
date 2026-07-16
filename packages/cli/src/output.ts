@@ -253,6 +253,11 @@ const FS_OPERATION_VERB: Record<string, string> = {
   // it fails to create its storage directory, so map it to the operation that
   // actually failed rather than the generic "accessed" fallback.
   rwx: 'created',
+  // Directory-creation failures (config init / first store creating the config
+  // dir, issue #228) use the `'create'` permission and get directory-specific
+  // wording in `formatFilesystemError`; this verb is the fallback if that
+  // branch is ever bypassed.
+  create: 'created',
 }
 
 /**
@@ -297,6 +302,23 @@ function classifyFilesystemError(err: FilesystemError): 'missing' | 'denied' | '
 function formatFilesystemError(err: FilesystemError): string {
   const quotedPath = `\`${err.path}\``
   const kind = classifyFilesystemError(err)
+  // Directory-creation failures (`config init` / first `store` creating the
+  // config dir, issue #228) get directory-specific wording and a
+  // parent-directory hint, rather than the file-oriented messages below —
+  // the thing that could not be created is a directory, and the fix lives in
+  // the parent directory's permissions (or choosing a writable location).
+  if (err.permission === 'create') {
+    if (kind === 'denied') {
+      return (
+        `${err.name}: The directory at ${quotedPath} could not be created (permission denied). ` +
+        'Check that its parent directory is writable, or choose a writable location with --config-dir, then try again.'
+      )
+    }
+    return (
+      `${err.name}: The directory at ${quotedPath} could not be created. ` +
+      'Check that its parent directory exists and is writable, then try again.'
+    )
+  }
   if (kind === 'missing') {
     return (
       `${err.name}: The file at ${quotedPath} does not exist. ` +

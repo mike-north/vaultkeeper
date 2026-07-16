@@ -22,6 +22,7 @@
 import * as fs from 'node:fs/promises'
 import * as path from 'node:path'
 import { encryptGcm, decryptGcm, getOrCreateWrapKey } from '../util/at-rest.js'
+import { toFilesystemError } from '../errors.js'
 import type { KeyMaterial, KeyStateSnapshot } from './types.js'
 
 const KEY_STATE_FILE = 'keys.enc'
@@ -155,7 +156,15 @@ export async function loadKeyState(configDir: string): Promise<KeyStateSnapshot 
  * @internal
  */
 export async function saveKeyState(configDir: string, snapshot: KeyStateSnapshot): Promise<void> {
-  await fs.mkdir(configDir, { recursive: true, mode: 0o700 })
+  // Creating the config directory can fail (e.g. its parent is read-only) on
+  // the first `store`, which persists key state before any secret is written.
+  // Surface a typed FilesystemError rather than leaking the raw Node
+  // `EACCES: … mkdir '<path>'` text (issue #228).
+  try {
+    await fs.mkdir(configDir, { recursive: true, mode: 0o700 })
+  } catch (err) {
+    throw toFilesystemError(err, 'config directory', configDir, 'create')
+  }
 
   const raw: RawKeyState = {
     version: 1,
@@ -176,6 +185,10 @@ export async function saveKeyState(configDir: string, snapshot: KeyStateSnapshot
 
   const statePath = path.join(configDir, KEY_STATE_FILE)
   const tmpPath = `${statePath}.${String(process.pid)}.tmp`
-  await fs.writeFile(tmpPath, envelope, { encoding: 'utf8', mode: 0o600 })
-  await fs.rename(tmpPath, statePath)
+  try {
+    await fs.writeFile(tmpPath, envelope, { encoding: 'utf8', mode: 0o600 })
+    await fs.rename(tmpPath, statePath)
+  } catch (err) {
+    throw toFilesystemError(err, 'key state file', statePath, 'write')
+  }
 }
