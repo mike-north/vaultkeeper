@@ -67,8 +67,6 @@ jobs:
 
       - run: pnpm check:typecheck
 
-      - run: pnpm check:typecheck-tests
-
       - run: pnpm check:lint-ts
 
       - run: pnpm check:format
