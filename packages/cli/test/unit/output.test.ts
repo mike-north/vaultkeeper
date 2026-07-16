@@ -747,6 +747,84 @@ describe('formatError renders FilesystemError without raw OS text (issue #150)',
     expect(formatted).not.toContain('The file at')
   })
 
+  // Review follow-up (issue #231): the `--config-dir` relocation hint is only
+  // applicable when the failing path is genuinely under the configured
+  // config dir. That comparison used raw string equality/`startsWith`, so a
+  // differently-spelled but equivalent form of the config dir (relative vs.
+  // absolute, trailing separator, Windows casing) would misclassify — the
+  // hint could wrongly appear or disappear depending on incidental spelling
+  // rather than the actual path relationship.
+  describe('the --config-dir relocation hint compares normalized paths (issue #231)', () => {
+    it('recognizes a relative spelling of the config dir as equivalent to the absolute failing path', () => {
+      const absoluteConfigDir = '/tmp/vk-relative-test/config'
+      const dir = path.join(absoluteConfigDir, 'sub')
+      const relativeConfigDir = path.relative(process.cwd(), absoluteConfigDir)
+      const err = new FilesystemError(
+        `Failed to create config directory at ${dir}: EACCES`,
+        dir,
+        'create',
+      )
+
+      // path.resolve() collapses the relative spelling back to the same
+      // absolute config dir as the one the failing path lives under.
+      const formatted = formatError(err, relativeConfigDir)
+
+      expect(formatted).toContain('or choose a writable location with --config-dir')
+    })
+
+    it('recognizes a trailing-separator spelling of the config dir as equivalent to the failing path', () => {
+      const configDir = '/tmp/vk-trailing-test/config'
+      const dir = path.join(configDir, 'sub')
+      const err = new FilesystemError(
+        `Failed to create config directory at ${dir}: EACCES`,
+        dir,
+        'create',
+      )
+
+      const formatted = formatError(err, configDir + path.sep)
+
+      expect(formatted).toContain('or choose a writable location with --config-dir')
+    })
+
+    it.runIf(process.platform === 'win32')(
+      'recognizes a differently-cased spelling of the config dir as equivalent on Windows',
+      () => {
+        const configDir = 'C:\\Users\\me\\AppData\\vaultkeeper'
+        const dir = configDir + '\\sub'
+        const err = new FilesystemError(
+          `Failed to create config directory at ${dir}: EACCES`,
+          dir,
+          'create',
+        )
+
+        const formatted = formatError(err, configDir.toUpperCase())
+
+        expect(formatted).toContain('or choose a writable location with --config-dir')
+      },
+    )
+
+    // The classic startsWith footgun: a sibling directory that merely shares
+    // a prefix with the config dir must NOT be misclassified as living under
+    // it, even after normalization.
+    it('does not treat a sibling directory that only shares a name prefix as under the config dir', () => {
+      const configDir = '/home/u/.config/vaultkeeper'
+      const dir = '/home/u/.config/vaultkeeper-backup'
+      const err = new FilesystemError(
+        `Failed to create config directory at ${dir}: EACCES`,
+        dir,
+        'create',
+      )
+
+      const formatted = formatError(err, configDir)
+
+      expect(formatted).not.toContain('--config-dir')
+      expect(formatted).toBe(
+        `FilesystemError: The directory at \`${dir}\` could not be created (permission denied). ` +
+          'Check that its parent directory is writable, then try again.',
+      )
+    })
+  })
+
   it("renders a non-permission config-dir creation failure (permission 'create') without a permission claim", () => {
     const dir = '/tmp/readonly/sub'
     const cause = Object.assign(new Error('EROFS: read-only file system'), { code: 'EROFS' })
