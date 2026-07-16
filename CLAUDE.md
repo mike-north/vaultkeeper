@@ -259,7 +259,7 @@ Tokens are compact JWE strings. The TS library uses the `jose` npm package; the 
 ### Rust/TS interop
 
 - Config JSON uses **camelCase** field names, enforced via `#[serde(rename_all = "camelCase")]`
-- `TrustTier` serializes as string numbers: `"1"`, `"2"`, `"3"`
+- `TrustTier` has two wire forms depending on where it appears. In a JWE token's `tid` claim it is a **string** number (`"1"`, `"2"`, `"3"`) for `jose` compatibility. In `config.json`'s `defaults.trustTier` it is a **bare number** (`3`) — matching the CLI `config init` output, the TS library, and the README. The config reader (both Rust core and TS) accepts either form for backward compatibility (issue #200).
 - VaultClaims fields use serde renames: `use_limit` → JSON `use`, `reference` → JSON `ref`
 - Both CLIs have identical command surfaces and output formats
 

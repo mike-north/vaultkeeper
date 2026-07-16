@@ -270,7 +270,70 @@ pub struct VaultDefaults {
     /// Default JWE time-to-live in minutes.
     pub ttl_minutes: u32,
     /// Default trust tier for executable identity verification.
+    ///
+    /// In `config.json` this field is written as a bare JSON number
+    /// (`"trustTier": 3`), matching the CLI `config init` output, the TS
+    /// library, and the README example. For backward compatibility the reader
+    /// also accepts a string-encoded number (`"trustTier": "3"`), which older
+    /// native-CLI configs emitted. Note this differs from the `tid` claim in a
+    /// JWE token, where [`TrustTier`] keeps its string wire form (`"3"`) for
+    /// `jose` compatibility.
+    #[serde(with = "trust_tier_config")]
     pub trust_tier: TrustTier,
+}
+
+/// Serde adapter for the `defaults.trustTier` config field (issue #200).
+///
+/// Serializes [`TrustTier`] as a bare JSON number and deserializes leniently
+/// from either a JSON number or a string-encoded number, so a config written
+/// by any of the CLIs (TS or native) loads uniformly. Kept local to the config
+/// field so the string wire form of [`TrustTier`] in JWE claims is untouched.
+mod trust_tier_config {
+    use super::TrustTier;
+    use serde::de::{Error as DeError, Unexpected};
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    fn tier_from_u64<E: DeError>(n: u64, unexpected: Unexpected<'_>) -> Result<TrustTier, E> {
+        match n {
+            1 => Ok(TrustTier::Sigstore),
+            2 => Ok(TrustTier::Tofu),
+            3 => Ok(TrustTier::Dev),
+            _ => Err(E::invalid_value(unexpected, &"a trust tier of 1, 2, or 3")),
+        }
+    }
+
+    pub(super) fn serialize<S>(value: &TrustTier, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_u8(*value as u8)
+    }
+
+    pub(super) fn deserialize<'de, D>(deserializer: D) -> Result<TrustTier, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum NumberOrString {
+            Number(u64),
+            String(String),
+        }
+
+        match NumberOrString::deserialize(deserializer)? {
+            NumberOrString::Number(n) => tier_from_u64(n, Unexpected::Unsigned(n)),
+            NumberOrString::String(s) => {
+                let trimmed = s.trim();
+                let n: u64 = trimmed.parse().map_err(|_| {
+                    D::Error::invalid_value(
+                        Unexpected::Str(&s),
+                        &"a trust tier of \"1\", \"2\", or \"3\"",
+                    )
+                })?;
+                tier_from_u64(n, Unexpected::Str(&s))
+            }
+        }
+    }
 }
 
 /// Development mode configuration.

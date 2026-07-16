@@ -99,9 +99,15 @@ importers:
       '@vaultkeeper/cli-test-helpers':
         specifier: workspace:*
         version: link:../cli-test-helpers
+      '@vaultkeeper/wasm':
+        specifier: workspace:*
+        version: link:../vaultkeeper-wasm
       tsx:
         specifier: ^4.21.0
         version: 4.21.0
+      vaultkeeper:
+        specifier: workspace:*
+        version: link:../vaultkeeper
       vitest:
         specifier: ^3.0.0
         version: 3.2.4(@types/node@22.19.11)(jiti@2.6.1)(tsx@4.21.0)(yaml@2.8.2)
