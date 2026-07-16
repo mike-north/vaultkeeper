@@ -191,6 +191,10 @@ describe('verifyTrustPending / commitTrust — verify/commit split (#148)', () =
       expect(pending.identity.trustTier).toBe(3)
       expect(pending.tofuConflict).toBe(false)
       expect(pending.pendingWrite).toEqual({ namespace: 'my-tool', hash: pending.identity.hash })
+      // The verify phase hasn't written anything yet, so `reason` must not
+      // claim persistence — it describes staging, not recording.
+      expect(pending.reason).toContain('staged')
+      expect(pending.reason).not.toContain('recorded')
 
       // Nothing was written by the verify phase alone.
       const manifest = await loadManifest(configDir)
@@ -307,6 +311,10 @@ describe('verifyTrustPending / commitTrust — verify/commit split (#148)', () =
       expect(result.identity.trustTier).toBe(3)
       const manifest = await loadManifest(configDir)
       expect(manifest.has('my-tool')).toBe(true)
+      // A write actually happened by the time this eager wrapper returns, so
+      // external callers should keep seeing the pre-split, persisted-tense
+      // wording — not the verify phase's "staged" language.
+      expect(result.reason).toBe('First encounter — hash recorded via TOFU')
     })
   })
 })

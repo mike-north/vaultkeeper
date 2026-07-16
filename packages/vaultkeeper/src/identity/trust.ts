@@ -138,11 +138,13 @@ export async function verifyTrustPending(
   }
 
   // --- Tier 3: First encounter — stage the hash for TOFU recording ---
+  // `reason` describes staging, not persistence: nothing is written until a
+  // caller invokes commitTrust (see PendingTrust.pendingWrite above).
   return {
     identity: { hash: currentHash, trustTier: 3, verified: false },
     tofuConflict: false,
     approvedHashes,
-    reason: 'First encounter — hash recorded via TOFU',
+    reason: 'First encounter — hash staged for TOFU recording',
     pendingWrite: { namespace, hash: currentHash },
     configDir,
   }
@@ -195,6 +197,15 @@ export async function verifyTrust(
 ): Promise<TrustVerificationResult> {
   const pending = await verifyTrustPending(execPath, options)
   await commitTrust(pending)
-  const { identity, tofuConflict, approvedHashes, reason } = pending
+  const { identity, tofuConflict, approvedHashes, pendingWrite } = pending
+  // verifyTrustPending's `reason` describes staging, since verification alone
+  // never writes. This wrapper just committed the write above, though, so a
+  // first-encounter result should keep its pre-split, persisted-tense wording
+  // for existing external callers rather than surfacing "staged" language for
+  // something that, by this point, has actually been recorded.
+  const reason =
+    pendingWrite !== undefined && identity.trustTier === 3
+      ? 'First encounter — hash recorded via TOFU'
+      : pending.reason
   return { identity, tofuConflict, approvedHashes, reason }
 }
