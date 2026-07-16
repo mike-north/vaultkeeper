@@ -143,8 +143,9 @@ async function main(): Promise<void> {
   }
   const { createClient, DesktopAuth, DesktopSessionExpiredError, RateLimitExceededError } = sdk
 
-  // `store` needs the secret value before touching the SDK at all, so a
-  // stdin read failure never reaches the biometric prompt.
+  // `store` reads the secret value before triggering the biometric prompt
+  // (`createClient` below), so a stdin read failure never costs the user a
+  // fresh presence action.
   let pendingSecret: string | undefined
   if (op === 'store') {
     try {
@@ -209,7 +210,10 @@ async function main(): Promise<void> {
         )
       } else if (err instanceof DesktopSessionExpiredError) {
         writeFailure('1Password session has expired', 'LOCKED')
-      } else if (err instanceof RateLimitExceededError) {
+      } else if (
+        typeof RateLimitExceededError === 'function' &&
+        err instanceof RateLimitExceededError
+      ) {
         // Not a human declining anything — a service-side throttle. Reporting
         // it as PRESENCE_DECLINED would misdirect the user toward the prompt.
         writeFailure(`1Password rate limit exceeded: ${String(err)}`, 'INTERNAL')
