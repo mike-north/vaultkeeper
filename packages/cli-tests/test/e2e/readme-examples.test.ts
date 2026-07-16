@@ -30,6 +30,7 @@ import {
   isInstallOnlyFence,
   runShellFence,
   typecheckCodeFence,
+  runCodeFence,
   type Fence,
 } from './readme-example-harness.js'
 
@@ -44,6 +45,10 @@ function fencesFor(readme: string): Fence[] {
 
 const EXEC_FENCES = EXEC_READMES.flatMap(fencesFor).filter(isShellFence)
 const TYPECHECK_FENCES = TYPECHECK_READMES.flatMap(fencesFor).filter(isCodeFence)
+/** `run`-marked TS/JS fences across every README — executed against the built package. */
+const RUN_FENCES = [...EXEC_READMES, ...TYPECHECK_READMES]
+  .flatMap(fencesFor)
+  .filter((f) => isCodeFence(f) && f.run)
 
 /** A fence is a sign/verify walkthrough if it drives both `sign` and `verify`. */
 function isSignVerifyFence(fence: Fence): boolean {
@@ -89,6 +94,20 @@ describe('README TypeScript/JavaScript examples type-check against the built typ
   }
 })
 
+describe('README run-marked examples execute clean against the built package', () => {
+  for (const fence of RUN_FENCES) {
+    const id = `${fence.readme}:${String(fence.startLine)}`
+    it(`${id} (${fence.lang}) runs to completion`, () => {
+      const result = runCodeFence(fence)
+      expect(
+        result.exitCode,
+        `\`${fence.readme}\` ${fence.lang} fence at line ${String(fence.startLine)} exited ` +
+          `${String(result.exitCode)} at runtime.\n--- stdout ---\n${result.stdout}\n--- stderr ---\n${result.stderr}`,
+      ).toBe(0)
+    })
+  }
+})
+
 describe('coverage guards (non-vacuous)', () => {
   it('finds shell fences to execute and TS/JS fences to type-check', () => {
     // Guard against a parser regression that silently matches nothing, which
@@ -107,6 +126,31 @@ describe('coverage guards (non-vacuous)', () => {
     for (const fence of signVerify) {
       expect(fence.skipped, 'the sign/verify walkthrough must not be opted out').toBe(false)
       expect(isInstallOnlyFence(fence)).toBe(false)
+    }
+  })
+
+  it('runs the multi-secret fetch example as the #227 proving case', () => {
+    // The library README's "Multiple secrets in one request" fetch example must
+    // be an actually-executed run fence — not merely type-checked — so this
+    // suite reproduces #227 (it threw a SecretNotFoundError before the network
+    // because it never stored the secrets it authorized). It must resolve
+    // `{{secret:name}}` from a SecretTokenMap and construct a `fetch()` with no
+    // `method` (defaulting to GET).
+    const multiSecret = RUN_FENCES.filter(
+      (f) =>
+        f.readme === 'packages/vaultkeeper/README.md' &&
+        f.code.includes('vault.fetch(') &&
+        f.code.includes('{{secret:apiKey}}'),
+    )
+    expect(multiSecret.length).toBeGreaterThan(0)
+    for (const fence of multiSecret) {
+      // A run fence must be self-contained so it can execute standalone.
+      expect(fence.code, 'the multi-secret run fence must import VaultKeeper').toMatch(
+        /import \{[^}]*\bVaultKeeper\b[^}]*\} from 'vaultkeeper'/,
+      )
+      expect(fence.code, 'the multi-secret run fence must store the secrets it authorizes').toMatch(
+        /vault\.store\('API_KEY'/,
+      )
     }
   })
 
@@ -141,6 +185,15 @@ describe('harness: fence extraction and classification', () => {
     const md = ['Some prose.', '```sh', 'vaultkeeper doctor', '```'].join('\n')
     const [fence] = extractFences(md, 'X.md')
     expect(fence?.skipped).toBe(false)
+    expect(fence?.run).toBe(false)
+  })
+
+  it('records a run marker (and its reason) across intervening blank lines', () => {
+    const md = ['<!-- readme-example: run - self-contained -->', '', '```ts', 'await main()', '```'].join('\n')
+    const [fence] = extractFences(md, 'X.md')
+    expect(fence?.run).toBe(true)
+    expect(fence?.skipped).toBe(false)
+    expect(fence?.runReason).toBe('self-contained')
   })
 
   it('auto-skips an install-only fence but not a real command sequence', () => {

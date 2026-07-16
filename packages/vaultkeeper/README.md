@@ -189,13 +189,20 @@ signatures.
 each secret by the **named** placeholder `{{secret:<name>}}`, where `<name>` is a key in the map,
 instead of the bare `{{secret}}`:
 
-<!-- readme-example: skip - fragment; `vault` comes from the quick-start fence above -->
+<!-- readme-example: run - self-contained; executed against the built package with the network stubbed (issue #227) -->
 
 ```ts
-// Authorize each secret independently, then key the tokens by the names you'll
-// reference in placeholders. `{ skipTrust: true }` (development only) is shown
-// here; in production pass a stable `executablePath` instead — see
-// [Trust tiers](#trust-tiers).
+import { VaultKeeper } from 'vaultkeeper'
+
+const vault = await VaultKeeper.init()
+
+// Store each secret first (as in the quick start), then authorize each
+// independently and key the tokens by the names you'll reference in
+// placeholders. `{ skipTrust: true }` (development only) is shown here; in
+// production pass a stable `executablePath` instead — see [Trust tiers](#trust-tiers).
+await vault.store('API_KEY', 'api-secret-value')
+await vault.store('DB_PASSWORD', 'db-secret-value')
+
 const apiJwe = await vault.setup('API_KEY', { skipTrust: true })
 const dbJwe = await vault.setup('DB_PASSWORD', { skipTrust: true })
 const { token: apiToken } = await vault.authorize(apiJwe)
