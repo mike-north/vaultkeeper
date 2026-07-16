@@ -174,8 +174,9 @@ tracked separately.
 The [`vaultkeeper`](https://www.npmjs.com/package/vaultkeeper) library package's README and shipped
 `.d.ts` cover the TypeScript API and access patterns for embedding vaultkeeper programmatically —
 including the complete error hierarchy and full `VaultConfig` reference, shipped inline in that
-package's README. The [repository README](https://github.com/mike-north/vaultkeeper#readme) mirrors
-the same content online as a supplement.
+package's README. The [repository README](https://github.com/mike-north/vaultkeeper#readme) covers
+related narrative online, but for the complete reference see the `vaultkeeper` package's own
+README linked above.
 
 ## License
 

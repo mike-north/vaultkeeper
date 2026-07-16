@@ -483,8 +483,9 @@ read-only properties for machine-readable context.
 | `RotationInProgressError` | `rotateKey()` called while a previous rotation's grace period is still active.                           |
 
 Each class's JSDoc (carried on the package's shipped `.d.ts`) documents these same errors and
-fields inline. The [repository README](https://github.com/mike-north/vaultkeeper#readme) mirrors
-this list for online reference.
+fields inline. The [repository README](https://github.com/mike-north/vaultkeeper#readme) covers
+related narrative online, but this package's own README (above) and its shipped `.d.ts` are the
+authoritative, complete list.
 
 ## Testing against this library
 
@@ -508,8 +509,8 @@ pnpm add -D @vaultkeeper/test-helpers
 This README is self-contained: the full error hierarchy, development-mode narrative, and complete
 `VaultConfig` reference above are all shipped inside the package (no network access required). The
 package's `.d.ts` files carry the same reference on every exported type, method, and option via
-JSDoc. The [repository README](https://github.com/mike-north/vaultkeeper#readme) mirrors this
-content online as a supplement.
+JSDoc. The [repository README](https://github.com/mike-north/vaultkeeper#readme) covers related
+narrative online, but treat this package's own README as the complete, authoritative reference.
 
 ## License
 
