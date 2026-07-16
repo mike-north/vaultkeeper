@@ -42,8 +42,8 @@ import {
 import {
   storeSecretItem,
   deleteSecretItem,
-  TAG,
-  PASSWORD_FIELD_TITLE,
+  findItemOverviewByTitle,
+  extractPasswordField,
 } from './one-password-item-ops.js'
 
 interface RetrieveSuccessResponse {
@@ -261,44 +261,32 @@ async function main(): Promise<void> {
     return
   }
 
-  // op === 'retrieve' — unchanged read path.
-  let overviews
+  // op === 'retrieve' — the read path, sharing the same find/extract helpers
+  // as the parent backend and the write path so the tag/field conventions
+  // cannot drift. The failure-code taxonomy is preserved exactly: a list
+  // failure is INTERNAL, a missing item or a get failure is NOT_FOUND.
+  let overview
   try {
-    overviews = await client.items.list(vaultId)
+    overview = await findItemOverviewByTitle(client, vaultId, secretId)
   } catch (err) {
     writeFailure(`Failed to list items: ${String(err)}`, 'INTERNAL')
     process.exit(1)
   }
 
-  let targetId: string | undefined
-  for (const overview of overviews) {
-    if (overview.title === secretId && overview.tags.includes(TAG)) {
-      targetId = overview.id
-      break
-    }
-  }
-
-  if (targetId === undefined) {
+  if (overview === undefined) {
     writeFailure(`Secret not found: ${secretId}`, 'NOT_FOUND')
     process.exit(1)
   }
 
   let item
   try {
-    item = await client.items.get(vaultId, targetId)
+    item = await client.items.get(vaultId, overview.id)
   } catch (err) {
     writeFailure(`Failed to retrieve item: ${String(err)}`, 'NOT_FOUND')
     process.exit(1)
   }
 
-  let secretValue: string | undefined
-  for (const field of item.fields) {
-    if (field.title === PASSWORD_FIELD_TITLE) {
-      secretValue = field.value
-      break
-    }
-  }
-
+  const secretValue = extractPasswordField(item)
   if (secretValue === undefined) {
     writeFailure(`Item found but missing password field: ${secretId}`, 'NOT_FOUND')
     process.exit(1)
