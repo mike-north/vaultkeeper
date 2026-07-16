@@ -88,13 +88,13 @@ function writeFailure(error: string, code: string): void {
 /** Read all of stdin (UTF-8) into a single string. Used only for `store`. */
 function readStdin(): Promise<string> {
   return new Promise((resolve, reject) => {
-    let data = ''
+    const chunks: string[] = []
     process.stdin.setEncoding('utf8')
     process.stdin.on('data', (chunk: string) => {
-      data += chunk
+      chunks.push(chunk)
     })
     process.stdin.on('end', () => {
-      resolve(data)
+      resolve(chunks.join(''))
     })
     process.stdin.on('error', (err: unknown) => {
       reject(err instanceof Error ? err : new Error(String(err)))
