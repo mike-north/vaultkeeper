@@ -113,6 +113,14 @@ async function main(): Promise<void> {
     process.exit(1)
   }
 
+  // Omitted op defaults to 'retrieve' (compatibility with parents that
+  // predate the write path). A PRESENT but unrecognized op is a
+  // parent/worker protocol mismatch — fail closed rather than silently
+  // running the wrong operation.
+  if (opArg !== undefined && !isValidOp(opArg)) {
+    writeFailure(`Worker invoked with unknown operation: ${opArg}`, 'INTERNAL')
+    process.exit(1)
+  }
   const op: WorkerOp = isValidOp(opArg) ? opArg : 'retrieve'
 
   // The SDK is an optional peer dependency, loaded lazily so the worker only
