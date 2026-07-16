@@ -156,6 +156,15 @@ vaultkeeper key export --name approval-signing-key > approval.pub
 # signature (a compact JWS), so it is safe to redirect into a file
 printf '%s' "$CHALLENGE" | vaultkeeper sign --name approval-signing-key > sig
 
+# List each backend's security capabilities (which can force a fresh, per-use
+# human action). Add --json for a machine-readable array.
+vaultkeeper backend capabilities
+
+# Require a fresh, per-use human action (e.g. a YubiKey touch) for an operation.
+# On a backend that cannot guarantee it, this fails before any credential is
+# touched. Valid on store/delete/sign/exec.
+printf '%s' "$CHALLENGE" | vaultkeeper sign --name approval-signing-key --require-presence-per-use > sig
+
 # Verify a detached signature fully offline — only the public key, the payload
 # on stdin, and the signature. Exit 0 = valid, 3 = did not verify.
 vaultkeeper verify --public-key approval.pub --signature sig <<<"$CHALLENGE"
@@ -372,6 +381,17 @@ The first enabled backend in the configuration is used.
 | `file`        | All      | AES-256-GCM encrypted file fallback (built-in) |
 | `1password`   | All      | 1Password `op` CLI (plugin)                    |
 | `yubikey`     | All      | YubiKey `ykman` (plugin)                       |
+
+### Presence-per-use
+
+A backend advertises whether its configured instance forces a **fresh, per-use human action** —
+`presencePerUse` — meaning every keyed operation requires a distinct touch/biometric that can never be
+satisfied from a cached or session unlock. Inspect it with `vaultkeeper backend capabilities` (or
+`VaultKeeper.getActiveBackendCapabilities()`), and require it for an operation with
+`--require-presence-per-use` / `requirePresencePerUse: true`. A YubiKey slot with a touch policy and
+1Password in `per-access` mode qualify; `file`/`keychain`/`dpapi`/`secret-tool` do not. See the
+[library README](packages/vaultkeeper/README.md#presence-per-use-require-a-fresh-human-action) for the
+per-backend truth basis and the cached-OS-unlock caveat.
 
 ## Platforms
 

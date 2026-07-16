@@ -13,6 +13,10 @@ function printStoreHelp(): void {
       // Derived from SECRET_NAME_RULE (the single source of truth for the
       // pattern's human description) so help and validation can't drift.
       `  --name <name>      Name to store the secret under; ${SECRET_NAME_RULE}\n` +
+      '  --require-presence-per-use\n' +
+      '                     Refuse unless the active backend forces a fresh, per-use\n' +
+      '                     human action for this write. A non-qualifying backend\n' +
+      '                     fails before any credential is touched.\n' +
       '  --skip-doctor      Skip doctor preflight checks\n' +
       CONFIG_DIR_HELP_OPTION +
       '  -h, --help         Show this help message\n\n' +
@@ -29,13 +33,14 @@ export async function storeCommand(args: string[], configDir: string): Promise<n
     return 0
   }
 
-  let values: { name?: string; 'skip-doctor': boolean }
+  let values: { name?: string; 'skip-doctor': boolean; 'require-presence-per-use': boolean }
   try {
     ;({ values } = parseArgs({
       args,
       options: {
         name: { type: 'string' },
         'skip-doctor': { type: 'boolean', default: false },
+        'require-presence-per-use': { type: 'boolean', default: false },
       },
       strict: true,
     }))
@@ -105,7 +110,9 @@ export async function storeCommand(args: string[], configDir: string): Promise<n
     // Store via VaultKeeper, which resolves the first enabled backend from the
     // loaded config and forwards that backend's config (including `path`).
     const vault = await VaultKeeper.init({ configDir, skipDoctor })
-    await vault.store(values.name, secret)
+    await vault.store(values.name, secret, {
+      requirePresencePerUse: values['require-presence-per-use'],
+    })
     process.stdout.write(`Secret "${values.name}" stored successfully.\n`)
     return 0
   } catch (err) {

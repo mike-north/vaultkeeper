@@ -161,10 +161,32 @@ padding, [RFC 7515](https://www.rfc-editor.org/rfc/rfc7515); detached payload vi
 JOSE library can verify it independently. `verify` needs no config, backend, or key store — only
 the public key, the payload on stdin, and the signature.
 
+## Presence-per-use (require a fresh human action)
+
+Discover which backends can force a **fresh, per-use human action** (a distinct touch/biometric that
+no cached or session unlock can satisfy), then require it for an operation:
+
+```sh
+# List each registered backend and whether it forces a fresh per-use action.
+vaultkeeper backend capabilities          # human-readable
+vaultkeeper backend capabilities --json   # [{ "type", "displayName", "presencePerUse" }, ...]
+
+# Require it for a backend-touching op. On a non-qualifying backend this fails
+# with NotCapableError (exit 1) before any credential is touched.
+printf '%s' "$CHALLENGE" | vaultkeeper sign --name approval-signing-key --require-presence-per-use
+```
+
+`--require-presence-per-use` is accepted on `store`, `delete`, `sign`, and `exec` (never a global
+flag, and never on `verify`, which touches no backend). With `exec`, a cached token is never reused
+under this flag — a fresh action is forced for the invocation. A YubiKey slot with a touch policy or
+1Password in `per-access` mode qualifies; `file`/`keychain`/`dpapi`/`secret-tool` do not. See the
+library README's [Presence-per-use](https://www.npmjs.com/package/vaultkeeper) section for the
+per-backend truth basis and the cached-OS-unlock caveat.
+
 ## Available commands
 
-`doctor`, `config init` / `config show`, `store`, `delete`, `key create` / `key export`, `sign`,
-`verify`, `exec`, `approve`, `dev-mode`, `rotate-key`, `revoke-key`. The native Rust CLI
+`doctor`, `config init` / `config show`, `store`, `delete`, `backend capabilities`, `key create` /
+`key export`, `sign`, `verify`, `exec`, `approve`, `dev-mode`, `rotate-key`, `revoke-key`. The native Rust CLI
 (`vaultkeeper-cli`, installable via `cargo install vaultkeeper-cli`) shares the secret-management
 command surface; signing (`key`/`sign`/`verify`) currently ships in the Node CLI, with Rust parity
 tracked separately.

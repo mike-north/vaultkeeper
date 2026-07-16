@@ -87,10 +87,7 @@ export async function writeCachedToken(
  *
  * @internal
  */
-export async function invalidateCache(
-  callerPath: string,
-  secretName: string,
-): Promise<void> {
+export async function invalidateCache(callerPath: string, secretName: string): Promise<void> {
   const filePath = path.join(getCacheDir(), cacheFileName(callerPath, secretName))
   try {
     await fs.unlink(filePath)
