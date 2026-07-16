@@ -67,7 +67,24 @@ export async function verifyCommand(args: string[]): Promise<number> {
       strict: true,
     }))
   } catch (err) {
-    if (err instanceof Error) {
+    // node's parseArgs rejects a space-separated value that begins with `-`
+    // (e.g. an inline PEM `--public-key -----BEGIN…`) as "argument is
+    // ambiguous". These flags take a file PATH, not inline key material, so
+    // point the caller at the file-path contract and the `=` escape for a value
+    // that legitimately starts with a dash.
+    const isAmbiguous =
+      err instanceof Error &&
+      'code' in err &&
+      err.code === 'ERR_PARSE_ARGS_INVALID_OPTION_VALUE'
+    if (isAmbiguous) {
+      process.stderr.write(
+        'Error: --public-key and --signature take a file PATH, not an inline value. ' +
+          'A value beginning with "-" (including an inline PEM, which starts with ' +
+          '"-----BEGIN") is read as another option. Write the key/signature to a file ' +
+          'and pass its path; if the path itself begins with "-", use the ' +
+          '--public-key=<path> (equals) form.\n',
+      )
+    } else if (err instanceof Error) {
       process.stderr.write(`Error: ${err.message}\n`)
     }
     process.stderr.write(
@@ -81,6 +98,26 @@ export async function verifyCommand(args: string[]): Promise<number> {
   if (publicKeyPath === undefined || signaturePath === undefined) {
     process.stderr.write('Error: --public-key and --signature are both required\n')
     return 2
+  }
+
+  // Catch the equals-form inline PEM (`--public-key=-----BEGIN…`), which parses
+  // cleanly but is inline key material, not a path — reading it as a file would
+  // fail with a confusing ENOENT. These flags are file-path-only.
+  const inlineFlags: { flag: string; value: string }[] = [
+    { flag: '--public-key', value: publicKeyPath },
+    { flag: '--signature', value: signaturePath },
+  ]
+  for (const { flag, value } of inlineFlags) {
+    if (value.startsWith('-----BEGIN')) {
+      process.stderr.write(
+        `Error: ${flag} takes a file PATH, not inline key material. ` +
+          'Write the PEM/signature to a file and pass its path instead.\n',
+      )
+      process.stderr.write(
+        'Usage: vaultkeeper verify --public-key <pem-path> --signature <sig-path> < payload\n',
+      )
+      return 2
+    }
   }
 
   try {

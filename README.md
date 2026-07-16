@@ -130,6 +130,14 @@ Both the native Rust CLI and the Node.js CLI share the same command surface:
 > The safe `file` default described below (a bare `config init` writing the `file` backend) currently applies to the **Node.js CLI** and the TypeScript library. The native Rust CLI's zero-config default still targets the platform-native store; converging it onto this behavior is tracked in [#75](https://github.com/mike-north/vaultkeeper/issues/75).
 
 ```sh
+# Every command accepts a global `--config-dir <path>` (or the
+# VAULTKEEPER_CONFIG_DIR env var) that isolates config, key material, and the
+# `file` backend's secrets to that directory instead of the default
+# ~/.config/vaultkeeper. Prefer it when experimenting or running in CI so you
+# never touch (or clobber) your real configuration, e.g.:
+#   vaultkeeper --config-dir ./vk-demo config init
+#   vaultkeeper --config-dir ./vk-demo store --name MY_API_KEY
+
 # Run preflight checks
 vaultkeeper doctor
 
@@ -763,6 +771,18 @@ const jwe = await vault.setup('SECRET_NAME', {
   backendType: 'keychain',
 })
 ```
+
+> [!IMPORTANT]
+> **What counts as a "use".** `useLimit` bounds the number of times a JWE can be
+> **authorized** — i.e. calls to `vault.authorize(jwe)` — **not** the number of
+> delegated `fetch()`/`exec()`/`getSecret()` calls. Each `authorize(jwe)`
+> consumes one use and returns a `CapabilityToken`; the delegated-access methods
+> take that already-authorized token and do **not** consume a further use. So
+> with `useLimit: 1` you may call `authorize(jwe)` **once**, then run as many
+> `exec()`/`fetch()` calls as you like against the resulting token — only a
+> **second** `authorize(jwe)` throws `UsageLimitExceededError`. Size `useLimit`
+> to how many times the JWE itself will be redeemed, not to how many downstream
+> operations each redemption performs.
 
 ## Error types
 
