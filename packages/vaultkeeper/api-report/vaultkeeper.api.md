@@ -371,9 +371,9 @@ export class SigningKeyNotFoundError extends VaultError {
 
 // @public
 export class SigningNotSupportedError extends VaultError {
-    constructor(message: string, backendType: string, supportedBackends: string[]);
+    constructor(message: string, backendType: string, builtInSigningBackends: string[]);
     readonly backendType: string;
-    readonly supportedBackends: string[];
+    readonly builtInSigningBackends: string[];
 }
 
 // @public

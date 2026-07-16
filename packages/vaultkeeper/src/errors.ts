@@ -394,8 +394,8 @@ export class SigningKeyAlreadyExistsError extends VaultError {
  * Thrown when a signing operation (`key create`, `key export`, `sign`) is
  * requested against a backend that does not implement the signing contract.
  * Signing is never silently emulated on a backend that cannot perform it in a
- * key-stays-backend-side manner; inspect {@link SigningNotSupportedError.supportedBackends}
- * for the backend types that do.
+ * key-stays-backend-side manner; inspect {@link SigningNotSupportedError.builtInSigningBackends}
+ * for the built-in backend types that do.
  *
  * @public
  */
@@ -404,16 +404,22 @@ export class SigningNotSupportedError extends VaultError {
   readonly backendType: string
 
   /**
-   * The backend type identifiers that do implement the signing contract, so a
-   * caller can point the user at a backend that works.
+   * The **built-in** backend type identifiers known to implement the signing
+   * contract (currently just the `file` backend). This is deliberately a
+   * static list of built-ins, not a live capability survey: a consumer that
+   * registers its own {@link SigningBackend} is not enumerated here, because
+   * discovering that would require instantiating every registered backend —
+   * a side effect that must not happen on an error path. A caller can still
+   * point a user at a working built-in, and custom backends may implement the
+   * contract independently.
    */
-  readonly supportedBackends: string[]
+  readonly builtInSigningBackends: string[]
 
-  constructor(message: string, backendType: string, supportedBackends: string[]) {
+  constructor(message: string, backendType: string, builtInSigningBackends: string[]) {
     super(message)
     this.name = 'SigningNotSupportedError'
     this.backendType = backendType
-    this.supportedBackends = supportedBackends
+    this.builtInSigningBackends = builtInSigningBackends
   }
 }
 

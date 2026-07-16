@@ -320,7 +320,7 @@ Thrown when a named signing key does not exist in the active backend — for exa
 
 </td><td>
 
-Thrown when a signing operation (`key create`<!-- -->, `key export`<!-- -->, `sign`<!-- -->) is requested against a backend that does not implement the signing contract. Signing is never silently emulated on a backend that cannot perform it in a key-stays-backend-side manner; inspect [SigningNotSupportedError.supportedBackends](./vaultkeeper.signingnotsupportederror.supportedbackends.md) for the backend types that do.
+Thrown when a signing operation (`key create`<!-- -->, `key export`<!-- -->, `sign`<!-- -->) is requested against a backend that does not implement the signing contract. Signing is never silently emulated on a backend that cannot perform it in a key-stays-backend-side manner; inspect [SigningNotSupportedError.builtInSigningBackends](./vaultkeeper.signingnotsupportederror.builtinsigningbackends.md) for the built-in backend types that do.
 
 
 </td></tr>

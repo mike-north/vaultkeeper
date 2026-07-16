@@ -567,7 +567,7 @@ describe('VaultKeeper', () => {
       )
       await expect(vault.createSigningKey('k', 'EdDSA')).rejects.toMatchObject({
         backendType: 'test',
-        supportedBackends: ['file'],
+        builtInSigningBackends: ['file'],
       })
     })
 

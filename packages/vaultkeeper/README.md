@@ -460,16 +460,16 @@ read-only properties for machine-readable context.
 
 **Access patterns**
 
-| Class                          | When thrown                                                                                                                                                                                       |
-| ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `FetchError`                   | Delegated `fetch()` failed before a `Response` (malformed URL, network failure) (field: `url`).                                                                                                   |
-| `ExecError`                    | `exec()` request was invalid, or the command could not be started (field: `command`).                                                                                                             |
-| `AccessorConsumedError`        | `SecretAccessor.read()` called after it was already consumed.                                                                                                                                     |
-| `SigningKeyNotFoundError`      | A named signing key does not exist (field: `keyName`); distinct from `SecretNotFoundError` — signing keys occupy their own namespace (see [Signing and verification](#signing-and-verification)). |
-| `SigningKeyAlreadyExistsError` | Enrolling a signing key whose name already exists (field: `keyName`); enrollment never overwrites (that would break pinned public keys).                                                          |
-| `SigningNotSupportedError`     | The active backend does not implement the signing contract; names the backends that do (fields: `backendType`, `supportedBackends`).                                                              |
-| `InvalidAlgorithmError`        | `createSigningKey()` with an unsupported signing algorithm — strict JOSE identifiers, only `EdDSA` today (fields: `algorithm`, `allowed`).                                                        |
-| `InvalidKeyMaterialError`      | `verify()` given an unparseable public key, or a corrupt/tampered stored signing key — an operational fault, distinct from a signature that simply does not verify.                               |
+| Class                          | When thrown                                                                                                                                                                                           |
+| ------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `FetchError`                   | Delegated `fetch()` failed before a `Response` (malformed URL, network failure) (field: `url`).                                                                                                       |
+| `ExecError`                    | `exec()` request was invalid, or the command could not be started (field: `command`).                                                                                                                 |
+| `AccessorConsumedError`        | `SecretAccessor.read()` called after it was already consumed.                                                                                                                                         |
+| `SigningKeyNotFoundError`      | A named signing key does not exist (field: `keyName`); distinct from `SecretNotFoundError` — signing keys occupy their own namespace (see [Signing and verification](#signing-and-verification)).     |
+| `SigningKeyAlreadyExistsError` | Enrolling a signing key whose name already exists (field: `keyName`); enrollment never overwrites (that would break pinned public keys).                                                              |
+| `SigningNotSupportedError`     | The active backend does not implement the signing contract; names the built-in backend that does — a custom backend may implement `SigningBackend` (fields: `backendType`, `builtInSigningBackends`). |
+| `InvalidAlgorithmError`        | `createSigningKey()` with an unsupported signing algorithm — strict JOSE identifiers, only `EdDSA` today (fields: `algorithm`, `allowed`).                                                            |
+| `InvalidKeyMaterialError`      | `verify()` given an unparseable public key, or a corrupt/tampered stored signing key — an operational fault, distinct from a signature that simply does not verify.                                   |
 
 **Config, filesystem & key rotation**
 

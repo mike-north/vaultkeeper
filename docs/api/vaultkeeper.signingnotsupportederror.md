@@ -4,7 +4,7 @@
 
 ## SigningNotSupportedError class
 
-Thrown when a signing operation (`key create`<!-- -->, `key export`<!-- -->, `sign`<!-- -->) is requested against a backend that does not implement the signing contract. Signing is never silently emulated on a backend that cannot perform it in a key-stays-backend-side manner; inspect [SigningNotSupportedError.supportedBackends](./vaultkeeper.signingnotsupportederror.supportedbackends.md) for the backend types that do.
+Thrown when a signing operation (`key create`<!-- -->, `key export`<!-- -->, `sign`<!-- -->) is requested against a backend that does not implement the signing contract. Signing is never silently emulated on a backend that cannot perform it in a key-stays-backend-side manner; inspect [SigningNotSupportedError.builtInSigningBackends](./vaultkeeper.signingnotsupportederror.builtinsigningbackends.md) for the built-in backend types that do.
 
 **Signature:**
 
@@ -33,7 +33,7 @@ Description
 </th></tr></thead>
 <tbody><tr><td>
 
-[(constructor)(message, backendType, supportedBackends)](./vaultkeeper.signingnotsupportederror._constructor_.md)
+[(constructor)(message, backendType, builtInSigningBackends)](./vaultkeeper.signingnotsupportederror._constructor_.md)
 
 
 </td><td>
@@ -93,7 +93,7 @@ The type identifier of the active backend that cannot sign.
 </td></tr>
 <tr><td>
 
-[supportedBackends](./vaultkeeper.signingnotsupportederror.supportedbackends.md)
+[builtInSigningBackends](./vaultkeeper.signingnotsupportederror.builtinsigningbackends.md)
 
 
 </td><td>
@@ -108,7 +108,7 @@ string\[\]
 
 </td><td>
 
-The backend type identifiers that do implement the signing contract, so a caller can point the user at a backend that works.
+The \*\*built-in\*\* backend type identifiers known to implement the signing contract (currently just the `file` backend). This is deliberately a static list of built-ins, not a live capability survey: a consumer that registers its own [SigningBackend](./vaultkeeper.signingbackend.md) is not enumerated here, because discovering that would require instantiating every registered backend — a side effect that must not happen on an error path. A caller can still point a user at a working built-in, and custom backends may implement the contract independently.
 
 
 </td></tr>

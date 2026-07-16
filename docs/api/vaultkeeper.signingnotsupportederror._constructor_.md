@@ -9,7 +9,7 @@ Constructs a new instance of the `SigningNotSupportedError` class
 **Signature:**
 
 ```typescript
-constructor(message: string, backendType: string, supportedBackends: string[]);
+constructor(message: string, backendType: string, builtInSigningBackends: string[]);
 ```
 
 ## Parameters
@@ -60,7 +60,7 @@ string
 </td></tr>
 <tr><td>
 
-supportedBackends
+builtInSigningBackends
 
 
 </td><td>

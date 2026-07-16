@@ -266,11 +266,14 @@ export interface ExecutableTrustStatus {
 }
 
 /**
- * Backend type identifiers that implement the signing contract
- * ({@link SigningBackend}). Named in {@link SigningNotSupportedError} so a
- * caller on a non-signing backend is told exactly where signing works.
+ * The **built-in** backend type identifiers known to implement the signing
+ * contract ({@link SigningBackend}). Surfaced on {@link SigningNotSupportedError}
+ * so a caller on a non-signing backend is pointed at a built-in that works.
+ * Deliberately a static list of built-ins — a consumer's own registered
+ * SigningBackend is not surveyed here (that would mean instantiating every
+ * registered backend on an error path).
  */
-const SIGNING_CAPABLE_BACKENDS = ['file'] as const
+const BUILTIN_SIGNING_BACKENDS = ['file'] as const
 
 /** Usage tracking for tokens with use limits. */
 const usageCounts = new Map<string, number>()
@@ -862,10 +865,11 @@ export class VaultKeeper {
     const backend = this.#requireBackend()
     if (!isSigningBackend(backend)) {
       throw new SigningNotSupportedError(
-        `Backend '${backend.type}' does not support signing keys. ` +
-          `Signing is currently supported by: ${SIGNING_CAPABLE_BACKENDS.join(', ')}.`,
+        `The active backend ('${backend.type}') does not implement the signing contract. ` +
+          `The built-in '${BUILTIN_SIGNING_BACKENDS.join("', '")}' backend does, and a custom ` +
+          'backend may implement SigningBackend.',
         backend.type,
-        [...SIGNING_CAPABLE_BACKENDS],
+        [...BUILTIN_SIGNING_BACKENDS],
       )
     }
     return backend
