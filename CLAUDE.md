@@ -179,9 +179,11 @@ built-in typecheck mode**:
   already cover the same ground `tsd`'s `expectType`/`expectError` would, and a package here already
   uses vitest for runtime tests — introducing a second type-only test runner would recreate the
   inconsistency this convention exists to resolve (see issue #199).
-- Prefer this over a bare `tsc --noEmit -p tsconfig.test.json` script: a plain `tsc` invocation still
-  "passes" if an `@ts-expect-error` comment goes stale (the line it decorates starts compiling
-  cleanly again), silently losing the assertion. Vitest's typecheck mode fails the run in that case.
+- Prefer this over a bare `tsc --noEmit -p tsconfig.test.json` script: both catch a stale
+  `@ts-expect-error` (TS2578 fires either way), but vitest's typecheck mode runs as part of the
+  package's normal `vitest run`/CI invocation — no separate script or nx target to add, wire into
+  `check`, and keep in sync — and reports type-level results alongside the runtime tests in one
+  `describe`/`it`/`expectTypeOf` structure instead of a second, differently-shaped fixture file.
 
 **Exception — `@vaultkeeper/wasm`:** this package deliberately uses `node:test`, not vitest, for
 runtime tests, so it cannot host vitest's typecheck mode. Its type-only `*.test-d.ts` fixtures
