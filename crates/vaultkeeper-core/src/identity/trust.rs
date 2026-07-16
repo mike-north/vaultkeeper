@@ -9,7 +9,7 @@
 
 use super::hash::hash_executable;
 use super::manifest::{add_trusted_hash, is_trusted, load_manifest, save_manifest};
-use super::types::{IdentityInfo, TrustManifest, TrustOptions, TrustVerificationResult};
+use super::types::{IdentityInfo, TrustOptions, TrustVerificationResult};
 use crate::backend::HostPlatform;
 use crate::errors::VaultError;
 use crate::types::TrustTier;
@@ -38,10 +38,17 @@ pub struct PendingTrust {
     /// the namespace that the current hash no longer matches (most-recent last).
     /// Empty otherwise.
     pub approved_hashes: Vec<String>,
-    /// The manifest to persist on [`PendingTrust::commit`], or `None` when this
-    /// decision records nothing (a registry/Sigstore-already-recorded match, the
-    /// dev bypass, or a TOFU conflict).
-    manifest_to_save: Option<TrustManifest>,
+    /// The namespace/hash entry staged for [`PendingTrust::commit`] to merge into
+    /// the on-disk manifest, or `None` when this decision records nothing (a
+    /// registry/Sigstore-already-recorded match, the dev bypass, or a TOFU
+    /// conflict).
+    ///
+    /// Deliberately *not* a whole-manifest snapshot: verification and commit are
+    /// not atomic, so persisting a snapshot captured back in
+    /// [`verify_trust_pending`] would clobber any entry a concurrent process
+    /// wrote in between. `commit` reloads the current on-disk manifest and merges
+    /// just this entry into it instead (issue #209; mirrors the TS fix in #204).
+    pending_write: Option<(String, String)>,
 }
 
 impl PendingTrust {
@@ -51,9 +58,18 @@ impl PendingTrust {
     /// Call this only after the overall operation has otherwise succeeded (e.g.
     /// the token has been minted) so a failure never leaves a premature TOFU record
     /// behind (issue #148).
+    ///
+    /// Verification and commit are not atomic — another process can write to the
+    /// manifest in between (e.g. approving a different executable, or the same
+    /// one). To avoid clobbering that concurrent write, this reloads the manifest
+    /// from disk immediately before saving and merges the staged `(namespace,
+    /// hash)` entry into the *current* state, rather than persisting a snapshot
+    /// captured back in [`verify_trust_pending`] (issue #209).
     pub async fn commit(&self, host: &dyn HostPlatform) -> Result<(), VaultError> {
-        if let Some(manifest) = &self.manifest_to_save {
-            save_manifest(host, manifest).await?;
+        if let Some((namespace, hash)) = &self.pending_write {
+            let current = load_manifest(host).await?;
+            let merged = add_trusted_hash(&current, namespace, hash);
+            save_manifest(host, &merged).await?;
         }
         Ok(())
     }
@@ -87,7 +103,7 @@ pub async fn verify_trust_pending(
             tofu_conflict: false,
             reason: "Dev mode — hash verification skipped".to_string(),
             approved_hashes: Vec::new(),
-            manifest_to_save: None,
+            pending_write: None,
         });
     }
 
@@ -106,17 +122,16 @@ pub async fn verify_trust_pending(
     if !skip_sigstore {
         let sigstore_verified = try_sigstore(exec_path).await;
         if sigstore_verified {
-            let updated = add_trusted_hash(&manifest, namespace, &current_hash);
             return Ok(PendingTrust {
                 identity: IdentityInfo {
-                    hash: current_hash,
+                    hash: current_hash.clone(),
                     trust_tier: TrustTier::Sigstore,
                     verified: true,
                 },
                 tofu_conflict: false,
                 reason: "Sigstore bundle verified".to_string(),
                 approved_hashes: Vec::new(),
-                manifest_to_save: Some(updated),
+                pending_write: Some((namespace.to_string(), current_hash)),
             });
         }
     }
@@ -132,7 +147,7 @@ pub async fn verify_trust_pending(
             tofu_conflict: false,
             reason: "Hash found in trust manifest".to_string(),
             approved_hashes: Vec::new(),
-            manifest_to_save: None,
+            pending_write: None,
         });
     }
 
@@ -152,22 +167,21 @@ pub async fn verify_trust_pending(
             reason: "Hash changed from a previously approved value — re-approval required"
                 .to_string(),
             approved_hashes: existing.hashes.clone(),
-            manifest_to_save: None,
+            pending_write: None,
         });
     }
 
     // --- Tier 3: First encounter — record via TOFU (deferred to commit) ---
-    let updated = add_trusted_hash(&manifest, namespace, &current_hash);
     Ok(PendingTrust {
         identity: IdentityInfo {
-            hash: current_hash,
+            hash: current_hash.clone(),
             trust_tier: TrustTier::Dev,
             verified: false,
         },
         tofu_conflict: false,
         reason: "First encounter — hash recorded via TOFU".to_string(),
         approved_hashes: Vec::new(),
-        manifest_to_save: Some(updated),
+        pending_write: Some((namespace.to_string(), current_hash)),
     })
 }
 
@@ -472,6 +486,42 @@ mod tests {
             &manifest,
             "/usr/bin/test-app",
             &conflict.identity.hash
+        ));
+    }
+
+    /// Issue #209 regression (mirrors PR #204's TS interleaving test): committing
+    /// a `PendingTrust` must merge into the manifest's *current* on-disk state,
+    /// not overwrite it with the snapshot captured back in
+    /// `verify_trust_pending`. Before the fix, `PendingTrust` staged a whole
+    /// merged-manifest snapshot and `commit` saved that snapshot directly —
+    /// silently discarding a concurrent process's write to a different
+    /// namespace that landed between verify and commit. This test fails against
+    /// pre-fix code: `other-tool`'s entry would be missing after `commit`.
+    #[tokio::test]
+    async fn commit_merges_with_concurrent_manifest_write_instead_of_clobbering_it() {
+        let host = MockHost::new();
+        host.add_file("/usr/bin/my-tool", b"binary-content-v1");
+
+        let pending = verify_trust_pending(&host, "/usr/bin/my-tool", None)
+            .await
+            .unwrap();
+
+        // Simulate a concurrent process approving a different executable
+        // between our verify phase and our commit.
+        let concurrent_manifest = load_manifest(&host).await.unwrap();
+        let with_concurrent_entry =
+            add_trusted_hash(&concurrent_manifest, "other-tool", "concurrent-hash");
+        save_manifest(&host, &with_concurrent_entry).await.unwrap();
+
+        pending.commit(&host).await.unwrap();
+
+        // Both the concurrent entry and our staged entry must survive.
+        let manifest = load_manifest(&host).await.unwrap();
+        assert!(is_trusted(&manifest, "other-tool", "concurrent-hash"));
+        assert!(is_trusted(
+            &manifest,
+            "/usr/bin/my-tool",
+            &pending.identity.hash
         ));
     }
 }
