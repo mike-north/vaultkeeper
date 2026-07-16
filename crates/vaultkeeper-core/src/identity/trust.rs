@@ -62,18 +62,43 @@ impl PendingTrust {
     /// Verification and commit are not atomic — another process can write to the
     /// manifest in between (e.g. approving a different executable, or the same
     /// one). To avoid clobbering that concurrent write, this reloads the manifest
-    /// from disk immediately before saving and merges the staged `(namespace,
-    /// hash)` entry into the *current* state, rather than persisting a snapshot
-    /// captured back in [`verify_trust_pending`] (issue #209). If the freshly
-    /// reloaded manifest already trusts the staged hash — e.g. a concurrent
-    /// commit for the same executable landed first — this is a no-op: skipping
-    /// the redundant `save_manifest` avoids unnecessary I/O and shrinks the
-    /// window in which a last-writer-wins save could race another writer.
+    /// from disk immediately before saving and re-classifies the staged
+    /// `(namespace, hash)` entry against the *current* state, rather than
+    /// persisting a snapshot captured back in [`verify_trust_pending`] (issue
+    /// #209):
+    ///
+    /// - Already trusted (e.g. a concurrent commit for the same executable
+    ///   landed first) — a no-op; skipping the redundant `save_manifest` avoids
+    ///   unnecessary I/O and shrinks the window for a last-writer-wins race.
+    /// - The namespace has approved hashes that do **not** include the staged
+    ///   one — a concurrent process recorded a *different* executable for this
+    ///   namespace in the window since verification. Merging anyway would
+    ///   silently approve a second hash for one namespace, bypassing the
+    ///   TOFU-conflict record-nothing rule enforced at verify time (issue
+    ///   #148). This re-classifies as a conflict: returns
+    ///   [`VaultError::IdentityMismatch`] and writes nothing.
+    /// - The namespace has no entry yet — merges the staged entry in, as
+    ///   before.
     pub async fn commit(&self, host: &dyn HostPlatform) -> Result<(), VaultError> {
         if let Some((namespace, hash)) = &self.pending_write {
             let current = load_manifest(host).await?;
-            if is_trusted(&current, namespace, hash) {
-                return Ok(());
+            match current.get(namespace) {
+                Some(existing) if existing.hashes.iter().any(|h| h == hash) => {
+                    return Ok(());
+                }
+                Some(existing) if !existing.hashes.is_empty() => {
+                    let previous_hash = existing
+                        .hashes
+                        .last()
+                        .cloned()
+                        .unwrap_or_else(|| hash.clone());
+                    return Err(VaultError::IdentityMismatch {
+                        message: "Executable hash changed — re-approval required".to_string(),
+                        previous_hash,
+                        current_hash: hash.clone(),
+                    });
+                }
+                _ => {}
             }
             let merged = add_trusted_hash(&current, namespace, hash);
             save_manifest(host, &merged).await?;
@@ -575,6 +600,62 @@ mod tests {
             host.write_count(),
             writes_before_commit,
             "commit must not write when the staged entry is already trusted"
+        );
+    }
+
+    /// Issue #213 review follow-up: a *late* TOFU conflict. If a concurrent
+    /// process records a DIFFERENT hash for the SAME namespace in the window
+    /// between verify and commit, blindly merging the staged hash would
+    /// silently approve a second hash for one namespace — bypassing the
+    /// TOFU-conflict record-nothing rule enforced at verify time (issue #148).
+    /// `commit` must re-classify against the freshly reloaded manifest and
+    /// refuse: return `IdentityMismatch` and write nothing.
+    #[tokio::test]
+    async fn commit_refuses_when_a_concurrent_process_recorded_a_different_hash_for_the_same_namespace()
+     {
+        let host = MockHost::new();
+        host.add_file("/usr/bin/my-tool", b"binary-content-v1");
+
+        let pending = verify_trust_pending(&host, "/usr/bin/my-tool", None)
+            .await
+            .unwrap();
+        let staged_hash = pending.identity.hash.clone();
+
+        // Simulate a concurrent process recording a DIFFERENT hash for the
+        // SAME namespace before our commit reloads the manifest.
+        let concurrent_manifest = load_manifest(&host).await.unwrap();
+        let with_other_hash = add_trusted_hash(
+            &concurrent_manifest,
+            "/usr/bin/my-tool",
+            "concurrent-hash-b",
+        );
+        save_manifest(&host, &with_other_hash).await.unwrap();
+
+        let err = pending.commit(&host).await.unwrap_err();
+        match err {
+            VaultError::IdentityMismatch {
+                previous_hash,
+                current_hash,
+                ..
+            } => {
+                assert_eq!(previous_hash, "concurrent-hash-b");
+                assert_eq!(current_hash, staged_hash);
+            }
+            other => panic!("expected IdentityMismatch, got {other:?}"),
+        }
+
+        // Nothing was written beyond the concurrent entry: our staged hash
+        // never landed, and the namespace still has only one approved hash.
+        let manifest = load_manifest(&host).await.unwrap();
+        assert!(is_trusted(
+            &manifest,
+            "/usr/bin/my-tool",
+            "concurrent-hash-b"
+        ));
+        assert!(!is_trusted(&manifest, "/usr/bin/my-tool", &staged_hash));
+        assert_eq!(
+            manifest["/usr/bin/my-tool"].hashes,
+            vec!["concurrent-hash-b".to_string()]
         );
     }
 }
