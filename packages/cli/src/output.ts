@@ -299,7 +299,7 @@ function classifyFilesystemError(err: FilesystemError): 'missing' | 'denied' | '
  * carries no next step (issue #150). Mirrors the fix-oriented shape of the
  * config-error and identity-mismatch messages.
  */
-function formatFilesystemError(err: FilesystemError): string {
+function formatFilesystemError(err: FilesystemError, configDir: string): string {
   const quotedPath = `\`${err.path}\``
   const kind = classifyFilesystemError(err)
   // Directory-creation failures (`config init` / first `store` creating the
@@ -310,10 +310,15 @@ function formatFilesystemError(err: FilesystemError): string {
   // `rwx` is FileBackend's legacy label for the same failure class (its
   // storage-directory mkdir), so it gets the same directory wording.
   if (err.permission === 'create' || err.permission === 'rwx') {
+    // The --config-dir hint only helps when the failing directory actually
+    // lives under the configured config dir — a token-cache dir (XDG runtime)
+    // or an explicitly configured backend storage dir would not move with it.
+    const underConfigDir = err.path === configDir || err.path.startsWith(configDir + path.sep)
+    const relocationHint = underConfigDir ? ', or choose a writable location with --config-dir' : ''
     if (kind === 'denied') {
       return (
         `${err.name}: The directory at ${quotedPath} could not be created (permission denied). ` +
-        'Check that its parent directory is writable, or choose a writable location with --config-dir, then try again.'
+        `Check that its parent directory is writable${relocationHint}, then try again.`
       )
     }
     return (
@@ -415,7 +420,7 @@ export function formatError(err: unknown, configDir: string): string {
     return formatConfigReadError(err)
   }
   if (err instanceof FilesystemError) {
-    return formatFilesystemError(err)
+    return formatFilesystemError(err, configDir)
   }
   if (err instanceof Error) {
     return `${err.name}: ${err.message}`

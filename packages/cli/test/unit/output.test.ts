@@ -705,10 +705,13 @@ describe('formatError renders FilesystemError without raw OS text (issue #150)',
 
     const formatted = formatError(err, CONFIG_DIR)
 
+    // The storage dir lives outside the config dir, so the --config-dir
+    // relocation hint would be misleading and must be omitted.
     expect(formatted).toBe(
       `FilesystemError: The directory at \`${dir}\` could not be created (permission denied). ` +
-        'Check that its parent directory is writable, or choose a writable location with --config-dir, then try again.',
+        'Check that its parent directory is writable, then try again.',
     )
+    expect(formatted).not.toContain('--config-dir')
     expect(formatted).not.toContain('accessed')
     expect(formatted).not.toContain('EACCES')
   })
@@ -729,7 +732,10 @@ describe('formatError renders FilesystemError without raw OS text (issue #150)',
       cause,
     )
 
-    const formatted = formatError(err, CONFIG_DIR)
+    // In the real flow the failing path IS the config dir formatError
+    // receives, so pass it as such — that is what makes the --config-dir
+    // relocation hint applicable.
+    const formatted = formatError(err, dir)
 
     expect(formatted).toBe(
       `FilesystemError: The directory at \`${dir}\` could not be created (permission denied). ` +

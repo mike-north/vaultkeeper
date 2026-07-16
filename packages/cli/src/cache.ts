@@ -95,6 +95,17 @@ export async function writeCachedToken(
   const tmpPath = filePath + `.${crypto.randomUUID()}.tmp`
   try {
     await fs.writeFile(tmpPath, jwe, { encoding: 'utf8', mode: 0o600 })
+  } catch (err) {
+    throw new FilesystemError(
+      `Failed to write cached token at ${tmpPath}: ${
+        err instanceof Error ? err.message : String(err)
+      }`,
+      tmpPath,
+      'write',
+      err,
+    )
+  }
+  try {
     await fs.rename(tmpPath, filePath)
   } catch (err) {
     throw new FilesystemError(
