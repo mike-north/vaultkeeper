@@ -7,17 +7,17 @@
  *
  * Supports two access modes:
  * - `session`: A single SDK client is created on first use and cached for all operations.
- * - `per-access`: The `retrieve()` operation spawns a child process that creates a fresh
- *   SDK client (triggering biometric auth) for each retrieval. Other operations still use
- *   the cached session client.
+ * - `per-access`: Every keyed operation (`retrieve()`, `store()`, `delete()`) spawns a child
+ *   process that creates a fresh SDK client (triggering biometric auth) for that single
+ *   operation. `exists()`/`list()` still use the cached session client — they are read-only
+ *   probes, not the presence-gated path.
  *
- * Presence-per-use follows directly from this: in `per-access` mode the instance
- * forces a fresh biometric only for reads, so {@link OnePasswordBackend.getCapabilities}
- * reports `presencePerUse: true` scoped to `presenceEnforcedOperations: ['read']`.
- * A `--require-presence-per-use` `store`/`delete` is therefore refused with a
- * `NotCapableError` (fail closed) rather than passing through the cached session
- * client — the guarantee is enforced for the covered operation and never silently
- * bypassed for an uncovered one. `session` mode reports `false`.
+ * Presence-per-use follows directly from this: in `per-access` mode the instance forces a
+ * fresh biometric for `read`, `store`, and `delete`, so {@link OnePasswordBackend.getCapabilities}
+ * reports `presencePerUse: true` scoped to `presenceEnforcedOperations: ['read', 'store', 'delete']`.
+ * `session` mode reports `false`.
+ *
+ * @see https://github.com/mike-north/vaultkeeper/issues/211
  */
 
 import { spawn } from 'node:child_process'
@@ -30,8 +30,18 @@ import {
   BackendUnavailableError,
   AuthorizationDeniedError,
   ConfigValidationError,
+  PresenceDeclinedError,
+  PresenceTimeoutError,
 } from '../errors.js'
 import type { ListableBackend, PresenceCapableBackend, BackendCapabilities } from './types.js'
+import {
+  TAG,
+  findItemOverviewByTitle,
+  findItemByTitle,
+  extractPasswordField,
+  storeSecretItem,
+  deleteSecretItem,
+} from './one-password-item-ops.js'
 
 // ---- SDK type imports (runtime-dynamic, not static imports) ----
 // We import the SDK dynamically so that the backend degrades gracefully
@@ -39,17 +49,14 @@ import type { ListableBackend, PresenceCapableBackend, BackendCapabilities } fro
 
 type SdkModule = typeof import('@1password/sdk')
 type Client = import('@1password/sdk').Client
-type Item = import('@1password/sdk').Item
-type ItemOverview = import('@1password/sdk').ItemOverview
 
-const TAG = 'vaultkeeper'
-const PASSWORD_FIELD_TITLE = 'password'
 const SESSION_TIMEOUT_MS = 30_000
 import {
   INTEGRATION_NAME,
   SDK_INSTALL_URL,
   SDK_NOT_INSTALLED_MESSAGE,
   SDK_PACKAGE,
+  PRESENCE_WRITE_TIMEOUT_MS,
   getIntegrationVersion,
   isModuleNotFoundError,
 } from './one-password-constants.js'
@@ -92,6 +99,34 @@ function isWorkerSuccess(res: WorkerResponse): res is WorkerSuccess {
 function isWorkerResponse(value: unknown): value is WorkerResponse {
   if (value === null || typeof value !== 'object') return false
   if ('value' in value && typeof value.value === 'string') return true
+  if (
+    'error' in value &&
+    typeof value.error === 'string' &&
+    'code' in value &&
+    typeof value.code === 'string'
+  )
+    return true
+  return false
+}
+
+/** Worker response shape for a successful `store`/`delete` (no value to report). */
+interface WorkerWriteSuccess {
+  ok: true
+}
+
+type WorkerWriteResponse = WorkerWriteSuccess | WorkerFailure
+
+function isWorkerWriteSuccess(res: WorkerWriteResponse): res is WorkerWriteSuccess {
+  // Check the VALUE, not just key presence: a malformed/buggy worker response
+  // like `{ ok: false, error, code }` passes isWorkerWriteResponse via its
+  // failure branch and must never be classified as a successful write.
+  const record: Record<string, unknown> = { ...res }
+  return record.ok === true
+}
+
+function isWorkerWriteResponse(value: unknown): value is WorkerWriteResponse {
+  if (value === null || typeof value !== 'object') return false
+  if ('ok' in value && value.ok === true) return true
   if (
     'error' in value &&
     typeof value.error === 'string' &&
@@ -157,31 +192,37 @@ export class OnePasswordBackend implements ListableBackend, PresenceCapableBacke
    * Report this instance's capabilities.
    *
    * @remarks
-   * `presencePerUse` is `true` only in `per-access` mode, where each
-   * `retrieve()` spawns a fresh worker process that creates a new SDK client and
-   * triggers a per-read biometric approval that cannot be satisfied from the
-   * cached session client. In the default `session` mode a single client is
-   * cached for all operations, so operations ride one earlier unlock — that mode
-   * reports `false`.
+   * `presencePerUse` is `true` only in `per-access` mode, where every keyed
+   * operation (`retrieve()`, `store()`, `delete()`) spawns a fresh worker
+   * process that creates a new SDK client and triggers a per-operation
+   * biometric approval that cannot be satisfied from the cached session
+   * client. In the default `session` mode a single client is cached for all
+   * operations, so operations ride one earlier unlock — that mode reports
+   * `false`.
    *
-   * **Operation coverage:** the per-access biometric path gates `retrieve()`
-   * only (the read behind `setup`/`exec`); `store`/`delete` route through the
-   * cached session client and are **not** presence-forced. To keep the
-   * guarantee non-bypassable, this reports `presenceEnforcedOperations: ['read']`
-   * so a `--require-presence-per-use` `store`/`delete` is refused with a
-   * `NotCapableError` (fail closed) rather than silently passing. Callers
-   * requiring presence for writes should use a touch device.
+   * **Operation coverage:** the per-access biometric path gates `retrieve()`,
+   * `store()`, and `delete()` — every keyed operation reachable from
+   * `presenceEnforcedOperations`. `exists()`/`list()` are read-only probes,
+   * not keyed operations the presence contract covers, so they continue to
+   * use the cached session client. This reports
+   * `presenceEnforcedOperations: ['read', 'store', 'delete']` (issue #211
+   * closed the earlier `store`/`delete` gap — see
+   * {@link https://github.com/mike-north/vaultkeeper/issues/211}).
    *
-   * **Truth-basis / cached-OS-unlock caveat:** even for reads the fresh action
-   * is "a fresh SDK client plus whatever the OS enforces at that moment" — a
-   * "fresh process/SDK client" is **not** the same as a guaranteed fresh
-   * hardware action. A per-access read can still ride a cached OS-level Touch ID
-   * / Windows Hello unlock if the OS does not re-prompt. The strongest per-use
-   * hardware guarantee comes from a touch device (YubiKey / gpg smartcard).
+   * **Truth-basis / cached-OS-unlock caveat:** even for a covered operation
+   * the fresh action is "a fresh SDK client plus whatever the OS enforces at
+   * that moment" — a "fresh process/SDK client" is **not** the same as a
+   * guaranteed fresh hardware action. A per-access call can still ride a
+   * cached OS-level Touch ID / Windows Hello unlock if the OS does not
+   * re-prompt. The strongest per-use hardware guarantee comes from a touch
+   * device (YubiKey / gpg smartcard).
    */
   getCapabilities(): Promise<BackendCapabilities> {
     if (this.accessMode === 'per-access') {
-      return Promise.resolve({ presencePerUse: true, presenceEnforcedOperations: ['read'] })
+      return Promise.resolve({
+        presencePerUse: true,
+        presenceEnforcedOperations: ['read', 'store', 'delete'],
+      })
     }
     return Promise.resolve({ presencePerUse: false })
   }
@@ -282,87 +323,22 @@ export class OnePasswordBackend implements ListableBackend, PresenceCapableBacke
     return new sdk.DesktopAuth(accountName)
   }
 
-  // ---- Helpers for item lookup by title ----
-
-  /**
-   * List all items in the vault tagged "vaultkeeper" and find one with the
-   * matching title (= secret ID). Returns `undefined` if not found.
-   */
-  private async findItemOverview(client: Client, id: string): Promise<ItemOverview | undefined> {
-    const overviews = await client.items.list(this.vaultId)
-    for (const overview of overviews) {
-      if (overview.title === id && overview.tags.includes(TAG)) {
-        return overview
-      }
-    }
-    return undefined
-  }
-
-  /**
-   * Fetch the full item for a given secret id. Returns `undefined` if not found.
-   */
-  private async findItem(client: Client, id: string): Promise<Item | undefined> {
-    const overview = await this.findItemOverview(client, id)
-    if (overview === undefined) return undefined
-    return client.items.get(this.vaultId, overview.id)
-  }
-
-  /**
-   * Extract the concealed password field value from an item.
-   */
-  private extractSecret(item: Item, id: string): string {
-    for (const field of item.fields) {
-      if (field.title === PASSWORD_FIELD_TITLE) {
-        return field.value
-      }
-    }
-    throw new SecretNotFoundError(`Secret found in 1Password but missing password field: ${id}`)
-  }
-
   // ---- SecretBackend / ListableBackend implementation ----
 
   async store(id: string, secret: string): Promise<void> {
+    if (this.accessMode === 'per-access') {
+      return this.writeViaWorker('store', id, secret)
+    }
     const { ItemCategory, ItemFieldType } = await this.requireSdk()
     const client = await this.acquireClient()
-
-    const existing = await this.findItem(client, id)
-
-    if (existing !== undefined) {
-      // Update the existing item's password field, or append one if missing
-      const hasPasswordField = existing.fields.some((f) => f.title === PASSWORD_FIELD_TITLE)
-      const updatedFields = hasPasswordField
-        ? existing.fields.map((f) => {
-            if (f.title === PASSWORD_FIELD_TITLE) {
-              return { ...f, value: secret }
-            }
-            return f
-          })
-        : [
-            ...existing.fields,
-            {
-              id: 'password',
-              title: PASSWORD_FIELD_TITLE,
-              fieldType: ItemFieldType.Concealed,
-              value: secret,
-            },
-          ]
-      await client.items.put({ ...existing, fields: updatedFields })
-    } else {
-      await client.items.create({
-        category: ItemCategory.Password,
-        vaultId: this.vaultId,
-        title: id,
-        tags: [TAG],
-        fields: [
-          {
-            id: 'password',
-            title: PASSWORD_FIELD_TITLE,
-            fieldType: ItemFieldType.Concealed,
-            value: secret,
-          },
-        ],
-      })
-    }
+    await storeSecretItem(
+      client,
+      this.vaultId,
+      id,
+      secret,
+      ItemCategory.Password,
+      ItemFieldType.Concealed,
+    )
   }
 
   async retrieve(id: string): Promise<string> {
@@ -374,11 +350,15 @@ export class OnePasswordBackend implements ListableBackend, PresenceCapableBacke
 
   private async retrieveViaSession(id: string): Promise<string> {
     const client = await this.acquireClient()
-    const item = await this.findItem(client, id)
+    const item = await findItemByTitle(client, this.vaultId, id)
     if (item === undefined) {
       throw new SecretNotFoundError(`Secret not found in 1Password: ${id}`)
     }
-    return this.extractSecret(item, id)
+    const value = extractPasswordField(item)
+    if (value === undefined) {
+      throw new SecretNotFoundError(`Secret found in 1Password but missing password field: ${id}`)
+    }
+    return value
   }
 
   /**
@@ -403,13 +383,17 @@ export class OnePasswordBackend implements ListableBackend, PresenceCapableBacke
         stderrChunks.push(chunk)
       })
 
-      child.on('close', (code) => {
+      child.on('close', (code, signal) => {
         const raw = Buffer.concat(stdoutChunks).toString('utf8').trim()
 
         // If worker produced no stdout, use exit code + stderr for diagnostics
         if (raw === '') {
           const stderr = Buffer.concat(stderrChunks).toString('utf8').trim()
-          const detail = stderr !== '' ? stderr : `exit code ${String(code)}`
+          const exitDescription =
+            typeof signal === 'string'
+              ? `terminated by signal ${signal}`
+              : `exit code ${String(code)}`
+          const detail = stderr !== '' ? stderr : exitDescription
           reject(
             new BackendUnavailableError(
               `1Password per-access worker crashed for secret ${id}: ${detail}`,
@@ -482,18 +466,174 @@ export class OnePasswordBackend implements ListableBackend, PresenceCapableBacke
     })
   }
 
+  /**
+   * Spawn the per-access worker script to perform a `store` or `delete`,
+   * triggering a fresh biometric prompt for this single write (issue #211).
+   *
+   * @remarks
+   * For `store`, `secret` is delivered to the worker over **stdin**, never
+   * argv — it must never appear in a process listing, shell history, or log.
+   * `delete` needs no payload, so no stdin is written and the worker's stdin
+   * is left `'ignore'`d, mirroring the retrieve path's spawn options.
+   */
+  private writeViaWorker(op: 'store' | 'delete', id: string, secret?: string): Promise<void> {
+    return new Promise((resolve, reject) => {
+      const workerPath = join(dirname(fileURLToPath(import.meta.url)), 'one-password-worker.js')
+
+      const accountArg = this.account ?? ''
+      const needsStdin = secret !== undefined
+      const child = spawn(process.execPath, [workerPath, accountArg, this.vaultId, id, op], {
+        stdio: [needsStdin ? 'pipe' : 'ignore', 'pipe', 'pipe'],
+      })
+
+      if (needsStdin && child.stdin !== null) {
+        // A worker that exits before draining stdin (e.g. a protocol
+        // validation failure) makes this write raise EPIPE, which without a
+        // handler becomes an unhandled 'error' event and crashes the parent.
+        // The worker's own failure is already reported through the close
+        // handler below, so the stream error itself is safe to swallow.
+        child.stdin.on('error', () => {
+          /* reported via the close handler */
+        })
+        child.stdin.write(secret, 'utf8')
+        child.stdin.end()
+      }
+
+      const stdoutChunks: Buffer[] = []
+      const stderrChunks: Buffer[] = []
+      // The ternary in `stdio` above (rather than a fixed literal tuple) means
+      // TS can't narrow `stdout`/`stderr` to non-null from `spawn`'s overloads
+      // — both are always piped regardless, so optional chaining here mirrors
+      // the same null-safety idiom `execCommandFull` already uses in `util/exec.ts`.
+      child.stdout?.on('data', (chunk: Buffer) => {
+        stdoutChunks.push(chunk)
+      })
+      child.stderr?.on('data', (chunk: Buffer) => {
+        stderrChunks.push(chunk)
+      })
+
+      child.on('close', (code, signal) => {
+        const raw = Buffer.concat(stdoutChunks).toString('utf8').trim()
+
+        if (raw === '') {
+          const stderr = Buffer.concat(stderrChunks).toString('utf8').trim()
+          // A signal-terminated worker reports code null — name the signal
+          // instead of an unhelpful 'exit code null'.
+          const exitDescription =
+            typeof signal === 'string'
+              ? `terminated by signal ${signal}`
+              : `exit code ${String(code)}`
+          const detail = stderr !== '' ? stderr : exitDescription
+          reject(
+            new BackendUnavailableError(
+              `1Password per-access worker crashed during ${op} of secret ${id}: ${detail}`,
+              'worker-crashed',
+              ['1password'],
+            ),
+          )
+          return
+        }
+
+        let parsed: unknown
+        try {
+          parsed = JSON.parse(raw)
+        } catch {
+          reject(
+            new BackendUnavailableError(
+              `Worker returned unparseable output during ${op} of secret ${id}`,
+              'worker-internal-error',
+              ['1password'],
+            ),
+          )
+          return
+        }
+        if (!isWorkerWriteResponse(parsed)) {
+          reject(
+            new BackendUnavailableError(
+              `Worker returned unexpected response shape during ${op} of secret ${id}`,
+              'worker-internal-error',
+              ['1password'],
+            ),
+          )
+          return
+        }
+        if (isWorkerWriteSuccess(parsed)) {
+          resolve()
+          return
+        }
+        switch (parsed.code) {
+          case 'PLUGIN_NOT_FOUND':
+            reject(new PluginNotFoundError(SDK_NOT_INSTALLED_MESSAGE, SDK_PACKAGE, SDK_INSTALL_URL))
+            break
+          case 'NOT_FOUND':
+            reject(new SecretNotFoundError(`Secret not found in 1Password: ${id}`))
+            break
+          case 'LOCKED':
+            reject(new BackendLockedError('1Password is locked. Please unlock and retry.', true))
+            break
+          case 'PRESENCE_DECLINED':
+            reject(
+              new PresenceDeclinedError(
+                `1Password ${op} presence action was declined for secret ${id}`,
+                '1password',
+              ),
+            )
+            break
+          case 'PRESENCE_TIMEOUT':
+            reject(
+              new PresenceTimeoutError(
+                `1Password ${op} presence action timed out for secret ${id}`,
+                '1password',
+                PRESENCE_WRITE_TIMEOUT_MS,
+              ),
+            )
+            break
+          case 'INTERNAL':
+            reject(
+              new BackendUnavailableError(
+                `1Password per-access worker failed during ${op} of secret ${id}: ${parsed.error}`,
+                'worker-internal-error',
+                ['1password'],
+              ),
+            )
+            break
+          default:
+            reject(
+              new BackendUnavailableError(
+                `Worker failed during ${op} of secret ${id}: ${parsed.error}`,
+                'worker-internal-error',
+                ['1password'],
+              ),
+            )
+        }
+      })
+
+      child.on('error', (err) => {
+        reject(
+          new BackendUnavailableError(
+            `Failed to spawn 1Password per-access worker at ${workerPath}: ${String(err)}`,
+            'worker-spawn-failed',
+            ['1password'],
+          ),
+        )
+      })
+    })
+  }
+
   async delete(id: string): Promise<void> {
+    if (this.accessMode === 'per-access') {
+      return this.writeViaWorker('delete', id)
+    }
     const client = await this.acquireClient()
-    const overview = await this.findItemOverview(client, id)
-    if (overview === undefined) {
+    const deleted = await deleteSecretItem(client, this.vaultId, id)
+    if (!deleted) {
       throw new SecretNotFoundError(`Secret not found in 1Password: ${id}`)
     }
-    await client.items.delete(this.vaultId, overview.id)
   }
 
   async exists(id: string): Promise<boolean> {
     const client = await this.acquireClient()
-    const overview = await this.findItemOverview(client, id)
+    const overview = await findItemOverviewByTitle(client, this.vaultId, id)
     return overview !== undefined
   }
 

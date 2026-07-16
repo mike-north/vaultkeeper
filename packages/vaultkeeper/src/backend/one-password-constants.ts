@@ -28,6 +28,19 @@ export const SDK_INSTALL_URL = 'https://developer.1password.com/docs/sdks/'
 export const SDK_NOT_INSTALLED_MESSAGE = `1Password SDK (${SDK_PACKAGE}) is not installed. Install it to use the 1Password backend.`
 
 /**
+ * How long the per-access worker waits for `createClient()` to resolve during
+ * a presence-covered `store`/`delete` write before treating the fresh action
+ * as timed out (`PresenceTimeoutError`).
+ *
+ * @remarks
+ * Shared between the worker (which starts the timer) and the backend (which
+ * reports this value on the resulting {@link PresenceTimeoutError}), so the
+ * two never drift. Reads are unaffected — issue #211 only extends presence
+ * coverage to writes; see {@link https://github.com/mike-north/vaultkeeper/issues/211}.
+ */
+export const PRESENCE_WRITE_TIMEOUT_MS = 30_000
+
+/**
  * Whether an error thrown by `import('@1password/sdk')` means the module could
  * not be resolved (i.e. the optional peer is not installed), as opposed to a
  * present-but-broken SDK (native binding failure, init throw, incompatible

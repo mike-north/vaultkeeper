@@ -83,16 +83,17 @@ describe('per-backend truth basis (AC2)', () => {
     })
   })
 
-  it('1Password reports true only in per-access mode, and only for reads', async () => {
-    // per-access forces a fresh per-read biometric approval; session rides one
-    // cached unlock. Writes (store/delete) route through the cached session
-    // client, so per-access covers only the 'read' operation — a flagged
-    // store/delete must fail closed (see the enforcement tests).
+  it('1Password reports true only in per-access mode, covering read, store, and delete', async () => {
+    // per-access forces a fresh per-operation biometric approval for every
+    // keyed operation — reads route through the per-access worker (shipped in
+    // #210), and store/delete now do too (#211 closed the earlier gap where
+    // writes rode the cached session client). Session mode rides one cached
+    // unlock for everything, so it reports false.
     const perAccess = new OnePasswordBackend({ vault: 'v', accessMode: 'per-access' })
     const session = new OnePasswordBackend({ vault: 'v', accessMode: 'session' })
     await expect(perAccess.getCapabilities()).resolves.toEqual({
       presencePerUse: true,
-      presenceEnforcedOperations: ['read'],
+      presenceEnforcedOperations: ['read', 'store', 'delete'],
     })
     await expect(session.getCapabilities()).resolves.toEqual({ presencePerUse: false })
   })

@@ -49,20 +49,31 @@ enabled; config sets `{ "type": "1password", "enabled": true, "options": { "acce
 4. Cancel the biometric prompt → expect the read to fail (surfaced as an
    authorization/decline failure from the 1Password worker).
 
-5. Confirm writes fail closed: `vaultkeeper store --name S --require-presence-per-use`
-   (and the same for `delete`) → expect an immediate `NotCapableError` (exit 1)
-   with a message that presence-per-use is enforced for `read` only on this
-   backend. No biometric prompt should appear, and nothing should be written.
+5. Confirm writes now force a fresh action too (issue #211 closed the earlier
+   fail-closed gap): `vaultkeeper store --name S --require-presence-per-use`
+   → expect a fresh Touch ID / system biometric prompt (a distinct worker
+   process from the read prompt), and the store succeeds only after approval.
+   Repeat for `vaultkeeper delete --name S --require-presence-per-use` → expect
+   its own fresh prompt.
+6. Cancel the biometric prompt during a flagged `store`/`delete` → expect the
+   command to fail (exit 1) as a declined presence action (`PresenceDeclinedError`),
+   not a generic authorization failure — and confirm nothing was written/deleted.
+7. Withhold the prompt past the wait window during a flagged `store`/`delete` →
+   expect `PresenceTimeoutError` (exit 1), distinct from `PresenceDeclinedError`.
+8. Confirm the secret value never appears in a process listing during a flagged
+   `store`: while the command is running, run `ps aux | grep vaultkeeper` (or
+   equivalent) in another terminal and confirm the value is absent — it travels
+   to the worker over stdin, never as a spawn argument.
 
 > **Cached-OS-unlock caveat.** 1Password `per-access` creates a fresh SDK client
-> per read, but the OS may satisfy the biometric from a cached Touch ID / Windows
-> Hello unlock without re-prompting. If step 3 does **not** re-prompt, that is the
-> OS caching the unlock, not a vaultkeeper defect — the guarantee for 1Password is
-> "fresh SDK client plus whatever the OS enforces at that moment." For a hard
-> per-tap guarantee, use a touch device. `store`/`delete` route through the cached
-> session client, so presence is enforced for reads only; a flagged write is
-> **refused** (`NotCapableError`), never silently allowed — verified by step 5 and
-> by the automated `operation-aware, fail-closed enforcement` test.
+> per operation, but the OS may satisfy the biometric from a cached Touch ID /
+> Windows Hello unlock without re-prompting. If step 3 does **not** re-prompt,
+> that is the OS caching the unlock, not a vaultkeeper defect — the guarantee for
+> 1Password is "fresh SDK client plus whatever the OS enforces at that moment."
+> For a hard per-tap guarantee, use a touch device. `store` and `delete` now
+> route through the same per-access worker as reads (issue #211), each forcing
+> its own fresh action — verified by steps 5–8 and by the automated
+> `store — per-access mode` / `delete — per-access mode` unit test suites.
 
 ## gpg smartcard (touch-to-sign) — if/when a backend ships
 
