@@ -187,11 +187,22 @@ export function runShellFence(fence: Fence): ShellRunResult {
       mode: 0o755,
     })
 
+    // Build a minimal, deterministic environment instead of inheriting the full
+    // parent env: README fences run verbatim, so they must not depend on ambient
+    // VAULTKEEPER_* toggles (which would make the example non-reproducible), and CI
+    // secrets must never be exposed to a fence that forwards env. Only HOME +
+    // VAULTKEEPER_CONFIG_DIR are set explicitly; a small locale/tmp allowlist is
+    // carried through when present so tools behave normally.
     const env: NodeJS.ProcessEnv = {
-      ...process.env,
       PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ''}`,
       HOME: root,
       VAULTKEEPER_CONFIG_DIR: configDir,
+    }
+    for (const key of ['LANG', 'LC_ALL', 'LC_CTYPE', 'TMPDIR', 'TERM']) {
+      const value = process.env[key]
+      if (value !== undefined) {
+        env[key] = value
+      }
     }
 
     const result = spawnSync('bash', ['--noprofile', '--norc', '-euo', 'pipefail', '-c', fence.code], {
