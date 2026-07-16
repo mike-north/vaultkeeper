@@ -51,8 +51,9 @@ pub struct PendingTrust {
 }
 
 impl PendingTrust {
-    /// Persist the pending TOFU manifest write, if any. A no-op when there is
-    /// nothing to record.
+    /// Persist the pending trust-manifest write, if any — staged by a Tier-1
+    /// (Sigstore) approval or a Tier-3 (TOFU first-encounter) recording. A
+    /// no-op when there is nothing to record.
     ///
     /// Call this only after the overall operation has otherwise succeeded (e.g.
     /// the token has been minted) so a failure never leaves a premature
