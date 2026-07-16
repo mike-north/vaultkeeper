@@ -1,6 +1,6 @@
 {
   "name": "@vaultkeeper/cli-test-helpers",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "CLI test utilities for vaultkeeper",
   "homepage": "https://github.com/mike-north/vaultkeeper#readme",
   "repository": {
