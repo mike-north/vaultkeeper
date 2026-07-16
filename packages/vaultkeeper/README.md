@@ -433,28 +433,28 @@ consecutive required-presence operations each demand their own distinct fresh ac
 
 ### Per-backend truth basis
 
-| Backend                                    | `presencePerUse`                                                                                         | Basis                                                                                                                                                                                                       |
-| ------------------------------------------ | -------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `file`, `keychain`, `dpapi`, `secret-tool` | always `false`                                                                                           | Encryption-only or a cached/unattended unlock — no distinct per-use human action.                                                                                                                           |
-| `yubikey`                                  | `true` only when the configured slot enforces touch-per-operation (`options.touchPolicy: "required"`)    | Every challenge-response forces a physical tap. Verify the slot's real policy with `ykman otp info`. Derived from configuration, never from the backend type.                                               |
-| `1password`                                | `true` only in `per-access` mode (`options.accessMode: "per-access"`), and only for the `read` operation | A fresh worker/SDK client triggers a per-read biometric approval instead of reusing the cached session client. Writes route through the cached session, so it enforces presence for reads only (see below). |
+| Backend                                    | `presencePerUse`                                                                                              | Basis                                                                                                                                                                                                                                         |
+| ------------------------------------------ | ------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `file`, `keychain`, `dpapi`, `secret-tool` | always `false`                                                                                                | Encryption-only or a cached/unattended unlock — no distinct per-use human action.                                                                                                                                                             |
+| `yubikey`                                  | `true` only when the configured slot enforces touch-per-operation (`options.touchPolicy: "required"`)         | Every challenge-response forces a physical tap. Verify the slot's real policy with `ykman otp info`. Derived from configuration, never from the backend type.                                                                                 |
+| `1password`                                | `true` only in `per-access` mode (`options.accessMode: "per-access"`), covering `read`, `store`, and `delete` | A fresh worker/SDK client is spawned per operation — reads, stores, and deletes each trigger their own biometric approval instead of reusing the cached session client. `exists`/`list` remain read-only probes on the cached session client. |
 
 > **Operation coverage (enforced, not advisory).** 1Password `per-access` forces a fresh biometric
-> for **reads** (the secret read behind `setup`/`exec`) but routes `store`/`delete` through the cached
-> session client. Enforcement is therefore **operation-aware and fail-closed**: a
-> `--require-presence-per-use` / `requirePresencePerUse` `store` or `delete` on 1Password is **refused
-> with `NotCapableError`** before any credential is touched — it never passes without a fresh action.
-> Only presence-gated **reads** proceed. A touch device (YubiKey with a touch slot) enforces presence
-> for every operation and has no such restriction. This is expressed generically via
-> `BackendCapabilities.presenceEnforcedOperations` (omitted = all operations), not a per-type special
-> case.
+> for **every keyed operation** — `read` (the secret read behind `setup`/`exec`), `store`, and
+> `delete` each spawn their own worker process and their own fresh approval (issue #211 closed the
+> earlier gap where `store`/`delete` rode the cached session client). A touch device (YubiKey with a
+> touch slot) enforces presence for every operation the same way and has no restriction to model. This
+> coverage is expressed generically via `BackendCapabilities.presenceEnforcedOperations` (omitted =
+> all operations), not a per-type special case — a backend that only covers _some_ operations (were
+> one added later) would still refuse an uncovered `--require-presence-per-use` request with
+> `NotCapableError` rather than silently pass it through a cached session.
 
 > **Cached-OS-unlock caveat.** A "fresh process / SDK client" is **not** the same as a guaranteed
-> fresh hardware action. 1Password `per-access` re-creates the client per read, but the OS may still
-> satisfy the biometric from a cached Touch ID / Windows Hello unlock without re-prompting — so its
-> guarantee is "fresh SDK client plus whatever the OS enforces at that moment." The strongest per-use
-> guarantee comes from a dedicated touch device (YubiKey / gpg smartcard), where the tap is intrinsic
-> to the cryptographic operation.
+> fresh hardware action. 1Password `per-access` re-creates the client per operation, but the OS may
+> still satisfy the biometric from a cached Touch ID / Windows Hello unlock without re-prompting — so
+> its guarantee is "fresh SDK client plus whatever the OS enforces at that moment." The strongest
+> per-use guarantee comes from a dedicated touch device (YubiKey / gpg smartcard), where the tap is
+> intrinsic to the cryptographic operation.
 
 Real-hardware confirmation for each backend is documented as a manual verification test in
 [`docs/manual-tests/presence-per-use.md`](../../docs/manual-tests/presence-per-use.md).
