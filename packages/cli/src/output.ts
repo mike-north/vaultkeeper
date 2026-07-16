@@ -313,7 +313,16 @@ function formatFilesystemError(err: FilesystemError, configDir: string): string 
     // The --config-dir hint only helps when the failing directory actually
     // lives under the configured config dir — a token-cache dir (XDG runtime)
     // or an explicitly configured backend storage dir would not move with it.
-    const underConfigDir = err.path === configDir || err.path.startsWith(configDir + path.sep)
+    // Resolve both sides (and fold case on Windows, matching the
+    // isPlatformDefaultConfigDir normalization) so a relative spelling or
+    // trailing separator can't flip the hint.
+    const normalizePath = (p: string): string => {
+      const resolved = path.resolve(p)
+      return process.platform === 'win32' ? resolved.toLowerCase() : resolved
+    }
+    const errPath = normalizePath(err.path)
+    const confDir = normalizePath(configDir)
+    const underConfigDir = errPath === confDir || errPath.startsWith(confDir + path.sep)
     const relocationHint = underConfigDir ? ', or choose a writable location with --config-dir' : ''
     if (kind === 'denied') {
       return (
