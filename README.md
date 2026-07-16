@@ -36,6 +36,8 @@ await vault.fetch(token, {
 
 Minimal CLI flow:
 
+<!-- readme-example: skip - `exec` targets a placeholder caller path; see the CLI README for a runnable sign/verify walkthrough -->
+
 ```sh
 vaultkeeper config init                       # safe default: file backend
 echo "my-secret-value" | vaultkeeper store --name MY_API_KEY
@@ -129,6 +131,8 @@ Both the native Rust CLI and the Node.js CLI share the same command surface:
 > [!NOTE]
 > The safe `file` default described below (a bare `config init` writing the `file` backend) currently applies to the **Node.js CLI** and the TypeScript library. The native Rust CLI's zero-config default still targets the platform-native store; converging it onto this behavior is tracked in [#75](https://github.com/mike-north/vaultkeeper/issues/75).
 
+<!-- readme-example: skip - full command tour; `approve`/`exec`/`dev-mode` reference placeholder tool paths, not runnable verbatim -->
+
 ```sh
 # Every command accepts a global `--config-dir <path>` (or the
 # VAULTKEEPER_CONFIG_DIR env var) that isolates config, key material, and the
@@ -161,7 +165,11 @@ vaultkeeper key create --name approval-signing-key --type ed25519
 vaultkeeper key export --name approval-signing-key > approval.pub
 
 # Sign an arbitrary challenge from stdin; stdout is exactly the detached
-# signature (a compact JWS), so it is safe to redirect into a file
+# signature (a compact JWS), so it is safe to redirect into a file. Feed the
+# SAME bytes to sign and verify — here both read from `printf '%s'`. A
+# here-string (`<<<`) or `echo` would append a trailing newline, so verify
+# would see one more byte than sign signed and fail with exit 3.
+CHALLENGE="hello-challenge"
 printf '%s' "$CHALLENGE" | vaultkeeper sign --name approval-signing-key > sig
 
 # List each backend's security capabilities (which can force a fresh, per-use
@@ -175,7 +183,7 @@ printf '%s' "$CHALLENGE" | vaultkeeper sign --name approval-signing-key --requir
 
 # Verify a detached signature fully offline — only the public key, the payload
 # on stdin, and the signature. Exit 0 = valid, 3 = did not verify.
-vaultkeeper verify --public-key approval.pub --signature sig <<<"$CHALLENGE"
+printf '%s' "$CHALLENGE" | vaultkeeper verify --public-key approval.pub --signature sig
 
 # Pre-approve an executable (TOFU): records its SHA-256 in the trust manifest
 vaultkeeper approve --script /usr/local/bin/my-tool
@@ -203,6 +211,8 @@ On an interactive terminal you are prompted `[y/N]`; with non-TTY stdin (CI,
 Docker) there is no prompt, so approve the caller ahead of time — or approve a
 single invocation with `--yes` (or `VAULTKEEPER_YES=1`). The `file` backend needs
 no system credential store, which makes it a good fit for CI.
+
+<!-- readme-example: skip - CI recipe using `$CI_SCRIPT`/`./deploy.sh` placeholders, not runnable verbatim -->
 
 ```sh
 # Recommended: pre-approve the caller once, then exec runs unattended.

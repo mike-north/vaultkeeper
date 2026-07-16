@@ -28,6 +28,8 @@ vaultkeeper --config-dir /tmp/ci-vault doctor
 VAULTKEEPER_CONFIG_DIR=/tmp/ci-vault vaultkeeper doctor
 ```
 
+<!-- readme-example: skip - overview of the command surface; `approve`/`exec`/`dev-mode` reference placeholder tool paths, not runnable verbatim -->
+
 ```sh
 # Run preflight checks
 vaultkeeper doctor
@@ -149,11 +151,18 @@ from stdin (the detached signature is the only thing on stdout, so it is pipelin
 fully offline:
 
 ```sh
-vaultkeeper key create --name approval-signing-key --type ed25519   # unknown --type exits 2
+CHALLENGE="hello-challenge"
+vaultkeeper key create --name approval-signing-key --type ed25519   # an unknown --type value exits 2
 vaultkeeper key export --name approval-signing-key > approval.pub   # SPKI PEM public key
 printf '%s' "$CHALLENGE" | vaultkeeper sign --name approval-signing-key > sig
-vaultkeeper verify --public-key approval.pub --signature sig <<<"$CHALLENGE"   # exit 0 = valid
+printf '%s' "$CHALLENGE" | vaultkeeper verify --public-key approval.pub --signature sig   # exit 0 = valid
 ```
+
+Feed `sign` and `verify` the payload the **same way** — here, `printf '%s'` piped into
+both — so each reads byte-identical stdin. A detached signature covers the exact bytes it was
+given, so a construct that changes them breaks verification: a here-string (`<<<"$CHALLENGE"`)
+appends a trailing newline in bash and zsh, and `echo` does too, so mixing either with
+`printf '%s'` makes `verify` see one more byte than `sign` signed and fail with exit `3`.
 
 The signature is a detached-payload Compact JWS (algorithm `EdDSA` / Ed25519; base64url without
 padding, [RFC 7515](https://www.rfc-editor.org/rfc/rfc7515); detached payload via
@@ -165,6 +174,8 @@ the public key, the payload on stdin, and the signature.
 
 Discover which backends can force a **fresh, per-use human action** (a distinct touch/biometric that
 no cached or session unlock can satisfy), then require it for an operation:
+
+<!-- readme-example: skip - fragment; reuses the approval-signing-key and $CHALLENGE created in the sign/verify fence above -->
 
 ```sh
 # List each registered backend and whether it forces a fresh per-use action.

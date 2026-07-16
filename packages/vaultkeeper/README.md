@@ -127,6 +127,8 @@ Other access patterns share the same capability-token flow (`setup()` → `autho
 which is visible to other processes via `ps`. Placeholders are substituted in `env` values only
 (passing `{{secret}}` in `command`/`args` throws `ExecError`):
 
+<!-- readme-example: skip - fragment; `vault`/`token` come from the quick-start fence above -->
+
 ```ts
 // `token` comes from authorize(), exactly like the fetch() example above.
 const { result } = await vault.exec(token, {
@@ -145,6 +147,8 @@ applies. With a `SecretTokenMap` (multiple secrets), **every** injected value is
 out and receive the raw, unredacted output — for example when you need to parse a payload that
 legitimately contains the value — pass `redact: false` (mirroring the CLI's `--no-redact`):
 
+<!-- readme-example: skip - fragment; `vault`/`token` come from the quick-start fence above -->
+
 ```ts
 // Raw output — the injected secret is NOT scrubbed. Handle the result carefully;
 // it may contain the secret verbatim.
@@ -161,6 +165,8 @@ whose secret is only reachable through a single-use `read(callback)` call backed
 buffer; no placeholder substitution is involved. `read()` returns whatever the callback returns, so
 derive the value you need (a header string, a hash) inside the callback and capture that — never the
 raw `Buffer`, which is zeroed before `read()` returns. A second `read()` throws `AccessorConsumedError`:
+
+<!-- readme-example: skip - fragment; `vault`/`token` come from the quick-start fence above -->
 
 ```ts
 // `token` comes from authorize(), exactly like the fetch()/exec() examples above.
@@ -182,6 +188,8 @@ signatures.
 (`Record<string, CapabilityToken>`) to inject several secrets into one call. With a map, reference
 each secret by the **named** placeholder `{{secret:<name>}}`, where `<name>` is a key in the map,
 instead of the bare `{{secret}}`:
+
+<!-- readme-example: skip - fragment; `vault` comes from the quick-start fence above -->
 
 ```ts
 // Authorize each secret independently, then key the tokens by the names you'll
@@ -322,6 +330,8 @@ a binary that's rebuilt frequently during local development doesn't get rejected
 `config.developmentMode.executables`). Only use this for local workflows — remove the executable
 from the list (or don't add it) so a production caller stays on TOFU verification.
 
+<!-- readme-example: skip - fragment; `vault` comes from the quick-start fence above -->
+
 ```ts
 // Persist an executable as dev-mode-exempt across setup() calls, while still
 // passing its real path (so re-enabling verification later is a one-line change):
@@ -345,6 +355,8 @@ name-binding calls — `store()`, `setup()`, `createSigningKey()`, `exportPublic
 `authorizeSigningKey()` — reject a `name` containing `':'` with a `VaultError`. Read/delete/existence
 calls (`delete()`, `secretExists()`) stay permissive, so a legacy secret whose name happens to
 contain `':'` remains reachable for inspection and cleanup.
+
+<!-- readme-example: skip - fragment; `vault` comes from the quick-start fence above -->
 
 ```ts
 // 1. Enroll a signing key (backend-side; the `file` backend supports this today)
@@ -401,6 +413,8 @@ you require it for a specific operation.
 
 **Query a backend's capabilities:**
 
+<!-- readme-example: skip - fragment; `vault` comes from the quick-start fence above -->
+
 ```ts
 const caps = await vault.getActiveBackendCapabilities()
 if (!caps.presencePerUse) {
@@ -420,6 +434,8 @@ or `sign`. When the active backend cannot guarantee it, the call throws `NotCapa
 any credential, session, or device is touched**. When the backend is capable, the operation forces a
 fresh human action for that specific call (a declined action throws `PresenceDeclinedError`; a
 timeout throws `PresenceTimeoutError`):
+
+<!-- readme-example: skip - fragment; `vault` comes from the quick-start fence above -->
 
 ```ts
 // Presence-gated signing: each sign performs a fresh backend round-trip, so no
