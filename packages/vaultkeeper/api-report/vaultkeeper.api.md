@@ -238,6 +238,7 @@ export interface PreflightCheck {
 export interface PreflightCheckError {
     code?: string | undefined;
     configPath: string;
+    field?: string | undefined;
     kind: PreflightCheckErrorKind;
     location?: string | undefined;
 }

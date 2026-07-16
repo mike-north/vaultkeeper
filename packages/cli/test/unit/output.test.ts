@@ -431,35 +431,48 @@ describe('formatPreflightConfigError', () => {
     expect(errorPath).toBe(`ConfigParseError: ${doctorPath}`)
   })
 
-  // Issue #137: formatError now includes ConfigValidationError.field in its
-  // message (e.g. "is invalid (`version`)"), giving CLI users back the
-  // field-level detail #129 dropped. The doctor path's PreflightCheckError
-  // deliberately does NOT gain a `field` — extending that structured type is
-  // an explicit non-goal of #137 (see #130/#145's shipped design) — so the
-  // two paths diverge here rather than sharing wording exactly.
-  it('includes the failing field in formatError but not in the doctor path (issue #137, non-goal boundary)', () => {
+  // Issue #202: the doctor path now surfaces the validation `field` the same
+  // way `formatError` does (reversing the #137 non-goal). A config-validation
+  // PreflightCheckError carrying `field` renders "is invalid (`version`)", so
+  // doctor and every other command name the same failing field with one voice
+  // — the validation analogue of how a parse failure surfaces its `location`.
+  it('includes the failing field in BOTH formatError and the doctor path (issue #202)', () => {
     const err = new ConfigValidationError(
       `Invalid config at ${configPath}: bad. install @vaultkeeper/cli and run ...`,
       'version',
       configPath,
     )
     // Pass the platform-default dir so the recovery command stays bare here —
-    // this test's focus is the field detail (#137), while the --config-dir
-    // behavior (#149) is covered by its own dedicated cases below.
+    // this test's focus is the field detail, while the --config-dir behavior
+    // (#149) is covered by its own dedicated cases below.
     const defaultDir = getPlatformDefaultConfigDir()
     const errorPath = formatError(err, defaultDir)
     const doctorPath = formatPreflightConfigError(
-      { kind: 'config-validation', configPath },
+      { kind: 'config-validation', configPath, field: 'version' },
       defaultDir,
     )
 
-    expect(errorPath).toBe(
-      `ConfigValidationError: The config at \`${configPath}\` is invalid (\`version\`) — ` +
-        'run `vaultkeeper config init --force` to overwrite it.',
+    const expected =
+      `The config at \`${configPath}\` is invalid (\`version\`) — ` +
+      'run `vaultkeeper config init --force` to overwrite it.'
+    expect(doctorPath).toBe(expected)
+    // One voice: formatError just prefixes the error name onto the same text.
+    expect(errorPath).toBe(`ConfigValidationError: ${expected}`)
+  })
+
+  // A config-validation PreflightCheckError with no `field` (e.g. an older
+  // producer, or a validation failure that carries no field path) omits the
+  // parenthetical detail rather than rendering an empty `()`.
+  it('omits the field detail for a config-validation failure carrying no field', () => {
+    const doctorPath = formatPreflightConfigError(
+      { kind: 'config-validation', configPath },
+      configDir,
     )
-    expect(doctorPath).toBe(
-      `The config at \`${configPath}\` is invalid — run \`vaultkeeper config init --force\` to overwrite it.`,
-    )
+
+    // No field → the invalid clause carries no parenthetical detail (no empty
+    // `()`), unlike the field-bearing case above which renders "(`version`)".
+    expect(doctorPath).toContain(`The config at \`${configPath}\` is invalid — run`)
+    expect(doctorPath).not.toContain('is invalid (')
   })
 })
 

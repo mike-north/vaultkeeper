@@ -176,7 +176,14 @@ function toPreflightConfigError(err: unknown, configPath: string): PreflightChec
     return { kind: 'config-parse', configPath: err.path, location: err.location }
   }
   if (err instanceof ConfigValidationError) {
-    return { kind: 'config-validation', configPath: err.configFilePath ?? configPath }
+    // Carry the structured `field` (e.g. `backends`) so a consumer can render
+    // the field-level detail the parse path gets from `location`, without
+    // parsing the `reason` prose (issue #202).
+    return {
+      kind: 'config-validation',
+      configPath: err.configFilePath ?? configPath,
+      field: err.field,
+    }
   }
   if (err instanceof FilesystemError) {
     // A read failure (e.g. EACCES/EPERM on the config file or its parent

@@ -196,7 +196,17 @@ export function formatPreflightConfigError(
   if (error.kind === 'config-read') {
     return configReadRemediation(error.configPath, error.code)
   }
-  const detail = error.location !== undefined ? `at ${error.location}` : undefined
+  // Surface the field-level detail the same way `formatConfigError` does for a
+  // non-doctor validation error: a parse failure carries a `location`
+  // (`at line N, column N`); a validation failure carries the offending
+  // `field` (backtick-wrapped, e.g. `` `backends` ``), so doctor and every
+  // other command name the same detail with one voice (issue #202).
+  const detail =
+    error.location !== undefined
+      ? `at ${error.location}`
+      : error.field !== undefined
+        ? `\`${error.field}\``
+        : undefined
   return configRemediation(error.configPath, detail, configDir)
 }
 
