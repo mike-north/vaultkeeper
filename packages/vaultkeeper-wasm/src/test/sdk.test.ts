@@ -145,6 +145,26 @@ describe('@vaultkeeper/wasm SDK', () => {
     })
   })
 
+  // Regression for issue #200: `config init` (and the README example) writes
+  // `"trustTier": 3` as a bare JSON number. Before the fix the Rust-core reader
+  // behind this SDK required a string-encoded number, so `createVaultKeeper`
+  // threw `Failed to parse config` on a config produced by the documented CLI
+  // flow. The SDK must load the numeric form.
+  it('reads a config whose trustTier is a bare JSON number (issue #200)', async () => {
+    await withTempDir(async (dir) => {
+      const config = {
+        version: 1,
+        backends: [{ type: 'file', enabled: true }],
+        keyRotation: { gracePeriodDays: 7 },
+        defaults: { ttlMinutes: 60, trustTier: 3 },
+      }
+      await writeFile(join(dir, 'config.json'), JSON.stringify(config, null, 2) + '\n')
+      const vault = await VaultKeeper.create({ skipDoctor: true }, dir)
+      assert.equal(vault.config().version, 1)
+      vault.dispose()
+    })
+  })
+
   it('setup produces a JWE token', async () => {
     await withTempDir(async (dir) => {
       const vault = await createTestVault(dir)

@@ -136,6 +136,63 @@ mod config_validation {
         let result = load_config_from_str("{invalid");
         assert!(result.is_err());
     }
+
+    // Regression for issue #200: `config init` (TS CLI + README) writes
+    // `"trustTier": 3` as a bare JSON number. Before the fix the Rust-core
+    // reader required a string-encoded number, so the WASM SDK could not read a
+    // CLI-produced config. The reader must accept the numeric form.
+    #[test]
+    fn load_config_accepts_numeric_trust_tier() {
+        let json = r#"{
+            "version": 1,
+            "backends": [{"type": "file", "enabled": true}],
+            "keyRotation": {"gracePeriodDays": 7},
+            "defaults": {"ttlMinutes": 60, "trustTier": 3}
+        }"#;
+        let cfg = load_config_from_str(json).unwrap();
+        assert_eq!(cfg.defaults.trust_tier, TrustTier::Dev);
+    }
+
+    // Backward compatibility: string-encoded trust tiers (older native-CLI
+    // output) must still load after the leniency change in issue #200.
+    #[test]
+    fn load_config_still_accepts_string_trust_tier() {
+        let json = r#"{
+            "version": 1,
+            "backends": [{"type": "file", "enabled": true}],
+            "keyRotation": {"gracePeriodDays": 7},
+            "defaults": {"ttlMinutes": 60, "trustTier": "1"}
+        }"#;
+        let cfg = load_config_from_str(json).unwrap();
+        assert_eq!(cfg.defaults.trust_tier, TrustTier::Sigstore);
+    }
+
+    #[test]
+    fn load_config_rejects_out_of_range_trust_tier() {
+        let json = r#"{
+            "version": 1,
+            "backends": [{"type": "file", "enabled": true}],
+            "keyRotation": {"gracePeriodDays": 7},
+            "defaults": {"ttlMinutes": 60, "trustTier": 4}
+        }"#;
+        assert!(load_config_from_str(json).is_err());
+    }
+
+    // The canonical config wire form is a bare number, matching the TS CLI,
+    // the TS library, and the README example (issue #200). The native CLI
+    // serializes `default_config()`, so this guards the writer side too.
+    #[test]
+    fn default_config_serializes_trust_tier_as_number() {
+        let json = serde_json::to_string(&default_config()).unwrap();
+        assert!(
+            json.contains("\"trustTier\":3"),
+            "expected bare-number trustTier in {json}"
+        );
+        assert!(
+            !json.contains("\"trustTier\":\"3\""),
+            "config trustTier must not be a string: {json}"
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------

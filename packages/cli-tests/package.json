@@ -14,8 +14,10 @@
   "license": "MIT",
   "devDependencies": {
     "@vaultkeeper/cli-test-helpers": "workspace:*",
+    "@vaultkeeper/wasm": "workspace:*",
     "@types/node": "^22.0.0",
     "tsx": "^4.21.0",
+    "vaultkeeper": "workspace:*",
     "vitest": "^3.0.0"
   }
 }
