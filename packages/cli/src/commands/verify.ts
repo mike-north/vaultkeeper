@@ -81,8 +81,8 @@ export async function verifyCommand(args: string[]): Promise<number> {
         'Error: --public-key and --signature take a file PATH, not an inline value. ' +
           'A value beginning with "-" (including an inline PEM, which starts with ' +
           '"-----BEGIN") is read as another option. Write the key/signature to a file ' +
-          'and pass its path; if the path itself begins with "-", use the ' +
-          '--public-key=<path> (equals) form.\n',
+          'and pass its path; if the path itself begins with "-", use the equals form ' +
+          '(--public-key=<path> / --signature=<path>).\n',
       )
     } else if (err instanceof Error) {
       process.stderr.write(`Error: ${err.message}\n`)
@@ -97,6 +97,9 @@ export async function verifyCommand(args: string[]): Promise<number> {
   const signaturePath = values.signature
   if (publicKeyPath === undefined || signaturePath === undefined) {
     process.stderr.write('Error: --public-key and --signature are both required\n')
+    process.stderr.write(
+      'Usage: vaultkeeper verify --public-key <pem-path> --signature <sig-path> < payload\n',
+    )
     return 2
   }
 

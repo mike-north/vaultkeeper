@@ -59,8 +59,10 @@ describe('verify --public-key/--signature reject inline PEM with a clear usage e
     expect(stderrOutput).not.toContain('argument is ambiguous')
     expect(stderrOutput).toContain('file PATH')
     expect(stderrOutput).toContain('-----BEGIN')
-    // Points at the escape for a legitimately dash-leading path.
+    // Points at the equals-form escape for a legitimately dash-leading path,
+    // covering BOTH flags the message names (not just --public-key).
     expect(stderrOutput).toContain('--public-key=<path>')
+    expect(stderrOutput).toContain('--signature=<path>')
   })
 
   it('exits 2 with a file-path hint for an equals-form inline public key', async () => {
@@ -82,9 +84,12 @@ describe('verify --public-key/--signature reject inline PEM with a clear usage e
     expect(stderrOutput).toContain('Usage: vaultkeeper verify --public-key <pem-path>')
   })
 
-  it('still reports both flags as required when one is missing', async () => {
+  it('reports both flags as required AND prints the Usage line when one is missing', async () => {
     const code = await verifyCommand(['--public-key', '/tmp/pub.pem'])
     expect(code).toBe(2)
     expect(stderrOutput).toContain('--public-key and --signature are both required')
+    // The missing-flags path must be as actionable as the parse-error and
+    // inline-PEM paths: it prints the Usage hint too.
+    expect(stderrOutput).toContain('Usage: vaultkeeper verify --public-key <pem-path>')
   })
 })
