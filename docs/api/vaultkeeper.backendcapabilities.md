@@ -83,9 +83,9 @@ boolean
 
 </td><td>
 
-`true` when this configured instance can force a distinct, fresh physical human action (e.g. a YubiKey touch, a gpg-smartcard tap, or a 1Password per-use biometric approval) that can \*\*never\*\* be satisfied from a cached or session-unlocked state — for the operations named in [BackendCapabilities.presenceEnforcedOperations](./vaultkeeper.backendcapabilities.presenceenforcedoperations.md) (all keyed operations when that field is omitted).
+`true` when this configured instance can force a distinct, fresh physical human action (e.g. a YubiKey touch, a gpg-smartcard tap, or a 1Password per-use biometric approval) — a deliberate action taken \*for this operation, right now\*, not merely "a vault was unlocked at some point."
 
-This is the property [\`--require-presence-per-use\`](https://github.com/mike-north/vaultkeeper/issues/122) gates on: a fresh, deliberate human action taken \*for this operation, right now\* — not merely "a vault was unlocked at some point." A backend that only caches an unlock, or that is encryption-only with no per-use action, reports `false`<!-- -->.
+The guarantee is \*\*operation-scoped\*\*, not blanket: when `presencePerUse` is `true`<!-- -->, that fresh action is available and \*\*non-bypassably enforced\*\* for exactly the operations listed in [BackendCapabilities.presenceEnforcedOperations](./vaultkeeper.backendcapabilities.presenceenforcedoperations.md) (all keyed operations when that field is omitted). For a covered operation, a [\`--require-presence-per-use\`](https://github.com/mike-north/vaultkeeper/issues/122) request drives a fresh action that cannot be satisfied from a cached or session-unlocked state. For an operation \*\*outside\*\* that set, the request is \*\*refused\*\* with a `NotCapableError` — it is never silently satisfied from a cached unlock. A backend that only caches an unlock, or that is encryption-only with no per-use action, reports `false`<!-- -->.
 
 Backends that do not implement [PresenceCapableBackend](./vaultkeeper.presencecapablebackend.md) are treated as `false` by [getBackendCapabilities()](./vaultkeeper.getbackendcapabilities.md) — an unknown backend never silently claims presence.
 

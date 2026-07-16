@@ -44,9 +44,10 @@ function printBackendHelp(): void {
   process.stdout.write(
     'Usage: vaultkeeper backend <subcommand> [options]\n\n' +
       'Subcommands:\n' +
-      '  capabilities   List each registered backend and its security capabilities\n\n' +
+      '  capabilities [--json]   List each registered backend and its security\n' +
+      '                          capabilities. Pass --json for a machine-readable\n' +
+      '                          array; omit it for human-readable text.\n\n' +
       'Options:\n' +
-      '  --json         Emit machine-readable JSON instead of human-readable text\n' +
       CONFIG_DIR_HELP_OPTION +
       '  -h, --help     Show this help message\n\n' +
       'Environment variables:\n' +

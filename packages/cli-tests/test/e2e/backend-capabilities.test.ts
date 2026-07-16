@@ -101,6 +101,17 @@ describe('backend capabilities', () => {
     expect(yubikey?.presencePerUse).toBe(true)
   })
 
+  it('backend --help documents --json under the capabilities subcommand, not as a top-level option', async () => {
+    // Regression: --json is only accepted by `backend capabilities`, so the help
+    // must not present it as a bare top-level `backend` option.
+    env = await createCliTestEnv()
+    const result = await env.run(['backend', '--help'])
+    expect(result.exitCode).toBe(0)
+    expect(result.stdout).toContain('capabilities [--json]')
+    // No standalone top-level `  --json ` option line.
+    expect(/\n {2}--json /.test(result.stdout)).toBe(false)
+  })
+
   it('a YubiKey slot without a touch policy reports false', async () => {
     env = await createCliTestEnv({
       config: {

@@ -10,6 +10,14 @@
  * - `per-access`: The `retrieve()` operation spawns a child process that creates a fresh
  *   SDK client (triggering biometric auth) for each retrieval. Other operations still use
  *   the cached session client.
+ *
+ * Presence-per-use follows directly from this: in `per-access` mode the instance
+ * forces a fresh biometric only for reads, so {@link OnePasswordBackend.getCapabilities}
+ * reports `presencePerUse: true` scoped to `presenceEnforcedOperations: ['read']`.
+ * A `--require-presence-per-use` `store`/`delete` is therefore refused with a
+ * `NotCapableError` (fail closed) rather than passing through the cached session
+ * client — the guarantee is enforced for the covered operation and never silently
+ * bypassed for an uncovered one. `session` mode reports `false`.
  */
 
 import { spawn } from 'node:child_process'

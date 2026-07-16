@@ -315,9 +315,10 @@ const BUILTIN_SIGNING_BACKENDS = ['file'] as const
  */
 const PRESENCE_PER_USE_QUALIFYING_BACKENDS =
   'A qualifying backend forces a distinct, fresh human action per operation — ' +
-  'e.g. a YubiKey slot with a touch-per-operation policy, a gpg smartcard with ' +
-  'touch-to-sign, or 1Password in per-access mode. Switch to (or reconfigure) ' +
-  'such a backend, or drop the presence requirement.'
+  'e.g. a YubiKey slot with a touch-per-operation policy or a gpg smartcard with ' +
+  'touch-to-sign (both cover every operation), or 1Password in per-access mode ' +
+  '(which enforces presence for reads only today, not writes). Switch to (or ' +
+  'reconfigure) such a backend, or drop the presence requirement.'
 
 /** Usage tracking for tokens with use limits. */
 const usageCounts = new Map<string, number>()
