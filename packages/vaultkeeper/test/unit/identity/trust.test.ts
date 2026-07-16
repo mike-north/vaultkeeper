@@ -385,14 +385,19 @@ describe('verifyTrustPending / commitTrust — verify/commit split (#148)', () =
       const concurrentManifest = await loadManifest(configDir)
       await saveManifest(configDir, addTrustedHash(concurrentManifest, 'my-tool', stagedHash))
       const manifestPath = path.join(configDir, 'trust-manifest.json')
-      const before = await fs.stat(manifestPath)
+      // Pin the mtime to a fixed past instant so ANY rewrite — which stamps
+      // ~now — is detectable regardless of the filesystem's timestamp
+      // resolution (a plain before/after comparison can false-pass on
+      // coarse-resolution filesystems when both reads land in one tick).
+      const sentinel = new Date('2020-01-01T00:00:00.000Z')
+      await fs.utimes(manifestPath, sentinel, sentinel)
 
       await expect(commitTrust(pending)).resolves.toBeUndefined()
 
-      // No redundant save: the file was not rewritten, and the namespace still
-      // holds exactly one copy of the hash.
+      // No redundant save: the file still carries the sentinel mtime, and the
+      // namespace still holds exactly one copy of the hash.
       const after = await fs.stat(manifestPath)
-      expect(after.mtimeMs).toBe(before.mtimeMs)
+      expect(after.mtimeMs).toBe(sentinel.getTime())
       const manifest = await loadManifest(configDir)
       expect(manifest.get('my-tool')?.hashes).toEqual([stagedHash])
     })
