@@ -383,13 +383,17 @@ export class OnePasswordBackend implements ListableBackend, PresenceCapableBacke
         stderrChunks.push(chunk)
       })
 
-      child.on('close', (code) => {
+      child.on('close', (code, signal) => {
         const raw = Buffer.concat(stdoutChunks).toString('utf8').trim()
 
         // If worker produced no stdout, use exit code + stderr for diagnostics
         if (raw === '') {
           const stderr = Buffer.concat(stderrChunks).toString('utf8').trim()
-          const detail = stderr !== '' ? stderr : `exit code ${String(code)}`
+          const exitDescription =
+            typeof signal === 'string'
+              ? `terminated by signal ${signal}`
+              : `exit code ${String(code)}`
+          const detail = stderr !== '' ? stderr : exitDescription
           reject(
             new BackendUnavailableError(
               `1Password per-access worker crashed for secret ${id}: ${detail}`,
@@ -500,12 +504,18 @@ export class OnePasswordBackend implements ListableBackend, PresenceCapableBacke
         stderrChunks.push(chunk)
       })
 
-      child.on('close', (code) => {
+      child.on('close', (code, signal) => {
         const raw = Buffer.concat(stdoutChunks).toString('utf8').trim()
 
         if (raw === '') {
           const stderr = Buffer.concat(stderrChunks).toString('utf8').trim()
-          const detail = stderr !== '' ? stderr : `exit code ${String(code)}`
+          // A signal-terminated worker reports code null — name the signal
+          // instead of an unhelpful 'exit code null'.
+          const exitDescription =
+            typeof signal === 'string'
+              ? `terminated by signal ${signal}`
+              : `exit code ${String(code)}`
+          const detail = stderr !== '' ? stderr : exitDescription
           reject(
             new BackendUnavailableError(
               `1Password per-access worker crashed during ${op} of secret ${id}: ${detail}`,
