@@ -204,6 +204,18 @@ vaultkeeper rotate-key
 vaultkeeper revoke-key
 ```
 
+The sign/verify sequence above, extracted as a runnable walkthrough (this fence
+executes in CI — see the example-fence check — so the byte-identical-stdin rule
+can't silently regress here):
+
+```sh
+CHALLENGE="hello-challenge"
+vaultkeeper key create --name approval-signing-key --type ed25519
+vaultkeeper key export --name approval-signing-key > approval.pub
+printf '%s' "$CHALLENGE" | vaultkeeper sign --name approval-signing-key > sig
+printf '%s' "$CHALLENGE" | vaultkeeper verify --public-key approval.pub --signature sig   # exit 0 = valid
+```
+
 ### Running in CI
 
 `vaultkeeper exec` requires approval the first time a caller requests a secret.
