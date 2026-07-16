@@ -4,6 +4,7 @@ import * as os from 'node:os'
 import * as path from 'node:path'
 import { verifyTrust, verifyTrustPending, commitTrust } from '../../../src/identity/trust.js'
 import { loadManifest, addTrustedHash, saveManifest } from '../../../src/identity/manifest.js'
+import { IdentityMismatchError } from '../../../src/errors.js'
 
 async function withTempDir(fn: (dir: string) => Promise<void>): Promise<void> {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'vaultkeeper-trust-'))
@@ -294,6 +295,73 @@ describe('verifyTrustPending / commitTrust — verify/commit split (#148)', () =
       const manifest = await loadManifest(configDir)
       expect(manifest.get('other-tool')?.hashes).toEqual(['concurrent-hash'])
       expect(manifest.has('my-tool')).toBe(true)
+    })
+  })
+
+  // Issue #223 (mirrors Rust fix c46913d, #213 review follow-up): a *late*
+  // TOFU conflict. If a concurrent process records a DIFFERENT hash for the
+  // SAME namespace in the window between verify and commit, blindly merging
+  // the staged hash would silently approve a second hash for one namespace —
+  // bypassing the TOFU-conflict record-nothing rule enforced at verify time
+  // (issue #148). commitTrust must re-classify against the freshly reloaded
+  // manifest and refuse: throw IdentityMismatchError and write nothing.
+  it('commitTrust refuses when a concurrent process recorded a different hash for the same namespace', async () => {
+    await withTempDir(async (dir) => {
+      const execPath = await createTempBinary(dir, 'my-tool', 'binary-content-v1')
+      const configDir = path.join(dir, 'config')
+
+      const pending = await verifyTrustPending(execPath, {
+        configDir,
+        namespace: 'my-tool',
+        skipSigstore: true,
+      })
+      const stagedHash = pending.identity.hash
+
+      // Simulate a concurrent process recording a DIFFERENT hash for the SAME
+      // namespace before our commit reloads the manifest.
+      const concurrentManifest = await loadManifest(configDir)
+      const withOtherHash = addTrustedHash(concurrentManifest, 'my-tool', 'concurrent-hash-b')
+      await saveManifest(configDir, withOtherHash)
+
+      await expect(commitTrust(pending)).rejects.toThrow(IdentityMismatchError)
+
+      // Nothing was written beyond the concurrent entry: our staged hash never
+      // landed, and the namespace still has only one approved hash.
+      const manifest = await loadManifest(configDir)
+      expect(manifest.get('my-tool')?.hashes).toEqual(['concurrent-hash-b'])
+      expect(manifest.get('my-tool')?.hashes).not.toContain(stagedHash)
+    })
+  })
+
+  it('commitTrust throws IdentityMismatchError carrying the previous and staged hashes', async () => {
+    await withTempDir(async (dir) => {
+      const execPath = await createTempBinary(dir, 'my-tool', 'binary-content-v1')
+      const configDir = path.join(dir, 'config')
+
+      const pending = await verifyTrustPending(execPath, {
+        configDir,
+        namespace: 'my-tool',
+        skipSigstore: true,
+      })
+      const stagedHash = pending.identity.hash
+
+      const concurrentManifest = await loadManifest(configDir)
+      const withOtherHash = addTrustedHash(concurrentManifest, 'my-tool', 'concurrent-hash-b')
+      await saveManifest(configDir, withOtherHash)
+
+      let caught: unknown
+      try {
+        await commitTrust(pending)
+      } catch (err) {
+        caught = err
+      }
+      if (!(caught instanceof IdentityMismatchError)) {
+        throw new Error(
+          `expected commitTrust to throw IdentityMismatchError, got: ${String(caught)}`,
+        )
+      }
+      expect(caught.previousHash).toBe('concurrent-hash-b')
+      expect(caught.currentHash).toBe(stagedHash)
     })
   })
 
