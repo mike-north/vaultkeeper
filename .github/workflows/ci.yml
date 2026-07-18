@@ -41,6 +41,87 @@ jobs:
           path: target/release/vaultkeeper
           retention-days: 1
 
+  wasm-guards:
+    name: WASM Build Guards (drift + size)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Single source of truth for the pinned Rust/wasm-pack/wasm-opt versions
+      # and the size budget — shared with the local regeneration command
+      # documented in packages/vaultkeeper-wasm/README.md.
+      - name: Load pinned wasm toolchain versions
+        run: cat crates/vaultkeeper-wasm/wasm-toolchain.env >> "$GITHUB_ENV"
+
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN_VERSION }}
+          targets: wasm32-unknown-unknown
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install pinned wasm-pack
+        run: |
+          curl -sSfL -o /tmp/wasm-pack.tar.gz \
+            "https://github.com/wasm-bindgen/wasm-pack/releases/download/v${WASM_PACK_VERSION}/wasm-pack-v${WASM_PACK_VERSION}-x86_64-unknown-linux-musl.tar.gz"
+          tar -xzf /tmp/wasm-pack.tar.gz -C /tmp
+          install -m 755 "/tmp/wasm-pack-v${WASM_PACK_VERSION}-x86_64-unknown-linux-musl/wasm-pack" /usr/local/bin/wasm-pack
+          wasm-pack --version
+
+      - name: Install pinned wasm-opt (binaryen)
+        run: |
+          curl -sSfL -o /tmp/binaryen.tar.gz \
+            "https://github.com/WebAssembly/binaryen/releases/download/version_${BINARYEN_VERSION}/binaryen-version_${BINARYEN_VERSION}-x86_64-linux.tar.gz"
+          tar -xzf /tmp/binaryen.tar.gz -C /tmp
+          echo "/tmp/binaryen-version_${BINARYEN_VERSION}/bin" >> "$GITHUB_PATH"
+
+      - name: Rebuild wasm artifact with the pinned toolchain
+        run: |
+          # --remap-path-prefix normalizes CARGO_HOME out of embedded panic/debug
+          # path strings (file!() output from registry dependencies). Without
+          # this, the rebuilt binary differs byte-for-byte from any local build
+          # purely because CARGO_HOME's absolute path differs between machines
+          # (e.g. /home/runner/.cargo here vs /Users/<you>/.cargo locally) — even
+          # though the actual compiled logic is identical. Verified locally
+          # (issue #240): two builds from independently-fetched CARGO_HOME trees
+          # at different absolute paths produce an identical sha256 once this
+          # flag is applied, and differ without it. This is why AC1's plain byte
+          # hash compare is stable in practice — no functional-hash fallback
+          # (AC2) needed.
+          export RUSTFLAGS="--remap-path-prefix=${CARGO_HOME:-$HOME/.cargo}=/cargo-home"
+          wasm-pack build --target nodejs crates/vaultkeeper-wasm --out-dir /tmp/wasm-rebuild
+
+      - name: Verify committed artifact matches the pinned-toolchain rebuild (drift check)
+        run: |
+          committed=packages/vaultkeeper-wasm/wasm/vaultkeeper_wasm_bg.wasm
+          rebuilt=/tmp/wasm-rebuild/vaultkeeper_wasm_bg.wasm
+          committed_hash=$(sha256sum "$committed" | cut -d' ' -f1)
+          rebuilt_hash=$(sha256sum "$rebuilt" | cut -d' ' -f1)
+          echo "committed sha256: $committed_hash"
+          echo "rebuilt   sha256: $rebuilt_hash"
+          if [ "$committed_hash" != "$rebuilt_hash" ]; then
+            echo "::error::packages/vaultkeeper-wasm/wasm/vaultkeeper_wasm_bg.wasm does not match a rebuild under the pinned toolchain (rustc ${RUST_TOOLCHAIN_VERSION}, wasm-pack ${WASM_PACK_VERSION}, binaryen ${BINARYEN_VERSION}). Regenerate it per packages/vaultkeeper-wasm/README.md's 'Regenerating the committed artifact' section and commit the result."
+            exit 1
+          fi
+
+      - name: Enforce gzip size budget
+        run: |
+          rebuilt=/tmp/wasm-rebuild/vaultkeeper_wasm_bg.wasm
+          uncompressed=$(wc -c < "$rebuilt")
+          gzip_size=$(gzip -9 -c "$rebuilt" | wc -c)
+          echo "uncompressed: ${uncompressed} bytes (budget ${WASM_UNCOMPRESSED_BUDGET_BYTES})"
+          echo "gzip:         ${gzip_size} bytes (budget ${WASM_GZIP_BUDGET_BYTES})"
+          status=0
+          if [ "$uncompressed" -gt "$WASM_UNCOMPRESSED_BUDGET_BYTES" ]; then
+            echo "::error::Uncompressed wasm artifact ${uncompressed} bytes exceeds budget ${WASM_UNCOMPRESSED_BUDGET_BYTES} bytes. If this growth is intentional, adjust WASM_UNCOMPRESSED_BUDGET_BYTES in crates/vaultkeeper-wasm/wasm-toolchain.env."
+            status=1
+          fi
+          if [ "$gzip_size" -gt "$WASM_GZIP_BUDGET_BYTES" ]; then
+            echo "::error::Gzipped wasm artifact ${gzip_size} bytes exceeds budget ${WASM_GZIP_BUDGET_BYTES} bytes. If this growth is intentional, adjust WASM_GZIP_BUDGET_BYTES in crates/vaultkeeper-wasm/wasm-toolchain.env."
+            status=1
+          fi
+          exit $status
+
   typescript:
     name: TypeScript Build & Check (Node ${{ matrix.node-version }})
     needs: rust

@@ -128,6 +128,54 @@ required) genuinely gates file-backend operation. Treat a failing native-tool en
 the WASM `doctor()` to the file backend so this entry demotes to informational is tracked as a
 follow-up; it needs a change to the Rust core and a rebuild of the committed `.wasm`.)
 
+## Regenerating the committed artifact
+
+This package ships a committed `.wasm` binary (`wasm/vaultkeeper_wasm_bg.wasm`) rather than
+building from source at install time. CI's `wasm-guards` job (`.github/workflows/ci.yml`) rebuilds
+it with a pinned toolchain on every push/PR and fails if the rebuild doesn't byte-for-byte match
+what's committed — so any change to `crates/vaultkeeper-wasm` or `crates/vaultkeeper-core` must
+regenerate and commit this artifact in the same change.
+
+The exact toolchain versions (Rust, `wasm-pack`, `wasm-opt`/binaryen) and the size budget are pinned
+in [`crates/vaultkeeper-wasm/wasm-toolchain.env`](../../crates/vaultkeeper-wasm/wasm-toolchain.env) —
+the single source of truth CI reads from. Use the same versions locally or the drift check will
+fail on your PR even though your rebuild "looks right."
+
+```sh
+# 1. Read the pinned versions
+cat crates/vaultkeeper-wasm/wasm-toolchain.env
+
+# 2. Install that exact Rust toolchain (adds the wasm32 target too)
+rustup toolchain install <RUST_TOOLCHAIN_VERSION> --target wasm32-unknown-unknown
+rustup default <RUST_TOOLCHAIN_VERSION>   # or use `+<version>` per-command below
+
+# 3. Install that exact wasm-pack version
+cargo install wasm-pack --version <WASM_PACK_VERSION> --locked
+
+# 4. Install that exact wasm-opt (binaryen) version and put it FIRST on PATH —
+#    wasm-pack uses whatever wasm-opt it finds on PATH, so a different
+#    system-installed version (e.g. from Homebrew) will silently produce a
+#    different, non-matching binary.
+#    macOS: https://github.com/WebAssembly/binaryen/releases/download/version_<BINARYEN_VERSION>/binaryen-version_<BINARYEN_VERSION>-arm64-macos.tar.gz
+#    Linux: .../binaryen-version_<BINARYEN_VERSION>-x86_64-linux.tar.gz
+#    Extract it, then:
+export PATH="/path/to/binaryen-version_<BINARYEN_VERSION>/bin:$PATH"
+
+# 5. Rebuild with CARGO_HOME normalized out of embedded debug paths — this is
+#    what makes the output match CI's rebuild byte-for-byte regardless of your
+#    machine's absolute CARGO_HOME path.
+export RUSTFLAGS="--remap-path-prefix=${CARGO_HOME:-$HOME/.cargo}=/cargo-home"
+wasm-pack build --target nodejs crates/vaultkeeper-wasm --out-dir /tmp/vaultkeeper-wasm-rebuild
+
+# 6. Copy the rebuilt artifacts over the committed ones and commit
+cp /tmp/vaultkeeper-wasm-rebuild/vaultkeeper_wasm_bg.wasm* packages/vaultkeeper-wasm/wasm/
+cp /tmp/vaultkeeper-wasm-rebuild/vaultkeeper_wasm.{js,d.ts} packages/vaultkeeper-wasm/wasm/
+```
+
+`wasm-opt -Oz` (aggressive size optimization) runs automatically as part of step 5 via
+`[package.metadata.wasm-pack.profile.release]` in `crates/vaultkeeper-wasm/Cargo.toml` — no
+separate post-processing step is needed.
+
 ## Full documentation
 
 See the [repository README](https://github.com/mike-north/vaultkeeper#readme) for the delegated
