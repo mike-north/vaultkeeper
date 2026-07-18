@@ -24,11 +24,18 @@ describe('loadKeyState hydrates a Rust-written fixture (AC2)', () => {
   it('decodes the id, key bytes, and createdAt written by the Rust core', async () => {
     const loaded = await loadKeyState(FIXTURE_DIR)
 
-    expect(loaded?.current.id).toBe('k-rust-fixture-1700000000-wxyz')
-    expect(Buffer.from(loaded?.current.key ?? new Uint8Array()).toString('hex')).toBe(
+    // Assert the fixture actually loaded before dereferencing `current` — a
+    // regressed loader returning `undefined` should fail here with a clear,
+    // actionable message rather than throwing an opaque TypeError out of the
+    // `.toISOString()` call below.
+    expect(loaded).toBeDefined()
+    if (loaded === undefined) throw new Error('unreachable: asserted above')
+
+    expect(loaded.current.id).toBe('k-rust-fixture-1700000000-wxyz')
+    expect(Buffer.from(loaded.current.key).toString('hex')).toBe(
       Buffer.from(Array.from({ length: 32 }, (_, i) => 0x40 + i)).toString('hex'),
     )
-    expect(loaded?.current.createdAt.toISOString()).toBe('2023-11-14T22:13:20.000Z')
-    expect(loaded?.previous).toBeUndefined()
+    expect(loaded.current.createdAt.toISOString()).toBe('2023-11-14T22:13:20.000Z')
+    expect(loaded.previous).toBeUndefined()
   })
 })

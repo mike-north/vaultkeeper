@@ -388,9 +388,41 @@ fn civil_from_days(z: i64) -> (i64, u32, u32) {
     (year, m, d)
 }
 
+/// Whether `y` is a leap year in the proleptic Gregorian calendar.
+fn is_leap_year(y: i64) -> bool {
+    (y % 4 == 0 && y % 100 != 0) || y % 400 == 0
+}
+
+/// Number of days in Gregorian calendar month `m` of year `y`. `m` must
+/// already be known to be in `1..=12`; an out-of-range `m` returns `0`, which
+/// makes any `d` fail the `d > days_in_month(y, m)` check in
+/// [`days_from_civil`] rather than panicking.
+fn days_in_month(y: i64, m: u32) -> u32 {
+    match m {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 => {
+            if is_leap_year(y) {
+                29
+            } else {
+                28
+            }
+        }
+        _ => 0,
+    }
+}
+
 /// Inverse of [`civil_from_days`].
+///
+/// Validates `d` against the actual number of days in month `m` of year `y`
+/// (leap years included) — not just a blanket `1..=31` — so an impossible
+/// calendar date (e.g. `2024-02-31`, or `2023-02-29` in a non-leap year) is
+/// rejected as `None` rather than being silently normalized into some other
+/// timestamp. A corrupt persisted `created_at` string must degrade to "no
+/// recoverable state" (the contract [`iso8601_to_epoch_secs`] documents), not
+/// resolve to a different date than whatever was actually on disk.
 fn days_from_civil(y: i64, m: u32, d: u32) -> Option<i64> {
-    if !(1..=12).contains(&m) || !(1..=31).contains(&d) {
+    if !(1..=12).contains(&m) || d < 1 || d > days_in_month(y, m) {
         return None;
     }
     let y = if m <= 2 { y - 1 } else { y };
@@ -447,6 +479,27 @@ mod tests {
         assert_eq!(iso8601_to_epoch_secs("2024-01-15T10:30:00.000"), None); // missing Z
         assert_eq!(iso8601_to_epoch_secs("2024-13-01T00:00:00.000Z"), None); // month 13
         assert_eq!(iso8601_to_epoch_secs("2024-01-15T25:00:00.000Z"), None); // hour 25
+    }
+
+    /// Regression test: `days_from_civil` previously only bounded the day
+    /// component to `1..=31`, so an impossible calendar date like
+    /// `2024-02-31` normalized into whatever date the underlying arithmetic
+    /// happened to produce instead of being rejected. A corrupt persisted
+    /// `created_at` must degrade to `None` ("no recoverable state"), not
+    /// silently resolve to a different timestamp than what was on disk.
+    #[test]
+    fn iso8601_rejects_impossible_calendar_dates() {
+        assert_eq!(iso8601_to_epoch_secs("2024-02-31T00:00:00.000Z"), None); // Feb never has 31 days
+        assert_eq!(iso8601_to_epoch_secs("2023-02-29T00:00:00.000Z"), None); // 2023 is not a leap year
+        assert_eq!(iso8601_to_epoch_secs("2024-04-31T00:00:00.000Z"), None); // April has 30 days
+        assert_eq!(iso8601_to_epoch_secs("2024-01-00T00:00:00.000Z"), None); // day 0
+    }
+
+    /// The leap-day case the above test's non-leap-year rejection is a
+    /// counterpart to: `2024-02-29` is a real date and must still parse.
+    #[test]
+    fn iso8601_accepts_leap_day() {
+        assert!(iso8601_to_epoch_secs("2024-02-29T00:00:00.000Z").is_some());
     }
 
     // -------------------------------------------------------------------
