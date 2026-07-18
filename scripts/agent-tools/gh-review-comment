@@ -25,7 +25,7 @@ ALLOWED_REPO="vaultkeeper"
 # A broken GITHUB_TOKEN in the environment shadows keyring auth; the gh binary
 # is invoked directly (no override indirection) so the command cannot be
 # redirected via the environment.
-unset GITHUB_TOKEN || true
+unset GITHUB_TOKEN GH_TOKEN || true
 
 die() { printf '%s\n' "gh-review-comment: $*" >&2; exit "${2:-2}"; }
 

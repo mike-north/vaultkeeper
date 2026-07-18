@@ -29,7 +29,7 @@ EOF
 [[ "$1" =~ ^[1-9][0-9]*$ ]] || { echo "pr-health: PR number must be a positive integer, got: $1" >&2; exit 2; }
 pr="$1"
 
-unset GITHUB_TOKEN || true
+unset GITHUB_TOKEN GH_TOKEN || true
 
 json=$(gh pr view "$pr" --repo "$REPO" \
   --json state,mergeStateStatus,statusCheckRollup,reviews) || {
