@@ -109,6 +109,16 @@ describe('mapWasmError — non-finite/non-integer number rejection', () => {
     assert.equal(err.location, undefined)
   })
 
+  it('falls back to the default timeoutMs (0) for a negative boundary value', () => {
+    const err = mapWasmError({
+      vaultErrorCode: 'device-not-present',
+      message: 'device not present',
+      timeoutMs: -1,
+    })
+    assert.ok(err instanceof DeviceNotPresentError)
+    assert.equal(err.timeoutMs, 0)
+  })
+
   it('still accepts a genuine safe-integer timeoutMs', () => {
     const err = mapWasmError({
       vaultErrorCode: 'device-not-present',

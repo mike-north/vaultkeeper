@@ -858,16 +858,18 @@ function optionalBoolean(value: unknown): boolean | undefined {
 
 /**
  * Numeric analogue of {@link optionalString}. Rejects `NaN`, `Infinity`,
- * `-Infinity`, and non-integer values (via `Number.isSafeInteger`) in
- * addition to non-numbers — every current use (`timeoutMs`, `line`,
- * `column`) is inherently an integer count, so a non-finite or fractional
- * value is exactly as untrustworthy as a non-number and must fall back to
- * `undefined` the same way, rather than leaking `NaN`/`Infinity` into a typed
- * field or into a formatted string like {@link toConfigParseLocation}'s
- * output (e.g. `'line NaN, column 12'`).
+ * `-Infinity`, non-integer values (via `Number.isSafeInteger`), and negative
+ * values in addition to non-numbers — every current use (`timeoutMs`,
+ * `line`, `column`) is inherently a non-negative integer count, so a
+ * negative, non-finite, or fractional value is exactly as untrustworthy as a
+ * non-number and must fall back to `undefined` the same way, rather than
+ * leaking `-1`/`NaN`/`Infinity` into a typed field or into a formatted
+ * string like {@link toConfigParseLocation}'s output. If a genuinely
+ * signed numeric field ever crosses the bridge, give it its own helper
+ * rather than loosening this one.
  */
 function optionalNumber(value: unknown): number | undefined {
-  return typeof value === 'number' && Number.isSafeInteger(value) ? value : undefined
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : undefined
 }
 
 /**
