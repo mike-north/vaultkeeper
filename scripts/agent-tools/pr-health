@@ -1,0 +1,54 @@
+#!/usr/bin/env bash
+# pr-health — one-line health readout for a PR in mike-north/vaultkeeper.
+#
+# Collapses the gh pr view + jq + GraphQL reviewThreads pipeline agents
+# otherwise hand-assemble: CI rollup, merge state, unresolved review-thread
+# count, and Copilot-review presence, as one greppable line.
+#
+# Read-only. Repo is hardcoded; the only argument is a PR number.
+# Unsets GITHUB_TOKEN internally (a broken env token shadows keyring auth).
+set -euo pipefail
+
+REPO="mike-north/vaultkeeper"
+
+usage() {
+  cat <<'EOF'
+usage: pr-health <pr-number>
+
+Prints one line:
+  PR <n> state=<OPEN|MERGED|CLOSED> mss=<mergeStateStatus> checks=<pass>/<total> pending=<n> failed=<names|-> unresolved=<n> copilot=<n>
+
+Exit codes: 0 = fetched OK · 2 = usage error · 1 = API/network error
+EOF
+}
+
+[ "${1:-}" = "--help" ] && { usage; exit 0; }
+[ $# -eq 1 ] || { usage >&2; exit 2; }
+case "$1" in
+  ''|*[!0-9]*) echo "pr-health: PR number must be a positive integer, got: $1" >&2; exit 2 ;;
+esac
+pr="$1"
+
+unset GITHUB_TOKEN || true
+
+json=$(gh pr view "$pr" --repo "$REPO" \
+  --json state,mergeStateStatus,statusCheckRollup,reviews) || {
+  echo "pr-health: failed to fetch PR #$pr from $REPO" >&2; exit 1; }
+
+owner="${REPO%/*}"; name="${REPO#*/}"
+threads=$(gh api graphql \
+  -F owner="$owner" -F name="$name" -F pr="$pr" \
+  -f query='query($owner:String!,$name:String!,$pr:Int!){
+    repository(owner:$owner,name:$name){pullRequest(number:$pr){
+      reviewThreads(first:100){nodes{isResolved}}}}}' \
+  --jq '[.data.repository.pullRequest.reviewThreads.nodes[] | select(.isResolved==false)] | length') || {
+  echo "pr-health: failed to fetch review threads for PR #$pr" >&2; exit 1; }
+
+jq -r --argjson unresolved "$threads" '
+  (.statusCheckRollup // []) as $c |
+  ([$c[] | select(.status=="COMPLETED" and .conclusion=="SUCCESS")] | length) as $pass |
+  ([$c[] | select(.status!="COMPLETED")] | length) as $pending |
+  ([$c[] | select(.conclusion=="FAILURE" or .conclusion=="TIMED_OUT" or .conclusion=="CANCELLED") | .name] | join(",")) as $failed |
+  ([.reviews[] | select(.author.login=="copilot-pull-request-reviewer")] | length) as $copilot |
+  "PR '"$pr"' state=\(.state) mss=\(.mergeStateStatus) checks=\($pass)/\($c | length) pending=\($pending) failed=\(if $failed=="" then "-" else $failed end) unresolved=\($unresolved) copilot=\($copilot)"
+' <<<"$json"

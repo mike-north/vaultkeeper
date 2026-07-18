@@ -1,0 +1,140 @@
+#!/usr/bin/env bash
+#
+# gh-pr — read-only PR status helpers, scoped to one repo.
+#
+# Two fixed subcommands, each taking only a positive-integer PR number:
+#
+#   gh-pr is-ready <pr>
+#     One-line merge-readiness verdict, combining PR state + mergeStateStatus +
+#     failing status checks + unresolved review-thread count into a single read.
+#     Exit: 0 READY · 10 CI-FAILED · 20 BLOCKED/DIRTY/THREADS/pending · 30 not-open
+#
+#   gh-pr get-failure-details <pr>
+#     For each FAILED status check on the PR, resolve its Actions run and print
+#     the error/failure lines from that job's log (the "why did CI fail" pipeline).
+#     Exit: 0 (printed, incl. "no failing checks") · non-zero only on gh/API error.
+#
+# Scope is baked in: it only ever talks to the ALLOWED repo below, only does
+# read-only GETs (gh pr view / gh api graphql read query / gh run view --log-failed),
+# and accepts nothing but one of the two fixed subcommands plus a positive-integer
+# PR number. No caller-supplied path/URL/query — not a general gh wrapper.
+
+set -euo pipefail
+
+ALLOWED_OWNER="mike-north"
+ALLOWED_REPO="vaultkeeper"
+GH="${GH:-gh}"
+
+die() { printf '%s\n' "gh-pr: $*" >&2; exit "${2:-2}"; }
+
+usage() {
+  cat <<EOF
+gh-pr — read-only PR status helpers (scoped to ${ALLOWED_OWNER}/${ALLOWED_REPO}).
+
+Usage:
+  gh-pr is-ready <pr>              One-line merge-readiness verdict
+  gh-pr get-failure-details <pr>   Error lines from failing CI jobs
+  gh-pr --help
+
+<pr> must be a positive integer. Read-only. Exits non-zero for a not-ready PR
+(is-ready) or on gh/API error.
+EOF
+}
+
+require_repo() {
+  local origin
+  origin="$($GH repo view --json nameWithOwner --jq .nameWithOwner 2>/dev/null)" \
+    || die "could not determine the current repo via gh" 4
+  [ "$origin" = "${ALLOWED_OWNER}/${ALLOWED_REPO}" ] \
+    || die "refusing to run: current repo is '$origin', tool is scoped to ${ALLOWED_OWNER}/${ALLOWED_REPO}" 3
+}
+
+# Count unresolved review threads via a fixed, repo+PR-scoped GraphQL read query.
+unresolved_threads() {
+  local pr="$1"
+  $GH api graphql -F owner="${ALLOWED_OWNER}" -F repo="${ALLOWED_REPO}" -F pr="$pr" -f query='
+    query($owner:String!,$repo:String!,$pr:Int!){
+      repository(owner:$owner,name:$repo){
+        pullRequest(number:$pr){ reviewThreads(first:100){ nodes{ isResolved } } }
+      }
+    }' --jq '[.data.repository.pullRequest.reviewThreads.nodes[]|select(.isResolved|not)]|length' 2>/dev/null \
+    || die "gh api graphql read failed for PR ${pr}" 4
+}
+
+cmd_is_ready() {
+  local pr="$1"
+  local json state mss failed unresolved
+  json="$($GH pr view "$pr" --json state,mergeStateStatus,statusCheckRollup 2>/dev/null)" \
+    || die "gh pr view failed for PR ${pr}" 4
+  state="$(jq -r '.state' <<<"$json")"
+  mss="$(jq -r '.mergeStateStatus' <<<"$json")"
+  failed="$(jq -r '[.statusCheckRollup[]?|select(.conclusion=="FAILURE" or .conclusion=="TIMED_OUT" or .conclusion=="CANCELLED" or .conclusion=="ERROR")|.name]|join(", ")' <<<"$json")"
+
+  if [ "$state" != "OPEN" ]; then
+    printf 'PR %s: %s\n' "$pr" "$state"
+    exit 30
+  fi
+  if [ -n "$failed" ]; then
+    printf 'PR %s: CI-FAILED (%s)\n' "$pr" "$failed"
+    exit 10
+  fi
+  unresolved="$(unresolved_threads "$pr")"
+  if [ "$mss" = "DIRTY" ]; then
+    printf 'PR %s: DIRTY (merge conflict); unresolved threads=%s\n' "$pr" "$unresolved"
+    exit 20
+  fi
+  if [ "$unresolved" != "0" ]; then
+    printf 'PR %s: BLOCKED — %s unresolved review thread(s); mergeStateStatus=%s\n' "$pr" "$unresolved" "$mss"
+    exit 20
+  fi
+  if [ "$mss" = "CLEAN" ]; then
+    printf 'PR %s: READY (mergeStateStatus=CLEAN, 0 unresolved threads)\n' "$pr"
+    exit 0
+  fi
+  printf 'PR %s: BLOCKED — mergeStateStatus=%s (checks pending or review required), 0 unresolved threads\n' "$pr" "$mss"
+  exit 20
+}
+
+cmd_failure_details() {
+  local pr="$1"
+  local urls runs
+  # Fetch first (so a PR with no failing checks isn't a pipeline error), then
+  # extract run ids — `|| true` because grep exits 1 on the legitimate no-match case.
+  urls="$($GH pr view "$pr" --json statusCheckRollup \
+    --jq '[.statusCheckRollup[]?|select(.conclusion=="FAILURE" or .conclusion=="TIMED_OUT" or .conclusion=="ERROR")|.detailsUrl]|.[]' 2>/dev/null)" \
+    || die "gh pr view failed for PR ${pr}" 4
+  runs="$(printf '%s\n' "$urls" | grep -oE 'runs/[0-9]+' | cut -d/ -f2 | sort -u || true)"
+  if [ -z "$runs" ]; then
+    printf 'PR %s: no failing checks.\n' "$pr"
+    exit 0
+  fi
+  local run
+  for run in $runs; do
+    printf '=== failing run %s (PR %s) ===\n' "$run" "$pr"
+    $GH run view "$run" --log-failed 2>/dev/null \
+      | grep -iE 'error|fail|not found|cannot|ELIFECYCLE|Traceback|assert|✗|✖' \
+      | grep -viE '^\s*✓' \
+      | head -30 \
+      || printf '(no matching error lines; run: gh run view %s --log-failed)\n' "$run"
+    printf '\n'
+  done
+}
+
+sub="${1:-}"
+case "$sub" in
+  -h|--help) usage; exit 0 ;;
+  is-ready|get-failure-details) : ;;
+  "") usage; die "missing subcommand" 2 ;;
+  *) usage; die "unknown subcommand: $sub (expected is-ready or get-failure-details)" 2 ;;
+esac
+
+pr="${2:-}"
+[ "$#" -eq 2 ] || die "expected: gh-pr $sub <pr>" 2
+[[ "$pr" =~ ^[1-9][0-9]*$ ]] || die "PR number must be a positive integer, got: $pr" 2
+
+require_repo
+
+case "$sub" in
+  is-ready) cmd_is_ready "$pr" ;;
+  get-failure-details) cmd_failure_details "$pr" ;;
+esac

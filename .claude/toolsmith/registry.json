@@ -1,0 +1,46 @@
+{
+  "version": 1,
+  "tools": [
+    {
+      "name": "gh-review-comment",
+      "path": "scripts/agent-tools/gh-review-comment",
+      "purpose": "Print the full body (path:line, author, complete text) of one PR review comment in this repo — the piece gh-reviews truncates",
+      "args": "<comment-id>",
+      "scope": "repo:mike-north/vaultkeeper (read-only GET to pulls/comments/<id>; refuses outside the repo; id must be a positive integer)",
+      "covers": [
+        "gh\\s+api\\b.*/pulls/comments/\\d+"
+      ],
+      "status": "approved",
+      "approvedSha256": "fcc765b03605c676291e3cba5f74c5918c49476409f140a838a12db8f3aeac62",
+      "permissionRule": "Bash(scripts/agent-tools/gh-review-comment:*)"
+    },
+    {
+      "name": "gh-pr",
+      "path": "scripts/agent-tools/gh-pr",
+      "purpose": "Read-only PR status helpers for this repo: is-ready (one-line merge-readiness verdict) and get-failure-details (error lines from failing CI jobs)",
+      "args": "<is-ready|get-failure-details> <pr>",
+      "scope": "repo:mike-north/vaultkeeper (read-only; two fixed subcommands; PR must be a positive integer; no arbitrary API)",
+      "covers": [
+        "gh\\s+pr\\s+view\\b.*mergeStateStatus",
+        "gh\\s+run\\s+view\\b.*--log-failed"
+      ],
+      "status": "approved",
+      "approvedSha256": "af10f2f26a0792cc63f2766c7147d7ad88edd1406cf935c3b454b4c8a2e3427e",
+      "permissionRule": "Bash(scripts/agent-tools/gh-pr:*)"
+    },
+    {
+      "name": "pr-health",
+      "path": "scripts/agent-tools/pr-health",
+      "purpose": "One-line PR health readout for this repo: CI rollup, merge state, unresolved review-thread count, Copilot-review presence — replaces the hand-assembled gh pr view + jq + GraphQL pipeline",
+      "args": "<pr-number>",
+      "scope": "repo:mike-north/vaultkeeper (read-only; single positive-integer arg; fixed GraphQL query for reviewThreads; unsets GITHUB_TOKEN internally)",
+      "covers": [
+        "gh\\s+pr\\s+view\\b.*statusCheckRollup",
+        "gh\\s+api\\s+graphql\\b.*reviewThreads"
+      ],
+      "status": "approved",
+      "approvedSha256": "f55da066dd2b8fe29e5e2bb76a9453cf4fe4e650f6236a5bb9e7f14c2c5962ef",
+      "permissionRule": "Bash(scripts/agent-tools/pr-health:*)"
+    }
+  ]
+}
