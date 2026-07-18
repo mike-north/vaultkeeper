@@ -1751,13 +1751,39 @@ mod signing {
 
     // --- AC4: golden-vector byte-exact equality + cross-verification ---
 
+    #[test]
+    fn golden_vector_kid_is_the_real_derived_kid_not_an_arbitrary_label() {
+        // Regression for a review finding on #237: the vectors' `kid` must be
+        // `base64url(sha256(spkiDer))` of the fixture public key (matching
+        // `computeKid` in `packages/vaultkeeper/src/backend/file-backend.ts`
+        // and the generator's own `computeKid`), not an arbitrary string —
+        // otherwise the vectors don't exercise real kid derivation.
+        let verifying_key = parse_public_key_pem(TEST_PUBLIC_KEY_PEM).unwrap();
+        let expected_kid = kid_for_verifying_key(&verifying_key);
+        for vector in golden_vectors() {
+            assert_eq!(
+                vector.kid, expected_kid,
+                "vector '{}' must carry the fixture key's derived kid",
+                vector.name
+            );
+        }
+    }
+
+    /// The backend's own (opaque, caller-chosen) storage identifier for the
+    /// fixture key — deliberately NOT equal to any vector's `kid`. `kid` is
+    /// always derived from the public key material
+    /// (`base64url(sha256(spkiDer))`); the backend key id is a separate,
+    /// arbitrary lookup name. Using two different values here proves
+    /// `create_detached_jws` doesn't conflate them.
+    const FIXTURE_BACKEND_KEY_ID: &str = "vaultkeeper-test-key-1";
+
     #[tokio::test]
     async fn create_detached_jws_matches_golden_vectors_byte_for_byte() {
-        let backend = FixtureSigningBackend::with_fixture_key("vaultkeeper-test-key-1");
+        let backend = FixtureSigningBackend::with_fixture_key(FIXTURE_BACKEND_KEY_ID);
 
         for vector in golden_vectors() {
             let payload = decode_base64(&vector.payload_base64);
-            let jws = create_detached_jws(&backend, &vector.kid, &payload)
+            let jws = create_detached_jws(&backend, &vector.kid, FIXTURE_BACKEND_KEY_ID, &payload)
                 .await
                 .unwrap_or_else(|e| panic!("vector '{}' failed to sign: {e}", vector.name));
             assert_eq!(
@@ -1766,6 +1792,34 @@ mod signing {
                 vector.name
             );
         }
+    }
+
+    #[tokio::test]
+    async fn create_detached_jws_embeds_the_derived_kid_not_the_backend_key_id() {
+        // Regression for a review finding on #237: `kid` (header value,
+        // derived from the public key) and the backend's own key-lookup
+        // identifier are different concepts and must not be conflated.
+        let backend = FixtureSigningBackend::with_fixture_key(FIXTURE_BACKEND_KEY_ID);
+        let vector = golden_vectors()
+            .into_iter()
+            .find(|v| v.name == "ascii")
+            .unwrap();
+        let payload = decode_base64(&vector.payload_base64);
+
+        let jws = create_detached_jws(&backend, &vector.kid, FIXTURE_BACKEND_KEY_ID, &payload)
+            .await
+            .unwrap();
+
+        // Decode the protected header and confirm it carries the derived
+        // `kid`, NOT the unrelated backend storage id.
+        let parts: Vec<&str> = jws.split('.').collect();
+        let header_bytes = {
+            use base64ct::{Base64UrlUnpadded, Encoding};
+            Base64UrlUnpadded::decode_vec(parts[0]).unwrap()
+        };
+        let header: serde_json::Value = serde_json::from_slice(&header_bytes).unwrap();
+        assert_eq!(header["kid"], vector.kid);
+        assert_ne!(vector.kid, FIXTURE_BACKEND_KEY_ID);
     }
 
     #[test]
@@ -1905,14 +1959,20 @@ mod signing {
     #[tokio::test]
     async fn signing_backend_generate_key_then_sign_round_trips() {
         let backend = FixtureSigningBackend::new();
+        // "k1" is the backend's own (opaque) storage id for the key — NOT
+        // the JWS `kid`, which is always the public key's derived value
+        // (mirrors `VaultKeeper.sign` calling
+        // `createDetachedJws(claims.kid, payload, (data) =>
+        // backend.signWithKey(claims.backendRef, data))` in vault.ts).
+        const BACKEND_KEY_ID: &str = "k1";
         backend
-            .generate_signing_key("k1", SigningAlgorithm::EdDsa)
+            .generate_signing_key(BACKEND_KEY_ID, SigningAlgorithm::EdDsa)
             .await
             .unwrap();
-        let public_key = backend.get_public_key("k1").await.unwrap();
+        let public_key = backend.get_public_key(BACKEND_KEY_ID).await.unwrap();
         let verifying_key = parse_public_key_pem(&public_key.public_key_pem).unwrap();
 
-        let jws = create_detached_jws(&backend, "k1", b"payload bytes")
+        let jws = create_detached_jws(&backend, &public_key.kid, BACKEND_KEY_ID, b"payload bytes")
             .await
             .unwrap();
         let request = VerifyRequest {
@@ -1949,7 +2009,7 @@ mod signing {
     #[tokio::test]
     async fn create_detached_jws_propagates_signing_key_not_found() {
         let backend = FixtureSigningBackend::new();
-        let err = create_detached_jws(&backend, "missing", b"data")
+        let err = create_detached_jws(&backend, "some-kid", "missing", b"data")
             .await
             .unwrap_err();
         assert!(matches!(err, VaultError::SigningKeyNotFound { .. }));

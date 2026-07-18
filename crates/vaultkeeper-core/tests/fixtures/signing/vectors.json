@@ -1,29 +1,29 @@
 {
-  "kid": "vaultkeeper-test-key-1",
+  "kid": "ZVqObITJzw_MxU6uYwdwxiguVNrIZB5HPUNaErDi3hQ",
   "vectors": [
     {
       "name": "empty",
-      "kid": "vaultkeeper-test-key-1",
+      "kid": "ZVqObITJzw_MxU6uYwdwxiguVNrIZB5HPUNaErDi3hQ",
       "payloadBase64": "",
-      "jws": "eyJhbGciOiJFZERTQSIsImI2NCI6ZmFsc2UsImNyaXQiOlsiYjY0Il0sImtpZCI6InZhdWx0a2VlcGVyLXRlc3Qta2V5LTEifQ..Fz5OMhGpsxulEvZfRYbJ2Y9RpAQqzn2zg2OW0TpBTviQBzcwHXnIaXOu_zLi-I9kXt2GPKdgsaG45L_0dsT0AQ"
+      "jws": "eyJhbGciOiJFZERTQSIsImI2NCI6ZmFsc2UsImNyaXQiOlsiYjY0Il0sImtpZCI6IlpWcU9iSVRKendfTXhVNnVZd2R3eGlndVZOcklaQjVIUFVOYUVyRGkzaFEifQ..2ndgXzNS90ogzsZ7NFYag5v0mk9sqd_xU8A8STZUjDPWnHcktTiiQGc5lyQQt417vU_mfRZlA3yqZGEXZh3CCQ"
     },
     {
       "name": "ascii",
-      "kid": "vaultkeeper-test-key-1",
+      "kid": "ZVqObITJzw_MxU6uYwdwxiguVNrIZB5HPUNaErDi3hQ",
       "payloadBase64": "aGVsbG8gdmF1bHRrZWVwZXI=",
-      "jws": "eyJhbGciOiJFZERTQSIsImI2NCI6ZmFsc2UsImNyaXQiOlsiYjY0Il0sImtpZCI6InZhdWx0a2VlcGVyLXRlc3Qta2V5LTEifQ..OU-JocI4MXeiyRbkLky_8DjcqBvhFN5RAdeQ2NdeVwYZC3WehC6bG9pw4ET6f3lFNsQeWFK32pQj_usOYOkmBg"
+      "jws": "eyJhbGciOiJFZERTQSIsImI2NCI6ZmFsc2UsImNyaXQiOlsiYjY0Il0sImtpZCI6IlpWcU9iSVRKendfTXhVNnVZd2R3eGlndVZOcklaQjVIUFVOYUVyRGkzaFEifQ..7aimI6c83qUJWBJKzIElaksK7ayUrPZbaqignHRYgTWowNb6S0mVq55pzF3ulT8adBis44AJfIBsdNyM5zADDQ"
     },
     {
       "name": "utf8-multibyte",
-      "kid": "vaultkeeper-test-key-1",
+      "kid": "ZVqObITJzw_MxU6uYwdwxiguVNrIZB5HPUNaErDi3hQ",
       "payloadBase64": "aMOpbGxvIOS4lueVjCDwn5SQIGNhZsOp",
-      "jws": "eyJhbGciOiJFZERTQSIsImI2NCI6ZmFsc2UsImNyaXQiOlsiYjY0Il0sImtpZCI6InZhdWx0a2VlcGVyLXRlc3Qta2V5LTEifQ..gt3ywDLjj39vAOtxtPtmmjQ2YGSx1Zs3ZQQnF8-ywtmTpcRCF6T4r-4pg4HtrPBbg_Tso_UaJWQPxalXshuCAg"
+      "jws": "eyJhbGciOiJFZERTQSIsImI2NCI6ZmFsc2UsImNyaXQiOlsiYjY0Il0sImtpZCI6IlpWcU9iSVRKendfTXhVNnVZd2R3eGlndVZOcklaQjVIUFVOYUVyRGkzaFEifQ..8kZnCsoYffEkdYisH7ObXllmn7_Shqt4o5uB82VAKGsCOhG5o8TG0-kYVnLJ3G-IVuGxNYHGmTXJevY_D2eKBA"
     },
     {
       "name": "binary",
-      "kid": "vaultkeeper-test-key-1",
+      "kid": "ZVqObITJzw_MxU6uYwdwxiguVNrIZB5HPUNaErDi3hQ",
       "payloadBase64": "AAECf4D+/96tvu8=",
-      "jws": "eyJhbGciOiJFZERTQSIsImI2NCI6ZmFsc2UsImNyaXQiOlsiYjY0Il0sImtpZCI6InZhdWx0a2VlcGVyLXRlc3Qta2V5LTEifQ..7Q1iIM-Hj6fI6SJB9QUDqXr--LOI_WPxfgninwqj9G1wc9VCeAyoC5vqS-BmJnuPSGsGY_yey-sxg0YAkbdzBw"
+      "jws": "eyJhbGciOiJFZERTQSIsImI2NCI6ZmFsc2UsImNyaXQiOlsiYjY0Il0sImtpZCI6IlpWcU9iSVRKendfTXhVNnVZd2R3eGlndVZOcklaQjVIUFVOYUVyRGkzaFEifQ..kqfBM8-Evzn5iH2gjploFaoA9uwl6VmFpKYTNmLtFNy7dLd_V9uai282dQvOjhDbyX5RXeX-i6TNqFsBaEpNBw"
     }
   ]
 }

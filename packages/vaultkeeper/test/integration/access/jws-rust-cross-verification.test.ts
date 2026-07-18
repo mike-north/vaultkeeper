@@ -90,6 +90,19 @@ describe('detached-JWS golden vectors (shared with the Rust core)', () => {
     expect(names).toEqual(['ascii', 'binary', 'empty', 'utf8-multibyte'].sort())
   })
 
+  it('every vector carries the real derived kid, not an arbitrary label', () => {
+    // Regression for a review finding on #237: `kid` must be
+    // base64url(sha256(spkiDer)) — the same derivation as `computeKid` in
+    // packages/vaultkeeper/src/backend/file-backend.ts — not a hand-picked
+    // string. An arbitrary kid would let the vectors pass even if the wrong
+    // kid were embedded for a given key.
+    const spkiDer = crypto.createPublicKey(publicKeyPem).export({ type: 'spki', format: 'der' })
+    const expectedKid = crypto.createHash('sha256').update(spkiDer).digest('base64url')
+    for (const vector of vectors) {
+      expect(vector.kid).toBe(expectedKid)
+    }
+  })
+
   it.each(vectors.map((v) => [v.name, v] as const))(
     'verifyDetachedJws accepts the "%s" vector',
     async (_name, vector) => {

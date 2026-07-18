@@ -53,9 +53,31 @@ fn signing_input(protected_b64: &str, payload: &[u8]) -> Vec<u8> {
 }
 
 /// Assemble a detached-payload Compact JWS over `payload`, delegating the raw
-/// signature to `backend.sign_with_key(kid, ..)`. The private key never
-/// leaves the backend — this function only ever sees the resulting signature
-/// bytes.
+/// signature to `backend.sign_with_key(backend_key_id, ..)`. The private key
+/// never leaves the backend — this function only ever sees the resulting
+/// signature bytes.
+///
+/// `kid` and `backend_key_id` are deliberately two separate parameters, not
+/// one reused for both purposes. Mirrors the TypeScript `VaultKeeper.sign`
+/// (`packages/vaultkeeper/src/vault.ts`), which calls
+/// `createDetachedJws(claims.kid, payload, (data) =>
+/// backend.signWithKey(claims.backendRef, data))`:
+///
+/// - `kid` is the JWS protected-header value — the stable identifier
+///   *derived from the public key material*
+///   (`base64url(sha256(spkiDer))`, see `SigningPublicKey::kid` /
+///   `ed25519::kid_for_verifying_key`) that a verifier uses to select the
+///   right key.
+/// - `backend_key_id` is the backend's own (possibly opaque/namespaced)
+///   identifier for where the private key is stored — the value passed to
+///   [`SigningBackend::generate_signing_key`]/[`SigningBackend::get_public_key`]/
+///   [`SigningBackend::sign_with_key`].
+///
+/// A backend is free to store a key under an id that has no relationship to
+/// its derived `kid` (e.g. a caller-chosen name); conflating the two would
+/// make it impossible to emit the correct, key-derived `kid` for a signing
+/// key stored under an arbitrary name, and could silently embed the wrong
+/// `kid` for the key actually used.
 ///
 /// # Errors
 /// Propagates whatever [`VaultError`] `backend.sign_with_key` returns (e.g.
@@ -63,6 +85,7 @@ fn signing_input(protected_b64: &str, payload: &[u8]) -> Vec<u8> {
 pub async fn create_detached_jws<B>(
     backend: &B,
     kid: &str,
+    backend_key_id: &str,
     payload: &[u8],
 ) -> Result<String, VaultError>
 where
@@ -82,7 +105,7 @@ where
     let protected_b64 = Base64UrlUnpadded::encode_string(&header_json);
 
     let input = signing_input(&protected_b64, payload);
-    let signature = backend.sign_with_key(kid, &input).await?;
+    let signature = backend.sign_with_key(backend_key_id, &input).await?;
     let signature_b64 = Base64UrlUnpadded::encode_string(&signature);
 
     Ok(format!("{protected_b64}..{signature_b64}"))

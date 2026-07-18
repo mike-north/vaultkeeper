@@ -27,7 +27,7 @@
  * @see https://www.rfc-editor.org/rfc/rfc7797 (RFC 7797 `b64:false` unencoded payload option)
  * @see https://www.rfc-editor.org/rfc/rfc8032 (RFC 8032 EdDSA / Ed25519)
  */
-import { generateKeyPairSync, sign as cryptoSign } from 'node:crypto'
+import { createHash, createPublicKey, generateKeyPairSync, sign as cryptoSign } from 'node:crypto'
 import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -39,8 +39,17 @@ const privateKeyPath = join(here, 'ed25519-test-key.pkcs8.pem')
 const publicKeyPath = join(here, 'ed25519-test-key.spki.pem')
 const vectorsPath = join(here, 'vectors.json')
 
-/** The stable `kid` embedded in every vector's protected header. */
-const KID = 'vaultkeeper-test-key-1'
+/**
+ * Compute the stable `kid` for an SPKI-DER public key: `base64url(sha256(der))`.
+ *
+ * Mirrors `computeKid` in `packages/vaultkeeper/src/backend/file-backend.ts`
+ * exactly — `kid` is always derived from the public key material, never an
+ * arbitrary caller-chosen label, so a golden vector's `kid` genuinely
+ * exercises kid derivation rather than masking it.
+ */
+function computeKid(spkiDer: Buffer): string {
+  return createHash('sha256').update(spkiDer).digest('base64url')
+}
 
 interface TestPayload {
   name: string
@@ -82,10 +91,13 @@ interface Vector {
 async function main(): Promise<void> {
   const { privateKeyPem, publicKeyPem } = loadOrCreateKeypair()
 
+  const spkiDer = createPublicKey(publicKeyPem).export({ type: 'spki', format: 'der' })
+  const kid = computeKid(spkiDer)
+
   const vectors: Vector[] = []
   for (const { name, bytes } of payloads) {
     const payload = Buffer.from(bytes)
-    const jws = await createDetachedJws(KID, payload, (data) =>
+    const jws = await createDetachedJws(kid, payload, (data) =>
       Promise.resolve(cryptoSign(null, data, privateKeyPem)),
     )
 
@@ -97,10 +109,10 @@ async function main(): Promise<void> {
       throw new Error(`generated vector "${name}" failed to verify — refusing to commit it`)
     }
 
-    vectors.push({ name, kid: KID, payloadBase64: payload.toString('base64'), jws })
+    vectors.push({ name, kid, payloadBase64: payload.toString('base64'), jws })
   }
 
-  writeFileSync(vectorsPath, `${JSON.stringify({ kid: KID, vectors }, null, 2)}\n`)
+  writeFileSync(vectorsPath, `${JSON.stringify({ kid, vectors }, null, 2)}\n`)
   console.log(`Wrote ${vectors.length} vectors to ${vectorsPath}`)
 }
 
