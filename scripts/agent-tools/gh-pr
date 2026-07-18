@@ -23,7 +23,11 @@ set -euo pipefail
 
 ALLOWED_OWNER="mike-north"
 ALLOWED_REPO="vaultkeeper"
-GH="${GH:-gh}"
+
+# A broken GITHUB_TOKEN in the environment shadows keyring auth; the gh binary
+# is invoked directly (no override indirection) so the command cannot be
+# redirected via the environment.
+unset GITHUB_TOKEN || true
 
 die() { printf '%s\n' "gh-pr: $*" >&2; exit "${2:-2}"; }
 
@@ -43,28 +47,37 @@ EOF
 
 require_repo() {
   local origin
-  origin="$($GH repo view --json nameWithOwner --jq .nameWithOwner 2>/dev/null)" \
+  origin="$(gh repo view --json nameWithOwner --jq .nameWithOwner 2>/dev/null)" \
     || die "could not determine the current repo via gh" 4
   [ "$origin" = "${ALLOWED_OWNER}/${ALLOWED_REPO}" ] \
     || die "refusing to run: current repo is '$origin', tool is scoped to ${ALLOWED_OWNER}/${ALLOWED_REPO}" 3
 }
 
 # Count unresolved review threads via a fixed, repo+PR-scoped GraphQL read query.
+# Fails closed if the PR has more than one page of threads, so the count is
+# never silently under-reported.
 unresolved_threads() {
-  local pr="$1"
-  $GH api graphql -F owner="${ALLOWED_OWNER}" -F repo="${ALLOWED_REPO}" -F pr="$pr" -f query='
+  local pr="$1" result
+  result="$(gh api graphql -F owner="${ALLOWED_OWNER}" -F repo="${ALLOWED_REPO}" -F pr="$pr" -f query='
     query($owner:String!,$repo:String!,$pr:Int!){
       repository(owner:$owner,name:$repo){
-        pullRequest(number:$pr){ reviewThreads(first:100){ nodes{ isResolved } } }
+        pullRequest(number:$pr){ reviewThreads(first:100){
+          pageInfo{ hasNextPage }
+          nodes{ isResolved }
+        } }
       }
-    }' --jq '[.data.repository.pullRequest.reviewThreads.nodes[]|select(.isResolved|not)]|length' 2>/dev/null \
+    }' --jq '.data.repository.pullRequest.reviewThreads
+             | "\(.pageInfo.hasNextPage) \([.nodes[]|select(.isResolved|not)]|length)"' 2>/dev/null)" \
     || die "gh api graphql read failed for PR ${pr}" 4
+  [ "${result%% *}" = "false" ] \
+    || die "PR ${pr} has more than 100 review threads; refusing to report a truncated count" 4
+  printf '%s\n' "${result#* }"
 }
 
 cmd_is_ready() {
   local pr="$1"
   local json state mss failed unresolved
-  json="$($GH pr view "$pr" --json state,mergeStateStatus,statusCheckRollup 2>/dev/null)" \
+  json="$(gh pr view "$pr" --json state,mergeStateStatus,statusCheckRollup 2>/dev/null)" \
     || die "gh pr view failed for PR ${pr}" 4
   state="$(jq -r '.state' <<<"$json")"
   mss="$(jq -r '.mergeStateStatus' <<<"$json")"
@@ -100,7 +113,7 @@ cmd_failure_details() {
   local urls runs
   # Fetch first (so a PR with no failing checks isn't a pipeline error), then
   # extract run ids — `|| true` because grep exits 1 on the legitimate no-match case.
-  urls="$($GH pr view "$pr" --json statusCheckRollup \
+  urls="$(gh pr view "$pr" --json statusCheckRollup \
     --jq '[.statusCheckRollup[]?|select(.conclusion=="FAILURE" or .conclusion=="TIMED_OUT" or .conclusion=="ERROR")|.detailsUrl]|.[]' 2>/dev/null)" \
     || die "gh pr view failed for PR ${pr}" 4
   runs="$(printf '%s\n' "$urls" | grep -oE 'runs/[0-9]+' | cut -d/ -f2 | sort -u || true)"
@@ -111,7 +124,7 @@ cmd_failure_details() {
   local run
   for run in $runs; do
     printf '=== failing run %s (PR %s) ===\n' "$run" "$pr"
-    $GH run view "$run" --log-failed 2>/dev/null \
+    gh run view "$run" --log-failed 2>/dev/null \
       | grep -iE 'error|fail|not found|cannot|ELIFECYCLE|Traceback|assert|✗|✖' \
       | grep -viE '^\s*✓' \
       | head -30 \

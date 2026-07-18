@@ -21,7 +21,11 @@ set -euo pipefail
 
 ALLOWED_OWNER="mike-north"
 ALLOWED_REPO="vaultkeeper"
-GH="${GH:-gh}"
+
+# A broken GITHUB_TOKEN in the environment shadows keyring auth; the gh binary
+# is invoked directly (no override indirection) so the command cannot be
+# redirected via the environment.
+unset GITHUB_TOKEN || true
 
 die() { printf '%s\n' "gh-review-comment: $*" >&2; exit "${2:-2}"; }
 
@@ -47,12 +51,12 @@ id="$1"
 [[ "$id" =~ ^[1-9][0-9]*$ ]] || die "comment id must be a positive integer, got: $id"
 
 # Refuse to run outside the allowed repo — scope is enforced, not assumed.
-origin="$($GH repo view --json nameWithOwner --jq .nameWithOwner 2>/dev/null)" \
+origin="$(gh repo view --json nameWithOwner --jq .nameWithOwner 2>/dev/null)" \
   || die "could not determine the current repo via gh" 4
 [ "$origin" = "${ALLOWED_OWNER}/${ALLOWED_REPO}" ] \
   || die "refusing to run: current repo is '$origin', tool is scoped to ${ALLOWED_OWNER}/${ALLOWED_REPO}" 3
 
 # Single read-only GET to the fixed endpoint; owner/repo/id are all constrained above.
-$GH api "repos/${ALLOWED_OWNER}/${ALLOWED_REPO}/pulls/comments/${id}" \
+gh api "repos/${ALLOWED_OWNER}/${ALLOWED_REPO}/pulls/comments/${id}" \
   --jq '"\(.path):\(.line // .original_line)  [\(.user.login)]\n\n\(.body)"' \
   || die "gh api read failed for comment ${id}" 4

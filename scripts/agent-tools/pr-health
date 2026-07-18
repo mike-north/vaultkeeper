@@ -24,9 +24,7 @@ EOF
 
 [ "${1:-}" = "--help" ] && { usage; exit 0; }
 [ $# -eq 1 ] || { usage >&2; exit 2; }
-case "$1" in
-  ''|*[!0-9]*) echo "pr-health: PR number must be a positive integer, got: $1" >&2; exit 2 ;;
-esac
+[[ "$1" =~ ^[1-9][0-9]*$ ]] || { echo "pr-health: PR number must be a positive integer, got: $1" >&2; exit 2; }
 pr="$1"
 
 unset GITHUB_TOKEN || true
@@ -36,13 +34,19 @@ json=$(gh pr view "$pr" --repo "$REPO" \
   echo "pr-health: failed to fetch PR #$pr from $REPO" >&2; exit 1; }
 
 owner="${REPO%/*}"; name="${REPO#*/}"
-threads=$(gh api graphql \
+# Fails closed if the PR has more than one page of review threads, so the
+# unresolved count is never silently under-reported.
+thread_result=$(gh api graphql \
   -F owner="$owner" -F name="$name" -F pr="$pr" \
   -f query='query($owner:String!,$name:String!,$pr:Int!){
     repository(owner:$owner,name:$name){pullRequest(number:$pr){
-      reviewThreads(first:100){nodes{isResolved}}}}}' \
-  --jq '[.data.repository.pullRequest.reviewThreads.nodes[] | select(.isResolved==false)] | length') || {
+      reviewThreads(first:100){pageInfo{hasNextPage} nodes{isResolved}}}}}' \
+  --jq '.data.repository.pullRequest.reviewThreads
+        | "\(.pageInfo.hasNextPage) \([.nodes[] | select(.isResolved==false)] | length)"') || {
   echo "pr-health: failed to fetch review threads for PR #$pr" >&2; exit 1; }
+[ "${thread_result%% *}" = "false" ] || {
+  echo "pr-health: PR #$pr has more than 100 review threads; refusing to report a truncated count" >&2; exit 1; }
+threads="${thread_result#* }"
 
 jq -r --argjson unresolved "$threads" '
   (.statusCheckRollup // []) as $c |
