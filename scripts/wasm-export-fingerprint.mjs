@@ -24,6 +24,17 @@
 // import) always changes it — verified locally by removing a real export and
 // confirming the fingerprint check flags the mismatch.
 //
+// Scope, stated plainly: this catches "the committed .wasm's public contract
+// no longer matches what current source produces" — the same class of thing
+// check:api-report/check:api-docs catch for the TS surface. It does NOT catch
+// "the committed .wasm was built from stale/wrong source but happens to keep
+// an identical export/import surface" (e.g. a source change that alters
+// internal behavior without touching any exported function's presence or
+// kind). That gap is covered by the existing Rust unit tests, TS conformance
+// tests, and wasm e2e tests, which exercise actual behavior against whatever
+// artifact is committed — this check is a build-provenance guard, not a
+// substitute for those.
+//
 // Usage:
 //   node wasm-export-fingerprint.mjs <a.wasm> <b.wasm>   # compare, exit 1 on mismatch
 //   node wasm-export-fingerprint.mjs <a.wasm>            # print a.wasm's fingerprint
@@ -36,8 +47,22 @@ function normalizeName(name) {
   return name.replace(HASH_SUFFIX, '__hNORMALIZED')
 }
 
-function byName(a, b) {
-  return a.name < b.name ? -1 : a.name > b.name ? 1 : 0
+// Sorts on the full tuple, not just `name`: two entries can share a name
+// after normalization (e.g. two distinct closures both collapsing to
+// `__hNORMALIZED`), and Array.prototype.sort is stable, so a name-only
+// comparator would leave such ties in their original — host-dependent —
+// relative order, silently reintroducing the exact nondeterminism this
+// script exists to normalize away. Comparing every field first canonicalizes
+// full duplicates to be adjacent and interchangeable in the sorted output;
+// any residual difference reflects an actual field value, not import/export
+// table order.
+function compareEntries(a, b) {
+  if (a.name !== b.name) return a.name < b.name ? -1 : 1
+  if (a.kind !== b.kind) return a.kind < b.kind ? -1 : 1
+  const aModule = a.module ?? ''
+  const bModule = b.module ?? ''
+  if (aModule !== bModule) return aModule < bModule ? -1 : 1
+  return 0
 }
 
 function fingerprint(path) {
@@ -45,11 +70,11 @@ function fingerprint(path) {
 
   const exports = WebAssembly.Module.exports(mod)
     .map((e) => ({ name: normalizeName(e.name), kind: e.kind }))
-    .sort(byName)
+    .sort(compareEntries)
 
   const imports = WebAssembly.Module.imports(mod)
     .map((i) => ({ module: i.module, name: normalizeName(i.name), kind: i.kind }))
-    .sort(byName)
+    .sort(compareEntries)
 
   return { exportCount: exports.length, importCount: imports.length, exports, imports }
 }

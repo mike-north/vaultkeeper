@@ -131,18 +131,26 @@ follow-up; it needs a change to the Rust core and a rebuild of the committed `.w
 ## Regenerating the committed artifact
 
 This package ships a committed `.wasm` binary (`wasm/vaultkeeper_wasm_bg.wasm`) rather than
-building from source at install time. CI's `wasm-guards` job (`.github/workflows/ci.yml`) rebuilds
-it with a pinned toolchain on every push/PR and fails if the rebuild's **export/import surface**
-doesn't match what's committed — so any change to `crates/vaultkeeper-wasm` or
-`crates/vaultkeeper-core` must regenerate and commit this artifact in the same change.
+building from source at install time. Any change to `crates/vaultkeeper-wasm` or
+`crates/vaultkeeper-core` that affects compiled behavior should regenerate and commit this artifact
+in the same change — the committed binary is what every consumer of this package actually runs, so
+it needs to reflect current source regardless of whether CI would catch a miss.
 
-The check is a functional fingerprint (`scripts/wasm-export-fingerprint.mjs`), not a raw byte hash:
-a pinned toolchain does **not** produce byte-identical `.wasm` output across different host
-platforms (confirmed — a Linux CI rebuild and a macOS rebuild of the identical commit differ in
-internal type-table layout, data-segment ordering, and wasm-bindgen's per-build closure-shim
-symbol hashes, none of which is an actual behavior change). So your local rebuild does not need to
-byte-match CI's — only the set of exports/imports needs to match, which it will as long as you
-haven't changed the crate's public surface without regenerating.
+CI's `wasm-guards` job (`.github/workflows/ci.yml`) enforces part of that: it rebuilds with a
+pinned toolchain on every push/PR and fails if the rebuild's **export/import surface** doesn't
+match what's committed. Its guarantee is scoped to that surface, not full behavioral equivalence —
+see the header comment in `scripts/wasm-export-fingerprint.mjs` for exactly what it does and
+doesn't catch (in short: it catches "the exported/imported contract changed without a
+regeneration," not "the source changed in a way that kept the same contract" — the latter is
+covered by this package's own test suite, not by this check).
+
+The check is a functional fingerprint, not a raw byte hash: a pinned toolchain does **not** produce
+byte-identical `.wasm` output across different host platforms (confirmed — a Linux CI rebuild and a
+macOS rebuild of the identical commit differ in internal type-table layout, data-segment ordering,
+and wasm-bindgen's per-build closure-shim symbol hashes, none of which is an actual behavior
+change). So your local rebuild does not need to byte-match CI's — only the set of exports/imports
+needs to match, which it will as long as you haven't changed the crate's public surface without
+regenerating.
 
 The exact toolchain versions (Rust, `wasm-pack`, `wasm-opt`/binaryen) and the size budget are pinned
 in [`crates/vaultkeeper-wasm/wasm-toolchain.env`](../../crates/vaultkeeper-wasm/wasm-toolchain.env) —

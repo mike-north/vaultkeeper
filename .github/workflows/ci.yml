@@ -53,9 +53,16 @@ jobs:
       - name: Load pinned wasm toolchain versions
         # $GITHUB_ENV only accepts strict KEY=VALUE lines — comments/blank lines
         # (kept in the source file for documentation) make the env file command
-        # fail outright, so filter them out before appending.
-        run: grep -v '^#' crates/vaultkeeper-wasm/wasm-toolchain.env | grep -v '^[[:space:]]*$' >> "$GITHUB_ENV"
+        # fail outright, so filter them out before appending. Match a `#`
+        # preceded by only whitespace, not just column 1, in case a comment
+        # line is ever indented.
+        run: grep -v '^[[:space:]]*#' crates/vaultkeeper-wasm/wasm-toolchain.env | grep -v '^[[:space:]]*$' >> "$GITHUB_ENV"
 
+      # @master (not @stable, unlike the "rust" job above) is required here:
+      # @stable doesn't honor an explicit `toolchain:` version pin the same
+      # way — only @master's input handling supports pinning an exact
+      # version like RUST_TOOLCHAIN_VERSION. This is intentional, not an
+      # oversight; do not "fix" it to match the rust job's @stable.
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: ${{ env.RUST_TOOLCHAIN_VERSION }}
@@ -72,8 +79,15 @@ jobs:
           curl -sSfL -o /tmp/wasm-pack.tar.gz \
             "https://github.com/wasm-bindgen/wasm-pack/releases/download/v${WASM_PACK_VERSION}/wasm-pack-v${WASM_PACK_VERSION}-x86_64-unknown-linux-musl.tar.gz"
           tar -xzf /tmp/wasm-pack.tar.gz -C /tmp
-          install -m 755 "/tmp/wasm-pack-v${WASM_PACK_VERSION}-x86_64-unknown-linux-musl/wasm-pack" /usr/local/bin/wasm-pack
-          wasm-pack --version
+          # Install into a guaranteed user-writable directory rather than
+          # /usr/local/bin, which is not writable by the default runner user
+          # on all runner images (this happened to succeed on the current
+          # ubuntu-latest image, but shouldn't rely on that undocumented
+          # detail persisting).
+          mkdir -p "$HOME/.local/bin"
+          install -m 755 "/tmp/wasm-pack-v${WASM_PACK_VERSION}-x86_64-unknown-linux-musl/wasm-pack" "$HOME/.local/bin/wasm-pack"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          "$HOME/.local/bin/wasm-pack" --version
 
       - name: Install pinned wasm-opt (binaryen)
         run: |

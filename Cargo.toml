@@ -47,15 +47,24 @@ zeroize = "1"
 assert_matches = "1"
 serial_test = "3"
 
-# Pinned to 1 codegen unit for the wasm build's dependency graph only (issue
-# #240): with the default (16, LLVM's own parallel-codegen-unit partitioning),
-# rustc/wasm-bindgen's internal per-instantiation symbol hashes (e.g.
-# wasm_bindgen__closure__destroy__h<hex>) differ between hosts even given
-# byte-identical source and an identical pinned toolchain — confirmed via a
-# real CI run producing a different committed-artifact hash than the same
-# build run locally. A single codegen unit removes that source of
-# nondeterminism. Scoped to these two packages (not the whole workspace) so
-# the native CLI's build isn't affected.
+# A single codegen unit for the wasm build's dependency graph (issue #240):
+# measurably shrinks the release wasm artifact (~16 KB smaller in testing)
+# thanks to more cross-function inlining than the default (16 parallel
+# codegen units). This is a size optimization only, NOT a reproducibility
+# fix — it does not make the rebuilt .wasm byte-identical across host
+# platforms (confirmed: a Linux CI rebuild still differed from a macOS
+# rebuild of the same commit after enabling this). Host-to-host drift is
+# instead handled by CI's functional export/import fingerprint check
+# (scripts/wasm-export-fingerprint.mjs), not by chasing byte-level
+# determinism here.
+#
+# vaultkeeper-core's override applies to it wherever it's compiled in
+# --release, including as a dependency of the native vaultkeeper-cli binary
+# (vaultkeeper-cli depends on vaultkeeper-core) — this is unavoidable, since
+# vaultkeeper-core's compiled code is what actually makes up most of the wasm
+# artifact's size, so it needs the same setting for the wasm-side benefit
+# above to apply. The CLI binary itself is not affected by
+# vaultkeeper-wasm's override (vaultkeeper-wasm is never linked into it).
 [profile.release.package.vaultkeeper-wasm]
 codegen-units = 1
 
