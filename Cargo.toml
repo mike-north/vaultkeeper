@@ -46,3 +46,27 @@ zeroize = "1"
 # Testing
 assert_matches = "1"
 serial_test = "3"
+
+# A single codegen unit for the wasm build's dependency graph (issue #240):
+# measurably shrinks the release wasm artifact (~16 KB smaller in testing)
+# thanks to more cross-function inlining than the default (16 parallel
+# codegen units). This is a size optimization only, NOT a reproducibility
+# fix — it does not make the rebuilt .wasm byte-identical across host
+# platforms (confirmed: a Linux CI rebuild still differed from a macOS
+# rebuild of the same commit after enabling this). Host-to-host drift is
+# instead handled by CI's functional export/import fingerprint check
+# (scripts/wasm-export-fingerprint.mjs), not by chasing byte-level
+# determinism here.
+#
+# vaultkeeper-core's override applies to it wherever it's compiled in
+# --release, including as a dependency of the native vaultkeeper-cli binary
+# (vaultkeeper-cli depends on vaultkeeper-core) — this is unavoidable, since
+# vaultkeeper-core's compiled code is what actually makes up most of the wasm
+# artifact's size, so it needs the same setting for the wasm-side benefit
+# above to apply. The CLI binary itself is not affected by
+# vaultkeeper-wasm's override (vaultkeeper-wasm is never linked into it).
+[profile.release.package.vaultkeeper-wasm]
+codegen-units = 1
+
+[profile.release.package.vaultkeeper-core]
+codegen-units = 1

@@ -10,6 +10,15 @@ publish = false
 [lib]
 crate-type = ["cdylib", "rlib"]
 
+# Explicit -Oz (aggressive size optimization) rather than relying on wasm-pack's
+# implicit default wasm-opt invocation. wasm-opt's exact version must be pinned
+# on PATH by the caller (see crates/vaultkeeper-wasm/wasm-toolchain.env and the
+# CI "wasm-guards" job in .github/workflows/ci.yml) — wasm-pack otherwise falls
+# back to whatever wasm-opt it finds first on PATH, which breaks byte-for-byte
+# reproducibility across machines/CI.
+[package.metadata.wasm-pack.profile.release]
+wasm-opt = ["-Oz"]
+
 [dependencies]
 vaultkeeper-core = { path = "../vaultkeeper-core" }
 wasm-bindgen = { workspace = true }

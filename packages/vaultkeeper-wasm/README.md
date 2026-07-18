@@ -128,6 +128,77 @@ required) genuinely gates file-backend operation. Treat a failing native-tool en
 the WASM `doctor()` to the file backend so this entry demotes to informational is tracked as a
 follow-up; it needs a change to the Rust core and a rebuild of the committed `.wasm`.)
 
+## Regenerating the committed artifact
+
+This package ships a committed `.wasm` binary (`wasm/vaultkeeper_wasm_bg.wasm`) rather than
+building from source at install time. Any change to `crates/vaultkeeper-wasm` or
+`crates/vaultkeeper-core` that affects compiled behavior should regenerate and commit this artifact
+in the same change — the committed binary is what every consumer of this package actually runs, so
+it needs to reflect current source regardless of whether CI would catch a miss.
+
+CI's `wasm-guards` job (`.github/workflows/ci.yml`) enforces part of that: it rebuilds with a
+pinned toolchain on every push/PR and fails if the rebuild's **export/import surface** doesn't
+match what's committed. Its guarantee is scoped to that surface, not full behavioral equivalence —
+see the header comment in `scripts/wasm-export-fingerprint.mjs` for exactly what it does and
+doesn't catch (in short: it catches "the exported/imported contract changed without a
+regeneration," not "the source changed in a way that kept the same contract" — the latter is
+covered by this package's own test suite, not by this check).
+
+The check is a functional fingerprint, not a raw byte hash: a pinned toolchain does **not** produce
+byte-identical `.wasm` output across different host platforms (confirmed — a Linux CI rebuild and a
+macOS rebuild of the identical commit differ in internal type-table layout, data-segment ordering,
+and wasm-bindgen's per-build closure-shim symbol hashes, none of which is an actual behavior
+change). So your local rebuild does not need to byte-match CI's — only the set of exports/imports
+needs to match, which it will as long as you haven't changed the crate's public surface without
+regenerating.
+
+The exact toolchain versions (Rust, `wasm-pack`, `wasm-opt`/binaryen) and the size budget are pinned
+in [`crates/vaultkeeper-wasm/wasm-toolchain.env`](../../crates/vaultkeeper-wasm/wasm-toolchain.env) —
+the single source of truth CI reads from. Use the same versions locally or the drift check will
+fail on your PR even though your rebuild "looks right."
+
+```sh
+# 1. Read the pinned versions
+cat crates/vaultkeeper-wasm/wasm-toolchain.env
+
+# 2. Install that exact Rust toolchain (adds the wasm32 target too)
+rustup toolchain install <RUST_TOOLCHAIN_VERSION> --target wasm32-unknown-unknown
+rustup default <RUST_TOOLCHAIN_VERSION>   # or use `+<version>` per-command below
+
+# 3. Install that exact wasm-pack version
+cargo install wasm-pack --version <WASM_PACK_VERSION> --locked
+
+# 4. Install that exact wasm-opt (binaryen) version and put it FIRST on PATH —
+#    wasm-pack uses whatever wasm-opt it finds on PATH, so a different
+#    system-installed version (e.g. from Homebrew) will silently produce a
+#    different, non-matching binary.
+#    macOS: https://github.com/WebAssembly/binaryen/releases/download/version_<BINARYEN_VERSION>/binaryen-version_<BINARYEN_VERSION>-arm64-macos.tar.gz
+#    Linux: .../binaryen-version_<BINARYEN_VERSION>-x86_64-linux.tar.gz
+#    Extract it, then:
+export PATH="/path/to/binaryen-version_<BINARYEN_VERSION>/bin:$PATH"
+
+# 5. Rebuild with CARGO_HOME normalized out of embedded debug paths — reduces
+#    (but does not eliminate — see above) incidental differences from CI's
+#    rebuild. Not required for the drift check to pass, but keeps diffs small.
+export RUSTFLAGS="--remap-path-prefix=${CARGO_HOME:-$HOME/.cargo}=/cargo-home"
+wasm-pack build --target nodejs crates/vaultkeeper-wasm --out-dir /tmp/vaultkeeper-wasm-rebuild
+
+# 6. Copy the rebuilt artifacts over the committed ones and commit
+cp /tmp/vaultkeeper-wasm-rebuild/vaultkeeper_wasm_bg.wasm* packages/vaultkeeper-wasm/wasm/
+cp /tmp/vaultkeeper-wasm-rebuild/vaultkeeper_wasm.{js,d.ts} packages/vaultkeeper-wasm/wasm/
+
+# 7. Optional: verify the export/import surface matches what's currently
+#    committed before you overwrite it (useful before step 6, to see if a
+#    regeneration is even needed):
+node scripts/wasm-export-fingerprint.mjs \
+  packages/vaultkeeper-wasm/wasm/vaultkeeper_wasm_bg.wasm \
+  /tmp/vaultkeeper-wasm-rebuild/vaultkeeper_wasm_bg.wasm
+```
+
+`wasm-opt -Oz` (aggressive size optimization) runs automatically as part of step 5 via
+`[package.metadata.wasm-pack.profile.release]` in `crates/vaultkeeper-wasm/Cargo.toml` — no
+separate post-processing step is needed.
+
 ## Full documentation
 
 See the [repository README](https://github.com/mike-north/vaultkeeper#readme) for the delegated
