@@ -841,7 +841,6 @@ function optionalBoolean(value: unknown): boolean | undefined {
   return typeof value === 'boolean' ? value : undefined
 }
 
-/** Numeric analogue of {@link optionalString}: non-numbers become `undefined`. */
 /**
  * Numeric analogue of {@link optionalString}. Rejects `NaN`, `Infinity`,
  * `-Infinity`, and non-integer values (via `Number.isSafeInteger`) in
