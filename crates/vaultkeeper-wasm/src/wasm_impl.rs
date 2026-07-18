@@ -8,6 +8,9 @@ use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::JsFuture;
 
 use vaultkeeper_core::backend::{ExecOutput, FileBackend, HostPlatform, Platform, SecretBackend};
+use vaultkeeper_core::errors::{
+    ALL_ERROR_CODES, all_variants_for_parity_test, vault_error_code, vault_error_fields,
+};
 use vaultkeeper_core::vault::{SetupOptions, VaultKeeperOptions};
 use vaultkeeper_core::{ExecutableTrustRequiredReason, VaultError};
 
@@ -128,104 +131,49 @@ fn fs_rejection_to_vault_error(rejected: &JsValue, path: &Path, permission: &str
     }
 }
 
-/// Stable machine-readable code for a [`VaultError`], used by the TypeScript
-/// bridge to reconstruct a typed error instance from the thrown value.
-///
-/// Typed variants map one-to-one to a code. Corrupted/undecryptable stored
-/// entries are their own typed `VaultError::Decryption`, mapped to
-/// `decryption`. `VaultError::Other(..)` — which the core uses for the
-/// remaining malformed/validation failures that don't yet have a dedicated
-/// variant — maps to the generic `vault-error`; `authorize()` reclassifies
-/// its own `Other` errors to `invalid-token`, since any non-typed failure
-/// there means the token is unprocessable. This mapping is deliberately
-/// confined to the WASM boundary.
-fn vault_error_code(e: &VaultError) -> &'static str {
-    match e {
-        VaultError::SecretNotFound { .. } => "secret-not-found",
-        VaultError::Decryption { .. } => "decryption",
-        VaultError::TokenExpired { .. } => "token-expired",
-        VaultError::KeyRotated { .. } => "key-rotated",
-        VaultError::KeyRevoked { .. } => "key-revoked",
-        VaultError::TokenRevoked { .. } => "token-revoked",
-        VaultError::UsageLimitExceeded { .. } => "usage-limit-exceeded",
-        VaultError::RotationInProgress { .. } => "rotation-in-progress",
-        VaultError::BackendLocked { .. } => "backend-locked",
-        VaultError::DeviceNotPresent { .. } => "device-not-present",
-        VaultError::AuthorizationDenied { .. } => "authorization-denied",
-        VaultError::BackendUnavailable { .. } => "backend-unavailable",
-        VaultError::PluginNotFound { .. } => "plugin-not-found",
-        VaultError::IdentityMismatch { .. } => "identity-mismatch",
-        VaultError::ExecutableTrustRequired { .. } => "executable-trust-required",
-        VaultError::InvalidAlgorithm { .. } => "invalid-algorithm",
-        VaultError::Setup { .. } => "setup",
-        VaultError::Filesystem { .. } => "filesystem",
-        VaultError::Other(_) => "vault-error",
-    }
-}
-
 /// Convert a [`VaultError`] into a thrown JS value carrying a stable
 /// `vaultErrorCode`, its `message`, and any structured context fields. The
 /// TypeScript bridge maps `vaultErrorCode` back to a `VaultError` subclass so
 /// callers receive a real typed error instance.
+///
+/// The code and field logic themselves live in `vaultkeeper_core` (see
+/// `vault_error_code`/`vault_error_fields` in
+/// `crates/vaultkeeper-core/src/errors.rs`) so they're unit-testable without
+/// a wasm32 target; this function is just the thin JSON-serialization
+/// wrapper that gets those values across the actual WASM/JS boundary, plus
+/// the one JS-facing message override below.
+///
+/// If serializing or parsing the full field map ever fails — not expected in
+/// practice, since every field is a plain string/number/bool/array — this
+/// falls back to [`coded_js_error`] rather than silently degrading to
+/// `undefined`, so `vaultErrorCode`/`message` are never lost even in that
+/// pathological case.
 fn vault_error_to_js(e: &VaultError) -> JsValue {
-    let obj = js_sys::Object::new();
-    let set = |k: &str, v: &JsValue| {
-        // Reflect::set on a fresh Object cannot fail; ignore the Result.
-        let _ = Reflect::set(&obj, &JsValue::from_str(k), v);
-    };
-    set("vaultErrorCode", &JsValue::from_str(vault_error_code(e)));
-    set("message", &JsValue::from_str(&e.to_string()));
-    match e {
-        VaultError::TokenExpired { can_refresh, .. } => {
-            set("canRefresh", &JsValue::from_bool(*can_refresh));
-        }
-        VaultError::Decryption { path, .. } => {
-            set("path", &JsValue::from_str(path));
-        }
-        VaultError::BackendUnavailable {
-            reason, attempted, ..
-        } => {
-            set("reason", &JsValue::from_str(reason));
-            let arr = js_sys::Array::new();
-            for a in attempted {
-                arr.push(&JsValue::from_str(a));
-            }
-            set("attempted", &arr);
-        }
+    let mut fields = vault_error_fields(e);
+    let code = vault_error_code(e);
+    fields.insert(
+        "vaultErrorCode".to_string(),
+        serde_json::Value::String(code.to_string()),
+    );
+    let message = match e {
         VaultError::ExecutableTrustRequired { reason, .. } => {
             // The core carries a Rust-native message (SetupOptions.executable_path
             // etc.) for direct Rust callers; at this JS boundary we replace it
             // with the JS-facing wording (options.executablePath / skipTrust) so
             // WASM SDK consumers see their own API's names.
-            set(
-                "message",
-                &JsValue::from_str(executable_trust_required_js_message(*reason)),
-            );
-            set("reason", &JsValue::from_str(reason.as_str()));
+            executable_trust_required_js_message(*reason).to_string()
         }
-        VaultError::IdentityMismatch {
-            previous_hash,
-            current_hash,
-            ..
-        } => {
-            set("previousHash", &JsValue::from_str(previous_hash));
-            set("currentHash", &JsValue::from_str(current_hash));
-        }
-        VaultError::Filesystem {
-            path,
-            permission,
-            code,
-            ..
-        } => {
-            set("path", &JsValue::from_str(path));
-            set("permission", &JsValue::from_str(permission));
-            if let Some(code) = code {
-                set("code", &JsValue::from_str(code));
-            }
-        }
-        _ => {}
-    }
-    obj.into()
+        _ => e.to_string(),
+    };
+    fields.insert(
+        "message".to_string(),
+        serde_json::Value::String(message.clone()),
+    );
+
+    serde_json::to_string(&fields)
+        .ok()
+        .and_then(|json| js_sys::JSON::parse(&json).ok())
+        .unwrap_or_else(|| coded_js_error(code, &message))
 }
 
 /// JS-facing message for an [`ExecutableTrustRequiredReason`], phrased in the
@@ -433,6 +381,40 @@ impl HostPlatform for JsHostPlatform {
 #[wasm_bindgen(start)]
 pub fn init() {
     console_error_panic_hook::set_once();
+}
+
+/// The canonical list of every machine-readable `vaultErrorCode` this WASM
+/// binary can throw — the single source of truth for the error taxonomy (see
+/// `ALL_ERROR_CODES` in `crates/vaultkeeper-core/src/errors.rs`).
+///
+/// `packages/vaultkeeper-wasm/src/test/error-parity.test.ts` fetches this
+/// exact list at test time and asserts it equals the TypeScript
+/// reconstruction map's known codes exactly, catching drift between the two
+/// languages in either direction.
+#[wasm_bindgen(js_name = "allVaultErrorCodes")]
+#[must_use]
+pub fn all_vault_error_codes() -> Vec<String> {
+    ALL_ERROR_CODES.iter().map(|s| (*s).to_string()).collect()
+}
+
+/// Diagnostic-only export: constructs one instance of every `VaultError`
+/// variant with fixed dummy field values and converts each through the real
+/// `vault_error_to_js` bridge, exactly as a genuine thrown error would be.
+///
+/// This exists solely so `error-parity.test.ts` can round-trip real
+/// bridge-produced values through the TypeScript reconstruction map, instead
+/// of guessing at the JSON shape `vault_error_to_js` produces. It is not part
+/// of the SDK's public TypeScript API (`packages/vaultkeeper-wasm/src/index.ts`
+/// does not re-export it) and is never called from a real code path — see
+/// `all_variants_for_parity_test` in `crates/vaultkeeper-core/src/errors.rs`
+/// for the fixture values.
+#[wasm_bindgen(js_name = "__testAllVaultErrors")]
+pub fn __test_all_vault_errors() -> js_sys::Array {
+    let arr = js_sys::Array::new();
+    for e in &all_variants_for_parity_test() {
+        arr.push(&vault_error_to_js(e));
+    }
+    arr
 }
 
 /// WASM-exposed VaultKeeper wrapper.
