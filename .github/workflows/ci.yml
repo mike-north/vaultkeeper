@@ -56,7 +56,7 @@ jobs:
         # fail outright, so filter them out before appending.
         run: grep -v '^#' crates/vaultkeeper-wasm/wasm-toolchain.env | grep -v '^[[:space:]]*$' >> "$GITHUB_ENV"
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: ${{ env.RUST_TOOLCHAIN_VERSION }}
           targets: wasm32-unknown-unknown
@@ -90,22 +90,6 @@ jobs:
           # differences from a local rebuild.
           export RUSTFLAGS="--remap-path-prefix=${CARGO_HOME:-$HOME/.cargo}=/cargo-home"
           wasm-pack build --target nodejs crates/vaultkeeper-wasm --out-dir /tmp/wasm-rebuild
-
-      - name: TEMP root-cause diagnostic - rebuild with wasm-opt disabled
-        run: |
-          cp crates/vaultkeeper-wasm/Cargo.toml /tmp/wasm-cargo-toml.bak
-          sed -i 's/wasm-opt = \["-Oz"\]/wasm-opt = false/' crates/vaultkeeper-wasm/Cargo.toml
-          export RUSTFLAGS="--remap-path-prefix=${CARGO_HOME:-$HOME/.cargo}=/cargo-home"
-          wasm-pack build --target nodejs crates/vaultkeeper-wasm --out-dir /tmp/wasm-rebuild-preopt
-          mv /tmp/wasm-cargo-toml.bak crates/vaultkeeper-wasm/Cargo.toml
-          echo "pre-opt sha256: $(sha256sum /tmp/wasm-rebuild-preopt/vaultkeeper_wasm_bg.wasm | cut -d' ' -f1)"
-
-      - name: TEMP root-cause diagnostic - upload pre-opt artifact for local diffing
-        uses: actions/upload-artifact@v4
-        with:
-          name: wasm-rebuild-preopt-debug
-          path: /tmp/wasm-rebuild-preopt/
-          retention-days: 1
 
       - name: Verify committed artifact matches the pinned-toolchain rebuild (drift check)
         # AC2: byte-for-byte comparison (AC1) was tried first and demonstrably
