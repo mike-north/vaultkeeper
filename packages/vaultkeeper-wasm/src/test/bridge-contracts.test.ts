@@ -15,6 +15,7 @@ import { createServer } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { createNodeHost } from '../node-host.js'
 import { mapWasmError, FetchError, NotCapableError } from '../errors.js'
+import type { HostSecretBackend } from '../types.js'
 
 /** Loose shape of a value thrown across the WASM boundary (see `../errors.ts`). */
 interface BridgeErrorShape {
@@ -495,5 +496,98 @@ describe('JsSecretBackend scaffold — store/retrieve/delete/exists/list (issue 
     const bindings = await loadDiagnosticBindings()
     const backend = createMockSecretBackend()
     await assert.rejects(() => bindings.__testJsSecretBackendRetrieve(backend, 'does-not-exist'))
+  })
+})
+
+/**
+ * Regression tests for code-review findings on this PR: `JsSecretBackend`
+ * (crates/vaultkeeper-wasm/src/wasm_impl.rs) originally coerced host-callback
+ * results too leniently — `retrieve()` handed a possibly non-`Uint8Array`
+ * result blind to `Uint8Array::new`, `exists()` defaulted any non-boolean
+ * result to `false` via `unwrap_or`, and `list()` handed a possibly
+ * non-array result blind to `js_sys::Array::from` and silently dropped
+ * non-string entries. Each of these host-contract violations must now
+ * surface as an error rather than silently producing misleading data (or
+ * crashing on an uncaught JS exception).
+ */
+describe('JsSecretBackend scaffold — rejects malformed host-callback results', () => {
+  function baseSecretBackendFields(): { type: string; displayName: string } {
+    return { type: 'malformed-backend', displayName: 'Malformed Backend' }
+  }
+
+  it('retrieve() rejects a non-Uint8Array result instead of coercing it', async () => {
+    const bindings = await loadDiagnosticBindings()
+    const backend: HostSecretBackend = {
+      ...baseSecretBackendFields(),
+      isAvailable: () => Promise.resolve(true),
+      store: () => Promise.resolve(),
+      // @ts-expect-error -- deliberately violating the HostSecretBackend contract to test the Rust-side guard
+      retrieve: () => Promise.resolve('not-a-uint8array'),
+      delete: () => Promise.resolve(),
+      exists: () => Promise.resolve(true),
+    }
+    await assert.rejects(() => bindings.__testJsSecretBackendRetrieve(backend, 'id'))
+  })
+
+  it('exists() rejects a non-boolean result instead of defaulting to false', async () => {
+    const bindings = await loadDiagnosticBindings()
+    const backend: HostSecretBackend = {
+      ...baseSecretBackendFields(),
+      isAvailable: () => Promise.resolve(true),
+      store: () => Promise.resolve(),
+      retrieve: () => Promise.resolve(new Uint8Array()),
+      delete: () => Promise.resolve(),
+      // @ts-expect-error -- deliberately violating the HostSecretBackend contract to test the Rust-side guard
+      exists: () => Promise.resolve('true'),
+    }
+    await assert.rejects(() => bindings.__testJsSecretBackendExists(backend, 'id'))
+  })
+
+  it('list() rejects a non-array result instead of throwing or silently returning []', async () => {
+    const bindings = await loadDiagnosticBindings()
+    const backend: HostSecretBackend = {
+      ...baseSecretBackendFields(),
+      isAvailable: () => Promise.resolve(true),
+      store: () => Promise.resolve(),
+      retrieve: () => Promise.resolve(new Uint8Array()),
+      delete: () => Promise.resolve(),
+      exists: () => Promise.resolve(true),
+      // @ts-expect-error -- deliberately violating the HostSecretBackend contract to test the Rust-side guard
+      list: () => Promise.resolve(42),
+    }
+    await assert.rejects(() => bindings.__testJsSecretBackendList(backend))
+  })
+
+  it('list() rejects an array containing a non-string entry instead of silently dropping it', async () => {
+    const bindings = await loadDiagnosticBindings()
+    const backend: HostSecretBackend = {
+      ...baseSecretBackendFields(),
+      isAvailable: () => Promise.resolve(true),
+      store: () => Promise.resolve(),
+      retrieve: () => Promise.resolve(new Uint8Array()),
+      delete: () => Promise.resolve(),
+      exists: () => Promise.resolve(true),
+      // @ts-expect-error -- deliberately violating the HostSecretBackend contract (list() must resolve string[]) to test the Rust-side guard
+      list: () => Promise.resolve(['good-id', 42, 'other-good-id']),
+    }
+    await assert.rejects(() => bindings.__testJsSecretBackendList(backend))
+  })
+})
+
+describe('__testHttpFetch — rejects a malformed request.body (js_value_to_http_request)', () => {
+  it('rejects a non-Uint8Array request.body instead of coercing it', async () => {
+    const bindings = await loadDiagnosticBindings()
+    const host = {
+      ...baseHost(),
+      httpFetch: () => Promise.reject(new Error('should not be called')),
+    }
+    await assert.rejects(() =>
+      bindings.__testHttpFetch(host, {
+        method: 'GET',
+        url: 'https://example.test/x',
+        headers: {},
+        body: 'not-bytes',
+      }),
+    )
   })
 })

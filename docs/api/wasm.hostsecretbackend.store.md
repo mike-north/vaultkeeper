@@ -4,6 +4,8 @@
 
 ## HostSecretBackend.store() method
 
+Store `secret`<!-- -->, a \*\*UTF-8 encoded\*\* byte payload — the Rust core's `SecretBackend` trait this contract mirrors is `&str`<!-- -->/`String`<!-- -->-based, so `JsSecretBackend` (`crates/vaultkeeper-wasm/src/wasm_impl.rs`<!-- -->) decodes these bytes as UTF-8 on the way in. `Uint8Array` is used here (rather than a JS `string`<!-- -->) only to keep the boundary encoding-agnostic and `Buffer`<!-- -->-free; it is not a license to store arbitrary binary data. Non-UTF-8 bytes are rejected at the boundary, not silently mangled.
+
 **Signature:**
 
 ```typescript

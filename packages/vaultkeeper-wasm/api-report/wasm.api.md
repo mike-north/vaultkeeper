@@ -132,11 +132,9 @@ export interface HostSecretBackend {
     isAvailable(): Promise<boolean>;
     // (undocumented)
     list?(): Promise<string[]>;
-    // (undocumented)
     retrieve(id: string): Promise<Uint8Array>;
     // (undocumented)
     signWithKey?(name: string, data: Uint8Array): Promise<Uint8Array>;
-    // (undocumented)
     store(id: string, secret: Uint8Array): Promise<void>;
     // (undocumented)
     readonly type: string;

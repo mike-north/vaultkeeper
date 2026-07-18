@@ -539,6 +539,10 @@ function __wbg_get_imports() {
             const ret = result;
             return ret;
         },
+        __wbg_isArray_33b91feb269ff46e: function(arg0) {
+            const ret = Array.isArray(arg0);
+            return ret;
+        },
         __wbg_keys_ab0d051a1c55236d: function(arg0) {
             const ret = Object.keys(arg0);
             return ret;

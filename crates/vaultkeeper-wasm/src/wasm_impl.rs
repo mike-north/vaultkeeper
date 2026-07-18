@@ -615,10 +615,18 @@ fn js_value_to_http_request(request: &JsValue) -> Result<HttpRequest, JsError> {
         }
     }
 
-    let body = Reflect::get(request, &JsValue::from_str("body"))
-        .ok()
-        .filter(|v| !v.is_undefined() && !v.is_null())
-        .map(|v| Uint8Array::new(&v).to_vec());
+    // Check the real type via `dyn_ref` rather than handing a possibly
+    // non-Uint8Array value blind to `Uint8Array::new`, which either coerces
+    // it into misleading bytes or throws inside the JS constructor.
+    let body = match Reflect::get(request, &JsValue::from_str("body")).ok() {
+        Some(v) if !v.is_undefined() && !v.is_null() => {
+            let arr = v
+                .dyn_ref::<Uint8Array>()
+                .ok_or_else(|| JsError::new("request.body must be a Uint8Array"))?;
+            Some(arr.to_vec())
+        }
+        _ => None,
+    };
 
     Ok(HttpRequest {
         method,
@@ -749,7 +757,15 @@ impl SecretBackend for JsSecretBackend {
             .await
             .map_err(|e| js_err(&format!("retrieve() promise rejected: {e:?}")))?;
 
-        let bytes = Uint8Array::new(&result).to_vec();
+        // Check the real type via `dyn_ref` rather than handing a possibly
+        // non-Uint8Array result blind to `Uint8Array::new`, which either
+        // coerces it into misleading bytes or throws inside the JS
+        // constructor — a host contract violation should fail loudly with a
+        // typed VaultError, not corrupt data or crash.
+        let bytes = result
+            .dyn_ref::<Uint8Array>()
+            .ok_or_else(|| js_err("retrieve() did not resolve to a Uint8Array"))?
+            .to_vec();
         String::from_utf8(bytes)
             .map_err(|e| VaultError::Other(format!("retrieve() returned non-UTF-8 bytes: {e}")))
     }
@@ -781,7 +797,12 @@ impl SecretBackend for JsSecretBackend {
             .await
             .map_err(|e| js_err(&format!("exists() promise rejected: {e:?}")))?;
 
-        Ok(result.as_bool().unwrap_or(false))
+        // A non-boolean result is a host contract violation, not a "does not
+        // exist" answer — defaulting it to `false` (via `unwrap_or`) would
+        // mask a broken host implementation as a normal negative result.
+        result
+            .as_bool()
+            .ok_or_else(|| js_err("exists() did not resolve to a boolean"))
     }
 }
 
@@ -805,12 +826,24 @@ impl ListableBackend for JsSecretBackend {
             .await
             .map_err(|e| js_err(&format!("list() promise rejected: {e:?}")))?;
 
+        // `js_sys::Array::from` on a non-array-like/non-iterable value (e.g.
+        // `undefined`, a plain number) throws inside the JS call rather than
+        // returning an empty array, and even a genuine array with non-string
+        // entries would otherwise have those entries silently dropped below
+        // — check `Array.isArray()` first and reject every entry's type
+        // explicitly, so a host contract violation fails loudly instead of
+        // crashing or producing a partial/incorrect list.
+        if !js_sys::Array::is_array(&result) {
+            return Err(js_err("list() did not resolve to an array"));
+        }
         let arr = js_sys::Array::from(&result);
-        let mut ids = Vec::new();
+        let mut ids = Vec::with_capacity(arr.length() as usize);
         for i in 0..arr.length() {
-            if let Some(s) = arr.get(i).as_string() {
-                ids.push(s);
-            }
+            let s = arr
+                .get(i)
+                .as_string()
+                .ok_or_else(|| js_err("list() array contained a non-string entry"))?;
+            ids.push(s);
         }
         Ok(ids)
     }

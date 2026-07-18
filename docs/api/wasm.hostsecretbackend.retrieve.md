@@ -4,6 +4,8 @@
 
 ## HostSecretBackend.retrieve() method
 
+Retrieve the secret stored under `id`<!-- -->, encoded the same way `store` was called — UTF-8 bytes, not arbitrary binary. A non-UTF-8 result surfaces as an error rather than producing corrupted text.
+
 **Signature:**
 
 ```typescript
