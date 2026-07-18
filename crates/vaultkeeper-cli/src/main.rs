@@ -9,8 +9,9 @@ use host::NativeHostPlatform;
 use std::io::{self, Read};
 use std::path::PathBuf;
 use std::sync::Arc;
-use vaultkeeper_core::backend::{FileBackend, HostPlatform, SecretBackend};
+use vaultkeeper_core::backend::{FileBackend, HostPlatform, PresenceOperation, SecretBackend};
 use vaultkeeper_core::config;
+use vaultkeeper_core::vault::enforce_presence_requirement;
 
 #[derive(Parser)]
 #[command(
@@ -57,12 +58,22 @@ enum Commands {
         /// Secret name
         #[arg(long)]
         name: String,
+        /// Require the active backend to force a fresh, per-use human presence
+        /// action for this store. Refuses with a `NotCapable` error — before
+        /// the backend is touched — if it cannot guarantee one.
+        #[arg(long)]
+        require_presence_per_use: bool,
     },
     /// Delete a secret
     Delete {
         /// Secret name
         #[arg(long)]
         name: String,
+        /// Require the active backend to force a fresh, per-use human presence
+        /// action for this delete. Refuses with a `NotCapable` error — before
+        /// the backend is touched — if it cannot guarantee one.
+        #[arg(long)]
+        require_presence_per_use: bool,
     },
     /// Manage configuration
     Config {
@@ -98,8 +109,14 @@ async fn main() {
             0
         }
         Some(cmd) => match cmd {
-            Commands::Store { name } => cmd_store(&name).await,
-            Commands::Delete { name } => cmd_delete(&name).await,
+            Commands::Store {
+                name,
+                require_presence_per_use,
+            } => cmd_store(&name, require_presence_per_use).await,
+            Commands::Delete {
+                name,
+                require_presence_per_use,
+            } => cmd_delete(&name, require_presence_per_use).await,
             Commands::Exec { token, command } => cmd_exec(&token, &command).await,
             Commands::Doctor => cmd_doctor().await,
             Commands::Approve { path } => cmd_approve(&path).await,
@@ -118,7 +135,7 @@ fn print_help() {
     Cli::command().print_help().ok();
 }
 
-async fn cmd_store(name: &str) -> i32 {
+async fn cmd_store(name: &str, require_presence_per_use: bool) -> i32 {
     // Read secret from stdin
     let mut secret = String::new();
     if let Err(e) = io::stdin().read_to_string(&mut secret) {
@@ -135,6 +152,20 @@ async fn cmd_store(name: &str) -> i32 {
     let host = make_host();
     let backend = FileBackend::new(host.clone());
 
+    // Non-bypassable presence gate (issue #242): refuses before the backend is
+    // ever touched when the flag is set and the active backend can't force a
+    // fresh per-use action for `store`. A no-op when the flag is unset.
+    if let Err(e) = enforce_presence_requirement(
+        &backend,
+        PresenceOperation::Store,
+        Some(require_presence_per_use),
+    )
+    .await
+    {
+        eprintln!("Error: {e}");
+        return 1;
+    }
+
     if let Err(e) = backend.store(name, secret).await {
         eprintln!("Error: {e}");
         return 1;
@@ -144,9 +175,21 @@ async fn cmd_store(name: &str) -> i32 {
     0
 }
 
-async fn cmd_delete(name: &str) -> i32 {
+async fn cmd_delete(name: &str, require_presence_per_use: bool) -> i32 {
     let host = make_host();
     let backend = FileBackend::new(host);
+
+    // Non-bypassable presence gate (issue #242): see cmd_store.
+    if let Err(e) = enforce_presence_requirement(
+        &backend,
+        PresenceOperation::Delete,
+        Some(require_presence_per_use),
+    )
+    .await
+    {
+        eprintln!("Error: {e}");
+        return 1;
+    }
 
     match backend.delete(name).await {
         Ok(()) => {}

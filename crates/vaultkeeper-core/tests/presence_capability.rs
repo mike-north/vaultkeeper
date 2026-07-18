@@ -379,9 +379,10 @@ async fn timed_out_presence_action_surfaces_presence_timeout() {
 
 #[tokio::test]
 async fn two_consecutive_required_presence_operations_each_demand_a_distinct_fresh_action() {
-    // Non-bypassability (mirrors the TS AC6 test): only ONE fresh action is
-    // primed, so the second operation must not be satisfied by the first's
-    // resolution or any cached material.
+    // Non-bypassability (mirrors the TS reference's "non-bypassability across
+    // consecutive operations" test in presence-enforcement.test.ts): only ONE
+    // fresh action is primed, so the second operation must not be satisfied
+    // by the first's resolution or any cached material.
     let backend = MockPresenceBackend::new(true);
     backend.arm(PresenceResponse::Approve, 1);
 
