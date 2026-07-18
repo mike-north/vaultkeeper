@@ -11,6 +11,7 @@ pub mod errors;
 pub mod identity;
 pub mod jwe;
 pub mod keys;
+pub mod signing;
 pub mod types;
 pub(crate) mod util;
 pub mod vault;
@@ -23,7 +24,7 @@ pub use backend::{
 pub use errors::{ExecutableTrustRequiredReason, VaultError};
 pub use types::{
     BackendConfig, ExecRequest, ExecResult, FetchRequest, KeyStatus, PreflightCheck,
-    PreflightCheckStatus, PreflightResult, ScopedPreflightCheck, SecretAccessor, SignRequest,
-    SignResult, TrustTier, VaultClaims, VaultConfig, VaultResponse, VerifyRequest,
+    PreflightCheckStatus, PreflightResult, ScopedPreflightCheck, SecretAccessor, SigningAlgorithm,
+    SigningPublicKey, TrustTier, VaultClaims, VaultConfig, VaultResponse, VerifyRequest,
 };
 pub use vault::{VaultKeeper, enforce_presence_requirement};

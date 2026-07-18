@@ -1,6 +1,7 @@
 //! Backend trait definitions and host platform abstraction.
 
 use crate::errors::VaultError;
+use crate::types::{SigningAlgorithm, SigningPublicKey};
 use std::path::Path;
 
 /// Output from a subprocess execution.
@@ -317,4 +318,50 @@ pub async fn get_backend_capabilities(
         Some(capable) => capable.get_capabilities().await,
         None => Ok(BackendCapabilities::none()),
     }
+}
+
+/// Backend that can enroll and use signing keys entirely on its own side.
+///
+/// Signing keys are a distinct resource from secrets: a private key must
+/// never flow through [`SecretBackend::store`]/[`SecretBackend::retrieve`] or
+/// a capability token's claims. A signing backend generates the keypair,
+/// exposes only the public half, and performs the signature itself — the
+/// private key never leaves the backend. This is what keeps a key out of any
+/// JWE claims token, and it is what lets [`crate::signing::create_detached_jws`]
+/// assemble a JWS without ever seeing key material: it calls
+/// [`SigningBackend::sign_with_key`] and only ever handles the resulting
+/// signature bytes.
+///
+/// Implementations must keep signing keys in a namespace that cannot collide
+/// with or be read as ordinary secrets. Mirrors the TypeScript
+/// `SigningBackend` (`packages/vaultkeeper/src/backend/types.ts`).
+#[cfg_attr(target_arch = "wasm32", async_trait::async_trait(?Send))]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait::async_trait)]
+pub trait SigningBackend: SecretBackend {
+    /// Enroll a new signing keypair under `id`.
+    ///
+    /// # Errors
+    /// Returns [`VaultError::SigningKeyAlreadyExists`] if a signing key
+    /// already exists under `id`, or [`VaultError::InvalidAlgorithm`] if
+    /// `algorithm` is not supported by this backend.
+    async fn generate_signing_key(
+        &self,
+        id: &str,
+        algorithm: SigningAlgorithm,
+    ) -> Result<(), VaultError>;
+
+    /// Return the public half of the signing key stored under `id`.
+    ///
+    /// # Errors
+    /// Returns [`VaultError::SigningKeyNotFound`] if no signing key exists
+    /// under `id`.
+    async fn get_public_key(&self, id: &str) -> Result<SigningPublicKey, VaultError>;
+
+    /// Sign `data` with the private key stored under `id`, returning the raw
+    /// signature bytes. The private key never leaves the backend.
+    ///
+    /// # Errors
+    /// Returns [`VaultError::SigningKeyNotFound`] if no signing key exists
+    /// under `id`.
+    async fn sign_with_key(&self, id: &str, data: &[u8]) -> Result<Vec<u8>, VaultError>;
 }
