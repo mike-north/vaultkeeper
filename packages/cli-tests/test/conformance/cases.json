@@ -11,7 +11,8 @@
     },
     "expectedStderr": {
       "type": "Any"
-    }
+    },
+    "expectedConfigFile": null
   },
   {
     "name": "help flag prints help and exits 0",
@@ -27,7 +28,8 @@
     },
     "expectedStderr": {
       "type": "Any"
-    }
+    },
+    "expectedConfigFile": null
   },
   {
     "name": "short help flag prints help and exits 0",
@@ -43,7 +45,8 @@
     },
     "expectedStderr": {
       "type": "Any"
-    }
+    },
+    "expectedConfigFile": null
   },
   {
     "name": "version flag prints version",
@@ -59,7 +62,8 @@
     },
     "expectedStderr": {
       "type": "Any"
-    }
+    },
+    "expectedConfigFile": null
   },
   {
     "name": "help lists all expected commands",
@@ -75,7 +79,8 @@
     },
     "expectedStderr": {
       "type": "Any"
-    }
+    },
+    "expectedConfigFile": null
   },
   {
     "name": "unknown command exits with error",
@@ -91,7 +96,8 @@
     "expectedStderr": {
       "type": "Contains",
       "value": "error"
-    }
+    },
+    "expectedConfigFile": null
   },
   {
     "name": "store requires --name",
@@ -107,7 +113,8 @@
     "expectedStderr": {
       "type": "Contains",
       "value": "--name"
-    }
+    },
+    "expectedConfigFile": null
   },
   {
     "name": "delete requires --name",
@@ -123,7 +130,8 @@
     "expectedStderr": {
       "type": "Contains",
       "value": "--name"
-    }
+    },
+    "expectedConfigFile": null
   },
   {
     "name": "exec requires --token",
@@ -139,7 +147,8 @@
     "expectedStderr": {
       "type": "Contains",
       "value": "--token"
-    }
+    },
+    "expectedConfigFile": null
   },
   {
     "name": "approve requires --path",
@@ -155,7 +164,8 @@
     "expectedStderr": {
       "type": "Contains",
       "value": "--path"
-    }
+    },
+    "expectedConfigFile": null
   },
   {
     "name": "dev-mode requires --path",
@@ -171,7 +181,8 @@
     "expectedStderr": {
       "type": "Contains",
       "value": "--path"
-    }
+    },
+    "expectedConfigFile": null
   },
   {
     "name": "config with no subcommand exits 2",
@@ -186,7 +197,8 @@
     },
     "expectedStderr": {
       "type": "Any"
-    }
+    },
+    "expectedConfigFile": null
   },
   {
     "name": "store succeeds with valid secret",
@@ -204,7 +216,8 @@
     },
     "expectedStderr": {
       "type": "Any"
-    }
+    },
+    "expectedConfigFile": null
   },
   {
     "name": "store exits 1 when stdin is empty",
@@ -222,7 +235,8 @@
     "expectedStderr": {
       "type": "Contains",
       "value": "No secret provided"
-    }
+    },
+    "expectedConfigFile": null
   },
   {
     "name": "delete succeeds",
@@ -240,10 +254,11 @@
     },
     "expectedStderr": {
       "type": "Any"
-    }
+    },
+    "expectedConfigFile": null
   },
   {
-    "name": "config init creates config when none exists",
+    "name": "config init writes the 'file' backend as the zero-config default (#98)",
     "command": [
       "config",
       "init"
@@ -257,6 +272,16 @@
     },
     "expectedStderr": {
       "type": "Any"
+    },
+    "expectedConfigFile": {
+      "type": "JsonContains",
+      "value": {
+        "backends": [
+          {
+            "type": "file"
+          }
+        ]
+      }
     }
   },
   {
@@ -274,7 +299,8 @@
     },
     "expectedStderr": {
       "type": "Any"
-    }
+    },
+    "expectedConfigFile": null
   },
   {
     "name": "config show exits 1 when no config exists",
@@ -290,8 +316,9 @@
     },
     "expectedStderr": {
       "type": "Contains",
-      "value": "Error"
-    }
+      "value": "Error: No config file found. Run 'vaultkeeper config init' to create one."
+    },
+    "expectedConfigFile": null
   },
   {
     "name": "config init exits 1 when config already exists",
@@ -307,8 +334,9 @@
     },
     "expectedStderr": {
       "type": "Contains",
-      "value": "already exists"
-    }
+      "value": "Error: Config already exists at"
+    },
+    "expectedConfigFile": null
   },
   {
     "name": "doctor produces output",
@@ -323,7 +351,8 @@
     },
     "expectedStderr": {
       "type": "Any"
-    }
+    },
+    "expectedConfigFile": null
   },
   {
     "name": "rotate-key succeeds with valid config",
@@ -339,7 +368,8 @@
     },
     "expectedStderr": {
       "type": "Any"
-    }
+    },
+    "expectedConfigFile": null
   },
   {
     "name": "revoke-key succeeds with valid config",
@@ -355,7 +385,8 @@
     },
     "expectedStderr": {
       "type": "Any"
-    }
+    },
+    "expectedConfigFile": null
   },
   {
     "name": "approve succeeds for existing file",
@@ -373,7 +404,8 @@
     },
     "expectedStderr": {
       "type": "Any"
-    }
+    },
+    "expectedConfigFile": null
   },
   {
     "name": "dev-mode enable succeeds",
@@ -392,7 +424,8 @@
     },
     "expectedStderr": {
       "type": "Any"
-    }
+    },
+    "expectedConfigFile": null
   },
   {
     "name": "dev-mode disable succeeds",
@@ -410,6 +443,7 @@
     },
     "expectedStderr": {
       "type": "Any"
-    }
+    },
+    "expectedConfigFile": null
   }
 ]

@@ -50,6 +50,13 @@ pub struct ConformanceCase {
     pub expected_stdout: OutputMatcher,
     /// Expected stderr pattern.
     pub expected_stderr: OutputMatcher,
+    /// Optional check against the contents of `config.json` in the config
+    /// dir after the command runs. `None` skips the check. Used for cases
+    /// that must assert on persisted config content rather than stdout/stderr
+    /// (e.g. verifying the zero-config default backend written by `config
+    /// init` — see #98 / #235).
+    #[serde(default)]
+    pub expected_config_file: Option<OutputMatcher>,
 }
 
 // ─── Help and usage cases ────────────────────────────────────────
@@ -64,6 +71,7 @@ fn help_cases() -> Vec<ConformanceCase> {
             expected_exit_code: 0,
             expected_stdout: OutputMatcher::Contains("vaultkeeper".into()),
             expected_stderr: OutputMatcher::Any,
+            expected_config_file: None,
         },
         ConformanceCase {
             name: "help flag prints help and exits 0".into(),
@@ -73,6 +81,7 @@ fn help_cases() -> Vec<ConformanceCase> {
             expected_exit_code: 0,
             expected_stdout: OutputMatcher::Contains("vaultkeeper".into()),
             expected_stderr: OutputMatcher::Any,
+            expected_config_file: None,
         },
         ConformanceCase {
             name: "short help flag prints help and exits 0".into(),
@@ -82,6 +91,7 @@ fn help_cases() -> Vec<ConformanceCase> {
             expected_exit_code: 0,
             expected_stdout: OutputMatcher::Contains("vaultkeeper".into()),
             expected_stderr: OutputMatcher::Any,
+            expected_config_file: None,
         },
         ConformanceCase {
             name: "version flag prints version".into(),
@@ -91,6 +101,7 @@ fn help_cases() -> Vec<ConformanceCase> {
             expected_exit_code: 0,
             expected_stdout: OutputMatcher::Contains("vaultkeeper".into()),
             expected_stderr: OutputMatcher::Any,
+            expected_config_file: None,
         },
         ConformanceCase {
             name: "help lists all expected commands".into(),
@@ -102,6 +113,7 @@ fn help_cases() -> Vec<ConformanceCase> {
                 "(?s)exec.*doctor.*approve.*dev-mode.*store.*delete.*config.*rotate-key.*revoke-key".into(),
             ),
             expected_stderr: OutputMatcher::Any,
+            expected_config_file: None,
         },
     ]
 }
@@ -117,6 +129,7 @@ fn error_cases() -> Vec<ConformanceCase> {
         expected_exit_code: 2,
         expected_stdout: OutputMatcher::Any,
         expected_stderr: OutputMatcher::Contains("error".into()),
+        expected_config_file: None,
     }]
 }
 
@@ -132,6 +145,7 @@ fn argument_validation_cases() -> Vec<ConformanceCase> {
             expected_exit_code: 2,
             expected_stdout: OutputMatcher::Any,
             expected_stderr: OutputMatcher::Contains("--name".into()),
+            expected_config_file: None,
         },
         ConformanceCase {
             name: "delete requires --name".into(),
@@ -141,6 +155,7 @@ fn argument_validation_cases() -> Vec<ConformanceCase> {
             expected_exit_code: 2,
             expected_stdout: OutputMatcher::Any,
             expected_stderr: OutputMatcher::Contains("--name".into()),
+            expected_config_file: None,
         },
         ConformanceCase {
             name: "exec requires --token".into(),
@@ -150,6 +165,7 @@ fn argument_validation_cases() -> Vec<ConformanceCase> {
             expected_exit_code: 2,
             expected_stdout: OutputMatcher::Any,
             expected_stderr: OutputMatcher::Contains("--token".into()),
+            expected_config_file: None,
         },
         ConformanceCase {
             name: "approve requires --path".into(),
@@ -159,6 +175,7 @@ fn argument_validation_cases() -> Vec<ConformanceCase> {
             expected_exit_code: 2,
             expected_stdout: OutputMatcher::Any,
             expected_stderr: OutputMatcher::Contains("--path".into()),
+            expected_config_file: None,
         },
         ConformanceCase {
             name: "dev-mode requires --path".into(),
@@ -168,6 +185,7 @@ fn argument_validation_cases() -> Vec<ConformanceCase> {
             expected_exit_code: 2,
             expected_stdout: OutputMatcher::Any,
             expected_stderr: OutputMatcher::Contains("--path".into()),
+            expected_config_file: None,
         },
         ConformanceCase {
             name: "config with no subcommand exits 2".into(),
@@ -177,6 +195,7 @@ fn argument_validation_cases() -> Vec<ConformanceCase> {
             expected_exit_code: 2,
             expected_stdout: OutputMatcher::Any,
             expected_stderr: OutputMatcher::Any,
+            expected_config_file: None,
         },
     ]
 }
@@ -193,6 +212,7 @@ fn store_delete_cases() -> Vec<ConformanceCase> {
             expected_exit_code: 0,
             expected_stdout: OutputMatcher::Contains("stored successfully".into()),
             expected_stderr: OutputMatcher::Any,
+            expected_config_file: None,
         },
         ConformanceCase {
             name: "store exits 1 when stdin is empty".into(),
@@ -202,6 +222,7 @@ fn store_delete_cases() -> Vec<ConformanceCase> {
             expected_exit_code: 1,
             expected_stdout: OutputMatcher::Any,
             expected_stderr: OutputMatcher::Contains("No secret provided".into()),
+            expected_config_file: None,
         },
         ConformanceCase {
             name: "delete succeeds".into(),
@@ -211,6 +232,7 @@ fn store_delete_cases() -> Vec<ConformanceCase> {
             expected_exit_code: 0,
             expected_stdout: OutputMatcher::Contains("deleted".into()),
             expected_stderr: OutputMatcher::Any,
+            expected_config_file: None,
         },
     ]
 }
@@ -220,13 +242,20 @@ fn store_delete_cases() -> Vec<ConformanceCase> {
 fn config_cases() -> Vec<ConformanceCase> {
     vec![
         ConformanceCase {
-            name: "config init creates config when none exists".into(),
+            // Regression coverage for #98 / #235: in a fresh, config-less
+            // environment the zero-config default written to disk must be
+            // the 'file' backend on every platform, never a platform-native
+            // keychain/dpapi store.
+            name: "config init writes the 'file' backend as the zero-config default (#98)".into(),
             command: vec!["config".into(), "init".into()],
             stdin: None,
             needs_config: false,
             expected_exit_code: 0,
             expected_stdout: OutputMatcher::Contains("created".into()),
             expected_stderr: OutputMatcher::Any,
+            expected_config_file: Some(OutputMatcher::JsonContains(serde_json::json!({
+                "backends": [{ "type": "file" }]
+            }))),
         },
         ConformanceCase {
             name: "config show outputs valid JSON with version".into(),
@@ -236,6 +265,7 @@ fn config_cases() -> Vec<ConformanceCase> {
             expected_exit_code: 0,
             expected_stdout: OutputMatcher::Contains("\"version\"".into()),
             expected_stderr: OutputMatcher::Any,
+            expected_config_file: None,
         },
         ConformanceCase {
             name: "config show exits 1 when no config exists".into(),
@@ -247,6 +277,7 @@ fn config_cases() -> Vec<ConformanceCase> {
             expected_stderr: OutputMatcher::Contains(
                 "Error: No config file found. Run 'vaultkeeper config init' to create one.".into(),
             ),
+            expected_config_file: None,
         },
         ConformanceCase {
             name: "config init exits 1 when config already exists".into(),
@@ -256,6 +287,7 @@ fn config_cases() -> Vec<ConformanceCase> {
             expected_exit_code: 1,
             expected_stdout: OutputMatcher::Any,
             expected_stderr: OutputMatcher::Contains("Error: Config already exists at".into()),
+            expected_config_file: None,
         },
     ]
 }
@@ -272,6 +304,7 @@ fn doctor_cases() -> Vec<ConformanceCase> {
         expected_exit_code: -1, // -1 = don't check exit code
         expected_stdout: OutputMatcher::Any,
         expected_stderr: OutputMatcher::Any,
+        expected_config_file: None,
     }]
 }
 
@@ -286,6 +319,7 @@ fn rotate_key_cases() -> Vec<ConformanceCase> {
         expected_exit_code: 0,
         expected_stdout: OutputMatcher::Contains("rotated successfully".into()),
         expected_stderr: OutputMatcher::Any,
+        expected_config_file: None,
     }]
 }
 
@@ -305,6 +339,7 @@ fn approve_cases() -> Vec<ConformanceCase> {
         expected_exit_code: 0,
         expected_stdout: OutputMatcher::Contains("Approved".into()),
         expected_stderr: OutputMatcher::Any,
+        expected_config_file: None,
     }]
 }
 
@@ -325,6 +360,7 @@ fn dev_mode_cases() -> Vec<ConformanceCase> {
             expected_exit_code: 0,
             expected_stdout: OutputMatcher::Contains("enabled".into()),
             expected_stderr: OutputMatcher::Any,
+            expected_config_file: None,
         },
         ConformanceCase {
             name: "dev-mode disable succeeds".into(),
@@ -338,6 +374,7 @@ fn dev_mode_cases() -> Vec<ConformanceCase> {
             expected_exit_code: 0,
             expected_stdout: OutputMatcher::Contains("disabled".into()),
             expected_stderr: OutputMatcher::Any,
+            expected_config_file: None,
         },
     ]
 }
@@ -353,6 +390,7 @@ fn revoke_key_cases() -> Vec<ConformanceCase> {
         expected_exit_code: 0,
         expected_stdout: OutputMatcher::Contains("revoked successfully".into()),
         expected_stderr: OutputMatcher::Any,
+        expected_config_file: None,
     }]
 }
 

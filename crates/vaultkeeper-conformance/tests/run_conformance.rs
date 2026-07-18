@@ -45,9 +45,9 @@ fn default_config_json() -> String {
 /// Run a single conformance case and return a detailed error message on failure.
 fn run_case(case: &ConformanceCase, bin: &std::path::Path) -> Result<(), String> {
     let dir = TempDir::new().map_err(|e| format!("failed to create temp dir: {e}"))?;
+    let config_path = dir.path().join("config.json");
 
     if case.needs_config {
-        let config_path = dir.path().join("config.json");
         fs::write(&config_path, default_config_json())
             .map_err(|e| format!("failed to write config: {e}"))?;
     }
@@ -89,15 +89,19 @@ fn run_case(case: &ConformanceCase, bin: &std::path::Path) -> Result<(), String>
             .wait_with_output()
             .map_err(|e| format!("failed to wait: {e}"))?;
 
-        check_output(case, &output)
+        check_output(case, &output, &config_path)
     } else {
         cmd.stdin(std::process::Stdio::null());
         let output = cmd.output().map_err(|e| format!("failed to run: {e}"))?;
-        check_output(case, &output)
+        check_output(case, &output, &config_path)
     }
 }
 
-fn check_output(case: &ConformanceCase, output: &std::process::Output) -> Result<(), String> {
+fn check_output(
+    case: &ConformanceCase,
+    output: &std::process::Output,
+    config_path: &std::path::Path,
+) -> Result<(), String> {
     let exit_code = output.status.code().unwrap_or(-1);
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -126,6 +130,22 @@ fn check_output(case: &ConformanceCase, output: &std::process::Output) -> Result
             case.expected_stderr,
             stderr.chars().take(200).collect::<String>()
         ));
+    }
+
+    if let Some(ref matcher) = case.expected_config_file {
+        match fs::read_to_string(config_path) {
+            Ok(content) => {
+                if !matches_output(matcher, &content) {
+                    errors.push(format!(
+                        "config file mismatch: expected {matcher:?}, got {:?}",
+                        content.chars().take(300).collect::<String>()
+                    ));
+                }
+            }
+            Err(e) => {
+                errors.push(format!("failed to read config file: {e}"));
+            }
+        }
     }
 
     if errors.is_empty() {
