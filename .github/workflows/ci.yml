@@ -78,6 +78,7 @@ jobs:
         run: |
           curl -sSfL -o /tmp/wasm-pack.tar.gz \
             "https://github.com/wasm-bindgen/wasm-pack/releases/download/v${WASM_PACK_VERSION}/wasm-pack-v${WASM_PACK_VERSION}-x86_64-unknown-linux-musl.tar.gz"
+          echo "${WASM_PACK_SHA256}  /tmp/wasm-pack.tar.gz" | sha256sum -c -
           tar -xzf /tmp/wasm-pack.tar.gz -C /tmp
           # Install into a guaranteed user-writable directory rather than
           # /usr/local/bin, which is not writable by the default runner user
@@ -93,6 +94,7 @@ jobs:
         run: |
           curl -sSfL -o /tmp/binaryen.tar.gz \
             "https://github.com/WebAssembly/binaryen/releases/download/version_${BINARYEN_VERSION}/binaryen-version_${BINARYEN_VERSION}-x86_64-linux.tar.gz"
+          echo "${BINARYEN_SHA256}  /tmp/binaryen.tar.gz" | sha256sum -c -
           tar -xzf /tmp/binaryen.tar.gz -C /tmp
           echo "/tmp/binaryen-version_${BINARYEN_VERSION}/bin" >> "$GITHUB_PATH"
 
@@ -143,21 +145,32 @@ jobs:
           if-no-files-found: ignore
 
       - name: Enforce gzip size budget
+        # The committed artifact is what ships to consumers, so the budget is
+        # enforced on it — not only on the fresh CI rebuild. The rebuild is
+        # checked too: it is what the *next* regeneration would commit, so a
+        # toolchain bump that balloons the output fails here before anyone
+        # commits the result. pipefail keeps a failed `gzip -9 -c` from
+        # letting `wc -c` report a bogus tiny size that silently passes.
         run: |
-          rebuilt=/tmp/wasm-rebuild/vaultkeeper_wasm_bg.wasm
-          uncompressed=$(wc -c < "$rebuilt")
-          gzip_size=$(gzip -9 -c "$rebuilt" | wc -c)
-          echo "uncompressed: ${uncompressed} bytes (budget ${WASM_UNCOMPRESSED_BUDGET_BYTES})"
-          echo "gzip:         ${gzip_size} bytes (budget ${WASM_GZIP_BUDGET_BYTES})"
+          set -o pipefail
           status=0
-          if [ "$uncompressed" -gt "$WASM_UNCOMPRESSED_BUDGET_BYTES" ]; then
-            echo "::error::Uncompressed wasm artifact ${uncompressed} bytes exceeds budget ${WASM_UNCOMPRESSED_BUDGET_BYTES} bytes. If this growth is intentional, adjust WASM_UNCOMPRESSED_BUDGET_BYTES in crates/vaultkeeper-wasm/wasm-toolchain.env."
-            status=1
-          fi
-          if [ "$gzip_size" -gt "$WASM_GZIP_BUDGET_BYTES" ]; then
-            echo "::error::Gzipped wasm artifact ${gzip_size} bytes exceeds budget ${WASM_GZIP_BUDGET_BYTES} bytes. If this growth is intentional, adjust WASM_GZIP_BUDGET_BYTES in crates/vaultkeeper-wasm/wasm-toolchain.env."
-            status=1
-          fi
+          for artifact in \
+            packages/vaultkeeper-wasm/wasm/vaultkeeper_wasm_bg.wasm \
+            /tmp/wasm-rebuild/vaultkeeper_wasm_bg.wasm; do
+            uncompressed=$(wc -c < "$artifact")
+            gzip_size=$(gzip -9 -c "$artifact" | wc -c)
+            echo "${artifact}:"
+            echo "  uncompressed: ${uncompressed} bytes (budget ${WASM_UNCOMPRESSED_BUDGET_BYTES})"
+            echo "  gzip:         ${gzip_size} bytes (budget ${WASM_GZIP_BUDGET_BYTES})"
+            if [ "$uncompressed" -gt "$WASM_UNCOMPRESSED_BUDGET_BYTES" ]; then
+              echo "::error::Uncompressed wasm artifact ${artifact} (${uncompressed} bytes) exceeds budget ${WASM_UNCOMPRESSED_BUDGET_BYTES} bytes. If this growth is intentional, adjust WASM_UNCOMPRESSED_BUDGET_BYTES in crates/vaultkeeper-wasm/wasm-toolchain.env."
+              status=1
+            fi
+            if [ "$gzip_size" -gt "$WASM_GZIP_BUDGET_BYTES" ]; then
+              echo "::error::Gzipped wasm artifact ${artifact} (${gzip_size} bytes) exceeds budget ${WASM_GZIP_BUDGET_BYTES} bytes. If this growth is intentional, adjust WASM_GZIP_BUDGET_BYTES in crates/vaultkeeper-wasm/wasm-toolchain.env."
+              status=1
+            fi
+          done
           exit $status
 
   typescript:
