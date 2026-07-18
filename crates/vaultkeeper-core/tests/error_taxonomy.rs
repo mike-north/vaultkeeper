@@ -333,3 +333,55 @@ fn field_less_variants_produce_no_extra_fields() {
         );
     }
 }
+
+/// Regression test for the `u64` → JS `number` boundary (review of #251):
+/// a `timeout_ms` beyond JS's 2^53 - 1 safe-integer range cannot cross the
+/// bridge exactly, so `vault_error_fields` must omit `timeoutMs` entirely
+/// (letting the TS class default apply) rather than emit a value the TS
+/// `optionalNumber` helper would reject on the far side. In-range values
+/// must still be emitted unchanged.
+#[test]
+fn timeout_ms_beyond_js_safe_integer_range_is_omitted() {
+    use vaultkeeper_core::VaultError;
+
+    let max_safe: u64 = (1 << 53) - 1;
+
+    for (in_range, out_of_range) in [
+        (
+            VaultError::DeviceNotPresent {
+                message: "device not present".into(),
+                timeout_ms: max_safe,
+            },
+            VaultError::DeviceNotPresent {
+                message: "device not present".into(),
+                timeout_ms: max_safe + 1,
+            },
+        ),
+        (
+            VaultError::PresenceTimeout {
+                message: "presence timed out".into(),
+                backend_type: "yubikey".into(),
+                timeout_ms: max_safe,
+            },
+            VaultError::PresenceTimeout {
+                message: "presence timed out".into(),
+                backend_type: "yubikey".into(),
+                timeout_ms: max_safe + 1,
+            },
+        ),
+    ] {
+        let fields = vault_error_fields(&in_range);
+        assert_eq!(
+            fields.get("timeoutMs"),
+            Some(&json!(max_safe)),
+            "an exactly-representable timeoutMs must still be emitted"
+        );
+
+        let fields = vault_error_fields(&out_of_range);
+        assert_eq!(
+            fields.get("timeoutMs"),
+            None,
+            "a timeoutMs beyond 2^53 - 1 must be omitted, not emitted lossily"
+        );
+    }
+}

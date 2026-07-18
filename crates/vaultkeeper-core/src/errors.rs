@@ -441,6 +441,15 @@ pub fn vault_error_code(e: &VaultError) -> &'static str {
 /// "business logic" of the bridge; keeping it here (rather than inline in the
 /// wasm32-only `wasm_impl.rs`) makes it unit-testable with a plain `cargo
 /// test`.
+/// JS `number` represents integers exactly only up to 2^53 - 1. A
+/// `timeout_ms` beyond that is inherently lossy across the bridge, and the TS
+/// reconstruction helper (`optionalNumber` in
+/// `packages/vaultkeeper-wasm/src/errors.ts`) rejects unsafe integers and
+/// falls back to the class default. Emitting the field only when it survives
+/// the crossing exactly makes that an explicit boundary contract rather than
+/// a silent rejection on the far side.
+const JS_MAX_SAFE_INTEGER: u64 = (1 << 53) - 1;
+
 #[must_use]
 pub fn vault_error_fields(e: &VaultError) -> serde_json::Map<String, serde_json::Value> {
     let mut fields = serde_json::Map::new();
@@ -454,7 +463,9 @@ pub fn vault_error_fields(e: &VaultError) -> serde_json::Map<String, serde_json:
         VaultError::BackendLocked { interactive, .. } => {
             fields.insert("interactive".into(), (*interactive).into());
         }
-        VaultError::DeviceNotPresent { timeout_ms, .. } => {
+        // The guard means an out-of-range timeout falls through to the
+        // field-less catch-all — exactly the intended omission.
+        VaultError::DeviceNotPresent { timeout_ms, .. } if *timeout_ms <= JS_MAX_SAFE_INTEGER => {
             fields.insert("timeoutMs".into(), (*timeout_ms).into());
         }
         VaultError::BackendUnavailable {
@@ -520,7 +531,9 @@ pub fn vault_error_fields(e: &VaultError) -> serde_json::Map<String, serde_json:
             ..
         } => {
             fields.insert("backendType".into(), backend_type.clone().into());
-            fields.insert("timeoutMs".into(), (*timeout_ms).into());
+            if *timeout_ms <= JS_MAX_SAFE_INTEGER {
+                fields.insert("timeoutMs".into(), (*timeout_ms).into());
+            }
         }
         VaultError::SigningKeyNotFound { id, .. }
         | VaultError::SigningKeyAlreadyExists { id, .. } => {
