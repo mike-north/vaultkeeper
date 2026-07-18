@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 
-use crate::backend::{HostPlatform, SecretBackend};
+use crate::backend::{HostPlatform, PresenceOperation, SecretBackend, get_backend_capabilities};
 use crate::config;
 use crate::errors::{ExecutableTrustRequiredReason, VaultError};
 use crate::jwe::{
@@ -10,6 +10,111 @@ use crate::jwe::{
 };
 use crate::keys::KeyManager;
 use crate::types::{KeyStatus, PreflightResult, VaultClaims, VaultConfig, VaultResponse};
+
+/// A qualifying description of backends that can satisfy a presence-per-use
+/// requirement. Surfaced in [`VaultError::NotCapable`] messages so a caller
+/// whose configured backend cannot provide the guarantee is pointed at ones
+/// that can. Deliberately describes qualifying *configurations* (not a fixed
+/// type list), since the capability is per configured instance — a custom
+/// backend may also qualify. Mirrors the TypeScript library's
+/// `PRESENCE_PER_USE_QUALIFYING_BACKENDS` (`packages/vaultkeeper/src/vault.ts`).
+const PRESENCE_PER_USE_QUALIFYING_BACKENDS: &str = "A qualifying backend forces a distinct, fresh human action per operation — \
+     e.g. a YubiKey slot with a touch-per-operation policy or a gpg smartcard with \
+     touch-to-sign (both cover every operation), or 1Password in per-access mode \
+     (which enforces presence for reads only today, not writes). Switch to (or \
+     reconfigure) such a backend, or drop the presence requirement.";
+
+/// Shared enforcement for a presence-per-use requirement.
+///
+/// Mirrors the TypeScript library's `VaultKeeper.#enforcePresenceRequirement`
+/// (`packages/vaultkeeper/src/vault.ts`) exactly. This is meant to be the
+/// single, non-bypassable point of enforcement for every backend-touching
+/// core operation — not duplicated per caller.
+///
+/// **Seam note (issue #242 AC3):** `vaultkeeper-core`'s [`VaultKeeper`] does
+/// not yet have backend-touching `store`/`retrieve`/`delete`/`sign` methods —
+/// today the native CLI calls a [`SecretBackend`] directly (pre-dating the
+/// single-core consolidation, see issue #234 Phases 2–3), and the signing
+/// path is landing concurrently in issue #237. This function is the ported,
+/// fully-tested enforcement primitive those future call sites must invoke
+/// before touching their backend, exactly as `store`/`delete`/`setup`/`sign`
+/// do in the TS reference; wiring it into new core methods is left to the PRs
+/// that add them so this issue does not block on or duplicate that work.
+///
+/// When `require` is not `Some(true)` this is a no-op. Otherwise it queries
+/// the backend's capabilities **fresh on every call** (never cached across
+/// operations, so a prior satisfied call can never satisfy a later one — see
+/// [`get_backend_capabilities`]) and returns [`VaultError::NotCapable`] —
+/// before the caller performs any credential/session/device operation — when
+/// the configured instance does not advertise
+/// [`crate::backend::BackendCapabilities::presence_per_use`], **or**
+/// advertises it but does not force a fresh action for **this** `operation`
+/// (see [`crate::backend::BackendCapabilities::presence_enforced_operations`]).
+/// This makes enforcement operation-aware and fail-closed: e.g. 1Password
+/// `per-access` forces presence for reads but not `store`/`delete`, so a
+/// flagged write is refused here rather than silently passing through the
+/// cached session client.
+///
+/// A capability report that itself errors (e.g. a live device probe that
+/// fails) also fails closed: the error propagates from here rather than being
+/// treated as either capable or non-capable.
+///
+/// When the backend *is* capable for this operation, this returns `Ok(())`
+/// and the caller proceeds to the backend's ordinary operation, which by the
+/// meaning of the capability forces a distinct fresh human action for this
+/// specific call. The presence action itself (and any
+/// [`VaultError::PresenceDeclined`]/[`VaultError::PresenceTimeout`]) therefore
+/// surfaces from that backend operation, not from here — so two consecutive
+/// required-presence operations each drive their own backend call and each
+/// demand their own fresh action.
+pub async fn enforce_presence_requirement(
+    backend: &dyn SecretBackend,
+    operation: PresenceOperation,
+    require: Option<bool>,
+) -> Result<(), VaultError> {
+    if require != Some(true) {
+        return Ok(());
+    }
+    let capabilities = get_backend_capabilities(backend).await?;
+    if !capabilities.presence_per_use {
+        return Err(VaultError::NotCapable {
+            message: format!(
+                "This operation required presence-per-use, but the active backend \
+                 ('{}') cannot guarantee it. {PRESENCE_PER_USE_QUALIFYING_BACKENDS}",
+                backend.backend_type(),
+            ),
+            backend_type: backend.backend_type().to_string(),
+            capability: "presencePerUse".to_string(),
+        });
+    }
+    // Operation-aware, fail-closed: a capable instance that only forces presence
+    // for some operations (an explicit `presence_enforced_operations` list) must
+    // refuse a flagged operation it does not cover, rather than passing without a
+    // fresh action. A `None` list means "all keyed operations" (a touch device).
+    if !capabilities.enforces(operation) {
+        let enforced_list = capabilities
+            .presence_enforced_operations
+            .as_ref()
+            .map(|ops| {
+                ops.iter()
+                    .map(|op| op.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            })
+            .unwrap_or_default();
+        return Err(VaultError::NotCapable {
+            message: format!(
+                "This '{operation}' operation required presence-per-use, but the active backend \
+                 ('{}') only enforces a fresh per-use action for [{enforced_list}] — not \
+                 '{operation}'. {PRESENCE_PER_USE_QUALIFYING_BACKENDS}",
+                backend.backend_type(),
+            ),
+            backend_type: backend.backend_type().to_string(),
+            capability: "presencePerUse".to_string(),
+        });
+    }
+    Ok(())
+}
 
 /// Options for initializing VaultKeeper.
 #[derive(Debug, Default)]

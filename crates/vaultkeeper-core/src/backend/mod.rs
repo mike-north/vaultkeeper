@@ -11,4 +11,8 @@ mod types;
 pub use file::FileBackend;
 pub use in_memory::InMemoryBackend;
 pub use registry::BackendRegistry;
-pub use types::{ExecOutput, HostPlatform, ListableBackend, Platform, SecretBackend};
+pub use types::{
+    BackendCapabilities, ExecOutput, HostPlatform, ListableBackend, Platform,
+    PresenceCapableBackend, PresenceOperation, SecretBackend, get_backend_capabilities,
+    is_presence_capable_backend,
+};

@@ -16,11 +16,14 @@ pub(crate) mod util;
 pub mod vault;
 
 // Re-export key public types at crate root for convenience.
-pub use backend::InMemoryBackend;
+pub use backend::{
+    BackendCapabilities, InMemoryBackend, PresenceCapableBackend, PresenceOperation,
+    get_backend_capabilities, is_presence_capable_backend,
+};
 pub use errors::{ExecutableTrustRequiredReason, VaultError};
 pub use types::{
     BackendConfig, ExecRequest, ExecResult, FetchRequest, KeyStatus, PreflightCheck,
     PreflightCheckStatus, PreflightResult, ScopedPreflightCheck, SecretAccessor, SignRequest,
     SignResult, TrustTier, VaultClaims, VaultConfig, VaultResponse, VerifyRequest,
 };
-pub use vault::VaultKeeper;
+pub use vault::{VaultKeeper, enforce_presence_requirement};
