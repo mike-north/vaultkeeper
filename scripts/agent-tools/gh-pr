@@ -114,7 +114,7 @@ cmd_failure_details() {
   # Fetch first (so a PR with no failing checks isn't a pipeline error), then
   # extract run ids — `|| true` because grep exits 1 on the legitimate no-match case.
   urls="$(gh pr view "$pr" --json statusCheckRollup \
-    --jq '[.statusCheckRollup[]?|select(.conclusion=="FAILURE" or .conclusion=="TIMED_OUT" or .conclusion=="ERROR")|.detailsUrl]|.[]' 2>/dev/null)" \
+    --jq '[.statusCheckRollup[]?|select(.conclusion=="FAILURE" or .conclusion=="TIMED_OUT" or .conclusion=="CANCELLED" or .conclusion=="ERROR")|.detailsUrl]|.[]' 2>/dev/null)" \
     || die "gh pr view failed for PR ${pr}" 4
   if [ -z "$urls" ]; then
     printf 'PR %s: no failing checks.\n' "$pr"
