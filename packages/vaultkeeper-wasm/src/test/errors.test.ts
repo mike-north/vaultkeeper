@@ -20,6 +20,8 @@ import {
   FilesystemError,
   IdentityMismatchError,
   BackendUnavailableError,
+  DeviceNotPresentError,
+  ConfigParseError,
   VaultError,
 } from '../errors.js'
 
@@ -53,6 +55,56 @@ describe('mapWasmError — backend-unavailable code (sparse-array hole rejection
     })
     assert.ok(err instanceof BackendUnavailableError)
     assert.deepEqual(err.attempted, ['keychain', 'file'])
+  })
+})
+
+// Regression test for PR #251 review feedback: optionalNumber() only checked
+// `typeof value === 'number'`, so NaN/Infinity/non-integer values passed
+// through unchanged — they could leak into a typed field (e.g. `timeoutMs`)
+// or produce a nonsensical formatted string (e.g. `toConfigParseLocation`'s
+// `'line NaN, column 12'`).
+describe('mapWasmError — non-finite/non-integer number rejection', () => {
+  it('falls back to the default timeoutMs (0) for a NaN boundary value, not NaN itself', () => {
+    const err = mapWasmError({
+      vaultErrorCode: 'device-not-present',
+      message: 'device not present',
+      timeoutMs: Number.NaN,
+    })
+    assert.ok(err instanceof DeviceNotPresentError)
+    assert.equal(err.timeoutMs, 0)
+    assert.notEqual(Number.isNaN(err.timeoutMs), true, 'must not leak NaN into timeoutMs')
+  })
+
+  it('falls back to the default timeoutMs (0) for an Infinity boundary value', () => {
+    const err = mapWasmError({
+      vaultErrorCode: 'device-not-present',
+      message: 'device not present',
+      timeoutMs: Number.POSITIVE_INFINITY,
+    })
+    assert.ok(err instanceof DeviceNotPresentError)
+    assert.equal(err.timeoutMs, 0)
+  })
+
+  it('leaves `location` undefined, not "line NaN, column 12", when `line` is NaN', () => {
+    const err = mapWasmError({
+      vaultErrorCode: 'config-parse',
+      message: 'config parse failed',
+      path: '/config.json',
+      line: Number.NaN,
+      column: 12,
+    })
+    assert.ok(err instanceof ConfigParseError)
+    assert.equal(err.location, undefined)
+  })
+
+  it('still accepts a genuine safe-integer timeoutMs', () => {
+    const err = mapWasmError({
+      vaultErrorCode: 'device-not-present',
+      message: 'device not present',
+      timeoutMs: 5000,
+    })
+    assert.ok(err instanceof DeviceNotPresentError)
+    assert.equal(err.timeoutMs, 5000)
   })
 })
 

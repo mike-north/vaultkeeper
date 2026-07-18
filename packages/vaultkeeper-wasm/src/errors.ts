@@ -842,8 +842,18 @@ function optionalBoolean(value: unknown): boolean | undefined {
 }
 
 /** Numeric analogue of {@link optionalString}: non-numbers become `undefined`. */
+/**
+ * Numeric analogue of {@link optionalString}. Rejects `NaN`, `Infinity`,
+ * `-Infinity`, and non-integer values (via `Number.isSafeInteger`) in
+ * addition to non-numbers — every current use (`timeoutMs`, `line`,
+ * `column`) is inherently an integer count, so a non-finite or fractional
+ * value is exactly as untrustworthy as a non-number and must fall back to
+ * `undefined` the same way, rather than leaking `NaN`/`Infinity` into a typed
+ * field or into a formatted string like {@link toConfigParseLocation}'s
+ * output (e.g. `'line NaN, column 12'`).
+ */
 function optionalNumber(value: unknown): number | undefined {
-  return typeof value === 'number' ? value : undefined
+  return typeof value === 'number' && Number.isSafeInteger(value) ? value : undefined
 }
 
 /**

@@ -93,6 +93,17 @@ function isBridgeErrorShape(value: unknown): value is BridgeErrorShape {
  * Assertion-function form of an `instanceof` check: narrows `err` to `T` in
  * the caller's scope without an `as` cast (`assert.ok` alone does not narrow,
  * since node:assert's signature is a generic truthy assertion).
+ *
+ * `ctor`'s parameter list is deliberately `never[]`, not `unknown[]`: `ctor`
+ * is only ever used for `instanceof`, never actually constructed, so any
+ * class should be assignable here regardless of its real constructor
+ * signature (every error class here takes at least a `message: string`).
+ * Construct-signature parameters are checked contravariantly, so `unknown[]`
+ * does **not** work — `unknown` is not assignable to `string`, so e.g.
+ * `SecretNotFoundError`'s `(message: string)` constructor would fail to
+ * satisfy `new (...args: unknown[]) => T`. `never` is assignable to every
+ * type, satisfying that contravariant check vacuously for any real
+ * constructor's parameter types.
  */
 function assertInstance<T extends VaultError>(
   err: VaultError,
@@ -149,6 +160,9 @@ describe('error-taxonomy parity (issue #236)', () => {
 
     const byCode = new Map(thrown.map((t) => [t.vaultErrorCode, t]))
 
+    // `ctor: new (...args: never[]) => T` — see the doc comment on
+    // `assertInstance` above for why `never[]`, not `unknown[]`, is the
+    // correct typing for an instanceof-only constructor parameter.
     const expect = <T extends VaultError>(
       code: string,
       ctor: new (...args: never[]) => T,
