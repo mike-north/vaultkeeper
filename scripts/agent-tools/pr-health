@@ -6,7 +6,7 @@
 # count, and Copilot-review presence, as one greppable line.
 #
 # Read-only. Repo is hardcoded; the only argument is a PR number.
-# Unsets GITHUB_TOKEN internally (a broken env token shadows keyring auth).
+# Unsets GITHUB_TOKEN and GH_TOKEN internally (a broken env token shadows keyring auth).
 set -euo pipefail
 
 REPO="mike-north/vaultkeeper"
@@ -55,6 +55,6 @@ jq -r --argjson unresolved "$threads" '
   ([$c[] | select(.status=="COMPLETED" and .conclusion=="SUCCESS")] | length) as $pass |
   ([$c[] | select(.status!="COMPLETED")] | length) as $pending |
   ([$c[] | select(.conclusion=="FAILURE" or .conclusion=="TIMED_OUT" or .conclusion=="CANCELLED" or .conclusion=="ERROR") | .name] | join(",")) as $failed |
-  ([.reviews[] | select(.author.login=="copilot-pull-request-reviewer")] | length) as $copilot |
+  ([.reviews // [] | .[] | select(.author.login=="copilot-pull-request-reviewer")] | length) as $copilot |
   "PR '"$pr"' state=\(.state) mss=\(.mergeStateStatus) checks=\($pass)/\($c | length) pending=\($pending) failed=\(if $failed=="" then "-" else $failed end) unresolved=\($unresolved) copilot=\($copilot)"
 ' <<<"$json"

@@ -33,7 +33,7 @@
       "path": "scripts/agent-tools/pr-health",
       "purpose": "One-line PR health readout for this repo: CI rollup, merge state, unresolved review-thread count, Copilot-review presence — replaces the hand-assembled gh pr view + jq + GraphQL pipeline",
       "args": "<pr-number>",
-      "scope": "repo:mike-north/vaultkeeper (read-only; single positive-integer arg; fixed GraphQL query for reviewThreads; unsets GITHUB_TOKEN internally)",
+      "scope": "repo:mike-north/vaultkeeper (read-only; single positive-integer arg; fixed GraphQL query for reviewThreads; unsets GITHUB_TOKEN and GH_TOKEN internally)",
       "covers": [
         "gh\\s+pr\\s+view\\b.*statusCheckRollup",
         "gh\\s+api\\s+graphql\\b.*reviewThreads"
