@@ -97,6 +97,18 @@ describe('mapWasmError — non-finite/non-integer number rejection', () => {
     assert.equal(err.location, undefined)
   })
 
+  it('leaves `location` undefined when `line` is 0 — the contract is 1-based', () => {
+    const err = mapWasmError({
+      vaultErrorCode: 'config-parse',
+      message: 'config parse failed',
+      path: '/config.json',
+      line: 0,
+      column: 12,
+    })
+    assert.ok(err instanceof ConfigParseError)
+    assert.equal(err.location, undefined)
+  })
+
   it('still accepts a genuine safe-integer timeoutMs', () => {
     const err = mapWasmError({
       vaultErrorCode: 'device-not-present',

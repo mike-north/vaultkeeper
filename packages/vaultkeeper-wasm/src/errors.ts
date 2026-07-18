@@ -896,13 +896,16 @@ function optionalStringArray(value: unknown): string[] | undefined {
 /**
  * Build a human-readable parse location from the WASM boundary's raw `line`
  * and `column` numbers, mirroring the pure-TypeScript `vaultkeeper` library's
- * `ConfigParseError.location` format. `undefined` unless both are present —
- * a partial location is not fabricated into a misleading string.
+ * `ConfigParseError.location` format. `undefined` unless both are present and
+ * positive (the contract is 1-based) — a partial or nonsensical location is
+ * not fabricated into a misleading string.
  */
 function toConfigParseLocation(line: unknown, column: unknown): string | undefined {
   const l = optionalNumber(line)
   const c = optionalNumber(column)
-  return l !== undefined && c !== undefined ? `line ${String(l)}, column ${String(c)}` : undefined
+  return l !== undefined && l >= 1 && c !== undefined && c >= 1
+    ? `line ${String(l)}, column ${String(c)}`
+    : undefined
 }
 
 function isWasmErrorShape(value: unknown): value is WasmErrorShape {
