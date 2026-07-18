@@ -1,0 +1,63 @@
+#!/usr/bin/env bash
+#
+# gh-review-comment — print the FULL body of one pull-request review comment.
+#
+# Narrow, read-only slice of `gh api`. Fetches a single review comment by its
+# numeric id and prints path:line, author, and the complete body. Exists because
+# `gh-reviews threads` truncates bodies and there is no `gh` porcelain verb for
+# reading one review comment in full.
+#
+# Scope is baked in: it only ever talks to the ALLOWED repo below, only issues a
+# read-only GET to the fixed pulls/comments/<id> endpoint, and accepts nothing
+# but a positive-integer comment id. There is no way to point it at another repo,
+# another endpoint, or an arbitrary API path.
+#
+# Usage:  gh-review-comment <comment-id>
+#         gh-review-comment --help
+#
+# Exit codes: 0 ok · 2 usage error · 3 wrong repo · 4 gh/api failure
+
+set -euo pipefail
+
+ALLOWED_OWNER="mike-north"
+ALLOWED_REPO="vaultkeeper"
+
+# A broken GITHUB_TOKEN or GH_TOKEN in the environment shadows keyring auth (both
+# are unset below); the gh binary
+# is invoked directly (no override indirection) so the command cannot be
+# redirected via the environment.
+unset GITHUB_TOKEN GH_TOKEN || true
+
+die() { printf '%s\n' "gh-review-comment: $*" >&2; exit "${2:-2}"; }
+
+usage() {
+  cat <<EOF
+gh-review-comment — print the full body of one PR review comment (read-only).
+
+Usage:
+  gh-review-comment <comment-id>     Print path:line, author, and full body
+  gh-review-comment --help           Show this help
+
+Scoped to ${ALLOWED_OWNER}/${ALLOWED_REPO} only. <comment-id> must be a positive integer
+(the databaseId shown as thread_comment_id by 'gh-reviews threads').
+EOF
+}
+
+case "${1:-}" in
+  ""|-h|--help) usage; [ "${1:-}" = "" ] && exit 2 || exit 0 ;;
+esac
+
+id="$1"
+[ "$#" -eq 1 ] || die "expected exactly one argument (a comment id); got $#"
+[[ "$id" =~ ^[1-9][0-9]*$ ]] || die "comment id must be a positive integer, got: $id"
+
+# Refuse to run outside the allowed repo — scope is enforced, not assumed.
+origin="$(gh repo view --json nameWithOwner --jq .nameWithOwner 2>/dev/null)" \
+  || die "could not determine the current repo via gh" 4
+[ "$origin" = "${ALLOWED_OWNER}/${ALLOWED_REPO}" ] \
+  || die "refusing to run: current repo is '$origin', tool is scoped to ${ALLOWED_OWNER}/${ALLOWED_REPO}" 3
+
+# Single read-only GET to the fixed endpoint; owner/repo/id are all constrained above.
+gh api "repos/${ALLOWED_OWNER}/${ALLOWED_REPO}/pulls/comments/${id}" \
+  --jq '"\(.path):\(.line // .original_line)  [\(.user.login)]\n\n\(.body)"' \
+  || die "gh api read failed for comment ${id}" 4

@@ -170,3 +170,6 @@ scratch/
 !**/scratch/.gitkeep
 # Claude Code local configuration (auto-added)
 .claude/*.local.*
+.claude/worktrees/
+.claude/settings.json
+.claude/fleet-role.json
