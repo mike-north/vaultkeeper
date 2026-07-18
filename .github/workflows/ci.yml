@@ -94,6 +94,15 @@ jobs:
           export RUSTFLAGS="--remap-path-prefix=${CARGO_HOME:-$HOME/.cargo}=/cargo-home"
           wasm-pack build --target nodejs crates/vaultkeeper-wasm --out-dir /tmp/wasm-rebuild
 
+      - name: TEMP root-cause diagnostic - rebuild with wasm-opt disabled
+        run: |
+          cp crates/vaultkeeper-wasm/Cargo.toml /tmp/wasm-cargo-toml.bak
+          sed -i 's/wasm-opt = \["-Oz"\]/wasm-opt = false/' crates/vaultkeeper-wasm/Cargo.toml
+          export RUSTFLAGS="--remap-path-prefix=${CARGO_HOME:-$HOME/.cargo}=/cargo-home"
+          wasm-pack build --target nodejs crates/vaultkeeper-wasm --out-dir /tmp/wasm-rebuild-preopt
+          mv /tmp/wasm-cargo-toml.bak crates/vaultkeeper-wasm/Cargo.toml
+          echo "pre-opt sha256: $(sha256sum /tmp/wasm-rebuild-preopt/vaultkeeper_wasm_bg.wasm | cut -d' ' -f1)"
+
       - name: Verify committed artifact matches the pinned-toolchain rebuild (drift check)
         run: |
           committed=packages/vaultkeeper-wasm/wasm/vaultkeeper_wasm_bg.wasm
