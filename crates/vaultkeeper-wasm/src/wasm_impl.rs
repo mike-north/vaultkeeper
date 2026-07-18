@@ -142,11 +142,18 @@ fn fs_rejection_to_vault_error(rejected: &JsValue, path: &Path, permission: &str
 /// a wasm32 target; this function is just the thin JSON-serialization
 /// wrapper that gets those values across the actual WASM/JS boundary, plus
 /// the one JS-facing message override below.
+///
+/// If serializing or parsing the full field map ever fails — not expected in
+/// practice, since every field is a plain string/number/bool/array — this
+/// falls back to [`coded_js_error`] rather than silently degrading to
+/// `undefined`, so `vaultErrorCode`/`message` are never lost even in that
+/// pathological case.
 fn vault_error_to_js(e: &VaultError) -> JsValue {
     let mut fields = vault_error_fields(e);
+    let code = vault_error_code(e);
     fields.insert(
         "vaultErrorCode".to_string(),
-        serde_json::Value::String(vault_error_code(e).to_string()),
+        serde_json::Value::String(code.to_string()),
     );
     let message = match e {
         VaultError::ExecutableTrustRequired { reason, .. } => {
@@ -158,10 +165,15 @@ fn vault_error_to_js(e: &VaultError) -> JsValue {
         }
         _ => e.to_string(),
     };
-    fields.insert("message".to_string(), serde_json::Value::String(message));
+    fields.insert(
+        "message".to_string(),
+        serde_json::Value::String(message.clone()),
+    );
 
-    let json = serde_json::to_string(&fields).unwrap_or_default();
-    js_sys::JSON::parse(&json).unwrap_or(JsValue::UNDEFINED)
+    serde_json::to_string(&fields)
+        .ok()
+        .and_then(|json| js_sys::JSON::parse(&json).ok())
+        .unwrap_or_else(|| coded_js_error(code, &message))
 }
 
 /// JS-facing message for an [`ExecutableTrustRequiredReason`], phrased in the

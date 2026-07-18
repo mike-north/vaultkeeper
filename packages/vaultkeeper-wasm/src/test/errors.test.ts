@@ -19,8 +19,42 @@ import {
   DecryptionError,
   FilesystemError,
   IdentityMismatchError,
+  BackendUnavailableError,
   VaultError,
 } from '../errors.js'
+
+// Regression test for PR #251 review feedback: optionalStringArray() used
+// Array#every, which vacuously accepts sparse-array holes (every() skips
+// them rather than visiting them as undefined). A thrown boundary value with
+// a hole-filled array would have been accepted as string[] even though a
+// hole reads back as undefined, not a string — violating the field's
+// documented string[] contract.
+describe('mapWasmError — backend-unavailable code (sparse-array hole rejection)', () => {
+  it('rejects a sparse-array `attempted` value and falls back to an empty array, not the hole-filled array', () => {
+    const sparse = new Array<string>(2)
+    sparse[1] = 'file' // index 0 left as a hole
+    const err = mapWasmError({
+      vaultErrorCode: 'backend-unavailable',
+      message: 'no backend available',
+      reason: 'all-failed',
+      attempted: sparse,
+    })
+    assert.ok(err instanceof BackendUnavailableError && err instanceof VaultError)
+    assert.deepEqual(err.attempted, [])
+    assert.notEqual(err.attempted, sparse, 'must not pass the hole-filled array through as-is')
+  })
+
+  it('still accepts a genuine string[] `attempted` value', () => {
+    const err = mapWasmError({
+      vaultErrorCode: 'backend-unavailable',
+      message: 'no backend available',
+      reason: 'all-failed',
+      attempted: ['keychain', 'file'],
+    })
+    assert.ok(err instanceof BackendUnavailableError)
+    assert.deepEqual(err.attempted, ['keychain', 'file'])
+  })
+})
 
 describe('mapWasmError — decryption code', () => {
   it('carries the path through when the boundary supplies one', () => {

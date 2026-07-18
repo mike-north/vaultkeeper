@@ -852,9 +852,21 @@ function optionalNumber(value: unknown): number | undefined {
  * strings becomes `undefined` — never a fabricated array, and never an array
  * containing non-string elements that would violate the field's `string[]`
  * contract.
+ *
+ * Iterates with `for...of` rather than `Array#every`: `every` skips sparse
+ * holes (e.g. `new Array(2)` has no assigned indices), so it would vacuously
+ * accept a hole-filled array as `string[]` even though reading a hole later
+ * yields `undefined`, not a string. `for...of` visits holes as `undefined`,
+ * so they are correctly rejected here.
  */
 function optionalStringArray(value: unknown): string[] | undefined {
-  return Array.isArray(value) && value.every((v) => typeof v === 'string') ? value : undefined
+  if (!Array.isArray(value)) return undefined
+  const result: string[] = []
+  for (const item of value) {
+    if (typeof item !== 'string') return undefined
+    result.push(item)
+  }
+  return result
 }
 
 /**
