@@ -436,7 +436,7 @@ fn days_from_civil(y: i64, m: u32, d: u32) -> Option<i64> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::backend::{ExecOutput, Platform};
+    use crate::backend::{ExecOptions, ExecOutput, Platform};
     use std::collections::{HashMap, HashSet};
     use std::path::PathBuf;
     use std::sync::Mutex;
@@ -528,7 +528,7 @@ mod tests {
             &self,
             _cmd: &str,
             _args: &[&str],
-            _stdin: Option<&[u8]>,
+            _options: ExecOptions<'_>,
         ) -> Result<ExecOutput, VaultError> {
             Ok(ExecOutput {
                 stdout: Vec::new(),

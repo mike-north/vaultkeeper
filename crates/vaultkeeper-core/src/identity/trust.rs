@@ -252,7 +252,7 @@ async fn try_sigstore(_exec_path: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::backend::{ExecOutput, Platform};
+    use crate::backend::{ExecOptions, ExecOutput, Platform};
     use async_trait::async_trait;
     use std::collections::HashMap;
     use std::path::{Path, PathBuf};
@@ -295,7 +295,7 @@ mod tests {
             &self,
             _cmd: &str,
             _args: &[&str],
-            _stdin: Option<&[u8]>,
+            _options: ExecOptions<'_>,
         ) -> Result<ExecOutput, VaultError> {
             Ok(ExecOutput {
                 stdout: Vec::new(),

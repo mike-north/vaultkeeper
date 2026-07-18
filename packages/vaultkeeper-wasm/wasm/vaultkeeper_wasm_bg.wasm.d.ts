@@ -2,6 +2,15 @@
 /* eslint-disable */
 export const memory: WebAssembly.Memory;
 export const __testAllVaultErrors: () => any;
+export const __testHttpFetch: (a: any, b: any) => any;
+export const __testJsSecretBackendDelete: (a: any, b: number, c: number) => any;
+export const __testJsSecretBackendExists: (a: any, b: number, c: number) => any;
+export const __testJsSecretBackendIsAvailable: (a: any) => any;
+export const __testJsSecretBackendList: (a: any) => any;
+export const __testJsSecretBackendMeta: (a: any) => [number, number, number];
+export const __testJsSecretBackendRetrieve: (a: any, b: number, c: number) => any;
+export const __testJsSecretBackendStore: (a: any, b: number, c: number, d: number, e: number) => any;
+export const __testPromptApproval: (a: any, b: number, c: number, d: number, e: number) => any;
 export const __wbg_wasmauthorization_free: (a: number, b: number) => void;
 export const __wbg_wasmvaultkeeper_free: (a: number, b: number) => void;
 export const allVaultErrorCodes: () => [number, number];

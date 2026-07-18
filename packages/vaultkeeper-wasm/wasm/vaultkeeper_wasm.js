@@ -245,6 +245,151 @@ function __testAllVaultErrors() {
 exports.__testAllVaultErrors = __testAllVaultErrors;
 
 /**
+ * Diagnostic-only export exercising `HostPlatform::http_fetch` directly
+ * through the real `JsHostPlatform` bridge (issue #239 AC2 — "land the
+ * primitive with direct tests"). No core consumer calls `http_fetch` yet
+ * (see the trait default in `crates/vaultkeeper-core/src/backend/types.rs`),
+ * so this is the only way to exercise the bridge end-to-end today. Not part
+ * of the SDK's public TypeScript API (`packages/vaultkeeper-wasm/src/index.ts`
+ * does not re-export it).
+ *
+ * `host` must satisfy the full `JsHostPlatform::new` contract (`platform()`,
+ * `configDir()`) in addition to `httpFetch()`, since it's constructed the
+ * same way a real `WasmVaultKeeper` host is.
+ * @param {any} host
+ * @param {any} request
+ * @returns {Promise<any>}
+ */
+function __testHttpFetch(host, request) {
+    const ret = wasm.__testHttpFetch(host, request);
+    return ret;
+}
+exports.__testHttpFetch = __testHttpFetch;
+
+/**
+ * Diagnostic-only export exercising `JsSecretBackend::delete`.
+ * @param {any} host
+ * @param {string} id
+ * @returns {Promise<void>}
+ */
+function __testJsSecretBackendDelete(host, id) {
+    const ptr0 = passStringToWasm0(id, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.__testJsSecretBackendDelete(host, ptr0, len0);
+    return ret;
+}
+exports.__testJsSecretBackendDelete = __testJsSecretBackendDelete;
+
+/**
+ * Diagnostic-only export exercising `JsSecretBackend::exists`.
+ * @param {any} host
+ * @param {string} id
+ * @returns {Promise<boolean>}
+ */
+function __testJsSecretBackendExists(host, id) {
+    const ptr0 = passStringToWasm0(id, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.__testJsSecretBackendExists(host, ptr0, len0);
+    return ret;
+}
+exports.__testJsSecretBackendExists = __testJsSecretBackendExists;
+
+/**
+ * Diagnostic-only export exercising `JsSecretBackend::is_available`.
+ * @param {any} host
+ * @returns {Promise<boolean>}
+ */
+function __testJsSecretBackendIsAvailable(host) {
+    const ret = wasm.__testJsSecretBackendIsAvailable(host);
+    return ret;
+}
+exports.__testJsSecretBackendIsAvailable = __testJsSecretBackendIsAvailable;
+
+/**
+ * Diagnostic-only export exercising `JsSecretBackend::list`
+ * (`ListableBackend`), including the `NotCapable` path when the JS mock
+ * doesn't provide `list()`.
+ * @param {any} host
+ * @returns {Promise<string[]>}
+ */
+function __testJsSecretBackendList(host) {
+    const ret = wasm.__testJsSecretBackendList(host);
+    return ret;
+}
+exports.__testJsSecretBackendList = __testJsSecretBackendList;
+
+/**
+ * Diagnostic-only export: constructs a `JsSecretBackend` from `host` and
+ * returns its `{ type, displayName }` identity — issue #239 AC5 "unit
+ * coverage with a mock JS backend". Not part of the SDK's public TypeScript
+ * API.
+ * @param {any} host
+ * @returns {any}
+ */
+function __testJsSecretBackendMeta(host) {
+    const ret = wasm.__testJsSecretBackendMeta(host);
+    if (ret[2]) {
+        throw takeFromExternrefTable0(ret[1]);
+    }
+    return takeFromExternrefTable0(ret[0]);
+}
+exports.__testJsSecretBackendMeta = __testJsSecretBackendMeta;
+
+/**
+ * Diagnostic-only export exercising `JsSecretBackend::retrieve`.
+ * @param {any} host
+ * @param {string} id
+ * @returns {Promise<string>}
+ */
+function __testJsSecretBackendRetrieve(host, id) {
+    const ptr0 = passStringToWasm0(id, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.__testJsSecretBackendRetrieve(host, ptr0, len0);
+    return ret;
+}
+exports.__testJsSecretBackendRetrieve = __testJsSecretBackendRetrieve;
+
+/**
+ * Diagnostic-only export exercising `JsSecretBackend::store`. `secret` is a
+ * UTF-8 string on this side of the boundary — the core `SecretBackend`
+ * trait's `store`/`retrieve` are `&str`/`String`-based — but crosses to the
+ * JS mock as a `Uint8Array`, exactly as a real `JsSecretBackend::store` call
+ * would.
+ * @param {any} host
+ * @param {string} id
+ * @param {string} secret
+ * @returns {Promise<void>}
+ */
+function __testJsSecretBackendStore(host, id, secret) {
+    const ptr0 = passStringToWasm0(id, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ptr1 = passStringToWasm0(secret, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const len1 = WASM_VECTOR_LEN;
+    const ret = wasm.__testJsSecretBackendStore(host, ptr0, len0, ptr1, len1);
+    return ret;
+}
+exports.__testJsSecretBackendStore = __testJsSecretBackendStore;
+
+/**
+ * Diagnostic-only export exercising `HostPlatform::prompt_approval`
+ * directly through the real `JsHostPlatform` bridge (issue #239 AC3). Not
+ * part of the SDK's public TypeScript API.
+ * @param {any} host
+ * @param {string} action
+ * @param {string} detail
+ * @returns {Promise<boolean>}
+ */
+function __testPromptApproval(host, action, detail) {
+    const ptr0 = passStringToWasm0(action, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ptr1 = passStringToWasm0(detail, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const len1 = WASM_VECTOR_LEN;
+    const ret = wasm.__testPromptApproval(host, ptr0, len0, ptr1, len1);
+    return ret;
+}
+exports.__testPromptApproval = __testPromptApproval;
+
+/**
  * The canonical list of every machine-readable `vaultErrorCode` this WASM
  * binary can throw — the single source of truth for the error taxonomy (see
  * `ALL_ERROR_CODES` in `crates/vaultkeeper-core/src/errors.rs`).
@@ -304,6 +449,10 @@ function __wbg_get_imports() {
         },
         __wbg___wbindgen_is_function_3c846841762788c1: function(arg0) {
             const ret = typeof(arg0) === 'function';
+            return ret;
+        },
+        __wbg___wbindgen_is_null_0b605fc6b167c56f: function(arg0) {
+            const ret = arg0 === null;
             return ret;
         },
         __wbg___wbindgen_is_object_781bc9f159099513: function(arg0) {
@@ -378,6 +527,10 @@ function __wbg_get_imports() {
         }, arguments); },
         __wbg_get_a8ee5c45dabc1b3b: function(arg0, arg1) {
             const ret = arg0[arg1 >>> 0];
+            return ret;
+        },
+        __wbg_keys_ab0d051a1c55236d: function(arg0) {
+            const ret = Object.keys(arg0);
             return ret;
         },
         __wbg_length_b3416cf66a5452c8: function(arg0) {
@@ -495,7 +648,7 @@ function __wbg_get_imports() {
             return ret;
         },
         __wbindgen_cast_0000000000000001: function(arg0, arg1) {
-            // Cast intrinsic for `Closure(Closure { dtor_idx: 160, function: Function { arguments: [Externref], shim_idx: 161, ret: Result(Unit), inner_ret: Some(Result(Unit)) }, mutable: true }) -> Externref`.
+            // Cast intrinsic for `Closure(Closure { dtor_idx: 209, function: Function { arguments: [Externref], shim_idx: 210, ret: Result(Unit), inner_ret: Some(Result(Unit)) }, mutable: true }) -> Externref`.
             const ret = makeMutClosure(arg0, arg1, wasm.wasm_bindgen__closure__destroy__h1722208547e491cb, wasm_bindgen__convert__closures_____invoke__h8760ba3086f56474);
             return ret;
         },
@@ -507,6 +660,13 @@ function __wbg_get_imports() {
         __wbindgen_cast_0000000000000003: function(arg0, arg1) {
             // Cast intrinsic for `Ref(String) -> Externref`.
             const ret = getStringFromWasm0(arg0, arg1);
+            return ret;
+        },
+        __wbindgen_cast_0000000000000004: function(arg0, arg1) {
+            var v0 = getArrayJsValueFromWasm0(arg0, arg1).slice();
+            wasm.__wbindgen_free(arg0, arg1 * 4, 4);
+            // Cast intrinsic for `Vector(NamedExternref("string")) -> Externref`.
+            const ret = v0;
             return ret;
         },
         __wbindgen_init_externref_table: function() {

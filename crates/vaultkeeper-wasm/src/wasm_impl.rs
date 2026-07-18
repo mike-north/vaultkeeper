@@ -7,7 +7,10 @@ use js_sys::{Function, Promise, Reflect, Uint8Array};
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::JsFuture;
 
-use vaultkeeper_core::backend::{ExecOutput, FileBackend, HostPlatform, Platform, SecretBackend};
+use vaultkeeper_core::backend::{
+    ApprovalContext, ExecOptions, ExecOutput, FileBackend, HostPlatform, HttpRequest, HttpResponse,
+    ListableBackend, Platform, SecretBackend,
+};
 use vaultkeeper_core::errors::{
     ALL_ERROR_CODES, all_variants_for_parity_test, vault_error_code, vault_error_fields,
 };
@@ -19,7 +22,8 @@ use vaultkeeper_core::{ExecutableTrustRequiredReason, VaultError};
 /// A `HostPlatform` implementation backed by JavaScript callbacks.
 ///
 /// The JS object must implement:
-/// - `exec(cmd, args, stdin?)` → `Promise<{stdout, stderr, exitCode}>`
+/// - `exec(cmd, args, options?)` → `Promise<{stdout, stderr, exitCode}>`, where
+///   `options` is `{ stdin?, env?, cwd? }` (issue #239)
 /// - `readFile(path)` → `Promise<Uint8Array>`
 /// - `writeFile(path, content, mode)` → `Promise<void>`
 /// - `fileExists(path)` → `Promise<boolean>`
@@ -28,6 +32,16 @@ use vaultkeeper_core::{ExecutableTrustRequiredReason, VaultError};
 /// - `listDir(path)` → `Promise<string[]>`
 /// - `platform()` → `string` ("darwin"|"linux"|"win32")
 /// - `configDir()` → `string`
+/// - `httpFetch(request)` → `Promise<{status, headers, body}>` (issue #239)
+/// - `promptApproval?(context)` → `Promise<boolean>` (issue #239, optional —
+///   absent means fail closed, never an automatic allow)
+///
+/// # No-reentrancy contract
+///
+/// None of these JS callbacks may call back into the vault (no
+/// `VaultKeeper`/`createVaultKeeper` method calls) while running. Core does
+/// not guard against reentrant calls; violating this can deadlock or corrupt
+/// in-flight state.
 struct JsHostPlatform {
     host: JsValue,
     config_dir: PathBuf,
@@ -225,7 +239,7 @@ impl HostPlatform for JsHostPlatform {
         &self,
         cmd: &str,
         args: &[&str],
-        stdin: Option<&[u8]>,
+        options: ExecOptions<'_>,
     ) -> Result<ExecOutput, VaultError> {
         let exec_fn = get_method(&self.host, "exec").map_err(|e| js_err(&format!("{e:?}")))?;
 
@@ -235,17 +249,34 @@ impl HostPlatform for JsHostPlatform {
             js_args.push(&JsValue::from_str(arg));
         }
 
-        let js_stdin = match stdin {
-            Some(data) => {
-                let arr = Uint8Array::new_with_length(data.len() as u32);
-                arr.copy_from(data);
-                arr.into()
+        // Issue #239: bundle stdin/env/cwd into a single options object
+        // rather than the pre-#239 positional stdin argument. Only fields
+        // that are `Some` are set, so an all-`None` `ExecOptions` produces an
+        // empty `{}` — the Node bridge (`node-host.ts`) treats every field of
+        // that object as optional, preserving pre-#239 behavior exactly.
+        let js_options = js_sys::Object::new();
+        if let Some(data) = options.stdin {
+            let arr = Uint8Array::new_with_length(data.len() as u32);
+            arr.copy_from(data);
+            let _ = Reflect::set(&js_options, &JsValue::from_str("stdin"), &arr.into());
+        }
+        if let Some(env) = options.env {
+            let env_obj = js_sys::Object::new();
+            for (key, value) in env {
+                let _ = Reflect::set(&env_obj, &JsValue::from_str(key), &JsValue::from_str(value));
             }
-            None => JsValue::UNDEFINED,
-        };
+            let _ = Reflect::set(&js_options, &JsValue::from_str("env"), &env_obj);
+        }
+        if let Some(cwd) = options.cwd {
+            let _ = Reflect::set(
+                &js_options,
+                &JsValue::from_str("cwd"),
+                &JsValue::from_str(&cwd.to_string_lossy()),
+            );
+        }
 
         let promise = exec_fn
-            .call3(&self.host, &js_cmd, &js_args, &js_stdin)
+            .call3(&self.host, &js_cmd, &js_args, &js_options.into())
             .map_err(|e| js_err(&format!("exec() call failed: {e:?}")))?;
 
         let result = JsFuture::from(Promise::from(promise))
@@ -391,6 +422,456 @@ impl HostPlatform for JsHostPlatform {
     fn config_dir(&self) -> &Path {
         &self.config_dir
     }
+
+    /// Bridges to the JS host's required `httpFetch(request)` method over
+    /// the global `fetch` (issue #239). No core consumer calls this yet —
+    /// see the trait default's doc comment
+    /// (`crates/vaultkeeper-core/src/backend/types.rs`) — this override just
+    /// makes the primitive real end-to-end for direct testing
+    /// (`__testHttpFetch` below) ahead of a later consumer.
+    async fn http_fetch(&self, request: HttpRequest) -> Result<HttpResponse, VaultError> {
+        let url = request.url.clone();
+        let fetch_fn = get_method(&self.host, "httpFetch").map_err(|e| VaultError::Fetch {
+            message: format!("{e:?}"),
+            url: url.clone(),
+        })?;
+
+        let js_request = http_request_to_js(&request);
+
+        let promise = fetch_fn
+            .call1(&self.host, &js_request)
+            .map_err(|e| VaultError::Fetch {
+                message: format!("httpFetch() call failed: {e:?}"),
+                url: url.clone(),
+            })?;
+
+        let result =
+            JsFuture::from(Promise::from(promise))
+                .await
+                .map_err(|e| VaultError::Fetch {
+                    message: format!("httpFetch() promise rejected: {e:?}"),
+                    url: url.clone(),
+                })?;
+
+        js_result_to_http_response(&result, &url)
+    }
+
+    /// Bridges to the JS host's *optional* `promptApproval(context)` method
+    /// (issue #239). A JS host that omits the method — the common case, since
+    /// no consumer wires this up yet — fails closed (`Ok(false)`), matching
+    /// the trait default in `crates/vaultkeeper-core/src/backend/types.rs`
+    /// exactly rather than surfacing a "missing method" error.
+    async fn prompt_approval(&self, context: ApprovalContext<'_>) -> Result<bool, VaultError> {
+        let Ok(prompt_fn) = get_method(&self.host, "promptApproval") else {
+            return Ok(false);
+        };
+
+        let js_context = js_sys::Object::new();
+        let _ = Reflect::set(
+            &js_context,
+            &JsValue::from_str("action"),
+            &JsValue::from_str(context.action),
+        );
+        let _ = Reflect::set(
+            &js_context,
+            &JsValue::from_str("detail"),
+            &JsValue::from_str(context.detail),
+        );
+
+        let promise = prompt_fn
+            .call1(&self.host, &js_context.into())
+            .map_err(|e| js_err(&format!("promptApproval() call failed: {e:?}")))?;
+
+        let result = JsFuture::from(Promise::from(promise))
+            .await
+            .map_err(|e| js_err(&format!("promptApproval() promise rejected: {e:?}")))?;
+
+        Ok(result.as_bool().unwrap_or(false))
+    }
+}
+
+/// Build the `{ method, url, headers, body? }` JS object `httpFetch` expects,
+/// mirroring `HttpFetchRequest` (`packages/vaultkeeper-wasm/src/types.ts`).
+fn http_request_to_js(request: &HttpRequest) -> JsValue {
+    let obj = js_sys::Object::new();
+    let _ = Reflect::set(
+        &obj,
+        &JsValue::from_str("method"),
+        &JsValue::from_str(&request.method),
+    );
+    let _ = Reflect::set(
+        &obj,
+        &JsValue::from_str("url"),
+        &JsValue::from_str(&request.url),
+    );
+    let headers_obj = js_sys::Object::new();
+    for (key, value) in &request.headers {
+        let _ = Reflect::set(
+            &headers_obj,
+            &JsValue::from_str(key),
+            &JsValue::from_str(value),
+        );
+    }
+    let _ = Reflect::set(&obj, &JsValue::from_str("headers"), &headers_obj);
+    if let Some(body) = &request.body {
+        let arr = Uint8Array::new_with_length(body.len() as u32);
+        arr.copy_from(body);
+        let _ = Reflect::set(&obj, &JsValue::from_str("body"), &arr.into());
+    }
+    obj.into()
+}
+
+/// Parse the `{ status, headers, body }` value `httpFetch` resolved with into
+/// an [`HttpResponse`], mirroring `HttpFetchResponse`
+/// (`packages/vaultkeeper-wasm/src/types.ts`). `url` is only used to label a
+/// malformed-shape failure with the request it came from.
+fn js_result_to_http_response(result: &JsValue, url: &str) -> Result<HttpResponse, VaultError> {
+    let malformed = |field: &str| VaultError::Fetch {
+        message: format!("httpFetch() result missing/invalid '{field}' (requested {url})"),
+        url: url.to_string(),
+    };
+
+    let status = Reflect::get(result, &JsValue::from_str("status"))
+        .ok()
+        .and_then(|v| v.as_f64())
+        .ok_or_else(|| malformed("status"))? as u16;
+
+    let mut headers = Vec::new();
+    let headers_val =
+        Reflect::get(result, &JsValue::from_str("headers")).map_err(|_| malformed("headers"))?;
+    if headers_val.is_object() {
+        let keys = js_sys::Object::keys(&js_sys::Object::from(headers_val.clone()));
+        for i in 0..keys.length() {
+            if let Some(key) = keys.get(i).as_string()
+                && let Ok(value) = Reflect::get(&headers_val, &JsValue::from_str(&key))
+                && let Some(value_str) = value.as_string()
+            {
+                headers.push((key, value_str));
+            }
+        }
+    }
+
+    let body_val =
+        Reflect::get(result, &JsValue::from_str("body")).map_err(|_| malformed("body"))?;
+    let body = Uint8Array::new(&body_val).to_vec();
+
+    Ok(HttpResponse {
+        status,
+        headers,
+        body,
+    })
+}
+
+/// Parse a JS `{ method, url, headers?, body? }` value (the same shape
+/// `httpFetch` receives) into an [`HttpRequest`]. Used only by the
+/// `__testHttpFetch` diagnostic export below, so a real caller never
+/// round-trips through this — it exists purely to let a TS test construct a
+/// request without hand-building the internal `HttpRequest` struct.
+fn js_value_to_http_request(request: &JsValue) -> Result<HttpRequest, JsError> {
+    let method = Reflect::get(request, &JsValue::from_str("method"))
+        .ok()
+        .and_then(|v| v.as_string())
+        .unwrap_or_else(|| "GET".to_string());
+    let url = Reflect::get(request, &JsValue::from_str("url"))
+        .ok()
+        .and_then(|v| v.as_string())
+        .ok_or_else(|| JsError::new("request.url must be a string"))?;
+
+    let mut headers = Vec::new();
+    if let Ok(headers_val) = Reflect::get(request, &JsValue::from_str("headers"))
+        && headers_val.is_object()
+    {
+        let keys = js_sys::Object::keys(&js_sys::Object::from(headers_val.clone()));
+        for i in 0..keys.length() {
+            if let Some(key) = keys.get(i).as_string()
+                && let Ok(value) = Reflect::get(&headers_val, &JsValue::from_str(&key))
+                && let Some(value_str) = value.as_string()
+            {
+                headers.push((key, value_str));
+            }
+        }
+    }
+
+    let body = Reflect::get(request, &JsValue::from_str("body"))
+        .ok()
+        .filter(|v| !v.is_undefined() && !v.is_null())
+        .map(|v| Uint8Array::new(&v).to_vec());
+
+    Ok(HttpRequest {
+        method,
+        url,
+        headers,
+        body,
+    })
+}
+
+// ─── JsSecretBackend ─────────────────────────────────────────────────
+
+/// A `SecretBackend` implementation backed by JavaScript callbacks (issue
+/// #239 Phase 0 scaffold).
+///
+/// The JS object must implement (mirrors `HostSecretBackend`,
+/// `packages/vaultkeeper-wasm/src/types.ts`):
+/// - `type` → `string` (read once at construction)
+/// - `displayName` → `string` (read once at construction)
+/// - `isAvailable()` → `Promise<boolean>`
+/// - `store(id, secret: Uint8Array)` → `Promise<void>`
+/// - `retrieve(id)` → `Promise<Uint8Array>`
+/// - `delete(id)` → `Promise<void>`
+/// - `exists(id)` → `Promise<boolean>`
+/// - `list?()` → `Promise<string[]>` (optional; probed once at construction —
+///   `list()` rejects with `NotCapable` if the JS object didn't provide one)
+///
+/// This scaffold implements only the core `SecretBackend`/`ListableBackend`
+/// traits. It deliberately does **not** dispatch `getCapabilities`,
+/// `generateSigningKey`, `getPublicKey`, or `signWithKey` — those forward-looking
+/// `HostSecretBackend` fields exist in the TS contract ahead of the Rust-side
+/// capability trait (issue #242) and signing trait (issue #237), which are
+/// out of scope here. Registry dispatch (making a `JsSecretBackend` reachable
+/// via `BackendRegistry`) is also a later phase; this type exists to be
+/// constructed directly (see the `__testJsSecretBackend*` diagnostic exports
+/// below) until that wiring lands.
+///
+/// # No-reentrancy contract
+///
+/// None of these JS callbacks may call back into the vault while running —
+/// same contract as `JsHostPlatform` above.
+struct JsSecretBackend {
+    host: JsValue,
+    backend_type: String,
+    display_name: String,
+    has_list: bool,
+}
+
+// SAFETY: In single-threaded WASM, JsValue is never accessed from multiple threads.
+unsafe impl Send for JsSecretBackend {}
+unsafe impl Sync for JsSecretBackend {}
+
+impl JsSecretBackend {
+    fn new(host: JsValue) -> Result<Self, JsError> {
+        let backend_type = Reflect::get(&host, &JsValue::from_str("type"))
+            .ok()
+            .and_then(|v| v.as_string())
+            .ok_or_else(|| JsError::new("HostSecretBackend.type must be a string"))?;
+        let display_name = Reflect::get(&host, &JsValue::from_str("displayName"))
+            .ok()
+            .and_then(|v| v.as_string())
+            .ok_or_else(|| JsError::new("HostSecretBackend.displayName must be a string"))?;
+        let has_list = Reflect::get(&host, &JsValue::from_str("list"))
+            .map(|v| v.is_function())
+            .unwrap_or(false);
+
+        Ok(Self {
+            host,
+            backend_type,
+            display_name,
+            has_list,
+        })
+    }
+}
+
+#[async_trait::async_trait(?Send)]
+impl SecretBackend for JsSecretBackend {
+    fn backend_type(&self) -> &str {
+        &self.backend_type
+    }
+
+    fn display_name(&self) -> &str {
+        &self.display_name
+    }
+
+    async fn is_available(&self) -> bool {
+        let Ok(is_available_fn) = get_method(&self.host, "isAvailable") else {
+            return false;
+        };
+        let Ok(promise) = is_available_fn.call0(&self.host) else {
+            return false;
+        };
+        JsFuture::from(Promise::from(promise))
+            .await
+            .ok()
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false)
+    }
+
+    async fn store(&self, id: &str, secret: &str) -> Result<(), VaultError> {
+        let store_fn = get_method(&self.host, "store").map_err(|e| js_err(&format!("{e:?}")))?;
+
+        let js_id = JsValue::from_str(id);
+        let secret_bytes = secret.as_bytes();
+        let js_secret = Uint8Array::new_with_length(secret_bytes.len() as u32);
+        js_secret.copy_from(secret_bytes);
+
+        let promise = store_fn
+            .call2(&self.host, &js_id, &js_secret.into())
+            .map_err(|e| js_err(&format!("store() call failed: {e:?}")))?;
+
+        JsFuture::from(Promise::from(promise))
+            .await
+            .map_err(|e| js_err(&format!("store() promise rejected: {e:?}")))?;
+
+        Ok(())
+    }
+
+    async fn retrieve(&self, id: &str) -> Result<String, VaultError> {
+        let retrieve_fn =
+            get_method(&self.host, "retrieve").map_err(|e| js_err(&format!("{e:?}")))?;
+
+        let js_id = JsValue::from_str(id);
+        let promise = retrieve_fn
+            .call1(&self.host, &js_id)
+            .map_err(|e| js_err(&format!("retrieve() call failed: {e:?}")))?;
+
+        let result = JsFuture::from(Promise::from(promise))
+            .await
+            .map_err(|e| js_err(&format!("retrieve() promise rejected: {e:?}")))?;
+
+        let bytes = Uint8Array::new(&result).to_vec();
+        String::from_utf8(bytes)
+            .map_err(|e| VaultError::Other(format!("retrieve() returned non-UTF-8 bytes: {e}")))
+    }
+
+    async fn delete(&self, id: &str) -> Result<(), VaultError> {
+        let delete_fn = get_method(&self.host, "delete").map_err(|e| js_err(&format!("{e:?}")))?;
+
+        let js_id = JsValue::from_str(id);
+        let promise = delete_fn
+            .call1(&self.host, &js_id)
+            .map_err(|e| js_err(&format!("delete() call failed: {e:?}")))?;
+
+        JsFuture::from(Promise::from(promise))
+            .await
+            .map_err(|e| js_err(&format!("delete() promise rejected: {e:?}")))?;
+
+        Ok(())
+    }
+
+    async fn exists(&self, id: &str) -> Result<bool, VaultError> {
+        let exists_fn = get_method(&self.host, "exists").map_err(|e| js_err(&format!("{e:?}")))?;
+
+        let js_id = JsValue::from_str(id);
+        let promise = exists_fn
+            .call1(&self.host, &js_id)
+            .map_err(|e| js_err(&format!("exists() call failed: {e:?}")))?;
+
+        let result = JsFuture::from(Promise::from(promise))
+            .await
+            .map_err(|e| js_err(&format!("exists() promise rejected: {e:?}")))?;
+
+        Ok(result.as_bool().unwrap_or(false))
+    }
+}
+
+#[async_trait::async_trait(?Send)]
+impl ListableBackend for JsSecretBackend {
+    async fn list(&self) -> Result<Vec<String>, VaultError> {
+        if !self.has_list {
+            return Err(VaultError::NotCapable {
+                message: format!("{} does not implement list()", self.backend_type),
+                backend_type: self.backend_type.clone(),
+                capability: "list".to_string(),
+            });
+        }
+
+        let list_fn = get_method(&self.host, "list").map_err(|e| js_err(&format!("{e:?}")))?;
+        let promise = list_fn
+            .call0(&self.host)
+            .map_err(|e| js_err(&format!("list() call failed: {e:?}")))?;
+
+        let result = JsFuture::from(Promise::from(promise))
+            .await
+            .map_err(|e| js_err(&format!("list() promise rejected: {e:?}")))?;
+
+        let arr = js_sys::Array::from(&result);
+        let mut ids = Vec::new();
+        for i in 0..arr.length() {
+            if let Some(s) = arr.get(i).as_string() {
+                ids.push(s);
+            }
+        }
+        Ok(ids)
+    }
+}
+
+/// Diagnostic-only export: constructs a `JsSecretBackend` from `host` and
+/// returns its `{ type, displayName }` identity — issue #239 AC5 "unit
+/// coverage with a mock JS backend". Not part of the SDK's public TypeScript
+/// API.
+#[wasm_bindgen(js_name = "__testJsSecretBackendMeta")]
+pub fn __test_js_secret_backend_meta(host: JsValue) -> Result<JsValue, JsValue> {
+    let backend = JsSecretBackend::new(host)?;
+    let obj = js_sys::Object::new();
+    Reflect::set(
+        &obj,
+        &JsValue::from_str("type"),
+        &JsValue::from_str(backend.backend_type()),
+    )
+    .map_err(|e| JsValue::from(JsError::new(&format!("{e:?}"))))?;
+    Reflect::set(
+        &obj,
+        &JsValue::from_str("displayName"),
+        &JsValue::from_str(backend.display_name()),
+    )
+    .map_err(|e| JsValue::from(JsError::new(&format!("{e:?}"))))?;
+    Ok(obj.into())
+}
+
+/// Diagnostic-only export exercising `JsSecretBackend::is_available`.
+#[wasm_bindgen(js_name = "__testJsSecretBackendIsAvailable")]
+pub async fn __test_js_secret_backend_is_available(host: JsValue) -> Result<bool, JsValue> {
+    let backend = JsSecretBackend::new(host)?;
+    Ok(backend.is_available().await)
+}
+
+/// Diagnostic-only export exercising `JsSecretBackend::store`. `secret` is a
+/// UTF-8 string on this side of the boundary — the core `SecretBackend`
+/// trait's `store`/`retrieve` are `&str`/`String`-based — but crosses to the
+/// JS mock as a `Uint8Array`, exactly as a real `JsSecretBackend::store` call
+/// would.
+#[wasm_bindgen(js_name = "__testJsSecretBackendStore")]
+pub async fn __test_js_secret_backend_store(
+    host: JsValue,
+    id: &str,
+    secret: &str,
+) -> Result<(), JsValue> {
+    let backend = JsSecretBackend::new(host)?;
+    backend
+        .store(id, secret)
+        .await
+        .map_err(|e| vault_error_to_js(&e))
+}
+
+/// Diagnostic-only export exercising `JsSecretBackend::retrieve`.
+#[wasm_bindgen(js_name = "__testJsSecretBackendRetrieve")]
+pub async fn __test_js_secret_backend_retrieve(host: JsValue, id: &str) -> Result<String, JsValue> {
+    let backend = JsSecretBackend::new(host)?;
+    backend
+        .retrieve(id)
+        .await
+        .map_err(|e| vault_error_to_js(&e))
+}
+
+/// Diagnostic-only export exercising `JsSecretBackend::delete`.
+#[wasm_bindgen(js_name = "__testJsSecretBackendDelete")]
+pub async fn __test_js_secret_backend_delete(host: JsValue, id: &str) -> Result<(), JsValue> {
+    let backend = JsSecretBackend::new(host)?;
+    backend.delete(id).await.map_err(|e| vault_error_to_js(&e))
+}
+
+/// Diagnostic-only export exercising `JsSecretBackend::exists`.
+#[wasm_bindgen(js_name = "__testJsSecretBackendExists")]
+pub async fn __test_js_secret_backend_exists(host: JsValue, id: &str) -> Result<bool, JsValue> {
+    let backend = JsSecretBackend::new(host)?;
+    backend.exists(id).await.map_err(|e| vault_error_to_js(&e))
+}
+
+/// Diagnostic-only export exercising `JsSecretBackend::list`
+/// (`ListableBackend`), including the `NotCapable` path when the JS mock
+/// doesn't provide `list()`.
+#[wasm_bindgen(js_name = "__testJsSecretBackendList")]
+pub async fn __test_js_secret_backend_list(host: JsValue) -> Result<Vec<String>, JsValue> {
+    let backend = JsSecretBackend::new(host)?;
+    backend.list().await.map_err(|e| vault_error_to_js(&e))
 }
 
 // ─── WASM API ──────────────────────────────────────────────────────
@@ -433,6 +914,75 @@ pub fn __test_all_vault_errors() -> js_sys::Array {
         arr.push(&vault_error_to_js(e));
     }
     arr
+}
+
+/// Diagnostic-only export exercising `HostPlatform::http_fetch` directly
+/// through the real `JsHostPlatform` bridge (issue #239 AC2 — "land the
+/// primitive with direct tests"). No core consumer calls `http_fetch` yet
+/// (see the trait default in `crates/vaultkeeper-core/src/backend/types.rs`),
+/// so this is the only way to exercise the bridge end-to-end today. Not part
+/// of the SDK's public TypeScript API (`packages/vaultkeeper-wasm/src/index.ts`
+/// does not re-export it).
+///
+/// `host` must satisfy the full `JsHostPlatform::new` contract (`platform()`,
+/// `configDir()`) in addition to `httpFetch()`, since it's constructed the
+/// same way a real `WasmVaultKeeper` host is.
+#[wasm_bindgen(js_name = "__testHttpFetch")]
+pub async fn __test_http_fetch(host: JsValue, request: JsValue) -> Result<JsValue, JsValue> {
+    let js_host = JsHostPlatform::new(host)?;
+    let http_request = js_value_to_http_request(&request)?;
+    let response = js_host
+        .http_fetch(http_request)
+        .await
+        .map_err(|e| vault_error_to_js(&e))?;
+    http_response_to_js(&response).map_err(JsValue::from)
+}
+
+/// Diagnostic-only export exercising `HostPlatform::prompt_approval`
+/// directly through the real `JsHostPlatform` bridge (issue #239 AC3). Not
+/// part of the SDK's public TypeScript API.
+#[wasm_bindgen(js_name = "__testPromptApproval")]
+pub async fn __test_prompt_approval(
+    host: JsValue,
+    action: &str,
+    detail: &str,
+) -> Result<bool, JsValue> {
+    let js_host = JsHostPlatform::new(host)?;
+    js_host
+        .prompt_approval(ApprovalContext { action, detail })
+        .await
+        .map_err(|e| vault_error_to_js(&e))
+}
+
+/// Convert an [`HttpResponse`] to the `{ status, headers, body }` JS shape,
+/// for `__testHttpFetch`'s return value.
+fn http_response_to_js(response: &HttpResponse) -> Result<JsValue, JsError> {
+    let obj = js_sys::Object::new();
+    Reflect::set(
+        &obj,
+        &JsValue::from_str("status"),
+        &JsValue::from_f64(f64::from(response.status)),
+    )
+    .map_err(|e| JsError::new(&format!("{e:?}")))?;
+
+    let headers_obj = js_sys::Object::new();
+    for (key, value) in &response.headers {
+        Reflect::set(
+            &headers_obj,
+            &JsValue::from_str(key),
+            &JsValue::from_str(value),
+        )
+        .map_err(|e| JsError::new(&format!("{e:?}")))?;
+    }
+    Reflect::set(&obj, &JsValue::from_str("headers"), &headers_obj)
+        .map_err(|e| JsError::new(&format!("{e:?}")))?;
+
+    let body_arr = Uint8Array::new_with_length(response.body.len() as u32);
+    body_arr.copy_from(&response.body);
+    Reflect::set(&obj, &JsValue::from_str("body"), &body_arr.into())
+        .map_err(|e| JsError::new(&format!("{e:?}")))?;
+
+    Ok(obj.into())
 }
 
 /// WASM-exposed VaultKeeper wrapper.

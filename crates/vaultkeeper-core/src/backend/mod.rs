@@ -12,7 +12,7 @@ pub use file::FileBackend;
 pub use in_memory::InMemoryBackend;
 pub use registry::BackendRegistry;
 pub use types::{
-    BackendCapabilities, ExecOutput, HostPlatform, ListableBackend, Platform,
-    PresenceCapableBackend, PresenceOperation, SecretBackend, SigningBackend,
-    get_backend_capabilities, is_presence_capable_backend,
+    ApprovalContext, BackendCapabilities, ExecOptions, ExecOutput, HostPlatform, HttpRequest,
+    HttpResponse, ListableBackend, Platform, PresenceCapableBackend, PresenceOperation,
+    SecretBackend, SigningBackend, get_backend_capabilities, is_presence_capable_backend,
 };

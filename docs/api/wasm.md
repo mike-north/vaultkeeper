@@ -480,12 +480,69 @@ Description
 </th></tr></thead>
 <tbody><tr><td>
 
+[ApprovalContext](./wasm.approvalcontext.md)
+
+
+</td><td>
+
+Context for a [WasmHostPlatform.promptApproval()](./wasm.wasmhostplatform.promptapproval.md) request.
+
+
+</td></tr>
+<tr><td>
+
 [AuthorizeResult](./wasm.authorizeresult.md)
 
 
 </td><td>
 
 Authorization result. Combines the validated claims (secret redacted), the response metadata, and a one-time [SecretAccessor](./wasm.secretaccessor.md) for the plaintext secret.
+
+
+</td></tr>
+<tr><td>
+
+[ExecOptions](./wasm.execoptions.md)
+
+
+</td><td>
+
+Options for [WasmHostPlatform.exec()](./wasm.wasmhostplatform.exec.md) (issue \#239). Every field is optional; omitting all of them reproduces the pre-\#239 2-argument `exec(cmd, args)` behavior exactly: no stdin, the child inherits the host process's environment unchanged, and the child inherits the host process's current working directory unchanged.
+
+
+</td></tr>
+<tr><td>
+
+[HostSecretBackend](./wasm.hostsecretbackend.md)
+
+
+</td><td>
+
+Contract a JS/TS-implemented secret backend must satisfy to be driven by the Rust core via `JsSecretBackend` (`crates/vaultkeeper-wasm`<!-- -->).
+
+Mirrors the core `SecretBackend` trait (`crates/vaultkeeper-core/src/backend/types.rs`<!-- -->): `type`<!-- -->/`displayName` are synchronous identity, everything else is async. Every byte payload at this boundary is a `Uint8Array` — never a Node `Buffer` — so the contract is identical whether the backend runs under Node or another JS host.
+
+
+</td></tr>
+<tr><td>
+
+[HttpFetchRequest](./wasm.httpfetchrequest.md)
+
+
+</td><td>
+
+A minimal HTTP request description for [WasmHostPlatform.httpFetch()](./wasm.wasmhostplatform.httpfetch.md)<!-- -->.
+
+
+</td></tr>
+<tr><td>
+
+[HttpFetchResponse](./wasm.httpfetchresponse.md)
+
+
+</td><td>
+
+The response produced by [WasmHostPlatform.httpFetch()](./wasm.wasmhostplatform.httpfetch.md)<!-- -->.
 
 
 </td></tr>
@@ -592,7 +649,7 @@ Response from token authorization.
 
 Host platform interface that bridges Node.js OS calls to the WASM module.
 
-Implementations of this interface are passed to the WASM VaultKeeper constructor to provide file I/O and subprocess execution.
+Implementations of this interface are passed to the WASM VaultKeeper constructor to provide file I/O, subprocess execution, and networking.
 
 
 </td></tr>
@@ -619,6 +676,17 @@ Description
 </td><td>
 
 Machine-readable discriminator for why an executable-trust choice was rejected by `setup()`<!-- -->. `'missing-choice'` means neither `executablePath` nor `skipTrust: true` was provided (an empty/whitespace `executablePath` counts as missing). `'conflicting-choice'` means both were provided, which are mutually exclusive intents. `'legacy-dev-sentinel'` means `executablePath` was the retired literal `'dev'` opt-out sentinel, which is no longer supported and must be replaced with `skipTrust: true`<!-- -->.
+
+
+</td></tr>
+<tr><td>
+
+[HostBackendCapabilities](./wasm.hostbackendcapabilities.md)
+
+
+</td><td>
+
+Capabilities a host-implemented [HostSecretBackend](./wasm.hostsecretbackend.md) may advertise.
 
 
 </td></tr>

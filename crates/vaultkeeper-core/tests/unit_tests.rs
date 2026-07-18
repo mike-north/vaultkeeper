@@ -3,7 +3,7 @@
 //! @see RFC 7516 (JWE Compact Serialization)
 //! @see RFC 5116 (AES-GCM)
 
-use vaultkeeper_core::backend::{BackendRegistry, ExecOutput, HostPlatform, Platform};
+use vaultkeeper_core::backend::{BackendRegistry, ExecOptions, ExecOutput, HostPlatform, Platform};
 use vaultkeeper_core::config::{
     default_backend_type_for_platform, default_config, load_config_from_str, validate_config,
 };
@@ -678,7 +678,7 @@ mod vault_keeper {
             &self,
             _cmd: &str,
             _args: &[&str],
-            _stdin: Option<&[u8]>,
+            _options: ExecOptions<'_>,
         ) -> Result<ExecOutput, VaultError> {
             // Return "openssl OK" so doctor checks pass
             Ok(ExecOutput {
@@ -1396,7 +1396,7 @@ mod doctor_scoping {
             &self,
             _cmd: &str,
             _args: &[&str],
-            _stdin: Option<&[u8]>,
+            _options: ExecOptions<'_>,
         ) -> Result<ExecOutput, VaultError> {
             // Return a generic successful output that passes most checks.
             Ok(ExecOutput {
