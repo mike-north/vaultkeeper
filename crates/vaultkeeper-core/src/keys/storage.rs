@@ -193,7 +193,13 @@ async fn generate_and_write_wrap_key(
     let mut key = vec![0u8; GCM_KEY_BYTES];
     getrandom::fill(&mut key)
         .map_err(|e| VaultError::Other(format!("Failed to generate wrap key: {e}")))?;
-    host.write_file(wrap_path, &key, 0o600).await?;
+    // Zeroize on a failed write too — this freshly generated key is real key
+    // material, and an early `?` return would otherwise drop it un-wiped,
+    // leaving it resident in memory after a failed persistence attempt.
+    if let Err(err) = host.write_file(wrap_path, &key, 0o600).await {
+        key.zeroize();
+        return Err(err);
+    }
     Ok(key)
 }
 
