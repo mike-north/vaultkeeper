@@ -9,9 +9,13 @@ Rotate the encryption key.
 **Signature:**
 
 ```typescript
-rotateKey(): void;
+rotateKey(): Promise<void>;
 ```
 **Returns:**
 
-void
+Promise&lt;void&gt;
+
+## Remarks
+
+Persists the new key state to the config directory before resolving, so a later process picks up the rotation — this is why rotation is async here (it was synchronous before key persistence existed).
 

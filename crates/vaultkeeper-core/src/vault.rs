@@ -55,6 +55,13 @@ pub struct VaultKeeper {
     _backend: Option<Box<dyn SecretBackend>>,
     /// Per-JTI usage counts for use-limited tokens.
     usage_counts: HashMap<String, u64>,
+    /// Whether key state is persisted to the host's config directory.
+    ///
+    /// `false` when `VaultKeeperOptions::config` was supplied directly: the
+    /// caller is assembling the vault in-process (tests, embedders), so keys
+    /// stay in memory only and never touch the config dir — mirroring the TS
+    /// `VaultKeeper.init`'s `persistKeys` flag.
+    persist_keys: bool,
 }
 
 impl VaultKeeper {
@@ -66,6 +73,11 @@ impl VaultKeeper {
         options: Option<VaultKeeperOptions>,
     ) -> Result<Self, VaultError> {
         let opts = options.unwrap_or_default();
+        // Persist key material to disk only when operating against a real
+        // on-disk config directory. When `config` is injected, the caller is
+        // assembling the vault in-process (tests, embedders), so keys stay in
+        // memory and never touch the config dir.
+        let persist_keys = opts.config.is_none();
 
         let cfg = match opts.config {
             Some(c) => c,
@@ -83,13 +95,25 @@ impl VaultKeeper {
         }
 
         let mut key_manager = KeyManager::new();
-        key_manager.init()?;
+        if persist_keys {
+            match crate::keys::load_key_state(host).await? {
+                Some(snapshot) => key_manager.hydrate(snapshot),
+                None => {
+                    key_manager.init()?;
+                    let snapshot = key_manager.snapshot()?;
+                    crate::keys::save_key_state(host, &snapshot).await?;
+                }
+            }
+        } else {
+            key_manager.init()?;
+        }
 
         Ok(Self {
             config: cfg,
             key_manager,
             _backend: None,
             usage_counts: HashMap::new(),
+            persist_keys,
         })
     }
 
@@ -117,16 +141,30 @@ impl VaultKeeper {
         &mut self.key_manager
     }
 
-    /// Rotate the current encryption key.
-    pub fn rotate_key(&mut self) -> Result<(), VaultError> {
+    /// Rotate the current encryption key, then persist the new state so a
+    /// later process picks up the rotation (see `keys::storage`).
+    pub async fn rotate_key(&mut self, host: &dyn HostPlatform) -> Result<(), VaultError> {
         let grace_period_ms =
             u64::from(self.config.key_rotation.grace_period_days) * 24 * 60 * 60 * 1000;
-        self.key_manager.rotate_key(grace_period_ms)
+        self.key_manager.rotate_key(grace_period_ms)?;
+        self.persist_key_state(host).await
     }
 
-    /// Emergency key revocation.
-    pub fn revoke_key(&mut self) -> Result<(), VaultError> {
-        self.key_manager.revoke_key()
+    /// Emergency key revocation, then persist the new state so a later
+    /// process picks up the revocation (see `keys::storage`).
+    pub async fn revoke_key(&mut self, host: &dyn HostPlatform) -> Result<(), VaultError> {
+        self.key_manager.revoke_key()?;
+        self.persist_key_state(host).await
+    }
+
+    /// Persist the current key state to the config dir when persistence is
+    /// enabled. A no-op for injected-config instances (in-memory keys).
+    async fn persist_key_state(&mut self, host: &dyn HostPlatform) -> Result<(), VaultError> {
+        if !self.persist_keys {
+            return Ok(());
+        }
+        let snapshot = self.key_manager.snapshot()?;
+        crate::keys::save_key_state(host, &snapshot).await
     }
 
     /// Store a secret value and produce a JWE token encapsulating it.

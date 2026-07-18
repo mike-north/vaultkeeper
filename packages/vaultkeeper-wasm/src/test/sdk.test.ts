@@ -205,7 +205,7 @@ describe('@vaultkeeper/wasm SDK', () => {
     await withTempDir(async (dir) => {
       const vault = await createTestVault(dir)
       // Should not throw
-      vault.rotateKey()
+      await vault.rotateKey()
       vault.dispose()
     })
   })
@@ -269,7 +269,7 @@ describe('@vaultkeeper/wasm SDK', () => {
     await withTempDir(async (dir) => {
       const vault = await createTestVault(dir)
       const token = await vault.setup('rotate-key', 'rotate-value', { skipTrust: true })
-      vault.rotateKey()
+      await vault.rotateKey()
       const result = vault.authorize(token)
       // Old token decrypted with previous key
       assert.equal(result.response.keyStatus, 'previous')
@@ -289,7 +289,7 @@ describe('@vaultkeeper/wasm SDK', () => {
     await withTempDir(async (dir) => {
       const vault = await createTestVault(dir)
       const token = await vault.setup('revoke-key', 'revoke-value', { skipTrust: true })
-      vault.revokeKey()
+      await vault.revokeKey()
       // Old token should be rejected — key was revoked
       assert.throws(() => vault.authorize(token), /revoked|unknown/i)
       // New tokens should still work
@@ -307,11 +307,42 @@ describe('@vaultkeeper/wasm SDK', () => {
   it('double rotate rejects (rotation already in progress)', async () => {
     await withTempDir(async (dir) => {
       const vault = await createTestVault(dir)
-      vault.rotateKey()
-      assert.throws(() => {
-        vault.rotateKey()
-      }, /rotation/i)
+      await vault.rotateKey()
+      await assert.rejects(() => vault.rotateKey(), /rotation/i)
       vault.dispose()
+    })
+  })
+
+  // Issue #238: key state now persists to the config dir, so these two
+  // instances sharing a `dir` model separate processes — each
+  // `createTestVault` call constructs a fresh WASM `VaultKeeper` (and thus a
+  // fresh in-memory KeyManager) with no shared JS-side state.
+
+  it('a token minted by one VaultKeeper instance authorizes in a later instance sharing the config dir', async () => {
+    await withTempDir(async (dir) => {
+      const first = await createTestVault(dir)
+      const token = await first.setup('cross-instance', 'cross-value', { skipTrust: true })
+      first.dispose()
+
+      const second = await createTestVault(dir)
+      const result = second.authorize(token)
+      assert.equal(
+        result.secret.read((value) => value),
+        'cross-value',
+      )
+      second.dispose()
+    })
+  })
+
+  it('the rotation grace-period guard survives a fresh instance sharing the config dir', async () => {
+    await withTempDir(async (dir) => {
+      const first = await createTestVault(dir)
+      await first.rotateKey()
+      first.dispose()
+
+      const second = await createTestVault(dir)
+      await assert.rejects(() => second.rotateKey(), /rotation/i)
+      second.dispose()
     })
   })
 
@@ -641,11 +672,9 @@ describe('@vaultkeeper/wasm security parity (issue #66)', () => {
   it('double key rotation throws a typed RotationInProgressError', async () => {
     await withTempDir(async (dir) => {
       const vault = await createTestVault(dir)
-      vault.rotateKey()
-      assert.throws(
-        () => {
-          vault.rotateKey()
-        },
+      await vault.rotateKey()
+      await assert.rejects(
+        () => vault.rotateKey(),
         (err: unknown) => err instanceof RotationInProgressError && err instanceof VaultError,
       )
       vault.dispose()

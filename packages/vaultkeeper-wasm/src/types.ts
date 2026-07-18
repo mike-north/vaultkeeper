@@ -14,6 +14,7 @@ export interface WasmHostPlatform {
   writeFile(path: string, content: Uint8Array, mode: number): Promise<void>
   fileExists(path: string): Promise<boolean>
   deleteFile(path: string): Promise<void>
+  renameFile(from: string, to: string): Promise<void>
   listDir(path: string): Promise<string[]>
   platform(): string
   configDir(): string

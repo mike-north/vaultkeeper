@@ -1,6 +1,6 @@
 //! KeyManager — handles key generation, rotation, and lookup.
 
-use super::types::{KeyMaterial, KeyState};
+use super::types::{KeyMaterial, KeyState, KeyStateSnapshot};
 use crate::errors::VaultError;
 use crate::util::time;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -100,6 +100,67 @@ impl KeyManager {
                 state.grace_period_ms = None;
             }
         }
+    }
+
+    /// Replace the in-memory state with a persisted snapshot (see
+    /// `keys::storage::load_key_state`).
+    ///
+    /// An expired grace period in the snapshot is dropped: the previous key
+    /// is discarded and no grace period is restored. When the grace period is
+    /// still active, the remaining duration is derived from the snapshot's
+    /// absolute expiry so `expire_previous_if_needed` continues to work
+    /// purely off the wall clock — correctness never depends on a live timer
+    /// surviving the process restart this snapshot is recovering from.
+    pub fn hydrate(&mut self, snapshot: KeyStateSnapshot) {
+        let now = time::now_millis();
+
+        if let (Some(previous), Some(expires_at)) =
+            (snapshot.previous, snapshot.grace_period_expires_at_ms)
+            && now < u128::from(expires_at)
+        {
+            let remaining_ms = (u128::from(expires_at) - now) as u64;
+            self.state = Some(KeyState {
+                current: snapshot.current,
+                previous: Some(previous),
+                rotated_at_ms: Some(now),
+                grace_period_ms: Some(remaining_ms),
+            });
+            return;
+        }
+
+        self.state = Some(KeyState {
+            current: snapshot.current,
+            previous: None,
+            rotated_at_ms: None,
+            grace_period_ms: None,
+        });
+    }
+
+    /// Capture the current state as a serializable snapshot for persistence
+    /// (see `keys::storage::save_key_state`). The previous key and grace
+    /// expiry are included only while the grace period is still active.
+    pub fn snapshot(&mut self) -> Result<KeyStateSnapshot, VaultError> {
+        self.expire_previous_if_needed();
+        let state = self
+            .state
+            .as_ref()
+            .ok_or(VaultError::Other("KeyManager not initialized".to_string()))?;
+
+        let mut result = KeyStateSnapshot {
+            current: state.current.clone(),
+            previous: None,
+            grace_period_expires_at_ms: None,
+        };
+
+        if let (Some(previous), Some(rotated_at), Some(grace_ms)) =
+            (&state.previous, state.rotated_at_ms, state.grace_period_ms)
+        {
+            let expires_at = rotated_at + u128::from(grace_ms);
+            result.previous = Some(previous.clone());
+            result.grace_period_expires_at_ms = Some(expires_at as u64);
+        }
+
+        Ok(result)
     }
 
     /// Emergency key revocation — removes the previous key immediately.

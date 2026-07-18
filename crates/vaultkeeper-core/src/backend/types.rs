@@ -47,6 +47,23 @@ pub trait HostPlatform: Send + Sync {
     /// Delete a file. Returns `Ok(())` if the file was deleted.
     async fn delete_file(&self, path: &Path) -> Result<(), VaultError>;
 
+    /// Replace `to` with `from`, e.g. for write-to-temp-then-rename
+    /// persistence (see `keys::storage`). Real hosts (native, wasm) must
+    /// implement this with a genuine atomic filesystem rename — on POSIX and
+    /// Windows that is atomic, and callers rely on it to guarantee a
+    /// concurrent reader never observes a half-written file.
+    ///
+    /// The default implementation (read `from`, write it to `to`, delete
+    /// `from`) is **not** atomic and does **not** satisfy that requirement —
+    /// it exists only so test doubles that don't exercise this path can skip
+    /// overriding it. Any host backing real persistence must override this
+    /// with a true atomic rename rather than relying on the default.
+    async fn rename_file(&self, from: &Path, to: &Path) -> Result<(), VaultError> {
+        let data = self.read_file(from).await?;
+        self.write_file(to, &data, 0o600).await?;
+        self.delete_file(from).await
+    }
+
     /// List filenames in a directory. Returns an empty vec if the dir doesn't exist.
     async fn list_dir(&self, path: &Path) -> Result<Vec<String>, VaultError>;
 

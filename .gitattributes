@@ -1,2 +1,15 @@
 docs/api/** linguist-generated=true
 *.sh text eol=lf
+
+# Key-material fixtures (issue #238 cross-impl tests). `.keys.wrap` is raw
+# random bytes small enough that git's own binary-content heuristic (which
+# most .wasm/.enc blobs trip automatically via embedded NUL bytes) isn't
+# reliable — a 32-byte random buffer has a good chance of containing zero
+# NUL bytes. `keys.enc` is base64 text today (no embedded CR/LF to corrupt
+# in its current committed content), but its exact bytes are just as
+# load-bearing for the cross-implementation test, and a future regeneration
+# could reintroduce a trailing newline or other text-normalization-sensitive
+# byte. Without `-text` on both, a Windows checkout with core.autocrlf
+# enabled could rewrite bytes and break the cross-implementation test.
+**/.keys.wrap -text
+**/keys.enc -text

@@ -337,8 +337,8 @@ export class VaultKeeper {
     dispose(): void;
     doctor(): Promise<PreflightResult>;
     retrieve(id: string): Promise<string>;
-    revokeKey(): void;
-    rotateKey(): void;
+    revokeKey(): Promise<void>;
+    rotateKey(): Promise<void>;
     setup(secretName: string, secretValue: string, options: SetupOptions): Promise<string>;
     store(id: string, secret: string): Promise<void>;
 }
@@ -377,6 +377,8 @@ export interface WasmHostPlatform {
     platform(): string;
     // (undocumented)
     readFile(path: string): Promise<Uint8Array>;
+    // (undocumented)
+    renameFile(from: string, to: string): Promise<void>;
     // (undocumented)
     writeFile(path: string, content: Uint8Array, mode: number): Promise<void>;
 }

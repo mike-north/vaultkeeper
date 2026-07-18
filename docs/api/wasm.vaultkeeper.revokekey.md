@@ -9,9 +9,13 @@ Emergency key revocation — removes previous key and generates a new current ke
 **Signature:**
 
 ```typescript
-revokeKey(): void;
+revokeKey(): Promise<void>;
 ```
 **Returns:**
 
-void
+Promise&lt;void&gt;
+
+## Remarks
+
+Persists the new key state to the config directory before resolving, so a later process picks up the revocation — this is why revocation is async here (it was synchronous before key persistence existed).
 

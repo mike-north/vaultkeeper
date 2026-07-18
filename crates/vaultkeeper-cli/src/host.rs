@@ -158,6 +158,28 @@ impl HostPlatform for NativeHostPlatform {
         })
     }
 
+    // `std::fs::rename` replaces an existing `to` on every platform Rust
+    // supports it on — including Windows, via `MoveFileExW`/
+    // `SetFileInformationByHandle` — per its own documented contract
+    // ("Renames a file or directory to a new name, replacing the original
+    // file if `to` already exists", https://doc.rust-lang.org/std/fs/fn.rename.html).
+    // The historical Windows footgun in this area (rust-lang/rust#31301) was
+    // specifically about renaming one *directory* over another, not the
+    // plain-file replace this call always performs (`keys.enc.<suffix>.tmp`
+    // over `keys.enc`), so no platform-specific fallback is needed here.
+    async fn rename_file(&self, from: &Path, to: &Path) -> Result<(), VaultError> {
+        std::fs::rename(from, to).map_err(|e| VaultError::Filesystem {
+            message: format!(
+                "Failed to rename {} to {}: {e}",
+                from.display(),
+                to.display()
+            ),
+            path: to.display().to_string(),
+            permission: "write".to_string(),
+            code: None,
+        })
+    }
+
     async fn list_dir(&self, path: &Path) -> Result<Vec<String>, VaultError> {
         match std::fs::read_dir(path) {
             Ok(entries) => {

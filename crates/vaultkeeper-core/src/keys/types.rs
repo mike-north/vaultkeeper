@@ -39,3 +39,24 @@ pub struct KeyRotationConfig {
     /// How long (in milliseconds) the previous key remains valid after rotation.
     pub grace_period_ms: u64,
 }
+
+/// A point-in-time snapshot of [`KeyManager`](super::KeyManager) state,
+/// suitable for persisting across processes via `keys::storage`. Produced by
+/// [`KeyManager::snapshot`](super::KeyManager::snapshot) and consumed by
+/// [`KeyManager::hydrate`](super::KeyManager::hydrate).
+///
+/// The rotation grace period is represented purely as an absolute expiry
+/// timestamp (epoch milliseconds); whether a rotation is "in progress" is
+/// derived by comparing it to the current time, so the guard survives
+/// process restarts without a live timer. Mirrors the TypeScript
+/// `KeyStateSnapshot` (`packages/vaultkeeper/src/keys/types.ts`).
+#[derive(Debug, Clone)]
+pub struct KeyStateSnapshot {
+    /// The currently active encryption key.
+    pub current: KeyMaterial,
+    /// The previous key, present only while its grace period is still active.
+    pub previous: Option<KeyMaterial>,
+    /// Absolute epoch-millisecond time at which the current grace period
+    /// ends. Present only while a rotation grace period is active.
+    pub grace_period_expires_at_ms: Option<u64>,
+}
