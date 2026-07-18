@@ -11,7 +11,7 @@
         "gh\\s+api\\b.*/pulls/comments/\\d+"
       ],
       "status": "approved",
-      "approvedSha256": "fcc765b03605c676291e3cba5f74c5918c49476409f140a838a12db8f3aeac62",
+      "approvedSha256": "0c3174fae0927b6a8ed8e80231e2613bf005dfc219c00d9374a40d954de60954",
       "permissionRule": "Bash(scripts/agent-tools/gh-review-comment:*)"
     },
     {
@@ -25,7 +25,7 @@
         "gh\\s+run\\s+view\\b.*--log-failed"
       ],
       "status": "approved",
-      "approvedSha256": "af10f2f26a0792cc63f2766c7147d7ad88edd1406cf935c3b454b4c8a2e3427e",
+      "approvedSha256": "664a7a2d0f8fa35f82c917105c5d4912fd671ca9569e02bb8d8da40c2c97aed1",
       "permissionRule": "Bash(scripts/agent-tools/gh-pr:*)"
     },
     {
@@ -39,7 +39,7 @@
         "gh\\s+api\\s+graphql\\b.*reviewThreads"
       ],
       "status": "approved",
-      "approvedSha256": "f55da066dd2b8fe29e5e2bb76a9453cf4fe4e650f6236a5bb9e7f14c2c5962ef",
+      "approvedSha256": "998949bececa676bf853e57a35257bc7b714533eb074e796e68fc72ded0d667d",
       "permissionRule": "Bash(scripts/agent-tools/pr-health:*)"
     }
   ]
