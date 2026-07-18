@@ -129,8 +129,18 @@ pub trait ListableBackend: SecretBackend {
 /// (`packages/vaultkeeper/src/backend/types.ts`). Used by
 /// [`BackendCapabilities::presence_enforced_operations`] to express that an
 /// instance forces a fresh per-use action for only *some* operations. `Read`
-/// covers the secret read behind `setup`/`exec`; `Store`, `Delete`, and `Sign`
-/// are the write, removal, and signing paths.
+/// covers a backend retrieve; `Store`, `Delete`, and `Sign` are the write,
+/// removal, and signing paths.
+///
+/// In the TypeScript library, `Read` gates the secret read behind
+/// `setup`/`exec` (`setup` fetches the secret from the backend before minting
+/// the token). `vaultkeeper-core`'s `VaultKeeper::setup()` does not — it mints
+/// a token directly from the caller-supplied secret value with no backend
+/// read, and its CLI `exec` gets the secret from the JWE claims rather than a
+/// live retrieve (see the seam note on
+/// [`crate::vault::enforce_presence_requirement`]). `Read` here names the
+/// backend operation the capability model gates, independent of which
+/// caller-facing operation eventually performs it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum PresenceOperation {
     Read,
