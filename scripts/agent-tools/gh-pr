@@ -128,14 +128,21 @@ cmd_failure_details() {
     printf '%s\n' "$urls"
     exit 0
   fi
-  local run
+  local run lines
   for run in $runs; do
     printf '=== failing run %s (PR %s) ===\n' "$run" "$pr"
-    gh run view "$run" --log-failed 2>/dev/null \
+    # Captured (not streamed) so head's early exit can't surface as a SIGPIPE
+    # pipeline failure under pipefail; emptiness decides the fallback message.
+    lines="$(gh run view "$run" --log-failed 2>/dev/null \
       | grep -iE 'error|fail|not found|cannot|ELIFECYCLE|Traceback|assert|✗|✖' \
       | grep -viE '^[[:space:]]*✓' \
       | head -30 \
-      || printf '(no matching error lines; run: gh run view %s --log-failed)\n' "$run"
+      || true)"
+    if [ -n "$lines" ]; then
+      printf '%s\n' "$lines"
+    else
+      printf '(no matching error lines; run: gh run view %s --log-failed)\n' "$run"
+    fi
     printf '\n'
   done
 }
