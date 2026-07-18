@@ -18,7 +18,9 @@ usage: pr-health <pr-number>
 Prints one line:
   PR <n> state=<OPEN|MERGED|CLOSED> mss=<mergeStateStatus> checks=<pass>/<total> pending=<n> failed=<names|-> unresolved=<n> copilot=<n>
 
-Exit codes: 0 = fetched OK · 2 = usage error · 1 = API/network error
+Exit codes: 0 = fetched OK · 2 = usage error · 1 = could not produce a
+trustworthy readout (API/network error, or >100 review threads where the
+tool refuses to report a truncated count)
 EOF
 }
 
