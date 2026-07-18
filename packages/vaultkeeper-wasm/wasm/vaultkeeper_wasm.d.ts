@@ -94,6 +94,33 @@ export class WasmVaultKeeper {
 }
 
 /**
+ * Diagnostic-only export: constructs one instance of every `VaultError`
+ * variant with fixed dummy field values and converts each through the real
+ * `vault_error_to_js` bridge, exactly as a genuine thrown error would be.
+ *
+ * This exists solely so `error-parity.test.ts` can round-trip real
+ * bridge-produced values through the TypeScript reconstruction map, instead
+ * of guessing at the JSON shape `vault_error_to_js` produces. It is not part
+ * of the SDK's public TypeScript API (`packages/vaultkeeper-wasm/src/index.ts`
+ * does not re-export it) and is never called from a real code path — see
+ * `all_variants_for_parity_test` in `crates/vaultkeeper-core/src/errors.rs`
+ * for the fixture values.
+ */
+export function __testAllVaultErrors(): Array<any>;
+
+/**
+ * The canonical list of every machine-readable `vaultErrorCode` this WASM
+ * binary can throw — the single source of truth for the error taxonomy (see
+ * `ALL_ERROR_CODES` in `crates/vaultkeeper-core/src/errors.rs`).
+ *
+ * `packages/vaultkeeper-wasm/src/test/error-parity.test.ts` fetches this
+ * exact list at test time and asserts it equals the TypeScript
+ * reconstruction map's known codes exactly, catching drift between the two
+ * languages in either direction.
+ */
+export function allVaultErrorCodes(): string[];
+
+/**
  * Factory function to create a WasmVaultKeeper.
  */
 export function createVaultKeeper(host: any, options: any): Promise<WasmVaultKeeper>;

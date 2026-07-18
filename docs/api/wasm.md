@@ -53,12 +53,89 @@ Thrown when a one-time secret accessor's `read()` is called after the secret has
 </td></tr>
 <tr><td>
 
+[AuthorizationDeniedError](./wasm.authorizationdeniederror.md)
+
+
+</td><td>
+
+Thrown when the user explicitly denies an authorization request for a secret access operation. Mirrors the pure-TypeScript `vaultkeeper` library's `AuthorizationDeniedError`<!-- -->.
+
+
+</td></tr>
+<tr><td>
+
+[BackendLockedError](./wasm.backendlockederror.md)
+
+
+</td><td>
+
+Thrown when the backend keychain or credential store is locked and requires user interaction (e.g. biometric prompt or password entry) before access can be granted. Mirrors the pure-TypeScript `vaultkeeper` library's `BackendLockedError`<!-- -->.
+
+
+</td></tr>
+<tr><td>
+
+[BackendUnavailableError](./wasm.backendunavailableerror.md)
+
+
+</td><td>
+
+Thrown when no configured backend is available or reachable. Mirrors the pure-TypeScript `vaultkeeper` library's `BackendUnavailableError`<!-- -->.
+
+
+</td></tr>
+<tr><td>
+
+[ConfigParseError](./wasm.configparseerror.md)
+
+
+</td><td>
+
+Thrown when a config file's contents cannot be parsed as JSON. Mirrors the pure-TypeScript `vaultkeeper` library's `ConfigParseError`<!-- -->.
+
+
+</td></tr>
+<tr><td>
+
+[ConfigValidationError](./wasm.configvalidationerror.md)
+
+
+</td><td>
+
+Thrown when a config value fails structural or semantic validation. Mirrors the pure-TypeScript `vaultkeeper` library's `ConfigValidationError`<!-- -->.
+
+
+</td></tr>
+<tr><td>
+
 [DecryptionError](./wasm.decryptionerror.md)
 
 
 </td><td>
 
 Thrown when a stored secret entry cannot be decrypted — the ciphertext is corrupted/truncated or the AES-GCM authentication tag failed to verify. Mirrors the pure-TypeScript `vaultkeeper` library's `DecryptionError`<!-- -->.
+
+
+</td></tr>
+<tr><td>
+
+[DeviceNotPresentError](./wasm.devicenotpresenterror.md)
+
+
+</td><td>
+
+Thrown when a hardware device (e.g. YubiKey or smart card) required for authentication is not currently connected. Mirrors the pure-TypeScript `vaultkeeper` library's `DeviceNotPresentError`<!-- -->.
+
+
+</td></tr>
+<tr><td>
+
+[ExecError](./wasm.execerror.md)
+
+
+</td><td>
+
+Thrown when spawning or running a subprocess fails. Mirrors the pure-TypeScript `vaultkeeper` library's `ExecError`<!-- -->.
 
 
 </td></tr>
@@ -72,6 +149,17 @@ Thrown when a stored secret entry cannot be decrypted — the ciphertext is corr
 Thrown by `setup()` when the caller does not make an unambiguous executable-trust decision.
 
 Mirrors the pure-TypeScript `vaultkeeper` library's `ExecutableTrustRequiredError`<!-- -->: `setup()` deliberately has no default trust behaviour, so the caller must pass either a real `executablePath` or explicitly opt out with `skipTrust: true`<!-- -->. Supplying neither — or both — or the retired `'dev'` sentinel as `executablePath` throws this error rather than silently minting an unbound token. Inspect [ExecutableTrustRequiredError.reason](./wasm.executabletrustrequirederror.reason.md) to distinguish the cases.
+
+
+</td></tr>
+<tr><td>
+
+[FetchError](./wasm.fetcherror.md)
+
+
+</td><td>
+
+Thrown when a delegated `fetch()` call fails before a `Response` can be produced. Mirrors the pure-TypeScript `vaultkeeper` library's `FetchError`<!-- -->.
 
 
 </td></tr>
@@ -96,6 +184,28 @@ Thrown when a filesystem operation fails while reading, writing, or deleting a s
 Thrown by `setup()` when the executable at `executablePath` has a hash that conflicts with a value previously approved for it under trust-on-first-use.
 
 Mirrors the pure-TypeScript `vaultkeeper` library's `IdentityMismatchError`<!-- -->: the first encounter with an executable records its hash, and a later hash change (a rebuilt or substituted binary) surfaces here rather than silently re-approving. Re-approval is required before the executable can be bound again. Inspect [IdentityMismatchError.previousHash](./wasm.identitymismatcherror.previoushash.md) and [IdentityMismatchError.currentHash](./wasm.identitymismatcherror.currenthash.md) to see what changed.
+
+
+</td></tr>
+<tr><td>
+
+[InvalidAlgorithmError](./wasm.invalidalgorithmerror.md)
+
+
+</td><td>
+
+Thrown when a caller requests a signing key algorithm that is not a supported JOSE algorithm identifier. Mirrors the pure-TypeScript `vaultkeeper` library's `InvalidAlgorithmError`<!-- -->.
+
+
+</td></tr>
+<tr><td>
+
+[InvalidKeyMaterialError](./wasm.invalidkeymaterialerror.md)
+
+
+</td><td>
+
+Thrown when signing-key material cannot be parsed — corrupt or tampered key material, or a structurally invalid public key supplied for verification. Mirrors the pure-TypeScript `vaultkeeper` library's `InvalidKeyMaterialError`<!-- -->.
 
 
 </td></tr>
@@ -134,6 +244,50 @@ Thrown when the encryption key used to create a JWE has been rotated out of the 
 </td></tr>
 <tr><td>
 
+[NotCapableError](./wasm.notcapableerror.md)
+
+
+</td><td>
+
+Thrown when an operation requires a backend capability (e.g. presence-per-use) that the active backend cannot provide. Mirrors the pure-TypeScript `vaultkeeper` library's `NotCapableError`<!-- -->.
+
+
+</td></tr>
+<tr><td>
+
+[PluginNotFoundError](./wasm.pluginnotfounderror.md)
+
+
+</td><td>
+
+Thrown when a required backend plugin is not installed on the current system. Mirrors the pure-TypeScript `vaultkeeper` library's `PluginNotFoundError`<!-- -->.
+
+
+</td></tr>
+<tr><td>
+
+[PresenceDeclinedError](./wasm.presencedeclinederror.md)
+
+
+</td><td>
+
+Thrown when a required fresh, per-use human presence action was explicitly declined by the human. Mirrors the pure-TypeScript `vaultkeeper` library's `PresenceDeclinedError`<!-- -->.
+
+
+</td></tr>
+<tr><td>
+
+[PresenceTimeoutError](./wasm.presencetimeouterror.md)
+
+
+</td><td>
+
+Thrown when a required fresh, per-use human presence action did not happen within the allotted time. Mirrors the pure-TypeScript `vaultkeeper` library's `PresenceTimeoutError`<!-- -->.
+
+
+</td></tr>
+<tr><td>
+
 [RotationInProgressError](./wasm.rotationinprogresserror.md)
 
 
@@ -156,6 +310,50 @@ Thrown when a requested secret does not exist in the backend store.
 </td></tr>
 <tr><td>
 
+[SetupError](./wasm.setuperror.md)
+
+
+</td><td>
+
+Thrown during initialization when a required system dependency is missing or incompatible. Mirrors the pure-TypeScript `vaultkeeper` library's `SetupError`<!-- -->.
+
+
+</td></tr>
+<tr><td>
+
+[SigningKeyAlreadyExistsError](./wasm.signingkeyalreadyexistserror.md)
+
+
+</td><td>
+
+Thrown when a signing key enrollment is attempted under a name that already exists. Mirrors the pure-TypeScript `vaultkeeper` library's `SigningKeyAlreadyExistsError`<!-- -->.
+
+
+</td></tr>
+<tr><td>
+
+[SigningKeyNotFoundError](./wasm.signingkeynotfounderror.md)
+
+
+</td><td>
+
+Thrown when a named signing key does not exist in the active backend. Mirrors the pure-TypeScript `vaultkeeper` library's `SigningKeyNotFoundError`<!-- -->.
+
+
+</td></tr>
+<tr><td>
+
+[SigningNotSupportedError](./wasm.signingnotsupportederror.md)
+
+
+</td><td>
+
+Thrown when a signing operation is requested against a backend that does not implement the signing contract. Mirrors the pure-TypeScript `vaultkeeper` library's `SigningNotSupportedError`<!-- -->.
+
+
+</td></tr>
+<tr><td>
+
 [TokenExpiredError](./wasm.tokenexpirederror.md)
 
 
@@ -173,6 +371,17 @@ Thrown when a JWE token has passed its expiration time (`exp` claim).
 </td><td>
 
 Thrown when a JWE token has been explicitly blocked (e.g. after a single-use token has already been consumed).
+
+
+</td></tr>
+<tr><td>
+
+[UnknownBackendTypeError](./wasm.unknownbackendtypeerror.md)
+
+
+</td><td>
+
+Thrown when a config's `backends[].type` names a backend that is not registered. A specialization of [ConfigValidationError](./wasm.configvalidationerror.md)<!-- -->. Mirrors the pure-TypeScript `vaultkeeper` library's `UnknownBackendTypeError`<!-- -->.
 
 
 </td></tr>

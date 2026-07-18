@@ -10,6 +10,11 @@ export class AccessorConsumedError extends VaultError {
 }
 
 // @public
+export class AuthorizationDeniedError extends VaultError {
+    constructor(message: string);
+}
+
+// @public
 export interface AuthorizeResult {
     // (undocumented)
     claims: VaultClaims;
@@ -17,6 +22,33 @@ export interface AuthorizeResult {
     response: VaultResponse;
     // (undocumented)
     secret: SecretAccessor;
+}
+
+// @public
+export class BackendLockedError extends VaultError {
+    constructor(message: string, interactive: boolean);
+    readonly interactive: boolean;
+}
+
+// @public
+export class BackendUnavailableError extends VaultError {
+    constructor(message: string, reason: string | undefined, attempted: string[]);
+    readonly attempted: string[];
+    readonly reason?: string;
+}
+
+// @public
+export class ConfigParseError extends VaultError {
+    constructor(message: string, path?: string, location?: string);
+    readonly location?: string;
+    readonly path?: string;
+}
+
+// @public
+export class ConfigValidationError extends VaultError {
+    constructor(message: string, field?: string, configFilePath?: string);
+    readonly configFilePath?: string;
+    readonly field?: string;
 }
 
 // @public
@@ -32,6 +64,18 @@ export class DecryptionError extends VaultError {
 }
 
 // @public
+export class DeviceNotPresentError extends VaultError {
+    constructor(message: string, timeoutMs: number);
+    readonly timeoutMs: number;
+}
+
+// @public
+export class ExecError extends VaultError {
+    constructor(message: string, command?: string);
+    readonly command?: string;
+}
+
+// @public
 export class ExecutableTrustRequiredError extends VaultError {
     constructor(message: string, reason: ExecutableTrustRequiredReason);
     readonly reason: ExecutableTrustRequiredReason;
@@ -39,6 +83,12 @@ export class ExecutableTrustRequiredError extends VaultError {
 
 // @public
 export type ExecutableTrustRequiredReason = 'missing-choice' | 'conflicting-choice' | 'legacy-dev-sentinel';
+
+// @public
+export class FetchError extends VaultError {
+    constructor(message: string, url?: string);
+    readonly url?: string;
+}
 
 // @public
 export class FilesystemError extends VaultError {
@@ -53,6 +103,18 @@ export class IdentityMismatchError extends VaultError {
     constructor(message: string, previousHash?: string, currentHash?: string);
     readonly currentHash?: string;
     readonly previousHash?: string;
+}
+
+// @public
+export class InvalidAlgorithmError extends VaultError {
+    constructor(message: string, algorithm: string | undefined, allowed: string[]);
+    readonly algorithm?: string;
+    readonly allowed: string[];
+}
+
+// @public
+export class InvalidKeyMaterialError extends VaultError {
+    constructor(message: string);
 }
 
 // @public
@@ -72,6 +134,20 @@ export class KeyRotatedError extends VaultError {
 
 // @public
 export type KeyStatus = 'current' | 'previous' | 'deprecated';
+
+// @public
+export class NotCapableError extends VaultError {
+    constructor(message: string, backendType?: string, capability?: string);
+    readonly backendType?: string;
+    readonly capability?: string;
+}
+
+// @public
+export class PluginNotFoundError extends VaultError {
+    constructor(message: string, plugin?: string, installUrl?: string);
+    readonly installUrl?: string;
+    readonly plugin?: string;
+}
 
 // @public
 export interface PreflightCheck {
@@ -103,6 +179,19 @@ export interface PreflightResult {
 }
 
 // @public
+export class PresenceDeclinedError extends VaultError {
+    constructor(message: string, backendType?: string);
+    readonly backendType?: string;
+}
+
+// @public
+export class PresenceTimeoutError extends VaultError {
+    constructor(message: string, backendType: string | undefined, timeoutMs: number);
+    readonly backendType?: string;
+    readonly timeoutMs: number;
+}
+
+// @public
 export class RotationInProgressError extends VaultError {
     constructor(message: string);
 }
@@ -116,6 +205,12 @@ export interface SecretAccessor {
 // @public
 export class SecretNotFoundError extends VaultError {
     constructor(message: string);
+}
+
+// @public
+export class SetupError extends VaultError {
+    constructor(message: string, dependency?: string);
+    readonly dependency?: string;
 }
 
 // @public
@@ -137,6 +232,25 @@ export interface SetupOptionsBase {
 }
 
 // @public
+export class SigningKeyAlreadyExistsError extends VaultError {
+    constructor(message: string, keyName?: string);
+    readonly keyName?: string;
+}
+
+// @public
+export class SigningKeyNotFoundError extends VaultError {
+    constructor(message: string, keyName?: string);
+    readonly keyName?: string;
+}
+
+// @public
+export class SigningNotSupportedError extends VaultError {
+    constructor(message: string, backendType: string | undefined, builtInSigningBackends: string[]);
+    readonly backendType?: string;
+    readonly builtInSigningBackends: string[];
+}
+
+// @public
 export class TokenExpiredError extends VaultError {
     constructor(message: string, canRefresh: boolean);
     readonly canRefresh: boolean;
@@ -149,6 +263,13 @@ export class TokenRevokedError extends VaultError {
 
 // @public
 export type TrustTier = '1' | '2' | '3';
+
+// @public
+export class UnknownBackendTypeError extends ConfigValidationError {
+    constructor(message: string, field: string | undefined, backendType: string | undefined, knownTypes: string[], configFilePath?: string);
+    readonly backendType?: string;
+    readonly knownTypes: string[];
+}
 
 // @public
 export class UsageLimitExceededError extends VaultError {
