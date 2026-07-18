@@ -4,7 +4,9 @@
 //! @see RFC 5116 (AES-GCM)
 
 use vaultkeeper_core::backend::{BackendRegistry, ExecOutput, HostPlatform, Platform};
-use vaultkeeper_core::config::{default_config, load_config_from_str, validate_config};
+use vaultkeeper_core::config::{
+    default_backend_type_for_platform, default_config, load_config_from_str, validate_config,
+};
 use vaultkeeper_core::errors::{ExecutableTrustRequiredReason, VaultError};
 use vaultkeeper_core::keys::KeyManager;
 use vaultkeeper_core::types::{
@@ -31,21 +33,25 @@ mod config_validation {
     }
 
     #[test]
-    fn default_config_uses_platform_appropriate_backend() {
+    fn default_config_is_file_backend_on_every_platform() {
+        // Regression test for #98 / #235: the zero-config default must
+        // resolve to the 'file' backend on macOS, Windows, and Linux — never
+        // a platform-native keychain/dpapi store, which would silently
+        // reintroduce the #98 regression once the wasm core swap lands.
+        //
+        // Parameterized over the `Platform` enum (rather than
+        // `#[cfg(target_os = ...)]`) so all three arms are exercised
+        // regardless of which OS actually runs this test.
+        for platform in [Platform::Darwin, Platform::Linux, Platform::Windows] {
+            assert_eq!(
+                default_backend_type_for_platform(platform),
+                "file",
+                "platform {platform:?} must default to the 'file' backend (#98)"
+            );
+        }
+
         let cfg = default_config();
-        let backend_type = cfg.backends[0].backend_type.as_str();
-        // On Linux (where CI runs), 'keychain' is macOS-only and must not be the default.
-        #[cfg(not(target_os = "macos"))]
-        assert_ne!(backend_type, "keychain", "keychain is macOS-only");
-        // On macOS, keychain is the expected default.
-        #[cfg(target_os = "macos")]
-        assert_eq!(backend_type, "keychain");
-        // On Windows, dpapi is the expected default.
-        #[cfg(target_os = "windows")]
-        assert_eq!(backend_type, "dpapi");
-        // On Linux and other Unix, file is the expected default.
-        #[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
-        assert_eq!(backend_type, "file");
+        assert_eq!(cfg.backends[0].backend_type, "file");
     }
 
     #[test]

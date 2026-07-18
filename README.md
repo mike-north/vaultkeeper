@@ -128,9 +128,6 @@ pnpm add @vaultkeeper/wasm
 
 Both the native Rust CLI and the Node.js CLI share the same command surface:
 
-> [!NOTE]
-> The safe `file` default described below (a bare `config init` writing the `file` backend) currently applies to the **Node.js CLI** and the TypeScript library. The native Rust CLI's zero-config default still targets the platform-native store; converging it onto this behavior is tracked in [#75](https://github.com/mike-north/vaultkeeper/issues/75).
-
 <!-- readme-example: skip - full command tour; `approve`/`exec`/`dev-mode` reference placeholder tool paths, not runnable verbatim -->
 
 ```sh

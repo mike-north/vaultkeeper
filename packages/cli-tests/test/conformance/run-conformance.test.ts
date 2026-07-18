@@ -32,6 +32,7 @@ interface ConformanceCase {
   expectedExitCode: number
   expectedStdout: OutputMatcher
   expectedStderr: OutputMatcher
+  expectedConfigFile: OutputMatcher | null
 }
 
 // ─── Load cases ──────────────────────────────────────────────────
@@ -141,58 +142,70 @@ interface RunResult {
   stdout: string
   stderr: string
   exitCode: number
+  /** Contents of config.json after the run, or null if it doesn't exist. */
+  configFileContent: string | null
 }
 
 async function runCase(testCase: ConformanceCase): Promise<RunResult> {
   const configDir = await fs.mkdtemp(path.join(os.tmpdir(), 'vk-conformance-'))
+  const configPath = path.join(configDir, 'config.json')
 
   try {
     if (testCase.needsConfig) {
-      await fs.writeFile(path.join(configDir, 'config.json'), DEFAULT_CONFIG + '\n', {
+      await fs.writeFile(configPath, DEFAULT_CONFIG + '\n', {
         mode: 0o600,
       })
     }
 
-    return await new Promise<RunResult>((resolve) => {
-      const bin = RUST_BIN
-      if (!bin) throw new Error('Rust binary not found')
+    const { stdout, stderr, exitCode } = await new Promise<Omit<RunResult, 'configFileContent'>>(
+      (resolve) => {
+        const bin = RUST_BIN
+        if (!bin) throw new Error('Rust binary not found')
 
-      // Substitute __SELF_BINARY__ with the actual vaultkeeper binary path
-      const args = testCase.command.map((arg) => (arg === '__SELF_BINARY__' ? bin : arg))
+        // Substitute __SELF_BINARY__ with the actual vaultkeeper binary path
+        const args = testCase.command.map((arg) => (arg === '__SELF_BINARY__' ? bin : arg))
 
-      const child = execFile(
-        bin,
-        args,
-        {
-          timeout: 15_000,
-          env: {
-            ...process.env,
-            VAULTKEEPER_CONFIG_DIR: configDir,
+        const child = execFile(
+          bin,
+          args,
+          {
+            timeout: 15_000,
+            env: {
+              ...process.env,
+              VAULTKEEPER_CONFIG_DIR: configDir,
+            },
           },
-        },
-        (error, stdout, stderr) => {
-          let exitCode = 0
-          if (error !== null) {
-            // Node's ExecException puts the exit code in `code` as a number
-            // when the process exits non-zero
-            exitCode = typeof error.code === 'number' ? error.code : 1
-          }
-          resolve({ stdout, stderr, exitCode })
-        },
-      )
+          (error, stdout, stderr) => {
+            let exitCode = 0
+            if (error !== null) {
+              // Node's ExecException puts the exit code in `code` as a number
+              // when the process exits non-zero
+              exitCode = typeof error.code === 'number' ? error.code : 1
+            }
+            resolve({ stdout, stderr, exitCode })
+          },
+        )
 
-      if (child.stdin !== null) {
-        // Ignore EPIPE — the child may exit before we finish writing
-        // (e.g., clap rejecting args before reading stdin). This race
-        // is more common on Node 20 than 22.
-        // eslint-disable-next-line @typescript-eslint/no-empty-function -- suppress EPIPE from child exiting before stdin write completes
-        child.stdin.on('error', () => {})
-        if (testCase.stdin !== null) {
-          child.stdin.write(testCase.stdin)
+        if (child.stdin !== null) {
+          // Ignore EPIPE — the child may exit before we finish writing
+          // (e.g., clap rejecting args before reading stdin). This race
+          // is more common on Node 20 than 22.
+          // eslint-disable-next-line @typescript-eslint/no-empty-function -- suppress EPIPE from child exiting before stdin write completes
+          child.stdin.on('error', () => {})
+          if (testCase.stdin !== null) {
+            child.stdin.write(testCase.stdin)
+          }
+          child.stdin.end()
         }
-        child.stdin.end()
-      }
-    })
+      },
+    )
+
+    let configFileContent: string | null = null
+    if (testCase.expectedConfigFile !== null) {
+      configFileContent = await fs.readFile(configPath, 'utf8').catch(() => null)
+    }
+
+    return { stdout, stderr, exitCode, configFileContent }
   } finally {
     await fs.rm(configDir, { recursive: true, force: true })
   }
@@ -226,6 +239,16 @@ describe.skipIf(RUST_BIN === null)('Rust CLI conformance', () => {
         errors.push(
           `stderr mismatch: expected ${JSON.stringify(testCase.expectedStderr)}, got ${JSON.stringify(result.stderr.slice(0, 200))}`,
         )
+      }
+
+      if (testCase.expectedConfigFile !== null) {
+        if (result.configFileContent === null) {
+          errors.push('config file mismatch: expected config.json to exist, but it was not found')
+        } else if (!matchesOutput(testCase.expectedConfigFile, result.configFileContent)) {
+          errors.push(
+            `config file mismatch: expected ${JSON.stringify(testCase.expectedConfigFile)}, got ${JSON.stringify(result.configFileContent.slice(0, 300))}`,
+          )
+        }
       }
 
       if (errors.length > 0) {

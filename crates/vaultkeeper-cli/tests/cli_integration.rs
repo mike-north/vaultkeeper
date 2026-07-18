@@ -269,7 +269,10 @@ mod config {
     }
 
     #[test]
-    fn config_init_uses_platform_appropriate_backend() {
+    fn config_init_uses_file_backend_on_every_platform() {
+        // Regression test for #98 / #235: `config init`'s zero-config default
+        // must be the 'file' backend on every platform, never a
+        // platform-native keychain/dpapi store.
         let (mut cmd, dir) = cli_test_env_no_config();
         cmd.args(["config", "init"])
             .assert()
@@ -280,12 +283,10 @@ mod config {
         let parsed: serde_json::Value =
             serde_json::from_str(&content).expect("should be valid JSON");
         let backend_type = parsed["backends"][0]["type"].as_str().unwrap_or("");
-        #[cfg(target_os = "macos")]
-        assert_eq!(backend_type, "keychain");
-        #[cfg(target_os = "windows")]
-        assert_eq!(backend_type, "dpapi");
-        #[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
-        assert_eq!(backend_type, "file");
+        assert_eq!(
+            backend_type, "file",
+            "zero-config default must be 'file' (#98)"
+        );
         // The path field must not appear in the generated config — the file backend
         // manages its own storage location and ignores any path in config.
         let backend_obj = parsed["backends"][0]

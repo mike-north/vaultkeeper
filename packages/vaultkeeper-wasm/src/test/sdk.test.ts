@@ -165,6 +165,22 @@ describe('@vaultkeeper/wasm SDK', () => {
     })
   })
 
+  // Regression for #98 / #235: with no config.json present at all, the
+  // zero-config default resolved by the Rust core (and exposed through this
+  // wasm SDK) must be the 'file' backend on every platform — never a
+  // platform-native keychain/dpapi store.
+  it('resolves the file backend as the zero-config default with no config.json present (#98)', async () => {
+    await withTempDir(async (dir) => {
+      const vault = await VaultKeeper.create({ skipDoctor: true }, dir)
+      const cfg = vault.config()
+      assert.ok(Array.isArray(cfg.backends))
+      const firstBackend = cfg.backends[0]
+      assert.ok(firstBackend, 'first backend must exist')
+      assert.equal(firstBackend.type, 'file')
+      vault.dispose()
+    })
+  })
+
   it('setup produces a JWE token', async () => {
     await withTempDir(async (dir) => {
       const vault = await createTestVault(dir)
