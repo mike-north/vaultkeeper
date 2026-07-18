@@ -17,7 +17,7 @@
 use std::collections::BTreeSet;
 
 use serde_json::json;
-use vaultkeeper_core::{
+use vaultkeeper_core::errors::{
     ALL_ERROR_CODES, all_variants_for_parity_test, vault_error_code, vault_error_fields,
 };
 

@@ -4,7 +4,7 @@
 
 ## UnknownBackendTypeError.knownTypes property
 
-The backend type identifiers that were registered when validation ran. `[]` only if the WASM boundary did not supply a value — never fabricated.
+The backend type identifiers that were registered when validation ran. Defaults to `[]` when the WASM boundary did not supply a `string[]` value — but a genuine boundary value of `[]` is preserved the same way, so this field cannot distinguish "no value supplied" from "no backend types were registered".
 
 **Signature:**
 

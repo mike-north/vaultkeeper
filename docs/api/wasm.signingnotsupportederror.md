@@ -108,7 +108,7 @@ string\[\]
 
 </td><td>
 
-The built-in backend type identifiers known to implement the signing contract. `[]` only if the WASM boundary did not supply a value — never fabricated.
+The built-in backend type identifiers known to implement the signing contract. Defaults to `[]` when the WASM boundary did not supply a `string[]` value — but a genuine boundary value of `[]` is preserved the same way, so this field cannot distinguish "no value supplied" from "no built-in backends implement it".
 
 
 </td></tr>

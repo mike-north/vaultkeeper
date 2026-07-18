@@ -108,7 +108,7 @@ string\[\]
 
 </td><td>
 
-The set of algorithms that are allowed. `[]` only if the WASM boundary did not supply a value — never fabricated.
+The set of algorithms that are allowed. Defaults to `[]` when the WASM boundary did not supply a `string[]` value — but a genuine boundary value of `[]` is preserved the same way, so this field cannot distinguish "no value supplied" from "no algorithms are allowed".
 
 
 </td></tr>

@@ -17,10 +17,7 @@ pub mod vault;
 
 // Re-export key public types at crate root for convenience.
 pub use backend::InMemoryBackend;
-pub use errors::{
-    ALL_ERROR_CODES, ExecutableTrustRequiredReason, VaultError, all_variants_for_parity_test,
-    vault_error_code, vault_error_fields,
-};
+pub use errors::{ExecutableTrustRequiredReason, VaultError};
 pub use types::{
     BackendConfig, ExecRequest, ExecResult, FetchRequest, KeyStatus, PreflightCheck,
     PreflightCheckStatus, PreflightResult, ScopedPreflightCheck, SecretAccessor, SignRequest,

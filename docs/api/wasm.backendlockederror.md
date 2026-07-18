@@ -87,7 +87,7 @@ boolean
 
 </td><td>
 
-Whether the lock can be resolved through an interactive user prompt. `false` only if the WASM boundary did not supply a value — never fabricated as `true`<!-- -->.
+Whether the lock can be resolved through an interactive user prompt. Defaults to `false` when the WASM boundary did not supply a value — but a genuine boundary value of `false` is preserved the same way, so this field cannot distinguish "no value supplied" from "the value is `false`<!-- -->".
 
 
 </td></tr>

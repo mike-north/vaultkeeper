@@ -8,11 +8,11 @@ use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::JsFuture;
 
 use vaultkeeper_core::backend::{ExecOutput, FileBackend, HostPlatform, Platform, SecretBackend};
-use vaultkeeper_core::vault::{SetupOptions, VaultKeeperOptions};
-use vaultkeeper_core::{
-    ALL_ERROR_CODES, ExecutableTrustRequiredReason, VaultError, all_variants_for_parity_test,
-    vault_error_code, vault_error_fields,
+use vaultkeeper_core::errors::{
+    ALL_ERROR_CODES, all_variants_for_parity_test, vault_error_code, vault_error_fields,
 };
+use vaultkeeper_core::vault::{SetupOptions, VaultKeeperOptions};
+use vaultkeeper_core::{ExecutableTrustRequiredReason, VaultError};
 
 // ─── JsHostPlatform ──────────────────────────────────────────────
 

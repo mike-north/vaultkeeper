@@ -87,7 +87,7 @@ number
 
 </td><td>
 
-How long (in milliseconds) the operation waited for the device before giving up. `0` only if the WASM boundary did not supply a value — never fabricated.
+How long (in milliseconds) the operation waited for the device before giving up. Defaults to `0` when the WASM boundary did not supply a value — but a genuine boundary value of `0` is preserved the same way, so this field cannot distinguish "no value supplied" from "waited zero milliseconds".
 
 
 </td></tr>

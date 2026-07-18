@@ -160,8 +160,10 @@ export class KeyRotatedError extends VaultError {
 export class BackendLockedError extends VaultError {
   /**
    * Whether the lock can be resolved through an interactive user prompt.
-   * `false` only if the WASM boundary did not supply a value — never
-   * fabricated as `true`.
+   * Defaults to `false` when the WASM boundary did not supply a value — but a
+   * genuine boundary value of `false` is preserved the same way, so this
+   * field cannot distinguish "no value supplied" from "the value is
+   * `false`".
    */
   readonly interactive: boolean
 
@@ -180,8 +182,10 @@ export class BackendLockedError extends VaultError {
 export class DeviceNotPresentError extends VaultError {
   /**
    * How long (in milliseconds) the operation waited for the device before
-   * giving up. `0` only if the WASM boundary did not supply a value — never
-   * fabricated.
+   * giving up. Defaults to `0` when the WASM boundary did not supply a
+   * value — but a genuine boundary value of `0` is preserved the same way,
+   * so this field cannot distinguish "no value supplied" from "waited zero
+   * milliseconds".
    */
   readonly timeoutMs: number
 
@@ -273,7 +277,9 @@ export class PresenceTimeoutError extends VaultError {
 
   /**
    * How long (in milliseconds) the operation waited for the presence action.
-   * `0` only if the WASM boundary did not supply a value — never fabricated.
+   * Defaults to `0` when the WASM boundary did not supply a value — but a
+   * genuine boundary value of `0` is preserved the same way, so this field
+   * cannot distinguish "no value supplied" from "waited zero milliseconds".
    */
   readonly timeoutMs: number
 
@@ -301,8 +307,10 @@ export class BackendUnavailableError extends VaultError {
 
   /**
    * The backend type identifiers that were attempted before this error was
-   * thrown. `[]` only if the WASM boundary did not supply a value — never
-   * fabricated as a false claim that a specific backend was attempted.
+   * thrown. Defaults to `[]` when the WASM boundary did not supply a
+   * `string[]` value — but a genuine boundary value of `[]` is preserved the
+   * same way, so this field cannot distinguish "no value supplied" from "no
+   * backends were attempted".
    */
   readonly attempted: string[]
 
@@ -509,8 +517,10 @@ export class InvalidAlgorithmError extends VaultError {
   readonly algorithm?: string
 
   /**
-   * The set of algorithms that are allowed. `[]` only if the WASM boundary
-   * did not supply a value — never fabricated.
+   * The set of algorithms that are allowed. Defaults to `[]` when the WASM
+   * boundary did not supply a `string[]` value — but a genuine boundary
+   * value of `[]` is preserved the same way, so this field cannot
+   * distinguish "no value supplied" from "no algorithms are allowed".
    */
   readonly allowed: string[]
 
@@ -591,8 +601,10 @@ export class SigningNotSupportedError extends VaultError {
 
   /**
    * The built-in backend type identifiers known to implement the signing
-   * contract. `[]` only if the WASM boundary did not supply a value — never
-   * fabricated.
+   * contract. Defaults to `[]` when the WASM boundary did not supply a
+   * `string[]` value — but a genuine boundary value of `[]` is preserved the
+   * same way, so this field cannot distinguish "no value supplied" from "no
+   * built-in backends implement it".
    */
   readonly builtInSigningBackends: string[]
 
@@ -671,7 +683,10 @@ export class UnknownBackendTypeError extends ConfigValidationError {
 
   /**
    * The backend type identifiers that were registered when validation ran.
-   * `[]` only if the WASM boundary did not supply a value — never fabricated.
+   * Defaults to `[]` when the WASM boundary did not supply a `string[]`
+   * value — but a genuine boundary value of `[]` is preserved the same way,
+   * so this field cannot distinguish "no value supplied" from "no backend
+   * types were registered".
    */
   readonly knownTypes: string[]
 
