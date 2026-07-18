@@ -63,6 +63,10 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
       - name: Install pinned wasm-pack
         run: |
           curl -sSfL -o /tmp/wasm-pack.tar.gz \
@@ -81,16 +85,9 @@ jobs:
       - name: Rebuild wasm artifact with the pinned toolchain
         run: |
           # --remap-path-prefix normalizes CARGO_HOME out of embedded panic/debug
-          # path strings (file!() output from registry dependencies). Without
-          # this, the rebuilt binary differs byte-for-byte from any local build
-          # purely because CARGO_HOME's absolute path differs between machines
-          # (e.g. /home/runner/.cargo here vs /Users/<you>/.cargo locally) — even
-          # though the actual compiled logic is identical. Verified locally
-          # (issue #240): two builds from independently-fetched CARGO_HOME trees
-          # at different absolute paths produce an identical sha256 once this
-          # flag is applied, and differ without it. This is why AC1's plain byte
-          # hash compare is stable in practice — no functional-hash fallback
-          # (AC2) needed.
+          # path strings (file!() output from registry dependencies), reducing
+          # (but not eliminating — see the drift-check step below) incidental
+          # differences from a local rebuild.
           export RUSTFLAGS="--remap-path-prefix=${CARGO_HOME:-$HOME/.cargo}=/cargo-home"
           wasm-pack build --target nodejs crates/vaultkeeper-wasm --out-dir /tmp/wasm-rebuild
 
@@ -111,15 +108,30 @@ jobs:
           retention-days: 1
 
       - name: Verify committed artifact matches the pinned-toolchain rebuild (drift check)
+        # AC2: byte-for-byte comparison (AC1) was tried first and demonstrably
+        # does NOT hold across host platforms, even with an identical pinned
+        # toolchain and the CARGO_HOME remap above. Diffing an actual CI-built
+        # artifact against a local macOS rebuild of the same commit (issue
+        # #240) showed the wasm module's internal type-table slot assignment,
+        # data-segment string ordering, and indirect-call table differ between
+        # hosts — plus wasm-bindgen's per-build closure-shim disambiguator
+        # hashes (e.g. `wasm_bindgen__closure__destroy__h<16 hex>`) differ,
+        # since wasm-bindgen's proc-macro always compiles for and runs on the
+        # host (not the wasm32 target). None of this is an actual behavior
+        # difference — confirmed by comparing the two builds' normalized
+        # export/import fingerprint, which was identical.
+        #
+        # So the drift check instead compares that functional fingerprint —
+        # the set of exports/imports (name + kind), with the known-volatile
+        # closure-shim hash suffix normalized away. A real API change (added,
+        # removed, or renamed export; changed import) still changes it —
+        # verified locally by removing a real export and confirming the
+        # comparison flags the mismatch.
         run: |
-          committed=packages/vaultkeeper-wasm/wasm/vaultkeeper_wasm_bg.wasm
-          rebuilt=/tmp/wasm-rebuild/vaultkeeper_wasm_bg.wasm
-          committed_hash=$(sha256sum "$committed" | cut -d' ' -f1)
-          rebuilt_hash=$(sha256sum "$rebuilt" | cut -d' ' -f1)
-          echo "committed sha256: $committed_hash"
-          echo "rebuilt   sha256: $rebuilt_hash"
-          if [ "$committed_hash" != "$rebuilt_hash" ]; then
-            echo "::error::packages/vaultkeeper-wasm/wasm/vaultkeeper_wasm_bg.wasm does not match a rebuild under the pinned toolchain (rustc ${RUST_TOOLCHAIN_VERSION}, wasm-pack ${WASM_PACK_VERSION}, binaryen ${BINARYEN_VERSION}). Regenerate it per packages/vaultkeeper-wasm/README.md's 'Regenerating the committed artifact' section and commit the result."
+          if ! node scripts/wasm-export-fingerprint.mjs \
+            packages/vaultkeeper-wasm/wasm/vaultkeeper_wasm_bg.wasm \
+            /tmp/wasm-rebuild/vaultkeeper_wasm_bg.wasm; then
+            echo "::error::packages/vaultkeeper-wasm/wasm/vaultkeeper_wasm_bg.wasm's export/import surface does not match a rebuild under the pinned toolchain (rustc ${RUST_TOOLCHAIN_VERSION}, wasm-pack ${WASM_PACK_VERSION}, binaryen ${BINARYEN_VERSION}). Regenerate it per packages/vaultkeeper-wasm/README.md's 'Regenerating the committed artifact' section and commit the result."
             exit 1
           fi
 

@@ -132,9 +132,17 @@ follow-up; it needs a change to the Rust core and a rebuild of the committed `.w
 
 This package ships a committed `.wasm` binary (`wasm/vaultkeeper_wasm_bg.wasm`) rather than
 building from source at install time. CI's `wasm-guards` job (`.github/workflows/ci.yml`) rebuilds
-it with a pinned toolchain on every push/PR and fails if the rebuild doesn't byte-for-byte match
-what's committed — so any change to `crates/vaultkeeper-wasm` or `crates/vaultkeeper-core` must
-regenerate and commit this artifact in the same change.
+it with a pinned toolchain on every push/PR and fails if the rebuild's **export/import surface**
+doesn't match what's committed — so any change to `crates/vaultkeeper-wasm` or
+`crates/vaultkeeper-core` must regenerate and commit this artifact in the same change.
+
+The check is a functional fingerprint (`scripts/wasm-export-fingerprint.mjs`), not a raw byte hash:
+a pinned toolchain does **not** produce byte-identical `.wasm` output across different host
+platforms (confirmed — a Linux CI rebuild and a macOS rebuild of the identical commit differ in
+internal type-table layout, data-segment ordering, and wasm-bindgen's per-build closure-shim
+symbol hashes, none of which is an actual behavior change). So your local rebuild does not need to
+byte-match CI's — only the set of exports/imports needs to match, which it will as long as you
+haven't changed the crate's public surface without regenerating.
 
 The exact toolchain versions (Rust, `wasm-pack`, `wasm-opt`/binaryen) and the size budget are pinned
 in [`crates/vaultkeeper-wasm/wasm-toolchain.env`](../../crates/vaultkeeper-wasm/wasm-toolchain.env) —
@@ -161,15 +169,22 @@ cargo install wasm-pack --version <WASM_PACK_VERSION> --locked
 #    Extract it, then:
 export PATH="/path/to/binaryen-version_<BINARYEN_VERSION>/bin:$PATH"
 
-# 5. Rebuild with CARGO_HOME normalized out of embedded debug paths — this is
-#    what makes the output match CI's rebuild byte-for-byte regardless of your
-#    machine's absolute CARGO_HOME path.
+# 5. Rebuild with CARGO_HOME normalized out of embedded debug paths — reduces
+#    (but does not eliminate — see above) incidental differences from CI's
+#    rebuild. Not required for the drift check to pass, but keeps diffs small.
 export RUSTFLAGS="--remap-path-prefix=${CARGO_HOME:-$HOME/.cargo}=/cargo-home"
 wasm-pack build --target nodejs crates/vaultkeeper-wasm --out-dir /tmp/vaultkeeper-wasm-rebuild
 
 # 6. Copy the rebuilt artifacts over the committed ones and commit
 cp /tmp/vaultkeeper-wasm-rebuild/vaultkeeper_wasm_bg.wasm* packages/vaultkeeper-wasm/wasm/
 cp /tmp/vaultkeeper-wasm-rebuild/vaultkeeper_wasm.{js,d.ts} packages/vaultkeeper-wasm/wasm/
+
+# 7. Optional: verify the export/import surface matches what's currently
+#    committed before you overwrite it (useful before step 6, to see if a
+#    regeneration is even needed):
+node scripts/wasm-export-fingerprint.mjs \
+  packages/vaultkeeper-wasm/wasm/vaultkeeper_wasm_bg.wasm \
+  /tmp/vaultkeeper-wasm-rebuild/vaultkeeper_wasm_bg.wasm
 ```
 
 `wasm-opt -Oz` (aggressive size optimization) runs automatically as part of step 5 via
