@@ -116,9 +116,16 @@ cmd_failure_details() {
   urls="$(gh pr view "$pr" --json statusCheckRollup \
     --jq '[.statusCheckRollup[]?|select(.conclusion=="FAILURE" or .conclusion=="TIMED_OUT" or .conclusion=="ERROR")|.detailsUrl]|.[]' 2>/dev/null)" \
     || die "gh pr view failed for PR ${pr}" 4
+  if [ -z "$urls" ]; then
+    printf 'PR %s: no failing checks.\n' "$pr"
+    exit 0
+  fi
   runs="$(printf '%s\n' "$urls" | grep -oE 'runs/[0-9]+' | cut -d/ -f2 | sort -u || true)"
   if [ -z "$runs" ]; then
-    printf 'PR %s: no failing checks.\n' "$pr"
+    # Failing checks exist but none resolve to a GitHub Actions run (external
+    # CI) — report them rather than claiming there are no failures.
+    printf 'PR %s: failing checks are not GitHub Actions runs; cannot fetch logs. Details URLs:\n' "$pr"
+    printf '%s\n' "$urls"
     exit 0
   fi
   local run
