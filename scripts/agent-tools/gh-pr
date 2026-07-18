@@ -133,7 +133,7 @@ cmd_failure_details() {
     printf '=== failing run %s (PR %s) ===\n' "$run" "$pr"
     gh run view "$run" --log-failed 2>/dev/null \
       | grep -iE 'error|fail|not found|cannot|ELIFECYCLE|Traceback|assert|✗|✖' \
-      | grep -viE '^\s*✓' \
+      | grep -viE '^[[:space:]]*✓' \
       | head -30 \
       || printf '(no matching error lines; run: gh run view %s --log-failed)\n' "$run"
     printf '\n'
