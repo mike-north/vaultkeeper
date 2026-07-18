@@ -107,6 +107,15 @@ jobs:
             exit 1
           fi
 
+      - name: Upload freshly rebuilt artifact for inspection (on drift-check failure)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: wasm-rebuild-debug
+          path: /tmp/wasm-rebuild/
+          retention-days: 7
+          if-no-files-found: ignore
+
       - name: Enforce gzip size budget
         run: |
           rebuilt=/tmp/wasm-rebuild/vaultkeeper_wasm_bg.wasm
