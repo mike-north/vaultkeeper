@@ -158,6 +158,19 @@ impl HostPlatform for NativeHostPlatform {
         })
     }
 
+    async fn rename_file(&self, from: &Path, to: &Path) -> Result<(), VaultError> {
+        std::fs::rename(from, to).map_err(|e| VaultError::Filesystem {
+            message: format!(
+                "Failed to rename {} to {}: {e}",
+                from.display(),
+                to.display()
+            ),
+            path: to.display().to_string(),
+            permission: "write".to_string(),
+            code: None,
+        })
+    }
+
     async fn list_dir(&self, path: &Path) -> Result<Vec<String>, VaultError> {
         match std::fs::read_dir(path) {
             Ok(entries) => {

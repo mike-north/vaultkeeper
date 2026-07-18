@@ -169,21 +169,19 @@ class WasmVaultKeeper {
     }
     /**
      * Emergency key revocation — removes previous key and generates a new current key.
+     * @returns {Promise<void>}
      */
     revokeKey() {
         const ret = wasm.wasmvaultkeeper_revokeKey(this.__wbg_ptr);
-        if (ret[1]) {
-            throw takeFromExternrefTable0(ret[0]);
-        }
+        return ret;
     }
     /**
      * Rotate the encryption key.
+     * @returns {Promise<void>}
      */
     rotateKey() {
         const ret = wasm.wasmvaultkeeper_rotateKey(this.__wbg_ptr);
-        if (ret[1]) {
-            throw takeFromExternrefTable0(ret[0]);
-        }
+        return ret;
     }
     /**
      * Create a JWE token encapsulating a secret.
@@ -225,45 +223,6 @@ class WasmVaultKeeper {
 }
 if (Symbol.dispose) WasmVaultKeeper.prototype[Symbol.dispose] = WasmVaultKeeper.prototype.free;
 exports.WasmVaultKeeper = WasmVaultKeeper;
-
-/**
- * Diagnostic-only export: constructs one instance of every `VaultError`
- * variant with fixed dummy field values and converts each through the real
- * `vault_error_to_js` bridge, exactly as a genuine thrown error would be.
- *
- * This exists solely so `error-parity.test.ts` can round-trip real
- * bridge-produced values through the TypeScript reconstruction map, instead
- * of guessing at the JSON shape `vault_error_to_js` produces. It is not part
- * of the SDK's public TypeScript API (`packages/vaultkeeper-wasm/src/index.ts`
- * does not re-export it) and is never called from a real code path — see
- * `all_variants_for_parity_test` in `crates/vaultkeeper-core/src/errors.rs`
- * for the fixture values.
- * @returns {Array<any>}
- */
-function __testAllVaultErrors() {
-    const ret = wasm.__testAllVaultErrors();
-    return ret;
-}
-exports.__testAllVaultErrors = __testAllVaultErrors;
-
-/**
- * The canonical list of every machine-readable `vaultErrorCode` this WASM
- * binary can throw — the single source of truth for the error taxonomy (see
- * `ALL_ERROR_CODES` in `crates/vaultkeeper-core/src/errors.rs`).
- *
- * `packages/vaultkeeper-wasm/src/test/error-parity.test.ts` fetches this
- * exact list at test time and asserts it equals the TypeScript
- * reconstruction map's known codes exactly, catching drift between the two
- * languages in either direction.
- * @returns {string[]}
- */
-function allVaultErrorCodes() {
-    const ret = wasm.allVaultErrorCodes();
-    var v1 = getArrayJsValueFromWasm0(ret[0], ret[1]).slice();
-    wasm.__wbindgen_free(ret[0], ret[1] * 4, 4);
-    return v1;
-}
-exports.allVaultErrorCodes = allVaultErrorCodes;
 
 /**
  * Factory function to create a WasmVaultKeeper.
@@ -339,6 +298,10 @@ function __wbg_get_imports() {
         },
         __wbg_call_2d781c1f4d5c0ef8: function() { return handleError(function (arg0, arg1, arg2) {
             const ret = arg0.call(arg1, arg2);
+            return ret;
+        }, arguments); },
+        __wbg_call_dcc2662fa17a72cf: function() { return handleError(function (arg0, arg1, arg2, arg3) {
+            const ret = arg0.call(arg1, arg2, arg3);
             return ret;
         }, arguments); },
         __wbg_call_e133b57c9155d22c: function() { return handleError(function (arg0, arg1) {
@@ -493,7 +456,7 @@ function __wbg_get_imports() {
             return ret;
         },
         __wbindgen_cast_0000000000000001: function(arg0, arg1) {
-            // Cast intrinsic for `Closure(Closure { dtor_idx: 144, function: Function { arguments: [Externref], shim_idx: 145, ret: Result(Unit), inner_ret: Some(Result(Unit)) }, mutable: true }) -> Externref`.
+            // Cast intrinsic for `Closure(Closure { dtor_idx: 182, function: Function { arguments: [Externref], shim_idx: 183, ret: Result(Unit), inner_ret: Some(Result(Unit)) }, mutable: true }) -> Externref`.
             const ret = makeMutClosure(arg0, arg1, wasm.wasm_bindgen__closure__destroy__h1722208547e491cb, wasm_bindgen__convert__closures_____invoke__h8760ba3086f56474);
             return ret;
         },
@@ -614,17 +577,6 @@ function debugString(val) {
     }
     // TODO we could test for more things here, like `Set`s and `Map`s.
     return className;
-}
-
-function getArrayJsValueFromWasm0(ptr, len) {
-    ptr = ptr >>> 0;
-    const mem = getDataViewMemory0();
-    const result = [];
-    for (let i = ptr; i < ptr + 4 * len; i += 4) {
-        result.push(wasm.__wbindgen_externrefs.get(mem.getUint32(i, true)));
-    }
-    wasm.__externref_drop_slice(ptr, len);
-    return result;
 }
 
 function getArrayU8FromWasm0(ptr, len) {

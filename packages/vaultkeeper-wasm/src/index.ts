@@ -344,18 +344,28 @@ export class VaultKeeper {
     }
   }
 
-  /** Rotate the encryption key. */
-  rotateKey(): void {
-    callSync(() => {
-      this.#inner.rotateKey()
-    })
+  /**
+   * Rotate the encryption key.
+   *
+   * @remarks
+   * Persists the new key state to the config directory before resolving, so a
+   * later process picks up the rotation — this is why rotation is async here
+   * (it was synchronous before key persistence existed).
+   */
+  async rotateKey(): Promise<void> {
+    await callAsync(() => this.#inner.rotateKey())
   }
 
-  /** Emergency key revocation — removes previous key and generates a new current key. */
-  revokeKey(): void {
-    callSync(() => {
-      this.#inner.revokeKey()
-    })
+  /**
+   * Emergency key revocation — removes previous key and generates a new current key.
+   *
+   * @remarks
+   * Persists the new key state to the config directory before resolving, so a
+   * later process picks up the revocation — this is why revocation is async
+   * here (it was synchronous before key persistence existed).
+   */
+  async revokeKey(): Promise<void> {
+    await callAsync(() => this.#inner.revokeKey())
   }
 
   /** Get the current configuration. */

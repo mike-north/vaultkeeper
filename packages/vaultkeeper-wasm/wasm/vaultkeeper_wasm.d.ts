@@ -70,11 +70,11 @@ export class WasmVaultKeeper {
     /**
      * Emergency key revocation — removes previous key and generates a new current key.
      */
-    revokeKey(): void;
+    revokeKey(): Promise<void>;
     /**
      * Rotate the encryption key.
      */
-    rotateKey(): void;
+    rotateKey(): Promise<void>;
     /**
      * Create a JWE token encapsulating a secret.
      *

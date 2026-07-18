@@ -92,6 +92,15 @@ Description
 </td></tr>
 <tr><td>
 
+[renameFile(from, to)](./wasm.wasmhostplatform.renamefile.md)
+
+
+</td><td>
+
+
+</td></tr>
+<tr><td>
+
 [writeFile(path, content, mode)](./wasm.wasmhostplatform.writefile.md)
 
 

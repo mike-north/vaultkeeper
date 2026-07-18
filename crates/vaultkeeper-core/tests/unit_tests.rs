@@ -1101,7 +1101,7 @@ mod vault_keeper {
             .unwrap();
 
         // Rotate the key
-        vault.rotate_key().unwrap();
+        vault.rotate_key(&host).await.unwrap();
 
         // Authorize should succeed (finds previous key) and provide a rotated JWT
         let (claims, response) = vault.authorize(&token).unwrap();
@@ -1145,7 +1145,7 @@ mod vault_keeper {
             .unwrap();
 
         // Revoke all keys — generates a completely new key
-        vault.revoke_key().unwrap();
+        vault.revoke_key(&host).await.unwrap();
 
         // Token should fail to authorize (unknown key)
         let result = vault.authorize(&token);
@@ -1244,6 +1244,127 @@ mod vault_keeper {
                 || matches!(err, VaultError::TokenRevoked { .. }),
             "Expected UsageLimitExceeded or TokenRevoked, got: {err}"
         );
+    }
+
+    // -----------------------------------------------------------------
+    // Issue #238: key-state persistence across process lifetimes.
+    //
+    // Each `VaultKeeper::init` call below models a separate process:
+    // constructing a fresh `VaultKeeper` against the *same* host discards all
+    // in-memory `KeyManager` state, so these tests only pass if key state is
+    // actually persisted to (and hydrated from) the host's config dir rather
+    // than kept in memory.
+    // -----------------------------------------------------------------
+
+    /// The scenario key persistence exists to fix: a JWE minted by one
+    /// process is authorized by a later one because the `kid` it embeds still
+    /// resolves to a known key.
+    #[tokio::test]
+    async fn a_token_minted_by_one_process_authorizes_in_a_later_process() {
+        let host = TestHost::with_config();
+        let first = VaultKeeper::init(
+            &host,
+            Some(VaultKeeperOptions {
+                skip_doctor: true,
+                ..Default::default()
+            }),
+        )
+        .await
+        .unwrap();
+        let token = first
+            .setup(
+                &host,
+                "cross-process",
+                "s3cret",
+                Some(&vaultkeeper_core::vault::SetupOptions {
+                    skip_trust: Some(true),
+                    ..Default::default()
+                }),
+            )
+            .await
+            .unwrap();
+        drop(first);
+
+        // A brand-new VaultKeeper against the same host simulates a fresh
+        // process: without persistence its KeyManager would generate an
+        // unrelated key and authorize() would fail with an unknown kid.
+        let mut second = VaultKeeper::init(
+            &host,
+            Some(VaultKeeperOptions {
+                skip_doctor: true,
+                ..Default::default()
+            }),
+        )
+        .await
+        .unwrap();
+        let (claims, _) = second.authorize(&token).unwrap();
+        assert_eq!(claims.val, "s3cret");
+    }
+
+    /// AC5: the rotation grace-period guard (`RotationInProgress`) survives a
+    /// process restart because the grace-period expiry is persisted, not held
+    /// only in a live timer.
+    #[tokio::test]
+    async fn rotation_grace_period_guard_survives_across_processes() {
+        let host = TestHost::with_config();
+        let mut first = VaultKeeper::init(
+            &host,
+            Some(VaultKeeperOptions {
+                skip_doctor: true,
+                ..Default::default()
+            }),
+        )
+        .await
+        .unwrap();
+        first.rotate_key(&host).await.unwrap();
+        drop(first);
+
+        let mut second = VaultKeeper::init(
+            &host,
+            Some(VaultKeeperOptions {
+                skip_doctor: true,
+                ..Default::default()
+            }),
+        )
+        .await
+        .unwrap();
+        let err = second.rotate_key(&host).await.unwrap_err();
+        assert!(
+            matches!(err, VaultError::RotationInProgress { .. }),
+            "expected RotationInProgress, got: {err:?}"
+        );
+    }
+
+    /// AC5: revocation is likewise persisted — a later process must not still
+    /// see the revoked previous key.
+    #[tokio::test]
+    async fn revocation_survives_across_processes() {
+        let host = TestHost::with_config();
+        let mut first = VaultKeeper::init(
+            &host,
+            Some(VaultKeeperOptions {
+                skip_doctor: true,
+                ..Default::default()
+            }),
+        )
+        .await
+        .unwrap();
+        first.rotate_key(&host).await.unwrap();
+        first.revoke_key(&host).await.unwrap();
+        drop(first);
+
+        let mut second = VaultKeeper::init(
+            &host,
+            Some(VaultKeeperOptions {
+                skip_doctor: true,
+                ..Default::default()
+            }),
+        )
+        .await
+        .unwrap();
+        // The revoked previous key's grace period must not have survived —
+        // a subsequent rotation must succeed rather than reject.
+        assert!(second.rotate_key(&host).await.is_ok());
     }
 }
 

@@ -481,7 +481,7 @@ async fn cmd_rotate_key() -> i32 {
         }
     };
 
-    if let Err(e) = vault.rotate_key() {
+    if let Err(e) = vault.rotate_key(host.as_ref()).await {
         eprintln!("Error: {e}");
         return 1;
     }
@@ -509,7 +509,7 @@ async fn cmd_revoke_key() -> i32 {
         }
     };
 
-    if let Err(e) = vault.revoke_key() {
+    if let Err(e) = vault.revoke_key(host.as_ref()).await {
         eprintln!("Error: {e}");
         return 1;
     }

@@ -381,6 +381,29 @@ mod rotate_key {
             .success()
             .stdout(predicate::str::contains("Key rotated successfully"));
     }
+
+    /// Issue #238, AC5: key state persists to the config dir, so the
+    /// grace-period guard survives across processes. Each `Command::cargo_bin`
+    /// call here is a fresh OS process sharing only the config dir — before
+    /// persistence, the second process would start with no in-memory previous
+    /// key and rotate again successfully instead of rejecting.
+    #[test]
+    fn second_rotate_rejects_while_grace_period_is_active_across_processes() {
+        let (mut first, dir) = cli_test_env();
+        first
+            .arg("rotate-key")
+            .assert()
+            .success()
+            .stdout(predicate::str::contains("Key rotated successfully"));
+
+        let mut second = Command::cargo_bin("vaultkeeper").expect("binary not found");
+        second.env("VAULTKEEPER_CONFIG_DIR", dir.path());
+        second
+            .arg("rotate-key")
+            .assert()
+            .failure()
+            .stderr(predicate::str::contains("rotation is already in progress"));
+    }
 }
 
 // ─── Revoke-key command ──────────────────────────────────────────

@@ -6,7 +6,16 @@
  */
 
 import { execFile } from 'node:child_process'
-import { access, mkdir, readdir, readFile, unlink, writeFile, chmod } from 'node:fs/promises'
+import {
+  access,
+  mkdir,
+  readdir,
+  readFile,
+  rename,
+  unlink,
+  writeFile,
+  chmod,
+} from 'node:fs/promises'
 import { homedir, platform as osPlatform } from 'node:os'
 import { dirname, join } from 'node:path'
 import type { WasmHostPlatform } from './types.js'
@@ -136,6 +145,14 @@ export function createNodeHost(configDirOverride?: string): WasmHostPlatform {
         await unlink(path)
       } catch (err) {
         throw toHostFilesystemError(err, path)
+      }
+    },
+
+    async renameFile(from: string, to: string): Promise<void> {
+      try {
+        await rename(from, to)
+      } catch (err) {
+        throw toHostFilesystemError(err, to)
       }
     },
 

@@ -24,6 +24,7 @@ use vaultkeeper_core::{ExecutableTrustRequiredReason, VaultError};
 /// - `writeFile(path, content, mode)` → `Promise<void>`
 /// - `fileExists(path)` → `Promise<boolean>`
 /// - `deleteFile(path)` → `Promise<void>`
+/// - `renameFile(from, to)` → `Promise<void>`
 /// - `listDir(path)` → `Promise<string[]>`
 /// - `platform()` → `string` ("darwin"|"linux"|"win32")
 /// - `configDir()` → `string`
@@ -344,6 +345,23 @@ impl HostPlatform for JsHostPlatform {
         Ok(())
     }
 
+    async fn rename_file(&self, from: &Path, to: &Path) -> Result<(), VaultError> {
+        let rename_fn =
+            get_method(&self.host, "renameFile").map_err(|e| js_err(&format!("{e:?}")))?;
+
+        let js_from = JsValue::from_str(&from.to_string_lossy());
+        let js_to = JsValue::from_str(&to.to_string_lossy());
+        let promise = rename_fn
+            .call2(&self.host, &js_from, &js_to)
+            .map_err(|e| js_err(&format!("renameFile() call failed: {e:?}")))?;
+
+        JsFuture::from(Promise::from(promise))
+            .await
+            .map_err(|e| fs_rejection_to_vault_error(&e, to, "write"))?;
+
+        Ok(())
+    }
+
     async fn list_dir(&self, path: &Path) -> Result<Vec<String>, VaultError> {
         let list_fn = get_method(&self.host, "listDir").map_err(|e| js_err(&format!("{e:?}")))?;
 
@@ -562,14 +580,20 @@ impl WasmVaultKeeper {
 
     /// Rotate the encryption key.
     #[wasm_bindgen(js_name = "rotateKey")]
-    pub fn rotate_key(&mut self) -> Result<(), JsValue> {
-        self.vault.rotate_key().map_err(|e| vault_error_to_js(&e))
+    pub async fn rotate_key(&mut self) -> Result<(), JsValue> {
+        self.vault
+            .rotate_key(self.host.as_ref())
+            .await
+            .map_err(|e| vault_error_to_js(&e))
     }
 
     /// Emergency key revocation — removes previous key and generates a new current key.
     #[wasm_bindgen(js_name = "revokeKey")]
-    pub fn revoke_key(&mut self) -> Result<(), JsValue> {
-        self.vault.revoke_key().map_err(|e| vault_error_to_js(&e))
+    pub async fn revoke_key(&mut self) -> Result<(), JsValue> {
+        self.vault
+            .revoke_key(self.host.as_ref())
+            .await
+            .map_err(|e| vault_error_to_js(&e))
     }
 
     /// Get the current configuration as JSON.
