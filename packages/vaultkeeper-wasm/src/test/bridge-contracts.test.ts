@@ -272,6 +272,91 @@ describe('__testHttpFetch — JsHostPlatform::http_fetch bridge (issue #239 AC2)
   })
 })
 
+/**
+ * Regression tests for a code-review finding on this PR:
+ * `js_result_to_http_response` (crates/vaultkeeper-wasm/src/wasm_impl.rs)
+ * originally accepted malformed `httpFetch()` results — `status` was cast
+ * directly to `u16` (silently truncating/wrapping out-of-range or fractional
+ * values), a missing/non-object `headers` silently became an empty list, and
+ * a non-`Uint8Array` `body` was constructed blind (risking a JS-side throw or
+ * a misleading coercion). Each case here must now reject with a typed
+ * `FetchError` rather than silently producing a misleading `HttpResponse`.
+ */
+describe('__testHttpFetch — rejects malformed httpFetch() result shapes', () => {
+  async function expectFetchError(response: unknown): Promise<void> {
+    const bindings = await loadDiagnosticBindings()
+    const host = { ...baseHost(), httpFetch: () => Promise.resolve(response) }
+    await assert.rejects(
+      () =>
+        bindings.__testHttpFetch(host, {
+          method: 'GET',
+          url: 'https://example.test/x',
+          headers: {},
+        }),
+      (thrown: unknown) => {
+        assert.ok(isBridgeErrorShape(thrown))
+        const err = mapWasmError(thrown)
+        assert.ok(err instanceof FetchError, `expected FetchError, got ${err.constructor.name}`)
+        return true
+      },
+    )
+  }
+
+  it('rejects a negative status instead of wrapping it into an in-range u16', async () => {
+    await expectFetchError({ status: -1, headers: {}, body: new Uint8Array() })
+  })
+
+  it('rejects a status above u16::MAX instead of truncating it', async () => {
+    await expectFetchError({ status: 70000, headers: {}, body: new Uint8Array() })
+  })
+
+  it('rejects a fractional status', async () => {
+    await expectFetchError({ status: 200.5, headers: {}, body: new Uint8Array() })
+  })
+
+  it('rejects a missing headers field instead of defaulting to an empty list', async () => {
+    await expectFetchError({ status: 200, body: new Uint8Array() })
+  })
+
+  it('rejects a non-object headers field (e.g. a string)', async () => {
+    await expectFetchError({ status: 200, headers: 'not-an-object', body: new Uint8Array() })
+  })
+
+  it('rejects a headers object with a non-string value', async () => {
+    await expectFetchError({ status: 200, headers: { 'x-count': 5 }, body: new Uint8Array() })
+  })
+
+  it('rejects a missing body field instead of coercing it to an empty array', async () => {
+    await expectFetchError({ status: 200, headers: {} })
+  })
+
+  it('rejects a non-Uint8Array body (e.g. a plain string)', async () => {
+    await expectFetchError({ status: 200, headers: {}, body: 'not-bytes' })
+  })
+
+  it('still accepts a well-formed result (control case)', async () => {
+    const bindings = await loadDiagnosticBindings()
+    const host = {
+      ...baseHost(),
+      httpFetch: () =>
+        Promise.resolve({
+          status: 200,
+          headers: { 'x-ok': 'yes' },
+          body: new Uint8Array([1, 2, 3]),
+        }),
+    }
+    const result = await bindings.__testHttpFetch(host, {
+      method: 'GET',
+      url: 'https://example.test/x',
+      headers: {},
+    })
+    assertDiagnosticHttpResponse(result)
+    assert.equal(result.status, 200)
+    assert.equal(result.headers['x-ok'], 'yes')
+    assert.deepEqual([...result.body], [1, 2, 3])
+  })
+})
+
 // ---------------------------------------------------------------------------
 // AC3: prompt_approval — optional, fails closed
 // ---------------------------------------------------------------------------

@@ -531,29 +531,52 @@ fn js_result_to_http_response(result: &JsValue, url: &str) -> Result<HttpRespons
         url: url.to_string(),
     };
 
-    let status = Reflect::get(result, &JsValue::from_str("status"))
+    // Reject anything that isn't a genuine non-negative integer in u16 range
+    // (negative, fractional, NaN, `Infinity`, or > 65535) rather than
+    // truncating/wrapping it into a misleading in-range `u16` via `as`.
+    let status_f64 = Reflect::get(result, &JsValue::from_str("status"))
         .ok()
         .and_then(|v| v.as_f64())
-        .ok_or_else(|| malformed("status"))? as u16;
+        .ok_or_else(|| malformed("status"))?;
+    if status_f64.fract() != 0.0 || !(0.0..=f64::from(u16::MAX)).contains(&status_f64) {
+        return Err(malformed("status"));
+    }
+    let status = status_f64 as u16;
 
-    let mut headers = Vec::new();
+    // A missing or non-object `headers` must fail loudly, not silently
+    // degrade to an empty header list.
     let headers_val =
         Reflect::get(result, &JsValue::from_str("headers")).map_err(|_| malformed("headers"))?;
-    if headers_val.is_object() {
-        let keys = js_sys::Object::keys(&js_sys::Object::from(headers_val.clone()));
-        for i in 0..keys.length() {
-            if let Some(key) = keys.get(i).as_string()
-                && let Ok(value) = Reflect::get(&headers_val, &JsValue::from_str(&key))
-                && let Some(value_str) = value.as_string()
-            {
-                headers.push((key, value_str));
-            }
-        }
+    if !headers_val.is_object() {
+        return Err(malformed("headers"));
+    }
+    let mut headers = Vec::new();
+    let keys = js_sys::Object::keys(&js_sys::Object::from(headers_val.clone()));
+    for i in 0..keys.length() {
+        // `Object.keys()` always yields strings, so `key` is infallible in
+        // practice; `value` is the part that can genuinely be a non-string
+        // (e.g. a header value set to a number), which must reject the whole
+        // response rather than silently drop that one header.
+        let key = keys
+            .get(i)
+            .as_string()
+            .ok_or_else(|| malformed("headers"))?;
+        let value = Reflect::get(&headers_val, &JsValue::from_str(&key))
+            .map_err(|_| malformed("headers"))?;
+        let value_str = value.as_string().ok_or_else(|| malformed("headers"))?;
+        headers.push((key, value_str));
     }
 
+    // `Uint8Array::new` on a non-Uint8Array value (e.g. `undefined`, a
+    // string, a plain array) either coerces to a misleading result or throws
+    // inside the JS constructor — check the real type first via `dyn_ref`
+    // instead of constructing blind.
     let body_val =
         Reflect::get(result, &JsValue::from_str("body")).map_err(|_| malformed("body"))?;
-    let body = Uint8Array::new(&body_val).to_vec();
+    let body = body_val
+        .dyn_ref::<Uint8Array>()
+        .ok_or_else(|| malformed("body"))?
+        .to_vec();
 
     Ok(HttpResponse {
         status,
