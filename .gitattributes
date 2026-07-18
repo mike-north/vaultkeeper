@@ -1,2 +1,11 @@
 docs/api/** linguist-generated=true
 *.sh text eol=lf
+
+# Raw random key-material fixtures (issue #238 cross-impl tests). These are
+# small enough, and random enough, that git's own binary-content heuristic
+# (which most .wasm/.enc blobs trip automatically via embedded NUL bytes)
+# isn't reliable here — a 32-byte random buffer has a good chance of
+# containing zero NUL bytes. Without `-text`, a Windows checkout with
+# core.autocrlf enabled could rewrite an incidental 0x0A byte to 0x0D 0x0A,
+# corrupting the fixture and breaking the cross-implementation test.
+**/.keys.wrap -text
