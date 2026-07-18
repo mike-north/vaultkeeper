@@ -51,7 +51,10 @@ jobs:
       # and the size budget — shared with the local regeneration command
       # documented in packages/vaultkeeper-wasm/README.md.
       - name: Load pinned wasm toolchain versions
-        run: cat crates/vaultkeeper-wasm/wasm-toolchain.env >> "$GITHUB_ENV"
+        # $GITHUB_ENV only accepts strict KEY=VALUE lines — comments/blank lines
+        # (kept in the source file for documentation) make the env file command
+        # fail outright, so filter them out before appending.
+        run: grep -v '^#' crates/vaultkeeper-wasm/wasm-toolchain.env | grep -v '^[[:space:]]*$' >> "$GITHUB_ENV"
 
       - uses: dtolnay/rust-toolchain@master
         with:
