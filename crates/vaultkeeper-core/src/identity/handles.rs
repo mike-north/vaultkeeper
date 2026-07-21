@@ -94,8 +94,9 @@
 //! handle is repeatable, not one-shot — so a `None`-expiry, high-`use_limit`
 //! signing handle would be a durable ambient signing capability redeemable
 //! by mere possession of the [`HandleId`], strictly worse than no handle at
-//! all. Until the issuance-side principal check tracked in #282 exists,
-//! [`crate::vault::VaultKeeper::register_signing_handle`] refuses to mint a
+//! all. Until the issuance-side principal check — an open product decision
+//! tracked in issue #261 — exists, [`crate::vault::VaultKeeper::register_signing_handle`]
+//! (gated as part of issue #282) refuses to mint a
 //! signing handle with `expires_at: None` (see its doc comment and
 //! [`VaultError::AuthorizationDenied`]). A caller-supplied finite
 //! `expires_at` is unaffected and works exactly as described above; only the

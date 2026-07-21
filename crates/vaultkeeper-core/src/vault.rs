@@ -621,11 +621,12 @@ impl VaultKeeper {
     /// `expires_at` — see `crate::identity::handles` — but a never-expiring
     /// (`None`) signing handle is refused with
     /// [`VaultError::AuthorizationDenied`] until an issuance-side principal
-    /// check exists (issue #282): with no invocation-time re-check anywhere
-    /// in the system, a `None` expiry would mint a durable ambient signing
-    /// capability redeemable by mere possession of the returned
-    /// [`HandleId`]. A finite `expires_at` is unaffected and registers
-    /// exactly as before.
+    /// check exists — an open product decision tracked in issue #261, with
+    /// this gate itself tracked in issue #282: with no invocation-time
+    /// re-check anywhere in the system, a `None` expiry would mint a
+    /// durable ambient signing capability redeemable by mere possession of
+    /// the returned [`HandleId`]. A finite `expires_at` is unaffected and
+    /// registers exactly as before.
     ///
     /// Only reachable from within this crate — `register_signing_handle` has
     /// no callers today; the future lease-mint path referenced above is
@@ -642,9 +643,7 @@ impl VaultKeeper {
     ) -> Result<HandleId, VaultError> {
         let Some(expires_at) = expires_at else {
             return Err(VaultError::AuthorizationDenied {
-                message: "long-lived signing handles are gated on an issuance-side principal \
-                          check — see #282"
-                    .into(),
+                message: "long-lived signing handles are gated on an issuance-side principal check — see #282".into(),
             });
         };
         Ok(self
