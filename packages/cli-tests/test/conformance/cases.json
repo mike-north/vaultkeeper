@@ -456,8 +456,8 @@
     "needsConfig": true,
     "expectedExitCode": 0,
     "expectedStdout": {
-      "type": "Regex",
-      "value": "(?s)Backend capabilities.*file.*presence-per-use: no"
+      "type": "Exact",
+      "value": "Backend capabilities (per configured instance):\n\n  file  Encrypted File Store  presence-per-use: no\n\nA backend with presence-per-use: yes forces a distinct, fresh human action\nper operation and can satisfy `--require-presence-per-use`.\n"
     },
     "expectedStderr": {
       "type": "Any"

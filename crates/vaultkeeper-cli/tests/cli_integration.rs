@@ -445,13 +445,21 @@ mod backend_capabilities {
 
     #[test]
     fn capabilities_exits_0_and_reports_file_backend_as_not_presence_capable() {
+        // Exact match, not a substring check: the Rust CLI reports exactly
+        // one row (the active/configured `file` backend — there is no
+        // config-driven multi-backend registry wired into the CLI), so its
+        // own output is fully deterministic. This pins the Rust CLI's own
+        // output byte-for-byte; it is not a claim that this string equals
+        // the TS CLI's output, which enumerates every registered backend
+        // type (six rows) — see the PR description for the byte-diff
+        // evidence of that difference.
         let (mut cmd, _dir) = cli_test_env();
         cmd.args(["backend", "capabilities"])
             .assert()
             .success()
-            .stdout(predicate::str::contains("Backend capabilities"))
-            .stdout(predicate::str::contains("file"))
-            .stdout(predicate::str::contains("presence-per-use: no"));
+            .stdout(predicate::eq(
+                "Backend capabilities (per configured instance):\n\n  file  Encrypted File Store  presence-per-use: no\n\nA backend with presence-per-use: yes forces a distinct, fresh human action\nper operation and can satisfy `--require-presence-per-use`.\n",
+            ));
     }
 
     #[test]

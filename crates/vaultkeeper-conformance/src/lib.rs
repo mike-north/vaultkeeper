@@ -391,8 +391,16 @@ fn backend_capabilities_cases() -> Vec<ConformanceCase> {
             stdin: None,
             needs_config: true,
             expected_exit_code: 0,
-            expected_stdout: OutputMatcher::Regex(
-                "(?s)Backend capabilities.*file.*presence-per-use: no".into(),
+            // Exact match, not a loose regex: the Rust CLI reports exactly one
+            // row (the active/configured backend — there is no config-driven
+            // multi-backend registry wired into the CLI), so its own output is
+            // fully deterministic and worth pinning byte-for-byte. This is
+            // Rust-CLI-self-consistency coverage, not a claim that this string
+            // equals the TS CLI's output — the TS CLI enumerates every
+            // registered backend type (six rows) and its raw stdout differs
+            // from this (see PR description for the byte-diff evidence).
+            expected_stdout: OutputMatcher::Exact(
+                "Backend capabilities (per configured instance):\n\n  file  Encrypted File Store  presence-per-use: no\n\nA backend with presence-per-use: yes forces a distinct, fresh human action\nper operation and can satisfy `--require-presence-per-use`.\n".into(),
             ),
             expected_stderr: OutputMatcher::Any,
             expected_config_file: None,
