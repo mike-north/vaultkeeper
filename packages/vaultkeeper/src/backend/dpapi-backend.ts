@@ -80,16 +80,25 @@ export class DpapiBackend implements ListableBackend {
     await fs.mkdir(storageDir, { recursive: true })
     const entryPath = getEntryPath(storageDir, id)
 
+    // The secret is never embedded in the script text (which becomes a
+    // `-Command` argv element, and therefore visible to any other process
+    // that can list this process's command line, e.g. `ps`/Task Manager).
+    // Instead it is piped over stdin, base64-encoded so the transfer is
+    // immune to console/pipe text-encoding and newline-translation
+    // differences between Node and PowerShell (issue #269).
     const script = [
       'Add-Type -AssemblyName System.Security',
-      `$bytes = [System.Text.Encoding]::UTF8.GetBytes(${JSON.stringify(secret)})`,
+      '$b64 = [Console]::In.ReadToEnd()',
+      '$bytes = [System.Convert]::FromBase64String($b64.Trim())',
       '$entropy = $null',
       '$scope = [System.Security.Cryptography.DataProtectionScope]::CurrentUser',
       '$encrypted = [System.Security.Cryptography.ProtectedData]::Protect($bytes, $entropy, $scope)',
       `[System.IO.File]::WriteAllBytes(${JSON.stringify(entryPath)}, $encrypted)`,
     ].join('; ')
 
-    await execCommand('powershell', ['-NoProfile', '-Command', script])
+    await execCommand('powershell', ['-NoProfile', '-Command', script], {
+      stdin: Buffer.from(secret, 'utf8').toString('base64'),
+    })
   }
 
   async retrieve(id: string): Promise<string> {
