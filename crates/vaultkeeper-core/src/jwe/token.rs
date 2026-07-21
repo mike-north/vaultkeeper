@@ -14,7 +14,7 @@ use aes_gcm::{Aes256Gcm, Nonce};
 use base64ct::{Base64UrlUnpadded, Encoding};
 
 use crate::errors::VaultError;
-use crate::types::VaultClaims;
+use crate::types::{ClaimsKind, VaultClaims};
 use crate::util::time;
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -242,13 +242,25 @@ pub fn extract_kid(jwe: &str) -> Result<Option<String>, VaultError> {
 
 /// Validate claims: check expiry, blocklist, usage limits, and required fields.
 ///
+/// Dispatches on [`VaultClaims::kty`] (`kty` omitted is treated as
+/// [`ClaimsKind::Secret`] for backward compatibility with tokens minted before
+/// this discriminator existed — mirroring the in-memory `isSigningClaims`
+/// split on the TypeScript side):
+///
+/// - A **secret** claim (`kty` omitted or `Secret`) requires a non-empty
+///   `bkd` and `val`.
+/// - A **signing-key lease** (`kty: SigningKey`) MUST NOT carry a `val`,
+///   requires a non-empty `kid`, and requires `kgen` to be present — a lease
+///   missing `kgen` is rejected outright, never defaulted to generation 0
+///   (fail-closed; the revocation design depends on this being explicit).
+///
 /// `current_usage` is the number of times this token has already been used.
 /// Pass `0` when usage tracking is not yet implemented at the storage layer.
 ///
 /// # Errors
 /// Returns appropriate `VaultError` variant if validation fails.
 pub fn validate_claims(claims: &VaultClaims, current_usage: u64) -> Result<(), VaultError> {
-    // Validate required fields are non-empty
+    // Validate required string fields shared by every claims kind.
     if claims.jti.trim().is_empty() {
         return Err(VaultError::Other(
             "Invalid token: jti must not be empty".to_string(),
@@ -264,20 +276,41 @@ pub fn validate_claims(claims: &VaultClaims, current_usage: u64) -> Result<(), V
             "Invalid token: exe must not be empty".to_string(),
         ));
     }
-    if claims.bkd.trim().is_empty() {
-        return Err(VaultError::Other(
-            "Invalid token: bkd must not be empty".to_string(),
-        ));
-    }
-    if claims.val.trim().is_empty() {
-        return Err(VaultError::Other(
-            "Invalid token: val must not be empty".to_string(),
-        ));
-    }
     if claims.reference.trim().is_empty() {
         return Err(VaultError::Other(
             "Invalid token: ref must not be empty".to_string(),
         ));
+    }
+
+    if matches!(claims.kty, Some(ClaimsKind::SigningKey)) {
+        // Signing-key lease: no secret value ever travels on this claims shape.
+        if claims.val.as_deref().is_some_and(|v| !v.trim().is_empty()) {
+            return Err(VaultError::Other(
+                "Invalid token: signing lease must not carry a val".to_string(),
+            ));
+        }
+        if claims.kid.as_deref().unwrap_or("").trim().is_empty() {
+            return Err(VaultError::Other(
+                "Invalid token: kid must not be empty".to_string(),
+            ));
+        }
+        if claims.kgen.is_none() {
+            return Err(VaultError::Other(
+                "Invalid token: kgen is required for a signing lease".to_string(),
+            ));
+        }
+    } else {
+        // Ordinary secret claim (kty omitted or Secret).
+        if claims.bkd.as_deref().unwrap_or("").trim().is_empty() {
+            return Err(VaultError::Other(
+                "Invalid token: bkd must not be empty".to_string(),
+            ));
+        }
+        if claims.val.as_deref().unwrap_or("").trim().is_empty() {
+            return Err(VaultError::Other(
+                "Invalid token: val must not be empty".to_string(),
+            ));
+        }
     }
 
     // Validate timestamp ordering
@@ -389,9 +422,35 @@ mod tests {
             exe: "dev".to_string(),
             use_limit: None,
             tid: TrustTier::Dev,
-            bkd: "file".to_string(),
-            val: "s3cret-value".to_string(),
+            bkd: Some("file".to_string()),
+            val: Some("s3cret-value".to_string()),
             reference: "my-secret".to_string(),
+            kty: None,
+            kid: None,
+            kgen: None,
+            pres: None,
+        }
+    }
+
+    /// Builds a well-formed signing-key lease claims payload: no `val`/`bkd`,
+    /// `kty: SigningKey`, and a `kgen` present (see issue #280).
+    fn test_signing_lease_claims() -> VaultClaims {
+        let now = time::now_secs();
+        VaultClaims {
+            jti: "test-jti-lease-001".to_string(),
+            exp: now + 3600,
+            iat: now,
+            sub: "release-key".to_string(),
+            exe: "dev".to_string(),
+            use_limit: None,
+            tid: TrustTier::Dev,
+            bkd: None,
+            val: None,
+            reference: "release-key".to_string(),
+            kty: Some(ClaimsKind::SigningKey),
+            kid: Some("kid-abc123".to_string()),
+            kgen: Some(1),
+            pres: None,
         }
     }
 
@@ -601,7 +660,7 @@ mod tests {
         assert!(validate_claims(&claims, 0).is_err());
 
         let mut claims = test_claims();
-        claims.val = "".to_string();
+        claims.val = Some("".to_string());
         assert!(validate_claims(&claims, 0).is_err());
     }
 
@@ -616,6 +675,91 @@ mod tests {
     fn validate_claims_accepts_valid() {
         let mut claims = test_claims();
         claims.jti = "valid-test-unique-jti".to_string();
+        assert!(validate_claims(&claims, 0).is_ok());
+    }
+
+    // ─── kty discrimination (issue #280) ──────────────────────────────
+
+    #[test]
+    fn validate_claims_rejects_secret_with_empty_val_via_whitespace() {
+        let mut claims = test_claims();
+        claims.val = Some("   ".to_string());
+        let err = validate_claims(&claims, 0).unwrap_err();
+        assert_eq!(err.to_string(), "Invalid token: val must not be empty");
+    }
+
+    #[test]
+    fn validate_claims_rejects_secret_with_missing_val() {
+        let mut claims = test_claims();
+        claims.val = None;
+        let err = validate_claims(&claims, 0).unwrap_err();
+        assert_eq!(err.to_string(), "Invalid token: val must not be empty");
+    }
+
+    #[test]
+    fn validate_claims_rejects_secret_with_missing_bkd() {
+        let mut claims = test_claims();
+        claims.bkd = None;
+        let err = validate_claims(&claims, 0).unwrap_err();
+        assert_eq!(err.to_string(), "Invalid token: bkd must not be empty");
+    }
+
+    #[test]
+    fn validate_claims_accepts_well_formed_signing_lease() {
+        let claims = test_signing_lease_claims();
+        assert!(validate_claims(&claims, 0).is_ok());
+    }
+
+    #[test]
+    fn validate_claims_rejects_signing_lease_carrying_val() {
+        let mut claims = test_signing_lease_claims();
+        claims.val = Some("this-should-not-be-here".to_string());
+        let err = validate_claims(&claims, 0).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Invalid token: signing lease must not carry a val"
+        );
+    }
+
+    #[test]
+    fn validate_claims_rejects_signing_lease_missing_kgen() {
+        let mut claims = test_signing_lease_claims();
+        claims.kgen = None;
+        let err = validate_claims(&claims, 0).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Invalid token: kgen is required for a signing lease"
+        );
+    }
+
+    #[test]
+    fn validate_claims_does_not_default_missing_kgen_to_zero() {
+        // Defense against a regression that would silently treat a missing
+        // `kgen` as generation 0 instead of rejecting — see issue #280: this
+        // matters for the revocation design, which must fail closed.
+        let mut claims = test_signing_lease_claims();
+        claims.kgen = None;
+        assert!(validate_claims(&claims, 0).is_err());
+
+        let mut claims = test_signing_lease_claims();
+        claims.kgen = Some(0);
+        assert!(validate_claims(&claims, 0).is_ok());
+    }
+
+    #[test]
+    fn validate_claims_rejects_signing_lease_missing_kid() {
+        let mut claims = test_signing_lease_claims();
+        claims.kid = None;
+        let err = validate_claims(&claims, 0).unwrap_err();
+        assert_eq!(err.to_string(), "Invalid token: kid must not be empty");
+    }
+
+    #[test]
+    fn validate_claims_secret_without_kty_still_works() {
+        // `kty` omitted entirely (legacy tokens minted before this
+        // discriminator existed) must continue to validate as a secret claim.
+        let mut claims = test_claims();
+        claims.kty = None;
         assert!(validate_claims(&claims, 0).is_ok());
     }
 }

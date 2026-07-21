@@ -332,9 +332,13 @@ impl VaultKeeper {
             exe,
             use_limit,
             tid: trust_tier,
-            bkd: backend_type,
-            val: secret_value.to_string(),
+            bkd: Some(backend_type),
+            val: Some(secret_value.to_string()),
             reference: secret_name.to_string(),
+            kty: None,
+            kid: None,
+            kgen: None,
+            pres: None,
         };
 
         let current_key = self.key_manager.get_current_key()?;
@@ -561,8 +565,12 @@ impl VaultKeeper {
             use_limit: claims.use_limit,
             tid: claims.tid,
             bkd: claims.bkd.clone(),
-            val: String::new(),
+            val: None,
             reference: claims.reference.clone(),
+            kty: claims.kty,
+            kid: claims.kid.clone(),
+            kgen: claims.kgen,
+            pres: claims.pres.clone(),
         };
         let handle_id = self.handle_table.insert_secret(claims, expires_at);
 

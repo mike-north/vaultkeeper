@@ -421,12 +421,15 @@ impl HandleTable {
     /// must not be hardcoded here) — `authorize()` passes the token's own
     /// `exp` claim.
     pub fn insert_secret(&mut self, mut claims: VaultClaims, expires_at: Option<u64>) -> HandleId {
-        let secret = std::mem::take(&mut claims.val);
-        self.insert(
-            StoredClaims::Secret(claims),
-            Some(Zeroizing::new(secret)),
-            expires_at,
-        )
+        // A JWE-based signing-key lease reuses this same `VaultClaims` shape
+        // but never carries a `val` (enforced by `validate_claims`) — its
+        // `secret` is `None` from the start, exactly like a signing handle,
+        // even though it is still stored as `StoredClaims::Secret` (the
+        // dedicated `StoredClaims::Signing`/`insert_signing` path is reserved
+        // for the separate, not-yet-wired engine-swap primitive — see
+        // `VaultKeeper::register_signing_handle`).
+        let secret = claims.val.take().map(Zeroizing::new);
+        self.insert(StoredClaims::Secret(claims), secret, expires_at)
     }
 
     /// Register a signing-key handle. Carries no secret — a signing-key
@@ -593,9 +596,13 @@ mod tests {
             exe: "dev".to_string(),
             use_limit: None,
             tid: TrustTier::Dev,
-            bkd: "file".to_string(),
-            val: val.to_string(),
+            bkd: Some("file".to_string()),
+            val: Some(val.to_string()),
             reference: "test-secret".to_string(),
+            kty: None,
+            kid: None,
+            kgen: None,
+            pres: None,
         }
     }
 
@@ -704,7 +711,7 @@ mod tests {
         let id = table.insert_secret(secret_claims("jti-1", "s3cret"), None);
         let claims = table.resolve_secret_claims(&id).unwrap();
         assert_eq!(
-            claims.val, "",
+            claims.val, None,
             "resolve_secret_claims must never egress the secret"
         );
         assert_eq!(claims.sub, "test-secret");

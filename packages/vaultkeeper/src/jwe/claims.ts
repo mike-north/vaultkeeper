@@ -72,12 +72,23 @@ export function clearBlocklist(): void {
  * Validates all claims in a VaultClaims payload.
  * @internal
  *
- * Checks performed:
- * - Required fields present (jti, exp, iat, sub, exe, tid, bkd, val, ref)
+ * Dispatches on {@link VaultClaims.kty} (`kty` omitted is treated as `'secret'`
+ * for backward compatibility with tokens minted before this discriminator
+ * existed — see the in-memory `isSigningClaims` split in `identity/session.ts`
+ * for the analogous pattern):
+ *
+ * - A **secret** claim (`kty` omitted or `'secret'`) requires a non-empty
+ *   `bkd` and `val`.
+ * - A **signing-key lease** (`kty: 'signing-key'`) MUST NOT carry a `val`,
+ *   requires a non-empty `kid`, and requires `kgen` to be present — a lease
+ *   missing `kgen` is rejected outright, never defaulted to generation 0
+ *   (fail-closed; the revocation design depends on this being explicit).
+ *
+ * Checks performed for every claim, regardless of kind:
+ * - Required fields present (jti, sub, exe, ref)
  * - Token is not expired (exp vs. current time)
  * - Token is not on the blocklist
  * - Usage limit (use) is not exceeded if a positive limit is set
- * - Trust tier (tid) is valid (1, 2, or 3)
  *
  * @param claims - VaultClaims payload to validate
  * @param usedCount - How many times the token has been used already (for `use` limit checking)
@@ -87,7 +98,7 @@ export function clearBlocklist(): void {
  * @throws VaultError for missing or malformed required fields
  */
 export function validateClaims(claims: VaultClaims, usedCount = 0): void {
-  // Validate required string fields are non-empty
+  // Validate required string fields shared by every claims kind.
   if (claims.jti.trim() === '') {
     throw new VaultError('Invalid token: jti must not be empty')
   }
@@ -97,14 +108,29 @@ export function validateClaims(claims: VaultClaims, usedCount = 0): void {
   if (claims.exe.trim() === '') {
     throw new VaultError('Invalid token: exe must not be empty')
   }
-  if (claims.bkd.trim() === '') {
-    throw new VaultError('Invalid token: bkd must not be empty')
-  }
-  if (claims.val.trim() === '') {
-    throw new VaultError('Invalid token: val must not be empty')
-  }
   if (claims.ref.trim() === '') {
     throw new VaultError('Invalid token: ref must not be empty')
+  }
+
+  if (claims.kty === 'signing-key') {
+    // Signing-key lease: no secret value ever travels on this claims shape.
+    if (claims.val !== undefined && claims.val.trim() !== '') {
+      throw new VaultError('Invalid token: signing lease must not carry a val')
+    }
+    if (claims.kid === undefined || claims.kid.trim() === '') {
+      throw new VaultError('Invalid token: kid must not be empty')
+    }
+    if (claims.kgen === undefined) {
+      throw new VaultError('Invalid token: kgen is required for a signing lease')
+    }
+  } else {
+    // Ordinary secret claim (kty omitted or 'secret').
+    if (claims.bkd === undefined || claims.bkd.trim() === '') {
+      throw new VaultError('Invalid token: bkd must not be empty')
+    }
+    if (claims.val === undefined || claims.val.trim() === '') {
+      throw new VaultError('Invalid token: val must not be empty')
+    }
   }
 
   // Validate timestamp ordering

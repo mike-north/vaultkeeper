@@ -15,8 +15,9 @@ use vaultkeeper_core::backend::{
 use vaultkeeper_core::errors::{
     ALL_ERROR_CODES, all_variants_for_parity_test, vault_error_code, vault_error_fields,
 };
+use vaultkeeper_core::jwe::validate_claims;
 use vaultkeeper_core::vault::{SetupOptions, VaultKeeperOptions};
-use vaultkeeper_core::{ExecutableTrustRequiredReason, VaultError};
+use vaultkeeper_core::{ClaimsKind, ExecutableTrustRequiredReason, VaultClaims, VaultError};
 
 // ─── JsHostPlatform ──────────────────────────────────────────────
 
@@ -1057,6 +1058,33 @@ pub fn __test_all_vault_errors() -> js_sys::Array {
     arr
 }
 
+/// Diagnostic-only export: runs the Rust core's `validate_claims` — the
+/// single validation chokepoint every token passes through — directly against
+/// a caller-supplied claims payload, without needing a real JWE, key, or
+/// `VaultKeeper` instance.
+///
+/// `claims_json` must deserialize as `VaultClaims`. Returns `Ok(())` when
+/// validation passes, or a `JsValue` produced by the real `vault_error_to_js`
+/// bridge (matching every other error surfaced from this binary) when it
+/// fails.
+///
+/// This exists so `packages/cli-tests/test/conformance/claims-validation-parity.test.ts`
+/// can assert the Rust core and the TypeScript library's `validateClaims`
+/// (`packages/vaultkeeper/src/jwe/claims.ts`) produce byte-identical error
+/// messages for the same malformed claims payload (issue #280) — it is not
+/// part of the SDK's public TypeScript API (`../index.ts` does not re-export
+/// it) and is never called from a real code path.
+///
+/// # Errors
+/// Returns the bridged `VaultError` when `claims_json` fails to parse as
+/// `VaultClaims`, or when `validate_claims` rejects the parsed claims.
+#[wasm_bindgen(js_name = "__testValidateClaims")]
+pub fn __test_validate_claims(claims_json: &str, used_count: u64) -> Result<(), JsValue> {
+    let claims: VaultClaims = serde_json::from_str(claims_json)
+        .map_err(|e| coded_js_error("invalid-token", &format!("invalid claims JSON: {e}")))?;
+    validate_claims(&claims, used_count).map_err(|e| vault_error_to_js(&e))
+}
+
 /// Diagnostic-only export exercising `HostPlatform::http_fetch` directly
 /// through the real `JsHostPlatform` bridge (issue #239 AC2 — "land the
 /// primitive with direct tests"). No core consumer calls `http_fetch` yet
@@ -1302,19 +1330,30 @@ impl WasmVaultKeeper {
             _ => vault_error_to_js(&e),
         })?;
 
-        // The one-time read against the handle table — `claims.val` is
-        // already empty (see `VaultKeeper::authorize`'s doc comment), so this
-        // is the only place the raw secret is ever materialized on this side
-        // of the WASM boundary. `read_secret` already returns a
-        // `Zeroizing<String>`; move it straight into `WasmAuthorization`
-        // rather than `.to_string()`-cloning it into a second, non-zeroizing
-        // `String` (the same leak class fixed in `VaultKeeper::authorize` —
-        // see that function's doc comment). No extra unprotected Rust-side
-        // copy of the secret exists between here and `read_secret()` below.
-        let secret = self
-            .vault
-            .read_secret(&handle_id)
-            .map_err(|e| vault_error_to_js(&e))?;
+        // A JWE-based signing-key lease (`kty: 'signing-key'`) never carries a
+        // secret at all — calling `read_secret` for one would return the same
+        // `accessor-consumed` error as an already-read secret handle,
+        // conflating "never had a secret" with "already consumed". Skip the
+        // read entirely for a lease so `secretAvailable` reports `false` from
+        // the start and `readSecret()` is never even attempted against it.
+        let secret = if claims.kty == Some(ClaimsKind::SigningKey) {
+            None
+        } else {
+            // The one-time read against the handle table — `claims.val` is
+            // already empty (see `VaultKeeper::authorize`'s doc comment), so this
+            // is the only place the raw secret is ever materialized on this side
+            // of the WASM boundary. `read_secret` already returns a
+            // `Zeroizing<String>`; move it straight into `WasmAuthorization`
+            // rather than `.to_string()`-cloning it into a second, non-zeroizing
+            // `String` (the same leak class fixed in `VaultKeeper::authorize` —
+            // see that function's doc comment). No extra unprotected Rust-side
+            // copy of the secret exists between here and `read_secret()` below.
+            Some(
+                self.vault
+                    .read_secret(&handle_id)
+                    .map_err(|e| vault_error_to_js(&e))?,
+            )
+        };
 
         let mut claims_value =
             serde_json::to_value(&claims).map_err(|e| JsError::new(&e.to_string()))?;
@@ -1330,7 +1369,7 @@ impl WasmVaultKeeper {
         Ok(WasmAuthorization {
             claims_json,
             response_json,
-            secret: Some(secret),
+            secret,
             handle_id: handle_id.as_str().to_string(),
         })
     }

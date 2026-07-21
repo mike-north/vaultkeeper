@@ -294,13 +294,23 @@ async fn cmd_exec(token: &str, command: &[String]) -> i32 {
     };
 
     // Decrypt and validate the JWE token
-    let (handle, _claims, _response) = match vault.authorize(token) {
+    let (handle, claims, _response) = match vault.authorize(token) {
         Ok(r) => r,
         Err(e) => {
             eprintln!("Error: Failed to authorize token: {e}");
             return 1;
         }
     };
+
+    // `exec` only makes sense for a secret claim — a signing-key lease
+    // carries no secret value to inject, and its handle refuses `read_secret`
+    // outright (issue #241 AC3). Check `kty` up front so that refusal is
+    // reported with the same message as before the handle-table refactor,
+    // rather than a lower-level handle error.
+    if claims.kty == Some(vaultkeeper_core::ClaimsKind::SigningKey) {
+        eprintln!("Error: token does not authorize a secret value");
+        return 1;
+    }
 
     // Read the secret exactly once (issue #241) — it never traveled through
     // `authorize()`'s return value.

@@ -220,9 +220,13 @@ mod type_serde {
             exe: "dev".to_string(),
             use_limit: Some(5),
             tid: TrustTier::Tofu,
-            bkd: "keychain".to_string(),
-            val: "super-secret".to_string(),
+            bkd: Some("keychain".to_string()),
+            val: Some("super-secret".to_string()),
             reference: "db-password".to_string(),
+            kty: None,
+            kid: None,
+            kgen: None,
+            pres: None,
         };
 
         let json = serde_json::to_string(&claims).unwrap();
@@ -243,9 +247,13 @@ mod type_serde {
             exe: "dev".to_string(),
             use_limit: None,
             tid: TrustTier::Dev,
-            bkd: "file".to_string(),
-            val: "secret".to_string(),
+            bkd: Some("file".to_string()),
+            val: Some("secret".to_string()),
             reference: "key".to_string(),
+            kty: None,
+            kid: None,
+            kgen: None,
+            pres: None,
         };
 
         let json = serde_json::to_string(&claims).unwrap();
@@ -1074,7 +1082,7 @@ mod vault_keeper {
 
         assert_eq!(claims.sub, "db-password");
         // issue #241 AC1: authorize() never returns the raw secret.
-        assert_eq!(claims.val, "");
+        assert_eq!(claims.val, None);
         assert_eq!(claims.reference, "db-password");
         assert_eq!(claims.tid, TrustTier::Dev);
         assert_eq!(response.key_status, KeyStatus::Current);
@@ -1096,7 +1104,7 @@ mod vault_keeper {
     /// contradicting the "Zero `Buffer` instances containing secrets after
     /// use" rule. The fix builds the redacted `VaultClaims` field-by-field,
     /// never touching (let alone cloning) `val`, so `claims.val`'s only
-    /// value ever assigned is `String::new()` and the *sole* copy of the
+    /// value ever assigned is `None` and the *sole* copy of the
     /// secret bytes moves straight from the decrypted claims into the
     /// handle table's `Zeroizing<String>` buffer via `insert_secret`.
     ///
@@ -1142,7 +1150,7 @@ mod vault_keeper {
 
         let (handle, claims, _response) = vault.authorize(&token).unwrap();
         assert_eq!(
-            claims.val, "",
+            claims.val, None,
             "returned claims must never carry the secret"
         );
         // The claims struct's Debug output is the most likely accidental
@@ -1188,7 +1196,7 @@ mod vault_keeper {
 
         // Authorize should succeed (finds previous key) and provide a rotated JWT
         let (handle, claims, response) = vault.authorize(&token).unwrap();
-        assert_eq!(claims.val, "");
+        assert_eq!(claims.val, None);
         assert_eq!(vault.read_secret(&handle).unwrap().as_str(), "abc123");
         assert_eq!(response.key_status, KeyStatus::Previous);
         assert!(response.rotated_jwt.is_some());
@@ -1197,7 +1205,7 @@ mod vault_keeper {
         let (handle2, claims2, response2) = vault
             .authorize(response.rotated_jwt.as_ref().unwrap())
             .unwrap();
-        assert_eq!(claims2.val, "");
+        assert_eq!(claims2.val, None);
         assert_eq!(vault.read_secret(&handle2).unwrap().as_str(), "abc123");
         assert_eq!(response2.key_status, KeyStatus::Current);
         assert!(response2.rotated_jwt.is_none());
@@ -1316,10 +1324,10 @@ mod vault_keeper {
 
         // First two authorizations succeed
         let (handle, claims, _) = vault.authorize(&token).unwrap();
-        assert_eq!(claims.val, "");
+        assert_eq!(claims.val, None);
         assert_eq!(vault.read_secret(&handle).unwrap().as_str(), "val");
         let (handle2, claims2, _) = vault.authorize(&token).unwrap();
-        assert_eq!(claims2.val, "");
+        assert_eq!(claims2.val, None);
         assert_eq!(vault.read_secret(&handle2).unwrap().as_str(), "val");
 
         // Third should fail — usage limit exceeded
@@ -1367,7 +1375,7 @@ mod vault_keeper {
 
         // The one permitted authorization mints a handle...
         let (handle, claims, _) = vault.authorize(&token).unwrap();
-        assert_eq!(claims.val, "");
+        assert_eq!(claims.val, None);
 
         // ...and further presentations of the same token are refused: the
         // token's use-budget is exhausted.
@@ -1445,7 +1453,7 @@ mod vault_keeper {
         .await
         .unwrap();
         let (handle, claims, _) = second.authorize(&token).unwrap();
-        assert_eq!(claims.val, "");
+        assert_eq!(claims.val, None);
         assert_eq!(second.read_secret(&handle).unwrap().as_str(), "s3cret");
     }
 
