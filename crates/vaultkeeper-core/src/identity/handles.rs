@@ -462,7 +462,10 @@ impl HandleTable {
     /// loop's periodic tick).
     pub fn sweep_expired(&mut self) -> usize {
         let now = now_secs();
-        let expired: Vec<HandleId> = self
+        // A `HashSet` membership test (below) is O(1); the previous
+        // `Vec<HandleId>` + `Vec::contains` inside `entry_order.retain(...)`
+        // made this O(n^2) in the number of expired entries.
+        let expired: std::collections::HashSet<HandleId> = self
             .entries
             .iter()
             .filter(|(_, entry)| entry.expires_at.is_some_and(|exp| now >= exp))
@@ -648,6 +651,54 @@ mod tests {
         // A handle with no core-imposed expiry (the long-lived,
         // non-interactive automation case, AC4) survives a sweep untouched.
         assert!(table.resolve_secret_claims(&unbounded).is_ok());
+    }
+
+    /// Regression test for the O(n^2) `sweep_expired` rewrite: exercises
+    /// several already-expired entries evicted in a single sweep call
+    /// (rather than just one, as `sweep_expired_evicts_only_expired_handles`
+    /// above does), and asserts both correctness (the right ids are gone,
+    /// the live one survives) and that `entry_order`'s bookkeeping stays
+    /// internally consistent afterward (its length still matches the live
+    /// entry count — needed for the FIFO backstop eviction to keep working).
+    ///
+    /// Bypasses the public `insert_secret`/`insert_signing` API to seed
+    /// several already-expired entries directly into the table's private
+    /// fields: `insert()` sweeps expired entries *before* inserting, so
+    /// inserting several already-expired handles through the public API
+    /// would sweep each prior one away on the very next call, never letting
+    /// more than one coexist for `sweep_expired()` to evict in a single
+    /// pass.
+    #[test]
+    fn sweep_expired_evicts_all_expired_entries_in_one_pass() {
+        let mut table = HandleTable::new();
+        let now = now_secs();
+
+        let live = table.insert_secret(secret_claims("jti-live", "keep"), Some(now + 3600));
+
+        let expired_ids: Vec<HandleId> = (0..5)
+            .map(|i| {
+                let id = HandleId::new();
+                table.entries.insert(
+                    id.clone(),
+                    HandleEntry {
+                        claims: StoredClaims::Secret(secret_claims(&format!("jti-exp-{i}"), "x")),
+                        secret: None,
+                        expires_at: Some(now - 1),
+                    },
+                );
+                table.entry_order.push_back(id.clone());
+                id
+            })
+            .collect();
+
+        let evicted = table.sweep_expired();
+        assert_eq!(evicted, 5);
+        assert_eq!(table.len(), 1);
+        for id in &expired_ids {
+            assert!(table.resolve_secret_claims(id).is_err());
+        }
+        assert!(table.resolve_secret_claims(&live).is_ok());
+        assert_eq!(table.entry_order.len(), table.entries.len());
     }
 
     #[test]

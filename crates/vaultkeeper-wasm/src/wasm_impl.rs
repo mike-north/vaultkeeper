@@ -6,6 +6,7 @@ use std::sync::Arc;
 use js_sys::{Function, Promise, Reflect, Uint8Array};
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::JsFuture;
+use zeroize::Zeroizing;
 
 use vaultkeeper_core::backend::{
     ApprovalContext, ExecOptions, ExecOutput, FileBackend, HostPlatform, HttpRequest, HttpResponse,
@@ -1226,12 +1227,16 @@ impl WasmVaultKeeper {
         // The one-time read against the handle table — `claims.val` is
         // already empty (see `VaultKeeper::authorize`'s doc comment), so this
         // is the only place the raw secret is ever materialized on this side
-        // of the WASM boundary.
+        // of the WASM boundary. `read_secret` already returns a
+        // `Zeroizing<String>`; move it straight into `WasmAuthorization`
+        // rather than `.to_string()`-cloning it into a second, non-zeroizing
+        // `String` (the same leak class fixed in `VaultKeeper::authorize` —
+        // see that function's doc comment). No extra unprotected Rust-side
+        // copy of the secret exists between here and `read_secret()` below.
         let secret = self
             .vault
             .read_secret(&handle_id)
-            .map_err(|e| vault_error_to_js(&e))?
-            .to_string();
+            .map_err(|e| vault_error_to_js(&e))?;
 
         let mut claims_value =
             serde_json::to_value(&claims).map_err(|e| JsError::new(&e.to_string()))?;
@@ -1349,7 +1354,11 @@ impl WasmVaultKeeper {
 pub struct WasmAuthorization {
     claims_json: String,
     response_json: String,
-    secret: Option<String>,
+    /// `Zeroizing`-wrapped so an authorization whose secret is never read
+    /// (`readSecret()` not called before this value is dropped) still has
+    /// its buffer scrubbed, rather than sitting unzeroized until the
+    /// allocator reuses it.
+    secret: Option<Zeroizing<String>>,
     handle_id: String,
 }
 
@@ -1390,14 +1399,28 @@ impl WasmAuthorization {
     /// Read the raw secret value exactly once. Subsequent calls throw an
     /// `accessor-consumed` error. This is the explicit, deliberately-named
     /// escape hatch for flows that must touch the plaintext secret.
+    ///
+    /// The Rust side never clones the secret to produce this value: the
+    /// plaintext is moved out of the `Zeroizing<String>` wrapper (leaving it
+    /// holding an empty string, which is a no-op to scrub on drop) rather
+    /// than copied out. The one residual, unprotected copy this cannot close
+    /// is on the far side of the `wasm-bindgen`-generated FFI glue itself —
+    /// returning an owned `String` from a `#[wasm_bindgen]` method has that
+    /// glue copy the bytes into a fresh JS string and then free this Rust
+    /// `String` via ordinary (non-zeroizing) `Drop`. That hand-off is
+    /// generated code we do not control, and JS strings are immutable and
+    /// cannot be scrubbed by this crate regardless — the same trust boundary
+    /// already noted for a dishonest/misbehaving JS host elsewhere in this
+    /// file (see `JsHostPlatform`'s "No-reentrancy contract").
     #[wasm_bindgen(js_name = "readSecret")]
     pub fn read_secret(&mut self) -> Result<String, JsValue> {
-        self.secret.take().ok_or_else(|| {
+        let mut secret = self.secret.take().ok_or_else(|| {
             coded_js_error(
                 "accessor-consumed",
                 "Secret has already been read; the one-time accessor is consumed",
             )
-        })
+        })?;
+        Ok(std::mem::take(&mut *secret))
     }
 }
 

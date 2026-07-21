@@ -64,6 +64,19 @@ class WasmAuthorization {
      * Read the raw secret value exactly once. Subsequent calls throw an
      * `accessor-consumed` error. This is the explicit, deliberately-named
      * escape hatch for flows that must touch the plaintext secret.
+     *
+     * The Rust side never clones the secret to produce this value: the
+     * plaintext is moved out of the `Zeroizing<String>` wrapper (leaving it
+     * holding an empty string, which is a no-op to scrub on drop) rather
+     * than copied out. The one residual, unprotected copy this cannot close
+     * is on the far side of the `wasm-bindgen`-generated FFI glue itself —
+     * returning an owned `String` from a `#[wasm_bindgen]` method has that
+     * glue copy the bytes into a fresh JS string and then free this Rust
+     * `String` via ordinary (non-zeroizing) `Drop`. That hand-off is
+     * generated code we do not control, and JS strings are immutable and
+     * cannot be scrubbed by this crate regardless — the same trust boundary
+     * already noted for a dishonest/misbehaving JS host elsewhere in this
+     * file (see `JsHostPlatform`'s "No-reentrancy contract").
      * @returns {string}
      */
     readSecret() {
@@ -752,7 +765,7 @@ function __wbg_get_imports() {
             return ret;
         },
         __wbindgen_cast_0000000000000001: function(arg0, arg1) {
-            // Cast intrinsic for `Closure(Closure { dtor_idx: 216, function: Function { arguments: [Externref], shim_idx: 217, ret: Result(Unit), inner_ret: Some(Result(Unit)) }, mutable: true }) -> Externref`.
+            // Cast intrinsic for `Closure(Closure { dtor_idx: 217, function: Function { arguments: [Externref], shim_idx: 218, ret: Result(Unit), inner_ret: Some(Result(Unit)) }, mutable: true }) -> Externref`.
             const ret = makeMutClosure(arg0, arg1, wasm.wasm_bindgen__closure__destroy__h1722208547e491cb, wasm_bindgen__convert__closures_____invoke__h8760ba3086f56474);
             return ret;
         },
