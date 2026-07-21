@@ -1338,10 +1338,10 @@ mod vault_keeper {
     /// liveness of handles already minted: a handle returned by an earlier,
     /// successful `authorize()` call must keep resolving and reading its
     /// secret even after the token itself has been refused for exceeding its
-    /// `use_limit`. `HandleTable`'s eviction policy (see
-    /// `crates/vaultkeeper-core/src/identity/handles.rs` module docs) lists
-    /// usage-limit exhaustion as a path that evicts handles going forward —
-    /// it must not retroactively evict a handle already handed out.
+    /// `use_limit`. Exhaustion blocks *future* `authorize()` calls on the
+    /// token (no new handles are minted); it neither evicts nor otherwise
+    /// invalidates a handle already handed out — see the eviction-policy
+    /// section of `crates/vaultkeeper-core/src/identity/handles.rs`.
     #[tokio::test]
     async fn handles_already_minted_survive_use_limit_exhaustion_of_their_token() {
         let host = TestHost::with_config();
@@ -1382,6 +1382,15 @@ mod vault_keeper {
         // the token being refused going forward: it still resolves and its
         // secret is still readable exactly once.
         assert_eq!(vault.read_secret(&handle).unwrap().as_str(), "val");
+
+        // "Exactly once" pinned from both sides: the second read is refused
+        // as consumed, proving exhaustion did not somehow reset the
+        // one-time-read state either.
+        let err = vault.read_secret(&handle).unwrap_err();
+        assert!(
+            matches!(err, VaultError::AccessorConsumed { .. }),
+            "Expected AccessorConsumed on second read, got: {err}"
+        );
     }
 
     // -----------------------------------------------------------------
