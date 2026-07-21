@@ -389,7 +389,12 @@ fn backend_capabilities_cases() -> Vec<ConformanceCase> {
                     .into(),
             command: vec!["backend".into(), "capabilities".into()],
             stdin: None,
-            needs_config: true,
+            // `backend capabilities` is a preflight discovery step (issue
+            // #262) — it must work before any config.json exists, so it can
+            // be checked before `store`/`delete --require-presence-per-use`.
+            // Verified empirically: the file backend is always available
+            // without configuration, so no config is needed here.
+            needs_config: false,
             expected_exit_code: 0,
             // Exact match, not a loose regex: the Rust CLI reports exactly one
             // row (the active/configured backend — there is no config-driven
@@ -410,7 +415,8 @@ fn backend_capabilities_cases() -> Vec<ConformanceCase> {
                 .into(),
             command: vec!["backend".into(), "capabilities".into(), "--json".into()],
             stdin: None,
-            needs_config: true,
+            // Same discovery-step rationale as the text-mode case above.
+            needs_config: false,
             expected_exit_code: 0,
             expected_stdout: OutputMatcher::JsonContains(serde_json::json!([{
                 "type": "file",

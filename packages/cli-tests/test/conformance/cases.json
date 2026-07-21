@@ -453,7 +453,7 @@
       "capabilities"
     ],
     "stdin": null,
-    "needsConfig": true,
+    "needsConfig": false,
     "expectedExitCode": 0,
     "expectedStdout": {
       "type": "Exact",
@@ -472,7 +472,7 @@
       "--json"
     ],
     "stdin": null,
-    "needsConfig": true,
+    "needsConfig": false,
     "expectedExitCode": 0,
     "expectedStdout": {
       "type": "JsonContains",
