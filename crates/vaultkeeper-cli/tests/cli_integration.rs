@@ -474,6 +474,15 @@ mod backend_capabilities {
         // silently replace any invalid byte with U+FFFD and let a real
         // encoding/serialization bug in the CLI's output pass unnoticed.
         let stdout = String::from_utf8(output.stdout).expect("stdout should be valid UTF-8");
+        // Byte-exact pin, deliberately order-sensitive: the row struct's
+        // field declaration order must keep matching the TS CLI's
+        // (`type`, `displayName`, `presencePerUse`). A parse-then-compare
+        // assertion alone would keep passing if the serialization ever
+        // regressed to serde_json's alphabetical map order.
+        assert_eq!(
+            stdout,
+            "[\n  {\n    \"type\": \"file\",\n    \"displayName\": \"Encrypted File Store\",\n    \"presencePerUse\": false\n  }\n]\n",
+        );
         let parsed: serde_json::Value =
             serde_json::from_str(&stdout).expect("stdout should be valid JSON");
         let rows = parsed.as_array().expect("expected a JSON array");
