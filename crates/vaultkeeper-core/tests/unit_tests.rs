@@ -1333,6 +1333,66 @@ mod vault_keeper {
         );
     }
 
+    /// Regression test for the documented invariant that use-limit
+    /// exhaustion governs the *token's* ability to mint new handles, not the
+    /// liveness of handles already minted: a handle returned by an earlier,
+    /// successful `authorize()` call must keep resolving and reading its
+    /// secret even after the token itself has been refused for exceeding its
+    /// `use_limit`. Exhaustion blocks *future* `authorize()` calls on the
+    /// token (no new handles are minted); it neither evicts nor otherwise
+    /// invalidates a handle already handed out — see the eviction-policy
+    /// section of `crates/vaultkeeper-core/src/identity/handles.rs`.
+    #[tokio::test]
+    async fn handles_already_minted_survive_use_limit_exhaustion_of_their_token() {
+        let host = TestHost::with_config();
+        let mut vault = VaultKeeper::init(
+            &host,
+            Some(VaultKeeperOptions {
+                skip_doctor: true,
+                ..Default::default()
+            }),
+        )
+        .await
+        .unwrap();
+
+        let opts = vaultkeeper_core::vault::SetupOptions {
+            use_limit: Some(1),
+            skip_trust: Some(true),
+            ..Default::default()
+        };
+        let token = vault
+            .setup(&host, "limited-once", "val", Some(&opts))
+            .await
+            .unwrap();
+
+        // The one permitted authorization mints a handle...
+        let (handle, claims, _) = vault.authorize(&token).unwrap();
+        assert_eq!(claims.val, "");
+
+        // ...and further presentations of the same token are refused: the
+        // token's use-budget is exhausted.
+        let err = vault.authorize(&token).unwrap_err();
+        assert!(
+            matches!(err, VaultError::UsageLimitExceeded { .. })
+                || matches!(err, VaultError::TokenRevoked { .. }),
+            "Expected UsageLimitExceeded or TokenRevoked, got: {err}"
+        );
+
+        // The original handle — minted before exhaustion — is untouched by
+        // the token being refused going forward: it still resolves and its
+        // secret is still readable exactly once.
+        assert_eq!(vault.read_secret(&handle).unwrap().as_str(), "val");
+
+        // "Exactly once" pinned from both sides: the second read is refused
+        // as consumed, proving exhaustion did not somehow reset the
+        // one-time-read state either.
+        let err = vault.read_secret(&handle).unwrap_err();
+        assert!(
+            matches!(err, VaultError::AccessorConsumed { .. }),
+            "Expected AccessorConsumed on second read, got: {err}"
+        );
+    }
+
     // -----------------------------------------------------------------
     // Issue #238: key-state persistence across process lifetimes.
     //

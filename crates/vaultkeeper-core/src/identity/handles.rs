@@ -53,9 +53,17 @@
 //!
 //! As a defense-in-depth backstop against unbounded growth from callers that
 //! never release and never expire, [`HANDLE_TABLE_MAX_SIZE`] caps the table
-//! at 10,000 live entries with FIFO eviction of the oldest handle — mirroring
-//! the TypeScript `usageCounts` map's `USAGE_MAP_MAX_SIZE` guard
-//! (`packages/vaultkeeper/src/vault.ts`) exactly.
+//! at 10,000 live entries with FIFO eviction of the oldest handle — the same
+//! intent as the TypeScript `usageCounts` map's `USAGE_MAP_MAX_SIZE` guard
+//! (`packages/vaultkeeper/src/vault.ts`), though not byte-for-byte identical:
+//! this table evicts the oldest entry *before* inserting once
+//! `len() >= HANDLE_TABLE_MAX_SIZE`, so it never holds more than 10,000
+//! entries, whereas the TypeScript map inserts first and evicts only once
+//! `size > USAGE_MAP_MAX_SIZE`, so it can momentarily hold 10,001 entries
+//! before trimming back down. The one-entry threshold difference is
+//! immaterial to the guard's purpose (bounding otherwise-unbounded growth);
+//! it is called out here only so a reader diffing the two implementations
+//! line-by-line does not mistake it for a bug.
 //!
 //! ## Why `expires_at` must stay caller-supplied, not hardcoded
 //!
@@ -121,11 +129,12 @@ use crate::util::time::now_secs;
 
 /// Maximum number of live entries [`HandleTable`] (both the handle map and
 /// the JTI usage-count map) will retain. When the cap is reached, the oldest
-/// inserted entry is evicted (FIFO) to make room. Mirrors the TypeScript
-/// `USAGE_MAP_MAX_SIZE` guard (`packages/vaultkeeper/src/vault.ts`) — this is
-/// the defense-in-depth backstop against unbounded growth described in the
-/// module docs, not the primary eviction mechanism (release/expiry/usage-limit
-/// are).
+/// inserted entry is evicted (FIFO) to make room. Same intent as the
+/// TypeScript `USAGE_MAP_MAX_SIZE` guard (`packages/vaultkeeper/src/vault.ts`)
+/// — see the module docs for the one-entry eviction-threshold difference
+/// between the two — this is the defense-in-depth backstop against unbounded
+/// growth described in the module docs, not the primary eviction mechanism
+/// (release/expiry/usage-limit are).
 pub const HANDLE_TABLE_MAX_SIZE: usize = 10_000;
 
 /// Opaque handle identifier returned by [`HandleTable::insert_secret`] /
@@ -329,10 +338,45 @@ impl HandleTable {
     /// `VaultKeeper::usage_counts` field's read-then-increment pattern —
     /// `authorize()` already calls [`HandleTable::current_usage`] before
     /// `validate_claims`, then this, exactly as it did with the bare
-    /// `HashMap` before. Bounded by [`HANDLE_TABLE_MAX_SIZE`] with FIFO
-    /// eviction of the oldest tracked `jti` (see the module doc's
-    /// process-global-vs-per-instance note for why this per-instance map
-    /// still needs its own bound even though it is not shared globally).
+    /// `HashMap` before. **Unlike** the TypeScript reference's `authorize()`
+    /// (`packages/vaultkeeper/src/vault.ts`), which only tracks usage for a
+    /// token whose `use` claim is non-null (an unlimited token is never
+    /// recorded, since it never needs a count check), `VaultKeeper::authorize`
+    /// calls this unconditionally for every token, unlimited or not — see
+    /// the caller in `VaultKeeper::authorize`. That means, unlike the TS
+    /// reference, an unlimited-use token here does occupy a `usage_counts`
+    /// slot for as long as it keeps getting presented. Bounded by
+    /// [`HANDLE_TABLE_MAX_SIZE`] with FIFO eviction of the oldest tracked
+    /// `jti` (see the module doc's process-global-vs-per-instance note for
+    /// why this per-instance map still needs its own bound even though it is
+    /// not shared globally).
+    ///
+    /// **Residual risk: FIFO eviction resets a count, it does not block the
+    /// evicted `jti`.** When `usage_counts` is at its cap and a new `jti`
+    /// arrives, the oldest tracked `jti`'s entry is dropped from the map
+    /// (below) — but that `jti` itself is not blocked here. If it is
+    /// presented to `authorize()` again afterward, [`HandleTable::current_usage`]
+    /// reports `0` for it once more, i.e. its use-limit count has been reset
+    /// rather than durably enforced. In principle, an actor holding 10,000+
+    /// distinct *valid, decryptable* tokens could deliberately cycle through
+    /// them to evict a specific limited token's entry and reset its count.
+    /// This is bounded by requiring possession of that many tokens the
+    /// vault's own key can decrypt (forging or guessing a valid JWE is not
+    /// feasible). Note this is **not** identical to the TypeScript
+    /// reference's `usageCounts` eviction (`packages/vaultkeeper/src/vault.ts`):
+    /// TS additionally calls `blockToken(oldest)` on the evicted `jti` at the
+    /// moment it is dropped, closing this residual gap outright rather than
+    /// merely bounding it. This module has no access to `crate::jwe::block_token`
+    /// (that call lives in `VaultKeeper::authorize`, which owns both this
+    /// table and the blocklist) — porting that same block-on-evict behavior
+    /// here would need a caller-supplied callback or moving the eviction call
+    /// up into `VaultKeeper::authorize`. Until that is done, the real
+    /// revocation mechanism for a token that must never be usable again,
+    /// regardless of count, is still the JWE blocklist
+    /// (`crate::jwe::block_token`) via the *use-limit-exhaustion* path —
+    /// `authorize()` already calls `block_token` once a tracked count reaches
+    /// its `use_limit` (see the caller in `VaultKeeper::authorize`) — but that
+    /// path is distinct from, and does not cover, this FIFO-eviction path.
     pub fn record_usage(&mut self, jti: &str) -> u64 {
         if !self.usage_counts.contains_key(jti) {
             if self.usage_counts.len() >= HANDLE_TABLE_MAX_SIZE
@@ -711,6 +755,25 @@ mod tests {
         assert_eq!(table.len(), 0);
         let err = table.resolve_secret_claims(&id).unwrap_err();
         assert!(matches!(err, VaultError::AuthorizationDenied { .. }));
+    }
+
+    /// AC4: `ensure_live`'s boundary check is `now_secs() >= exp`, i.e.
+    /// inclusive of the exact expiry second — a handle whose `expires_at` is
+    /// exactly the current second must already be treated as expired, not
+    /// live for one more tick. Regression guard against an off-by-one that
+    /// would flip the comparison to strictly-greater-than (`>`), which would
+    /// let a handle remain resolvable during the very second it was
+    /// documented to expire.
+    #[test]
+    fn handle_expiring_at_exactly_now_is_treated_as_expired_inclusive_boundary() {
+        let mut table = HandleTable::new();
+        let now = now_secs();
+        let id = table.insert_secret(secret_claims("jti-1", "s3cret"), Some(now));
+        let err = table.resolve_secret_claims(&id).unwrap_err();
+        assert!(
+            matches!(err, VaultError::TokenExpired { .. }),
+            "a handle expiring at exactly the current second must be treated as expired, got {err:?}"
+        );
     }
 
     #[test]
