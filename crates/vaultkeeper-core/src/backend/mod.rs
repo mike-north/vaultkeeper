@@ -7,6 +7,7 @@ pub mod file;
 pub mod in_memory;
 mod registry;
 pub mod secret_tool;
+mod signing_store;
 mod types;
 
 pub use file::FileBackend;
