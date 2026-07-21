@@ -491,10 +491,29 @@ mod backend_capabilities {
         // Discovery must be available before any config exists, mirroring
         // that `store`/`delete` refusal (--require-presence-per-use) is
         // meant to be checkable ahead of time.
+        //
+        // The command is intentionally config-independent today: it always
+        // reports the hardcoded active `FileBackend`, the same way every
+        // other command does (see PR #266 discussion) — so the row content
+        // here matches `capabilities_json_emits_a_row_with_type_display_name_and_presence_per_use`
+        // exactly, config file or not.
         let (mut cmd, _dir) = cli_test_env_no_config();
-        cmd.args(["backend", "capabilities", "--json"])
-            .assert()
-            .success();
+        let output = cmd
+            .args(["backend", "capabilities", "--json"])
+            .output()
+            .expect("failed to run");
+        assert!(output.status.success(), "expected exit 0");
+        let stdout = String::from_utf8(output.stdout).expect("stdout should be valid UTF-8");
+        let parsed: serde_json::Value =
+            serde_json::from_str(&stdout).expect("stdout should be valid JSON");
+        let rows = parsed.as_array().expect("expected a JSON array");
+        assert!(!rows.is_empty(), "expected at least one row");
+        let file_row = rows
+            .iter()
+            .find(|r| r["type"] == "file")
+            .expect("expected a 'file' backend row");
+        assert_eq!(file_row["displayName"], "Encrypted File Store");
+        assert_eq!(file_row["presencePerUse"], false);
     }
 
     #[test]
