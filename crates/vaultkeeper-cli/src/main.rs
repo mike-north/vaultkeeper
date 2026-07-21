@@ -82,7 +82,7 @@ enum Commands {
         #[command(subcommand)]
         action: ConfigAction,
     },
-    /// Inspect registered backends (e.g. capabilities)
+    /// Inspect the active backend (e.g. its capabilities)
     Backend {
         #[command(subcommand)]
         action: BackendAction,
@@ -103,7 +103,7 @@ enum ConfigAction {
 
 #[derive(Subcommand)]
 enum BackendAction {
-    /// List each registered backend and its security capabilities
+    /// Report the active (configured) backend's security capabilities
     Capabilities {
         /// Emit a machine-readable JSON array instead of human-readable text
         #[arg(long)]
