@@ -27,3 +27,8 @@ js-sys = { workspace = true }
 tokio = { workspace = true, features = ["full"] }
 assert_matches = { workspace = true }
 serial_test = { workspace = true }
+# Reuses the shared `store`/`delete` case data (issue #291 AC5) so the
+# real-`secret-tool` conformance test asserts against the exact same
+# name/secret fixture the CLI-level conformance suite already checks,
+# instead of a hand-duplicated approximation.
+vaultkeeper-conformance = { path = "../vaultkeeper-conformance" }
