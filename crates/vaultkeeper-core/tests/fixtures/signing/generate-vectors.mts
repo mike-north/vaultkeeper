@@ -32,7 +32,10 @@ import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import { createDetachedJws, verifyDetachedJws } from '../../../../../packages/vaultkeeper/src/access/jws.js'
+import {
+  createDetachedJws,
+  verifyDetachedJws,
+} from '../../../../../packages/vaultkeeper/src/access/jws.js'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const privateKeyPath = join(here, 'ed25519-test-key.pkcs8.pem')
@@ -113,7 +116,7 @@ async function main(): Promise<void> {
   }
 
   writeFileSync(vectorsPath, `${JSON.stringify({ kid, vectors }, null, 2)}\n`)
-  console.log(`Wrote ${vectors.length} vectors to ${vectorsPath}`)
+  console.log(`Wrote ${String(vectors.length)} vectors to ${vectorsPath}`)
 }
 
 await main()
