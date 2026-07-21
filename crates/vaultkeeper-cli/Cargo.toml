@@ -15,6 +15,7 @@ vaultkeeper-core = { workspace = true }
 async-trait = { workspace = true }
 clap = { workspace = true }
 tokio = { workspace = true, features = ["full"] }
+serde = { workspace = true }
 serde_json = { workspace = true }
 
 [dev-dependencies]

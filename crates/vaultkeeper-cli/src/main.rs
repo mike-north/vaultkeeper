@@ -520,6 +520,23 @@ async fn cmd_backend(action: BackendAction) -> i32 {
     }
 }
 
+/// One row of `backend capabilities --json` output. Field declaration order
+/// matches the TypeScript CLI's `BackendCapabilityRow` (`type`,
+/// `displayName`, `presencePerUse` — see
+/// `packages/cli/src/commands/backend.ts`) so a row shared by both CLIs
+/// serializes byte-identically (the TS CLI still emits more rows — it
+/// enumerates every registered backend type, while this CLI reports only the
+/// active backend); a `serde_json::Value` object built with `json!` would
+/// instead emit keys in the `BTreeMap`'s alphabetical order.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct BackendCapabilityRow<'a> {
+    #[serde(rename = "type")]
+    backend_type: &'a str,
+    display_name: &'a str,
+    presence_per_use: bool,
+}
+
 async fn cmd_backend_capabilities(json: bool) -> i32 {
     let host = make_host();
     let backend = FileBackend::new(host);
@@ -536,11 +553,11 @@ async fn cmd_backend_capabilities(json: bool) -> i32 {
     let display_name = backend.display_name();
 
     if json {
-        let rows = serde_json::json!([{
-            "type": backend_type,
-            "displayName": display_name,
-            "presencePerUse": capabilities.presence_per_use,
-        }]);
+        let rows = [BackendCapabilityRow {
+            backend_type,
+            display_name,
+            presence_per_use: capabilities.presence_per_use,
+        }];
         match serde_json::to_string_pretty(&rows) {
             Ok(s) => println!("{s}"),
             Err(e) => {

@@ -1273,6 +1273,7 @@ dependencies = [
  "async-trait",
  "clap",
  "predicates",
+ "serde",
  "serde_json",
  "tempfile",
  "tokio",
