@@ -132,13 +132,26 @@ pub const HANDLE_TABLE_MAX_SIZE: usize = 10_000;
 /// [`HandleTable::insert_signing`].
 ///
 /// Carries no claims data itself — it is a bare, unguessable (UUID v4)
-/// lookup key. Holding a `HandleId` proves nothing about authorization; only
-/// the table that minted it can resolve it, and it errors
-/// ([`VaultError::AuthorizationDenied`]) for any id it does not recognize
-/// (already released, evicted, or simply never minted by this table) —
-/// mirroring the TypeScript `CapabilityToken`'s `validateCapabilityToken`
-/// rejecting a token from a different `WeakMap`/module instance.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+/// lookup key. **It is bearer capability material, not a public
+/// identifier**: this table has no secondary check beyond a `HashMap`
+/// lookup by id, so whoever presents a
+/// `HandleId` can resolve its claims and read its secret (until the secret
+/// is consumed) for as long as the handle stays live — mere possession is
+/// sufficient, exactly like presenting the JWE token this handle was minted
+/// from. Treat it with the same handling discipline: never log it or
+/// otherwise expose it to an untrusted party, and pass it only across
+/// trusted boundaries (e.g. the WASM FFI boundary within the same trust
+/// domain, as `wasm_impl.rs` does). This deliberately differs from the
+/// TypeScript `CapabilityToken` (`packages/vaultkeeper/src/identity/session.ts`),
+/// whose unforgeability comes from JS object identity in a module-private
+/// `WeakMap` rather than a value that can be copied or printed — there is no
+/// equivalent "just don't expose the reference" guarantee for a stringly-typed
+/// id crossing an FFI boundary, so the caller has to uphold it explicitly.
+/// An id this table does not recognize (already released, evicted, or never
+/// minted by this table) errors with [`VaultError::AuthorizationDenied`],
+/// mirroring `validateCapabilityToken` rejecting a token from a different
+/// `WeakMap`/module instance.
+#[derive(Clone, PartialEq, Eq, Hash)]
 pub struct HandleId(String);
 
 impl HandleId {
@@ -148,8 +161,9 @@ impl HandleId {
 
     /// The underlying opaque identifier string. Exposed so a host bridge
     /// (e.g. the WASM boundary) can carry it across an FFI boundary as a
-    /// plain string — it is unguessable but not secret, so this is safe to
-    /// serialize/log/pass around freely.
+    /// plain string. **This is bearer capability material, not a public
+    /// identifier** (see the struct docs) — do not log it, persist it
+    /// insecurely, or otherwise expose it outside a trusted boundary.
     #[must_use]
     pub fn as_str(&self) -> &str {
         &self.0
@@ -157,8 +171,25 @@ impl HandleId {
 }
 
 impl fmt::Display for HandleId {
+    /// Renders the full id. Used deliberately by this module's own error
+    /// messages (`unknown_handle_error`, the expiry branch of `ensure_live`)
+    /// to name *which* handle was invalid/expired for the caller's own
+    /// debugging — that is a reviewed, intentional call site, not the
+    /// accidental-logging path `Debug` guards against below.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.0)
+    }
+}
+
+impl fmt::Debug for HandleId {
+    /// Redacted on purpose: `{:?}` is the common *accidental* logging path
+    /// (`debug!("{:?}", handle)`, a bare `dbg!(handle)`, an auto-derived
+    /// `Debug` on a containing struct). Printing only a short, non-redeemable
+    /// prefix still lets log lines be correlated with each other without
+    /// handing a log sink the bearer token itself.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let prefix = self.0.get(..8).unwrap_or(&self.0);
+        write!(f, "HandleId({prefix}…)")
     }
 }
 
@@ -485,6 +516,37 @@ mod tests {
             kid: "kid-1".to_string(),
             backend_ref: "signing-key:test".to_string(),
         }
+    }
+
+    /// Regression test: `HandleId` is bearer capability material (see the
+    /// struct docs) — mere possession redeems it, so the derived `Debug`
+    /// impl this type used to have printed the full bearer id via the most
+    /// common *accidental* logging path (`{:?}`, `dbg!(..)`, an
+    /// auto-derived `Debug` on a containing struct), directly contradicting
+    /// a "do not log it" handling requirement. `Display` is intentionally
+    /// left showing the full id (this module's own error messages rely on
+    /// it to name which handle failed) — only the accidental-logging path
+    /// is guarded.
+    #[test]
+    fn handle_id_debug_output_does_not_reveal_the_full_bearer_id() {
+        let mut table = HandleTable::new();
+        let id = table.insert_secret(secret_claims("jti-1", "s3cret"), None);
+
+        let debug_output = format!("{id:?}");
+        assert_ne!(
+            debug_output,
+            id.as_str(),
+            "Debug must not print the full bearer id verbatim"
+        );
+        assert!(
+            !debug_output.contains(id.as_str()),
+            "Debug output {debug_output:?} must not contain the full bearer id {}",
+            id.as_str()
+        );
+
+        // Display remains the full id — used deliberately by this module's
+        // own diagnostic error messages.
+        assert_eq!(format!("{id}"), id.as_str());
     }
 
     #[test]

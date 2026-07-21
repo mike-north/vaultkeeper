@@ -542,11 +542,28 @@ impl VaultKeeper {
         // `crate::identity::handles`) produces a correspondingly long-lived
         // handle, with no additional core-imposed shorter lifetime.
         let expires_at = Some(claims.exp);
-        let mut public_claims = claims.clone();
-        // Defense in depth: clear the clone's `val` immediately, before it
-        // is ever returned to the caller — the authoritative copy lives only
-        // inside the handle table from this point on.
-        std::mem::take(&mut public_claims.val);
+        // Build the redacted claims to return *without* ever cloning `val`:
+        // `VaultClaims::clone()` would duplicate the secret into a second,
+        // non-zeroizing `String` allocation, and dropping that duplicate
+        // (even immediately) leaves the plaintext sitting in freed heap
+        // memory — ordinary `String`/`Drop` does not scrub its buffer. Every
+        // other field is non-secret, so cloning them individually is fine;
+        // `val` is simply never read here, so no unprotected copy of the
+        // secret is ever created on this path. The one true copy of the
+        // secret moves straight from `claims` into the handle table's
+        // `Zeroizing` buffer via `insert_secret` below.
+        let public_claims = VaultClaims {
+            jti: claims.jti.clone(),
+            exp: claims.exp,
+            iat: claims.iat,
+            sub: claims.sub.clone(),
+            exe: claims.exe.clone(),
+            use_limit: claims.use_limit,
+            tid: claims.tid,
+            bkd: claims.bkd.clone(),
+            val: String::new(),
+            reference: claims.reference.clone(),
+        };
         let handle_id = self.handle_table.insert_secret(claims, expires_at);
 
         Ok((handle_id, public_claims, response))

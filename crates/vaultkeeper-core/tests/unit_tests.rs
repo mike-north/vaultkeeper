@@ -15,6 +15,7 @@ use vaultkeeper_core::types::{
 };
 use vaultkeeper_core::vault::VaultKeeperOptions;
 use vaultkeeper_core::{InMemoryBackend, VaultKeeper};
+use zeroize::Zeroizing;
 
 // ---------------------------------------------------------------------------
 // Config validation tests
@@ -1084,6 +1085,75 @@ mod vault_keeper {
         assert_eq!(secret.as_str(), "hunter2");
         let err = vault.read_secret(&handle).unwrap_err();
         assert!(matches!(err, VaultError::AccessorConsumed { .. }));
+    }
+
+    /// Regression test: `authorize()` used to build its returned (redacted)
+    /// claims by cloning the *full* `VaultClaims` — secret `val` included —
+    /// into a second `String` allocation, then `std::mem::take`-ing that
+    /// clone's `val` back out and dropping it. A plain `String`'s `Drop`
+    /// does not zero its buffer before freeing, so that dropped clone left
+    /// the plaintext secret sitting in freed heap memory — never zeroized,
+    /// contradicting the "Zero `Buffer` instances containing secrets after
+    /// use" rule. The fix builds the redacted `VaultClaims` field-by-field,
+    /// never touching (let alone cloning) `val`, so `claims.val`'s only
+    /// value ever assigned is `String::new()` and the *sole* copy of the
+    /// secret bytes moves straight from the decrypted claims into the
+    /// handle table's `Zeroizing<String>` buffer via `insert_secret`.
+    ///
+    /// **What this test can and cannot prove:** it structurally asserts
+    /// (a) the returned claims never carry the secret in `val` or anywhere
+    /// else observable, and (b) the only way to recover the secret is
+    /// through `read_secret`, which returns a `Zeroizing<String>` (a type
+    /// that zeroes its buffer on drop — enforced by the `zeroize` crate, not
+    /// re-derived here). It cannot directly observe heap contents to prove
+    /// no *unprotected* copy was ever created and dropped along the way —
+    /// that would need unsafe memory inspection or a custom allocator
+    /// harness, which is out of scope here. The regression this guards
+    /// against is a *source-level* one (a `clone()` that pulls the secret
+    /// into a second, non-zeroizing buffer before scrubbing it) — reading
+    /// this test alongside `authorize()`'s implementation is what actually
+    /// closes the loop: there is no `claims.clone()` left in that function
+    /// to reintroduce the bug.
+    #[tokio::test]
+    async fn authorize_never_clones_the_secret_into_public_claims() {
+        let host = TestHost::with_config();
+        let mut vault = VaultKeeper::init(
+            &host,
+            Some(VaultKeeperOptions {
+                skip_doctor: true,
+                ..Default::default()
+            }),
+        )
+        .await
+        .unwrap();
+
+        let token = vault
+            .setup(
+                &host,
+                "db-password",
+                "hunter2-clone-regression",
+                Some(&vaultkeeper_core::vault::SetupOptions {
+                    skip_trust: Some(true),
+                    ..Default::default()
+                }),
+            )
+            .await
+            .unwrap();
+
+        let (handle, claims, _response) = vault.authorize(&token).unwrap();
+        assert_eq!(
+            claims.val, "",
+            "returned claims must never carry the secret"
+        );
+        // The claims struct's Debug output is the most likely accidental
+        // leak path (a log statement, a test failure message) — assert the
+        // secret does not appear there either.
+        assert!(!format!("{claims:?}").contains("hunter2-clone-regression"));
+
+        // The secret is recoverable exactly once, and only through the
+        // Zeroizing-typed one-time accessor.
+        let secret: Zeroizing<String> = vault.read_secret(&handle).unwrap();
+        assert_eq!(secret.as_str(), "hunter2-clone-regression");
     }
 
     #[tokio::test]
