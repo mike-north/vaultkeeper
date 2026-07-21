@@ -3,7 +3,7 @@
 //! Ports the TypeScript reference test suites for this contract:
 //! `packages/vaultkeeper/test/unit/backend/capabilities.test.ts` (AC1) and
 //! `packages/vaultkeeper/test/integration/presence-enforcement.test.ts`
-//! (AC2/AC4). `vaultkeeper-core`'s `VaultKeeper` does not yet have
+//! (AC3/AC4/AC5/AC6). `vaultkeeper-core`'s `VaultKeeper` does not yet have
 //! backend-touching `store`/`retrieve`/`delete`/`sign` methods (see the seam
 //! note on `enforce_presence_requirement`), so these tests drive
 //! `enforce_presence_requirement` directly against a mock presence backend —

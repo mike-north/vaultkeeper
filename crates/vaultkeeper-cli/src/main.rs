@@ -59,7 +59,7 @@ enum Commands {
         #[arg(long)]
         name: String,
         /// Require the active backend to force a fresh, per-use human presence
-        /// action for this store. Refuses with a `NotCapable` error — before
+        /// action for this store. Refuses with a NotCapable error — before
         /// the backend is touched — if it cannot guarantee one.
         #[arg(long)]
         require_presence_per_use: bool,
@@ -70,7 +70,7 @@ enum Commands {
         #[arg(long)]
         name: String,
         /// Require the active backend to force a fresh, per-use human presence
-        /// action for this delete. Refuses with a `NotCapable` error — before
+        /// action for this delete. Refuses with a NotCapable error — before
         /// the backend is touched — if it cannot guarantee one.
         #[arg(long)]
         require_presence_per_use: bool,
