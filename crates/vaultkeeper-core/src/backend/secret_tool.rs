@@ -93,11 +93,14 @@ impl SecretBackend for SecretToolBackend {
             )
             .await?;
         if output.exit_code != 0 {
-            return Err(VaultError::Other(format!(
-                "secret-tool store failed with exit code {}: {}",
-                output.exit_code,
-                String::from_utf8_lossy(&output.stderr)
-            )));
+            return Err(VaultError::Exec {
+                message: format!(
+                    "secret-tool store failed with exit code {}: {}",
+                    output.exit_code,
+                    String::from_utf8_lossy(&output.stderr)
+                ),
+                command: "secret-tool".to_string(),
+            });
         }
         Ok(())
     }
@@ -541,8 +544,8 @@ mod tests {
             .await
             .unwrap_err();
         assert!(
-            matches!(err, VaultError::Other(_)),
-            "expected a typed VaultError, got {err:?}"
+            matches!(err, VaultError::Exec { ref command, .. } if command == "secret-tool"),
+            "expected VaultError::Exec carrying the failing command, got {err:?}"
         );
     }
 
