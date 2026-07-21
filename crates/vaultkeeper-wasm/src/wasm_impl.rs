@@ -748,9 +748,14 @@ impl JsSecretBackend {
 // `Uint8Array`. The Rust-side intermediate buffers created for that crossing
 // (the owned `Vec<u8>` copy handed to JS in `store`, and the owned `Vec<u8>`
 // read back from JS in `retrieve`) are wrapped in `zeroize::Zeroizing` so
-// they are scrubbed as soon as they go out of scope, matching the
-// `keys/storage.rs` convention (CLAUDE.md security rules: "Zero `Buffer`
-// instances containing secrets after use").
+// they are scrubbed on drop — in `store` that's forced explicitly right
+// after the copy is handed off (see the `drop` call below), rather than left
+// to happen whenever the intermediate would otherwise go out of scope. This
+// follows the same secret-hygiene goal as `keys/storage.rs`'s explicit
+// `.zeroize()` calls on key material — the project-wide principle of
+// scrubbing secret-bearing buffers after use (CLAUDE.md security rules),
+// applied here to a Rust `Vec<u8>` rather than the Node `Buffer` those rules
+// name directly.
 //
 // This does **not** extend past the boundary: once bytes are copied into a
 // JS-owned `Uint8Array` (in `store`) or handed to us by the host (in
@@ -793,6 +798,11 @@ impl SecretBackend for JsSecretBackend {
         let secret_bytes: Zeroizing<Vec<u8>> = Zeroizing::new(secret.as_bytes().to_vec());
         let js_secret = Uint8Array::new_with_length(secret_bytes.len() as u32);
         js_secret.copy_from(&secret_bytes);
+        // Scrub the Rust-side copy eagerly now that it's been copied into the
+        // JS-owned `Uint8Array`, rather than waiting for it to go out of
+        // scope at the end of the function (which would leave it live across
+        // the `.await` below).
+        drop(secret_bytes);
 
         let promise = store_fn
             .call2(&self.host, &js_id, &js_secret.into())
