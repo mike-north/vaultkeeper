@@ -80,23 +80,53 @@ describe('DpapiBackend', () => {
         expect.stringContaining('.vaultkeeper'),
         expect.objectContaining({ recursive: true }),
       )
-      expect(mockExecCommand).toHaveBeenCalledWith(
-        'powershell',
-        expect.arrayContaining(['-NoProfile', '-Command']),
-      )
+      const call = mockExecCommand.mock.calls[0]
+      expect(call?.[0]).toBe('powershell')
+      expect(call?.[1]).toEqual(expect.arrayContaining(['-NoProfile', '-Command']))
+      expect(typeof call?.[2]?.stdin).toBe('string')
     })
 
-    it('should include the secret in the powershell script', async () => {
+    // Regression for issue #269: the plaintext secret must never appear in
+    // argv passed to the child process (visible to `ps`/Task Manager on the
+    // host). It must be delivered over stdin instead. This test fails
+    // against the pre-fix implementation, which embedded
+    // `JSON.stringify(secret)` directly into the `-Command` script string —
+    // see the issue for the captured pre-fix failure output.
+    it('never places the secret value in the powershell argv (issue #269)', async () => {
       mockFs.mkdir.mockResolvedValue(undefined)
       mockExecCommand.mockResolvedValue('')
 
-      await backend.store('test-id', 'my-secret-value')
+      const sentinel = 'sentinel-269-topsecret-value'
+      await backend.store('test-id', sentinel)
 
+      // Guard against vacuous passes: if store() ever stopped invoking
+      // execCommand, an empty-argv fallback would let the loop below pass
+      // without asserting anything.
+      expect(mockExecCommand).toHaveBeenCalledTimes(1)
       const callArgs = mockExecCommand.mock.calls[0]
-      const script = callArgs?.[1]?.find(
-        (arg) => typeof arg === 'string' && arg.includes('my-secret-value'),
-      )
-      expect(script).toBeDefined()
+      const argv = callArgs?.[1] ?? []
+      expect(argv.length).toBeGreaterThan(0)
+      for (const arg of argv) {
+        expect(arg).not.toContain(sentinel)
+      }
+      // Also assert against the base64 encoding of the sentinel, in case a
+      // future implementation encodes the secret before embedding it in argv
+      // rather than eliminating argv exposure entirely.
+      const encodedSentinel = Buffer.from(sentinel, 'utf8').toString('base64')
+      for (const arg of argv) {
+        expect(arg).not.toContain(encodedSentinel)
+      }
+    })
+
+    it('passes the secret to powershell via stdin, base64-encoded', async () => {
+      mockFs.mkdir.mockResolvedValue(undefined)
+      mockExecCommand.mockResolvedValue('')
+
+      const sentinel = 'sentinel-269-topsecret-value'
+      await backend.store('test-id', sentinel)
+
+      const callOptions = mockExecCommand.mock.calls[0]?.[2]
+      expect(callOptions?.stdin).toBe(Buffer.from(sentinel, 'utf8').toString('base64'))
     })
 
     // Regression: issue #60 — BackendConfig.path was silently ignored.
@@ -116,6 +146,40 @@ describe('DpapiBackend', () => {
         (arg) => typeof arg === 'string' && arg.includes(customDir),
       )
       expect(writePathArg).toBeDefined()
+    })
+  })
+
+  describe('store/retrieve round trip (stdin encoding, issue #269)', () => {
+    // The live DPAPI encrypt/decrypt round trip only runs on Windows (see
+    // the PR description); this unit test instead pins down the JS-side
+    // contract the stdin rewrite must preserve: base64-encoding a secret and
+    // decoding it back must reproduce the exact original bytes for the
+    // characters `JSON.stringify` used to escape directly (quotes, newlines,
+    // backslashes, non-ASCII).
+    it.each([
+      ['plain ascii', 'secret-value'],
+      ['double quotes', 'value with "quotes" inside'],
+      ['single quotes', "value with 'quotes' inside"],
+      ['newlines', 'line one\nline two\r\nline three'],
+      ['backslashes', 'C:\\Users\\me\\secret\\path'],
+      ['non-ascii', 'pässwörd-日本語-emoji-🔒'],
+      ['mixed', "\"quoted \\ backslash\nnewline\r\ncrlf 日本語 🔒 'single'"],
+    ])('round-trips a secret containing %s through the stdin channel', async (_label, secret) => {
+      mockFs.mkdir.mockResolvedValue(undefined)
+      mockExecCommand.mockResolvedValue('')
+
+      await backend.store('test-id', secret)
+
+      const stdinPayload = mockExecCommand.mock.calls[0]?.[2]?.stdin
+      expect(typeof stdinPayload).toBe('string')
+      const decoded = Buffer.from(stdinPayload ?? '', 'base64').toString('utf8')
+      expect(decoded).toBe(secret)
+
+      // The argv must still contain none of the raw secret text.
+      const argv = mockExecCommand.mock.calls[0]?.[1] ?? []
+      for (const arg of argv) {
+        expect(arg).not.toContain(secret)
+      }
     })
   })
 
