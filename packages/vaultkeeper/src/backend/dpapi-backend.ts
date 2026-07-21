@@ -96,8 +96,14 @@ export class DpapiBackend implements ListableBackend {
       `[System.IO.File]::WriteAllBytes(${JSON.stringify(entryPath)}, $encrypted)`,
     ].join('; ')
 
+    // Zero the plaintext intermediate once the stdin payload is derived
+    // (security rule: zero Buffer instances containing secrets after use).
+    const secretBuf = Buffer.from(secret, 'utf8')
+    const stdinPayload = secretBuf.toString('base64')
+    secretBuf.fill(0)
+
     await execCommand('powershell', ['-NoProfile', '-Command', script], {
-      stdin: Buffer.from(secret, 'utf8').toString('base64'),
+      stdin: stdinPayload,
     })
   }
 

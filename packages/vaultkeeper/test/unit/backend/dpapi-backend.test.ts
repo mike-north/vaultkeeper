@@ -99,8 +99,13 @@ describe('DpapiBackend', () => {
       const sentinel = 'sentinel-269-topsecret-value'
       await backend.store('test-id', sentinel)
 
+      // Guard against vacuous passes: if store() ever stopped invoking
+      // execCommand, an empty-argv fallback would let the loop below pass
+      // without asserting anything.
+      expect(mockExecCommand).toHaveBeenCalledTimes(1)
       const callArgs = mockExecCommand.mock.calls[0]
       const argv = callArgs?.[1] ?? []
+      expect(argv.length).toBeGreaterThan(0)
       for (const arg of argv) {
         expect(arg).not.toContain(sentinel)
       }
