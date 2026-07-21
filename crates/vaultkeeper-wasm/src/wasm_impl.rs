@@ -742,6 +742,24 @@ impl JsSecretBackend {
     }
 }
 
+// ─── Zeroization boundary ────────────────────────────────────────
+//
+// `store`/`retrieve` copy secret material across the wasm/JS boundary as a
+// `Uint8Array`. The Rust-side intermediate buffers created for that crossing
+// (the owned `Vec<u8>` copy handed to JS in `store`, and the owned `Vec<u8>`
+// read back from JS in `retrieve`) are wrapped in `zeroize::Zeroizing` so
+// they are scrubbed as soon as they go out of scope, matching the
+// `keys/storage.rs` convention (CLAUDE.md security rules: "Zero `Buffer`
+// instances containing secrets after use").
+//
+// This does **not** extend past the boundary: once bytes are copied into a
+// JS-owned `Uint8Array` (in `store`) or handed to us by the host (in
+// `retrieve`), Rust has no reliable way to scrub that JS-side memory — it may
+// already have been copied, retained, or garbage-collected on its own
+// schedule. Scrubbing JS-side copies is out of scope here, consistent with
+// the "dishonest host" trust limit documented on `JsHostPlatform` above: a
+// malicious or buggy host can always retain what it's handed, so the
+// achievable goal is limited to zeroing the Rust-side intermediates.
 #[async_trait::async_trait(?Send)]
 impl SecretBackend for JsSecretBackend {
     fn backend_type(&self) -> &str {
@@ -770,9 +788,11 @@ impl SecretBackend for JsSecretBackend {
         let store_fn = get_method(&self.host, "store").map_err(|e| js_err(&format!("{e:?}")))?;
 
         let js_id = JsValue::from_str(id);
-        let secret_bytes = secret.as_bytes();
+        // Owned copy of the secret bytes, scrubbed on drop (see the
+        // "Zeroization boundary" note above `impl SecretBackend`).
+        let secret_bytes: Zeroizing<Vec<u8>> = Zeroizing::new(secret.as_bytes().to_vec());
         let js_secret = Uint8Array::new_with_length(secret_bytes.len() as u32);
-        js_secret.copy_from(secret_bytes);
+        js_secret.copy_from(&secret_bytes);
 
         let promise = store_fn
             .call2(&self.host, &js_id, &js_secret.into())
@@ -803,11 +823,25 @@ impl SecretBackend for JsSecretBackend {
         // coerces it into misleading bytes or throws inside the JS
         // constructor — a host contract violation should fail loudly with a
         // typed VaultError, not corrupt data or crash.
-        let bytes = result
-            .dyn_ref::<Uint8Array>()
-            .ok_or_else(|| js_err("retrieve() did not resolve to a Uint8Array"))?
-            .to_vec();
-        String::from_utf8(bytes)
+        //
+        // The read-back copy is wrapped in `Zeroizing` (see the
+        // "Zeroization boundary" note above `impl SecretBackend`) so it is
+        // scrubbed once this function returns. UTF-8 validation is done via
+        // `str::from_utf8` (borrowing) rather than `String::from_utf8`
+        // (consuming) specifically so `bytes` stays owned by the `Zeroizing`
+        // wrapper — and therefore still gets scrubbed on drop — instead of
+        // being moved into the returned `String` or a `FromUtf8Error`. The
+        // returned `String` itself is the vault secret, not an intermediate;
+        // per CLAUDE.md it is expected to flow onward and is the caller's
+        // responsibility to keep short-lived.
+        let bytes: Zeroizing<Vec<u8>> = Zeroizing::new(
+            result
+                .dyn_ref::<Uint8Array>()
+                .ok_or_else(|| js_err("retrieve() did not resolve to a Uint8Array"))?
+                .to_vec(),
+        );
+        std::str::from_utf8(&bytes)
+            .map(str::to_string)
             .map_err(|e| VaultError::Other(format!("retrieve() returned non-UTF-8 bytes: {e}")))
     }
 
