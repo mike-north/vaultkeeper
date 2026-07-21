@@ -245,6 +245,33 @@ function __testAllVaultErrors() {
 exports.__testAllVaultErrors = __testAllVaultErrors;
 
 /**
+ * Diagnostic-only export exercising `HostPlatform::exec` directly through
+ * the real `JsHostPlatform` bridge (issue #239 AC1, and the malformed-result
+ * hardening below it). Lets tests drive a mock host whose `exec()` returns a
+ * malformed `stdout`/`stderr`/`exitCode` without needing a core consumer
+ * that calls `exec` with such a host. Not part of the SDK's public
+ * TypeScript API (`packages/vaultkeeper-wasm/src/index.ts` does not
+ * re-export it).
+ *
+ * `host` must satisfy the full `JsHostPlatform::new` contract (`platform()`,
+ * `configDir()`) in addition to `exec()`, since it's constructed the same
+ * way a real `WasmVaultKeeper` host is.
+ * @param {any} host
+ * @param {string} cmd
+ * @param {string[]} args
+ * @returns {Promise<any>}
+ */
+function __testExec(host, cmd, args) {
+    const ptr0 = passStringToWasm0(cmd, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ptr1 = passArrayJsValueToWasm0(args, wasm.__wbindgen_malloc);
+    const len1 = WASM_VECTOR_LEN;
+    const ret = wasm.__testExec(host, ptr0, len0, ptr1, len1);
+    return ret;
+}
+exports.__testExec = __testExec;
+
+/**
  * Diagnostic-only export exercising `HostPlatform::http_fetch` directly
  * through the real `JsHostPlatform` bridge (issue #239 AC2 — "land the
  * primitive with direct tests"). No core consumer calls `http_fetch` yet
@@ -662,7 +689,7 @@ function __wbg_get_imports() {
             return ret;
         },
         __wbindgen_cast_0000000000000001: function(arg0, arg1) {
-            // Cast intrinsic for `Closure(Closure { dtor_idx: 209, function: Function { arguments: [Externref], shim_idx: 210, ret: Result(Unit), inner_ret: Some(Result(Unit)) }, mutable: true }) -> Externref`.
+            // Cast intrinsic for `Closure(Closure { dtor_idx: 214, function: Function { arguments: [Externref], shim_idx: 215, ret: Result(Unit), inner_ret: Some(Result(Unit)) }, mutable: true }) -> Externref`.
             const ret = makeMutClosure(arg0, arg1, wasm.wasm_bindgen__closure__destroy__h1722208547e491cb, wasm_bindgen__convert__closures_____invoke__h8760ba3086f56474);
             return ret;
         },
@@ -868,6 +895,16 @@ function makeMutClosure(arg0, arg1, dtor, f) {
     };
     CLOSURE_DTORS.register(real, state, state);
     return real;
+}
+
+function passArrayJsValueToWasm0(array, malloc) {
+    const ptr = malloc(array.length * 4, 4) >>> 0;
+    for (let i = 0; i < array.length; i++) {
+        const add = addToExternrefTable0(array[i]);
+        getDataViewMemory0().setUint32(ptr + 4 * i, add, true);
+    }
+    WASM_VECTOR_LEN = array.length;
+    return ptr;
 }
 
 function passStringToWasm0(arg, malloc, realloc) {

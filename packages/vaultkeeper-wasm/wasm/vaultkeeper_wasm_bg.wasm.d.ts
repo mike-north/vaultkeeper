@@ -2,6 +2,7 @@
 /* eslint-disable */
 export const memory: WebAssembly.Memory;
 export const __testAllVaultErrors: () => any;
+export const __testExec: (a: any, b: number, c: number, d: number, e: number) => any;
 export const __testHttpFetch: (a: any, b: any) => any;
 export const __testJsSecretBackendDelete: (a: any, b: number, c: number) => any;
 export const __testJsSecretBackendExists: (a: any, b: number, c: number) => any;

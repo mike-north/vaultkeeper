@@ -14,7 +14,7 @@ import * as assert from 'node:assert/strict'
 import { createServer } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { createNodeHost } from '../node-host.js'
-import { mapWasmError, FetchError, NotCapableError } from '../errors.js'
+import { mapWasmError, FetchError, NotCapableError, VaultError } from '../errors.js'
 import type { HostSecretBackend } from '../types.js'
 
 /** Loose shape of a value thrown across the WASM boundary (see `../errors.ts`). */
@@ -48,6 +48,13 @@ interface DiagnosticHttpResponse {
   body: Uint8Array
 }
 
+/** The `{ stdout, stderr, exitCode }` shape `__testExec` resolves with. */
+interface DiagnosticExecOutput {
+  stdout: Uint8Array
+  stderr: Uint8Array
+  exitCode: number
+}
+
 /** Narrows `__testHttpFetch`'s `unknown` result without an `as` cast. */
 function assertDiagnosticHttpResponse(value: unknown): asserts value is DiagnosticHttpResponse {
   assert.ok(
@@ -61,6 +68,15 @@ function assertDiagnosticHttpResponse(value: unknown): asserts value is Diagnost
     'response.headers must be an object',
   )
   assert.ok(record.body instanceof Uint8Array, 'response.body must be a Uint8Array')
+}
+
+/** Narrows `__testExec`'s `unknown` result without an `as` cast. */
+function assertDiagnosticExecOutput(value: unknown): asserts value is DiagnosticExecOutput {
+  assert.ok(typeof value === 'object' && value !== null, '__testExec must resolve to an object')
+  const record: Record<string, unknown> = { ...value }
+  assert.ok(record.stdout instanceof Uint8Array, 'result.stdout must be a Uint8Array')
+  assert.ok(record.stderr instanceof Uint8Array, 'result.stderr must be a Uint8Array')
+  assert.ok(typeof record.exitCode === 'number', 'result.exitCode must be a number')
 }
 
 /**
@@ -85,6 +101,7 @@ function baseHost(): MinimalHost {
 }
 
 interface DiagnosticBindings {
+  __testExec: (host: unknown, cmd: string, args: string[]) => Promise<unknown>
   __testHttpFetch: (host: unknown, request: unknown) => Promise<unknown>
   __testPromptApproval: (host: unknown, action: string, detail: string) => Promise<boolean>
   __testJsSecretBackendMeta: (host: unknown) => unknown
@@ -155,6 +172,56 @@ describe('createNodeHost().exec — env/cwd options (issue #239 AC1)', () => {
     )
     assert.equal(result.exitCode, 0)
     assert.equal(Buffer.from(result.stdout).toString(), 'piped-in')
+  })
+})
+
+describe('__testExec — rejects malformed exec() result shapes', () => {
+  async function expectExecError(result: unknown): Promise<void> {
+    const bindings = await loadDiagnosticBindings()
+    const host = { ...baseHost(), exec: () => Promise.resolve(result) }
+    await assert.rejects(
+      () => bindings.__testExec(host, 'node', []),
+      (thrown: unknown) => {
+        assert.ok(isBridgeErrorShape(thrown))
+        const err = mapWasmError(thrown)
+        assert.ok(err instanceof VaultError, `expected VaultError, got ${err.constructor.name}`)
+        return true
+      },
+    )
+  }
+
+  it('rejects a missing stdout instead of silently producing empty output', async () => {
+    await expectExecError({ stderr: new Uint8Array(), exitCode: 0 })
+  })
+
+  it('rejects an undefined stdout instead of silently producing empty output', async () => {
+    await expectExecError({ stdout: undefined, stderr: new Uint8Array(), exitCode: 0 })
+  })
+
+  it('rejects a non-Uint8Array stdout (e.g. a plain number) instead of coercing it', async () => {
+    await expectExecError({ stdout: 4, stderr: new Uint8Array(), exitCode: 0 })
+  })
+
+  it('rejects a non-Uint8Array stderr (e.g. a plain string) instead of coercing it', async () => {
+    await expectExecError({ stdout: new Uint8Array(), stderr: 'not-bytes', exitCode: 0 })
+  })
+
+  it('still accepts a well-formed result (control case)', async () => {
+    const bindings = await loadDiagnosticBindings()
+    const host = {
+      ...baseHost(),
+      exec: () =>
+        Promise.resolve({
+          stdout: new Uint8Array([1, 2, 3]),
+          stderr: new Uint8Array([4, 5]),
+          exitCode: 0,
+        }),
+    }
+    const result = await bindings.__testExec(host, 'node', [])
+    assertDiagnosticExecOutput(result)
+    assert.deepEqual([...result.stdout], [1, 2, 3])
+    assert.deepEqual([...result.stderr], [4, 5])
+    assert.equal(result.exitCode, 0)
   })
 })
 

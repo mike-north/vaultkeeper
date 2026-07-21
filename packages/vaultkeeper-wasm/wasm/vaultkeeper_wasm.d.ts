@@ -109,6 +109,21 @@ export class WasmVaultKeeper {
 export function __testAllVaultErrors(): Array<any>;
 
 /**
+ * Diagnostic-only export exercising `HostPlatform::exec` directly through
+ * the real `JsHostPlatform` bridge (issue #239 AC1, and the malformed-result
+ * hardening below it). Lets tests drive a mock host whose `exec()` returns a
+ * malformed `stdout`/`stderr`/`exitCode` without needing a core consumer
+ * that calls `exec` with such a host. Not part of the SDK's public
+ * TypeScript API (`packages/vaultkeeper-wasm/src/index.ts` does not
+ * re-export it).
+ *
+ * `host` must satisfy the full `JsHostPlatform::new` contract (`platform()`,
+ * `configDir()`) in addition to `exec()`, since it's constructed the same
+ * way a real `WasmVaultKeeper` host is.
+ */
+export function __testExec(host: any, cmd: string, args: string[]): Promise<any>;
+
+/**
  * Diagnostic-only export exercising `HostPlatform::http_fetch` directly
  * through the real `JsHostPlatform` bridge (issue #239 AC2 — "land the
  * primitive with direct tests"). No core consumer calls `http_fetch` yet

@@ -290,8 +290,14 @@ impl HostPlatform for JsHostPlatform {
         let exit_code_val = Reflect::get(&result, &JsValue::from_str("exitCode"))
             .map_err(|_| js_err("exec result missing exitCode"))?;
 
-        let stdout = Uint8Array::new(&stdout_val).to_vec();
-        let stderr = Uint8Array::new(&stderr_val).to_vec();
+        let stdout = stdout_val
+            .dyn_into::<Uint8Array>()
+            .map_err(|_| js_err("stdout is not a Uint8Array"))?
+            .to_vec();
+        let stderr = stderr_val
+            .dyn_into::<Uint8Array>()
+            .map_err(|_| js_err("stderr is not a Uint8Array"))?
+            .to_vec();
         let exit_code = exit_code_val
             .as_f64()
             .ok_or_else(|| js_err("exitCode is not a number"))? as i32;
@@ -1037,6 +1043,53 @@ fn http_response_to_js(response: &HttpResponse) -> Result<JsValue, JsError> {
     body_arr.copy_from(&response.body);
     Reflect::set(&obj, &JsValue::from_str("body"), &body_arr.into())
         .map_err(|e| JsError::new(&format!("{e:?}")))?;
+
+    Ok(obj.into())
+}
+
+/// Diagnostic-only export exercising `HostPlatform::exec` directly through
+/// the real `JsHostPlatform` bridge (issue #239 AC1, and the malformed-result
+/// hardening below it). Lets tests drive a mock host whose `exec()` returns a
+/// malformed `stdout`/`stderr`/`exitCode` without needing a core consumer
+/// that calls `exec` with such a host. Not part of the SDK's public
+/// TypeScript API (`packages/vaultkeeper-wasm/src/index.ts` does not
+/// re-export it).
+///
+/// `host` must satisfy the full `JsHostPlatform::new` contract (`platform()`,
+/// `configDir()`) in addition to `exec()`, since it's constructed the same
+/// way a real `WasmVaultKeeper` host is.
+#[wasm_bindgen(js_name = "__testExec")]
+pub async fn __test_exec(host: JsValue, cmd: &str, args: Vec<String>) -> Result<JsValue, JsValue> {
+    let js_host = JsHostPlatform::new(host)?;
+    let args: Vec<&str> = args.iter().map(String::as_str).collect();
+    let output = js_host
+        .exec(cmd, &args, ExecOptions::default())
+        .await
+        .map_err(|e| vault_error_to_js(&e))?;
+    exec_output_to_js(&output).map_err(JsValue::from)
+}
+
+/// Convert an [`ExecOutput`] to the `{ stdout, stderr, exitCode }` JS shape,
+/// for `__testExec`'s return value.
+fn exec_output_to_js(output: &ExecOutput) -> Result<JsValue, JsError> {
+    let obj = js_sys::Object::new();
+
+    let stdout_arr = Uint8Array::new_with_length(output.stdout.len() as u32);
+    stdout_arr.copy_from(&output.stdout);
+    Reflect::set(&obj, &JsValue::from_str("stdout"), &stdout_arr.into())
+        .map_err(|e| JsError::new(&format!("{e:?}")))?;
+
+    let stderr_arr = Uint8Array::new_with_length(output.stderr.len() as u32);
+    stderr_arr.copy_from(&output.stderr);
+    Reflect::set(&obj, &JsValue::from_str("stderr"), &stderr_arr.into())
+        .map_err(|e| JsError::new(&format!("{e:?}")))?;
+
+    Reflect::set(
+        &obj,
+        &JsValue::from_str("exitCode"),
+        &JsValue::from_f64(f64::from(output.exit_code)),
+    )
+    .map_err(|e| JsError::new(&format!("{e:?}")))?;
 
     Ok(obj.into())
 }
