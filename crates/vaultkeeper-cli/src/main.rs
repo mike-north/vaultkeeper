@@ -7,7 +7,7 @@ mod host;
 use clap::{Parser, Subcommand};
 use host::NativeHostPlatform;
 use std::io::{self, Read};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use vaultkeeper_core::backend::{FileBackend, HostPlatform, PresenceOperation, SecretBackend};
 use vaultkeeper_core::config;
@@ -476,18 +476,13 @@ async fn cmd_config(action: ConfigAction) -> i32 {
     }
 }
 
-fn create_config_dir(dir: &PathBuf) -> Result<(), String> {
-    std::fs::create_dir_all(dir).map_err(|e| format!("Failed to create config directory: {e}"))?;
-
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let perms = std::fs::Permissions::from_mode(0o700);
-        std::fs::set_permissions(dir, perms)
-            .map_err(|e| format!("Failed to set permissions on config directory: {e}"))?;
-    }
-
-    Ok(())
+fn create_config_dir(dir: &Path) -> Result<(), String> {
+    // Delegates to the same owner-only (0o700) directory creation
+    // `NativeHostPlatform::write_file` uses (see #255), so `config init` and
+    // every other write path agree on the contract: freshly created
+    // directories are 0o700 on Unix, and an already-existing directory
+    // (regardless of its current permissions) is left untouched.
+    host::create_dir_all_secure(dir).map_err(|e| format!("Failed to create config directory: {e}"))
 }
 
 fn write_config_file(path: &PathBuf, json: &str) -> Result<(), String> {

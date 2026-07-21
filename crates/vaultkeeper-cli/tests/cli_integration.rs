@@ -360,6 +360,81 @@ mod config {
         // Clap shows usage info and exits 2 for missing required subcommand
         cmd.arg("config").assert().code(2);
     }
+
+    // -----------------------------------------------------------------
+    // Issue #255: `config init` must create the config directory 0o700
+    // (owner-only), matching the TS library's contract.
+    // -----------------------------------------------------------------
+
+    /// AC1 + AC3: `config init` creating the config directory from scratch
+    /// (a `VAULTKEEPER_CONFIG_DIR` that doesn't exist yet) must leave it
+    /// `0o700` on Unix. Skipped on Windows, where POSIX mode bits don't
+    /// apply.
+    #[test]
+    #[cfg(unix)]
+    fn config_init_creates_fresh_config_dir_as_0700() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let parent = TempDir::new().expect("failed to create temp dir");
+        let config_dir = parent.path().join("vk-config");
+        assert!(!config_dir.exists(), "config dir must not pre-exist");
+
+        let mut cmd = Command::cargo_bin("vaultkeeper").expect("binary not found");
+        cmd.env("VAULTKEEPER_CONFIG_DIR", &config_dir);
+        cmd.args(["config", "init"])
+            .assert()
+            .success()
+            .stdout(predicate::str::contains("Config created at"));
+
+        let mode = fs::metadata(&config_dir).unwrap().permissions().mode() & 0o777;
+        assert_eq!(
+            mode, 0o700,
+            "freshly created config dir must be 0o700, got {mode:o}"
+        );
+    }
+
+    /// AC2: if the config directory already exists with broader
+    /// permissions, `config init` must leave those permissions untouched —
+    /// no chmod-on-startup surprise.
+    #[test]
+    #[cfg(unix)]
+    fn config_init_leaves_existing_wider_permission_dir_untouched() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let parent = TempDir::new().expect("failed to create temp dir");
+        let config_dir = parent.path().join("vk-config");
+        fs::create_dir(&config_dir).unwrap();
+        fs::set_permissions(&config_dir, fs::Permissions::from_mode(0o755)).unwrap();
+
+        let mut cmd = Command::cargo_bin("vaultkeeper").expect("binary not found");
+        cmd.env("VAULTKEEPER_CONFIG_DIR", &config_dir);
+        cmd.args(["config", "init"]).assert().success();
+
+        let mode = fs::metadata(&config_dir).unwrap().permissions().mode() & 0o777;
+        assert_eq!(
+            mode, 0o755,
+            "pre-existing config dir permissions must be left untouched"
+        );
+    }
+
+    /// AC3 on non-Unix: `config init` still creates the directory (mode
+    /// bits are a Unix-only concept, so there's nothing to assert there).
+    #[test]
+    #[cfg(not(unix))]
+    fn config_init_creates_fresh_config_dir_on_non_unix() {
+        let parent = TempDir::new().expect("failed to create temp dir");
+        let config_dir = parent.path().join("vk-config");
+        assert!(!config_dir.exists(), "config dir must not pre-exist");
+
+        let mut cmd = Command::cargo_bin("vaultkeeper").expect("binary not found");
+        cmd.env("VAULTKEEPER_CONFIG_DIR", &config_dir);
+        cmd.args(["config", "init"])
+            .assert()
+            .success()
+            .stdout(predicate::str::contains("Config created at"));
+
+        assert!(config_dir.is_dir());
+    }
 }
 
 // ─── Argument validation ─────────────────────────────────────────
