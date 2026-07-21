@@ -445,5 +445,64 @@
       "type": "Any"
     },
     "expectedConfigFile": null
+  },
+  {
+    "name": "backend capabilities exits 0 and reports the file backend as not presence-capable",
+    "command": [
+      "backend",
+      "capabilities"
+    ],
+    "stdin": null,
+    "needsConfig": false,
+    "expectedExitCode": 0,
+    "expectedStdout": {
+      "type": "Exact",
+      "value": "Backend capabilities (per configured instance):\n\n  file  Encrypted File Store  presence-per-use: no\n\nA backend with presence-per-use: yes forces a distinct, fresh human action\nper operation and can satisfy `--require-presence-per-use`.\n"
+    },
+    "expectedStderr": {
+      "type": "Any"
+    },
+    "expectedConfigFile": null
+  },
+  {
+    "name": "backend capabilities --json emits a row with type, displayName, presencePerUse",
+    "command": [
+      "backend",
+      "capabilities",
+      "--json"
+    ],
+    "stdin": null,
+    "needsConfig": false,
+    "expectedExitCode": 0,
+    "expectedStdout": {
+      "type": "JsonContains",
+      "value": [
+        {
+          "displayName": "Encrypted File Store",
+          "presencePerUse": false,
+          "type": "file"
+        }
+      ]
+    },
+    "expectedStderr": {
+      "type": "Any"
+    },
+    "expectedConfigFile": null
+  },
+  {
+    "name": "backend with no subcommand exits 2",
+    "command": [
+      "backend"
+    ],
+    "stdin": null,
+    "needsConfig": false,
+    "expectedExitCode": 2,
+    "expectedStdout": {
+      "type": "Any"
+    },
+    "expectedStderr": {
+      "type": "Any"
+    },
+    "expectedConfigFile": null
   }
 ]

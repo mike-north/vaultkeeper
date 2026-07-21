@@ -379,6 +379,66 @@ fn dev_mode_cases() -> Vec<ConformanceCase> {
     ]
 }
 
+// ─── Backend capabilities cases (issue #262) ─────────────────────
+
+fn backend_capabilities_cases() -> Vec<ConformanceCase> {
+    vec![
+        ConformanceCase {
+            name:
+                "backend capabilities exits 0 and reports the file backend as not presence-capable"
+                    .into(),
+            command: vec!["backend".into(), "capabilities".into()],
+            stdin: None,
+            // `backend capabilities` is a preflight discovery step (issue
+            // #262) — it must work before any config.json exists, so it can
+            // be checked before `store`/`delete --require-presence-per-use`.
+            // Verified empirically: the file backend is always available
+            // without configuration, so no config is needed here.
+            needs_config: false,
+            expected_exit_code: 0,
+            // Exact match, not a loose regex: the Rust CLI reports exactly one
+            // row (the active/configured backend — there is no config-driven
+            // multi-backend registry wired into the CLI), so its own output is
+            // fully deterministic and worth pinning byte-for-byte. This is
+            // Rust-CLI-self-consistency coverage, not a claim that this string
+            // equals the TS CLI's output — the TS CLI enumerates every
+            // registered backend type (six rows) and its raw stdout differs
+            // from this (see PR description for the byte-diff evidence).
+            expected_stdout: OutputMatcher::Exact(
+                "Backend capabilities (per configured instance):\n\n  file  Encrypted File Store  presence-per-use: no\n\nA backend with presence-per-use: yes forces a distinct, fresh human action\nper operation and can satisfy `--require-presence-per-use`.\n".into(),
+            ),
+            expected_stderr: OutputMatcher::Any,
+            expected_config_file: None,
+        },
+        ConformanceCase {
+            name: "backend capabilities --json emits a row with type, displayName, presencePerUse"
+                .into(),
+            command: vec!["backend".into(), "capabilities".into(), "--json".into()],
+            stdin: None,
+            // Same discovery-step rationale as the text-mode case above.
+            needs_config: false,
+            expected_exit_code: 0,
+            expected_stdout: OutputMatcher::JsonContains(serde_json::json!([{
+                "type": "file",
+                "displayName": "Encrypted File Store",
+                "presencePerUse": false
+            }])),
+            expected_stderr: OutputMatcher::Any,
+            expected_config_file: None,
+        },
+        ConformanceCase {
+            name: "backend with no subcommand exits 2".into(),
+            command: vec!["backend".into()],
+            stdin: None,
+            needs_config: false,
+            expected_exit_code: 2,
+            expected_stdout: OutputMatcher::Any,
+            expected_stderr: OutputMatcher::Any,
+            expected_config_file: None,
+        },
+    ]
+}
+
 // ─── Revoke-key cases ────────────────────────────────────────────
 
 fn revoke_key_cases() -> Vec<ConformanceCase> {
@@ -407,6 +467,7 @@ pub fn all_cases() -> Vec<ConformanceCase> {
     cases.extend(revoke_key_cases());
     cases.extend(approve_cases());
     cases.extend(dev_mode_cases());
+    cases.extend(backend_capabilities_cases());
     cases
 }
 
