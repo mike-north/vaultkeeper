@@ -10,6 +10,12 @@ export class AccessorConsumedError extends VaultError {
 }
 
 // @public
+export interface ApprovalContext {
+    action: string;
+    detail: string;
+}
+
+// @public
 export class AuthorizationDeniedError extends VaultError {
     constructor(message: string);
 }
@@ -76,6 +82,13 @@ export class ExecError extends VaultError {
 }
 
 // @public
+export interface ExecOptions {
+    cwd?: string;
+    env?: Record<string, string>;
+    stdin?: Uint8Array;
+}
+
+// @public
 export class ExecutableTrustRequiredError extends VaultError {
     constructor(message: string, reason: ExecutableTrustRequiredReason);
     readonly reason: ExecutableTrustRequiredReason;
@@ -96,6 +109,57 @@ export class FilesystemError extends VaultError {
     readonly code: string | undefined;
     readonly path?: string;
     readonly permission?: string;
+}
+
+// @public
+export type HostBackendCapabilities = Record<string, unknown>;
+
+// @public
+export interface HostSecretBackend {
+    // (undocumented)
+    delete(id: string): Promise<void>;
+    // (undocumented)
+    readonly displayName: string;
+    // (undocumented)
+    exists(id: string): Promise<boolean>;
+    // (undocumented)
+    generateSigningKey?(name: string, algorithm: string): Promise<void>;
+    // (undocumented)
+    getCapabilities?(): Promise<HostBackendCapabilities>;
+    // (undocumented)
+    getPublicKey?(name: string): Promise<Uint8Array>;
+    // (undocumented)
+    isAvailable(): Promise<boolean>;
+    // (undocumented)
+    list?(): Promise<string[]>;
+    retrieve(id: string): Promise<Uint8Array>;
+    // (undocumented)
+    signWithKey?(name: string, data: Uint8Array): Promise<Uint8Array>;
+    store(id: string, secret: Uint8Array): Promise<void>;
+    // (undocumented)
+    readonly type: string;
+}
+
+// @public
+export interface HttpFetchRequest {
+    // (undocumented)
+    body?: Uint8Array;
+    // (undocumented)
+    headers: Record<string, string>;
+    // (undocumented)
+    method: string;
+    // (undocumented)
+    url: string;
+}
+
+// @public
+export interface HttpFetchResponse {
+    // (undocumented)
+    body: Uint8Array;
+    // (undocumented)
+    headers: Record<string, string>;
+    // (undocumented)
+    status: number;
 }
 
 // @public
@@ -364,17 +428,19 @@ export interface WasmHostPlatform {
     // (undocumented)
     deleteFile(path: string): Promise<void>;
     // (undocumented)
-    exec(cmd: string, args: string[], stdin?: Uint8Array): Promise<{
+    exec(cmd: string, args: string[], options?: ExecOptions): Promise<{
         stdout: Uint8Array;
         stderr: Uint8Array;
         exitCode: number;
     }>;
     // (undocumented)
     fileExists(path: string): Promise<boolean>;
+    httpFetch(request: HttpFetchRequest): Promise<HttpFetchResponse>;
     // (undocumented)
     listDir(path: string): Promise<string[]>;
     // (undocumented)
     platform(): string;
+    promptApproval?(context: ApprovalContext): Promise<boolean>;
     // (undocumented)
     readFile(path: string): Promise<Uint8Array>;
     // (undocumented)

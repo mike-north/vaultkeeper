@@ -27,6 +27,12 @@
 // Re-export types
 export type {
   WasmHostPlatform,
+  ExecOptions,
+  HttpFetchRequest,
+  HttpFetchResponse,
+  ApprovalContext,
+  HostSecretBackend,
+  HostBackendCapabilities,
   VaultKeeperOptions,
   SetupOptions,
   SetupOptionsBase,

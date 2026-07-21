@@ -6,13 +6,17 @@
 
 Host platform interface that bridges Node.js OS calls to the WASM module.
 
-Implementations of this interface are passed to the WASM VaultKeeper constructor to provide file I/O and subprocess execution.
+Implementations of this interface are passed to the WASM VaultKeeper constructor to provide file I/O, subprocess execution, and networking.
 
 **Signature:**
 
 ```typescript
 export interface WasmHostPlatform 
 ```
+
+## Remarks
+
+\*\*No-reentrancy contract\*\*: none of these methods may call back into the vault (no `VaultKeeper` method calls, no `createVaultKeeper()`<!-- -->) during their own execution. The Rust core does not guard against reentrant calls; violating this can deadlock or corrupt in-flight state.
 
 ## Methods
 
@@ -47,7 +51,7 @@ Description
 </td></tr>
 <tr><td>
 
-[exec(cmd, args, stdin)](./wasm.wasmhostplatform.exec.md)
+[exec(cmd, args, options)](./wasm.wasmhostplatform.exec.md)
 
 
 </td><td>
@@ -60,6 +64,17 @@ Description
 
 
 </td><td>
+
+
+</td></tr>
+<tr><td>
+
+[httpFetch(request)](./wasm.wasmhostplatform.httpfetch.md)
+
+
+</td><td>
+
+Perform an HTTP request through the host's networking stack (issue \#239). [createNodeHost()](./wasm.createnodehost.md) implements this over the global `fetch`<!-- -->.
 
 
 </td></tr>
@@ -78,6 +93,17 @@ Description
 
 
 </td><td>
+
+
+</td></tr>
+<tr><td>
+
+[promptApproval(context)?](./wasm.wasmhostplatform.promptapproval.md)
+
+
+</td><td>
+
+_(Optional)_ Optional interactive human-approval capability (issue \#239). Absent means "no interactive approval available" — the Rust core treats that as an automatic refusal (fail closed), never an automatic allow. No consumer wires this up yet.
 
 
 </td></tr>

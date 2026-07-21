@@ -349,7 +349,7 @@ mod tests {
         assert_eq!(hex_encode(b"abc"), "616263");
     }
 
-    use crate::backend::{ExecOutput, Platform};
+    use crate::backend::{ExecOptions, ExecOutput, Platform};
     use std::collections::{HashMap, HashSet};
     use std::sync::Mutex;
 
@@ -374,7 +374,7 @@ mod tests {
             &self,
             _cmd: &str,
             _args: &[&str],
-            _stdin: Option<&[u8]>,
+            _options: ExecOptions<'_>,
         ) -> Result<ExecOutput, VaultError> {
             Ok(ExecOutput {
                 stdout: Vec::new(),

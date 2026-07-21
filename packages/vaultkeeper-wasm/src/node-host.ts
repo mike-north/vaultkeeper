@@ -18,7 +18,7 @@ import {
 } from 'node:fs/promises'
 import { homedir, platform as osPlatform } from 'node:os'
 import { dirname, join } from 'node:path'
-import type { WasmHostPlatform } from './types.js'
+import type { ExecOptions, HttpFetchRequest, HttpFetchResponse, WasmHostPlatform } from './types.js'
 
 /**
  * The structured failure contract `readFile`/`writeFile`/`deleteFile`/
@@ -75,20 +75,37 @@ export function createNodeHost(configDirOverride?: string): WasmHostPlatform {
     async exec(
       cmd: string,
       args: string[],
-      stdin?: Uint8Array,
+      options?: ExecOptions,
     ): Promise<{ stdout: Uint8Array; stderr: Uint8Array; exitCode: number }> {
       return new Promise((resolve) => {
-        const child = execFile(cmd, args, { encoding: 'buffer' }, (error, stdout, stderr) => {
-          resolve({
-            stdout: new Uint8Array(stdout),
-            stderr: new Uint8Array(stderr),
-            exitCode:
-              error?.code !== undefined ? (typeof error.code === 'number' ? error.code : 1) : 0,
-          })
-        })
+        // Issue #239: `env`/`cwd` are additive on top of the pre-#239
+        // behavior. Passing `env: undefined` to `execFile` (the case when
+        // `options.env` is omitted) makes the child inherit `process.env`
+        // unchanged — Node's own default — so omitting `env` here reproduces
+        // the pre-#239 behavior exactly. Merging with `{ ...process.env,
+        // ...options.env }` (rather than passing `options.env` alone) means
+        // only the named variables are overridden; every other inherited
+        // variable is preserved.
+        const child = execFile(
+          cmd,
+          args,
+          {
+            encoding: 'buffer',
+            env: options?.env ? { ...process.env, ...options.env } : undefined,
+            cwd: options?.cwd,
+          },
+          (error, stdout, stderr) => {
+            resolve({
+              stdout: new Uint8Array(stdout),
+              stderr: new Uint8Array(stderr),
+              exitCode:
+                error?.code !== undefined ? (typeof error.code === 'number' ? error.code : 1) : 0,
+            })
+          },
+        )
 
-        if (stdin !== undefined && child.stdin) {
-          child.stdin.write(stdin)
+        if (options?.stdin !== undefined && child.stdin) {
+          child.stdin.write(options.stdin)
           child.stdin.end()
         }
       })
@@ -173,6 +190,26 @@ export function createNodeHost(configDirOverride?: string): WasmHostPlatform {
 
     configDir(): string {
       return configDir
+    },
+
+    /**
+     * Issue #239: bridges `HostPlatform::http_fetch` to Node's global
+     * `fetch` (stable since Node 20, this package's minimum supported
+     * version). No core consumer calls this yet — see the trait default's
+     * doc comment (`crates/vaultkeeper-core/src/backend/types.rs`).
+     */
+    async httpFetch(request: HttpFetchRequest): Promise<HttpFetchResponse> {
+      // `exactOptionalPropertyTypes` forbids assigning `body: undefined`
+      // explicitly — omit the property entirely rather than set it to
+      // `undefined` when there's no request body.
+      const init: RequestInit = { method: request.method, headers: request.headers }
+      if (request.body !== undefined) {
+        init.body = new Uint8Array(request.body)
+      }
+      const response = await fetch(request.url, init)
+      const body = new Uint8Array(await response.arrayBuffer())
+      const headers = Object.fromEntries(response.headers.entries())
+      return { status: response.status, headers, body }
     },
   }
 }

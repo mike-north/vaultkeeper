@@ -1,7 +1,7 @@
 //! Native host platform implementation using std::process and std::fs.
 
 use std::path::{Path, PathBuf};
-use vaultkeeper_core::backend::{ExecOutput, HostPlatform, Platform};
+use vaultkeeper_core::backend::{ExecOptions, ExecOutput, HostPlatform, Platform};
 use vaultkeeper_core::errors::VaultError;
 
 /// Native host platform implementation for the CLI.
@@ -48,34 +48,48 @@ impl HostPlatform for NativeHostPlatform {
         &self,
         cmd: &str,
         args: &[&str],
-        stdin_data: Option<&[u8]>,
+        options: ExecOptions<'_>,
     ) -> Result<ExecOutput, VaultError> {
         use std::process::{Command, Stdio};
 
-        let mut child = Command::new(cmd)
-            .args(args)
-            .stdin(if stdin_data.is_some() {
+        let mut command = Command::new(cmd);
+        command.args(args);
+        if let Some(env) = options.env {
+            for (key, value) in env {
+                command.env(key, value);
+            }
+        }
+        if let Some(cwd) = options.cwd {
+            command.current_dir(cwd);
+        }
+        command
+            .stdin(if options.stdin.is_some() {
                 Stdio::piped()
             } else {
                 Stdio::null()
             })
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .map_err(|e| VaultError::Other(format!("Failed to spawn {cmd}: {e}")))?;
+            .stderr(Stdio::piped());
 
-        if let Some(data) = stdin_data {
+        let mut child = command.spawn().map_err(|e| VaultError::Exec {
+            message: format!("Failed to spawn {cmd}: {e}"),
+            command: cmd.to_string(),
+        })?;
+
+        if let Some(data) = options.stdin {
             use std::io::Write;
             if let Some(ref mut stdin) = child.stdin {
-                stdin
-                    .write_all(data)
-                    .map_err(|e| VaultError::Other(format!("Failed to write stdin: {e}")))?;
+                stdin.write_all(data).map_err(|e| VaultError::Exec {
+                    message: format!("Failed to write stdin for {cmd}: {e}"),
+                    command: cmd.to_string(),
+                })?;
             }
         }
 
-        let output = child
-            .wait_with_output()
-            .map_err(|e| VaultError::Other(format!("Failed to wait for {cmd}: {e}")))?;
+        let output = child.wait_with_output().map_err(|e| VaultError::Exec {
+            message: format!("Failed to wait for {cmd}: {e}"),
+            command: cmd.to_string(),
+        })?;
 
         Ok(ExecOutput {
             stdout: output.stdout,
@@ -274,6 +288,92 @@ mod tests {
             Ok(_) => {}
             Err(VaultError::Filesystem { permission, .. }) => assert_eq!(permission, "read"),
             Err(other) => panic!("expected VaultError::Filesystem, got {other:?}"),
+        }
+    }
+
+    // -----------------------------------------------------------------
+    // Issue #239: `exec` gains `ExecOptions { stdin, env, cwd }`.
+    // -----------------------------------------------------------------
+
+    /// `ExecOptions::default()` (all fields `None`) must reproduce the
+    /// pre-#239 3-argument `exec(cmd, args, stdin)` behavior exactly (AC1):
+    /// no stdin, inherited environment, inherited cwd.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn exec_with_default_options_behaves_like_pre_239_exec() {
+        let dir = tempfile::tempdir().unwrap();
+        let host = NativeHostPlatform::new(dir.path().to_path_buf());
+        let output = host
+            .exec("echo", &["hello"], ExecOptions::default())
+            .await
+            .unwrap();
+        assert_eq!(output.exit_code, 0);
+        assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "hello");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn exec_respects_cwd_option() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("marker.txt"), b"hi").unwrap();
+        let host = NativeHostPlatform::new(dir.path().to_path_buf());
+        let output = host
+            .exec(
+                "ls",
+                &[],
+                ExecOptions {
+                    cwd: Some(dir.path()),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        assert!(String::from_utf8_lossy(&output.stdout).contains("marker.txt"));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn exec_respects_env_option() {
+        let dir = tempfile::tempdir().unwrap();
+        let host = NativeHostPlatform::new(dir.path().to_path_buf());
+        let output = host
+            .exec(
+                "sh",
+                &["-c", "echo $VAULTKEEPER_TEST_VAR"],
+                ExecOptions {
+                    env: Some(&[("VAULTKEEPER_TEST_VAR", "hello-239")]),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "hello-239");
+    }
+
+    /// AC7 regression: exec failures must classify as `VaultError::Exec`
+    /// (distinct from the `HostFilesystemError`/`VaultError::Filesystem`
+    /// contract, which is unchanged by #239) even when a *new* option
+    /// (`cwd`) is what caused the failure — spawning with a nonexistent
+    /// working directory fails at `Command::spawn`.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn exec_with_nonexistent_cwd_fails_as_exec_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let host = NativeHostPlatform::new(dir.path().to_path_buf());
+        let missing_cwd = dir.path().join("does-not-exist");
+        let result = host
+            .exec(
+                "echo",
+                &["hi"],
+                ExecOptions {
+                    cwd: Some(&missing_cwd),
+                    ..Default::default()
+                },
+            )
+            .await;
+        match result {
+            Err(VaultError::Exec { command, .. }) => assert_eq!(command, "echo"),
+            other => panic!("expected VaultError::Exec, got {other:?}"),
         }
     }
 }

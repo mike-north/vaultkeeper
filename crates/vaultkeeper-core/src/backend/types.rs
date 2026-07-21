@@ -20,20 +20,111 @@ pub enum Platform {
     Windows,
 }
 
+/// Options for [`HostPlatform::exec`] (issue #239).
+///
+/// Every field is optional, and omitting all of them preserves the exact
+/// pre-#239 `exec` behavior: no stdin piped in, the child inherits the host
+/// process's environment unchanged, and the child inherits the host
+/// process's current working directory unchanged. `#[derive(Default)]`
+/// (all-`None`) is exactly that pre-#239 behavior.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ExecOptions<'a> {
+    /// Bytes piped to the child process's stdin. `None` pipes nothing in
+    /// (the pre-#239 default).
+    pub stdin: Option<&'a [u8]>,
+    /// Extra/overriding environment variables layered onto the host
+    /// process's inherited environment — existing variables not named here
+    /// are preserved, mirroring the Node bridge's `{ ...process.env, ...env }`
+    /// spread. `None` leaves the environment untouched (the pre-#239
+    /// default).
+    pub env: Option<&'a [(&'a str, &'a str)]>,
+    /// Working directory for the child process. `None` inherits the host
+    /// process's current working directory (the pre-#239 default).
+    pub cwd: Option<&'a Path>,
+}
+
+/// A minimal HTTP request description for [`HostPlatform::http_fetch`].
+#[derive(Debug, Clone)]
+pub struct HttpRequest {
+    pub method: String,
+    pub url: String,
+    pub headers: Vec<(String, String)>,
+    pub body: Option<Vec<u8>>,
+}
+
+/// The response produced by [`HostPlatform::http_fetch`].
+#[derive(Debug, Clone)]
+pub struct HttpResponse {
+    pub status: u16,
+    pub headers: Vec<(String, String)>,
+    pub body: Vec<u8>,
+}
+
+/// Context for a [`HostPlatform::prompt_approval`] request.
+#[derive(Debug, Clone, Copy)]
+pub struct ApprovalContext<'a> {
+    /// Short machine-readable identifier for the action being approved
+    /// (e.g. `"delegated-fetch"`).
+    pub action: &'a str,
+    /// Human-readable detail shown to the approver (e.g. the resolved URL).
+    pub detail: &'a str,
+}
+
 /// Host platform abstraction for OS interactions.
 ///
 /// In native mode, implementations use `std::process::Command` and `std::fs`.
 /// In WASM mode, implementations call back into JavaScript host functions.
+///
+/// # No-reentrancy contract
+///
+/// No `HostPlatform` method may call back into the vault (no `VaultKeeper`
+/// method calls, no `authorize()`/`setup()`) during its own execution. Core
+/// does not guard against reentrant calls; a host callback that violates
+/// this can deadlock or corrupt in-flight state.
 #[cfg_attr(target_arch = "wasm32", async_trait::async_trait(?Send))]
 #[cfg_attr(not(target_arch = "wasm32"), async_trait::async_trait)]
 pub trait HostPlatform: Send + Sync {
     /// Execute a subprocess, returning stdout, stderr, and exit code.
+    ///
+    /// `options` (issue #239) carries stdin, environment overrides, and a
+    /// working directory — all optional. Passing `ExecOptions::default()`
+    /// (or omitting all its fields) reproduces the pre-#239 3-argument
+    /// `exec(cmd, args, stdin)` behavior exactly.
     async fn exec(
         &self,
         cmd: &str,
         args: &[&str],
-        stdin: Option<&[u8]>,
+        options: ExecOptions<'_>,
     ) -> Result<ExecOutput, VaultError>;
+
+    /// Perform an HTTP request through the host's networking stack (native:
+    /// a real HTTP client the host wires in; WASM: the global `fetch`).
+    ///
+    /// This is a Phase 0 primitive (issue #239): no core consumer calls it
+    /// yet — the delegated-access port (a later issue) is the first real
+    /// caller. The default implementation fails with [`VaultError::Fetch`]
+    /// so existing hosts and test doubles don't need to implement real
+    /// networking just to satisfy the trait; a host opts in by overriding
+    /// this method.
+    async fn http_fetch(&self, request: HttpRequest) -> Result<HttpResponse, VaultError> {
+        Err(VaultError::Fetch {
+            message: format!(
+                "http_fetch is not implemented by this host platform (requested {})",
+                request.url
+            ),
+            url: request.url,
+        })
+    }
+
+    /// Ask a human to approve a sensitive action.
+    ///
+    /// This is an **optional** host capability (issue #239): hosts without an
+    /// interactive approval mechanism keep this default, which fails closed
+    /// (`Ok(false)`) rather than silently allowing. No consumer wires this up
+    /// yet — a later phase gates a real action behind it.
+    async fn prompt_approval(&self, _context: ApprovalContext<'_>) -> Result<bool, VaultError> {
+        Ok(false)
+    }
 
     /// Read a file.
     async fn read_file(&self, path: &Path) -> Result<Vec<u8>, VaultError>;

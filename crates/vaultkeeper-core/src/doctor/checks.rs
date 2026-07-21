@@ -1,6 +1,6 @@
 //! Individual preflight check functions for each system dependency.
 
-use crate::backend::HostPlatform;
+use crate::backend::{ExecOptions, HostPlatform};
 use crate::types::{PreflightCheck, PreflightCheckStatus};
 
 /// Parse a semver-like version string and return (major, minor, patch).
@@ -33,7 +33,10 @@ fn version_gte(a: (u32, u32, u32), b: (u32, u32, u32)) -> bool {
 /// Check that openssl is present and >= 1.1.1.
 pub async fn check_openssl(host: &dyn HostPlatform) -> PreflightCheck {
     let name = "openssl".to_string();
-    match host.exec("openssl", &["version"], None).await {
+    match host
+        .exec("openssl", &["version"], ExecOptions::default())
+        .await
+    {
         Ok(output) if output.exit_code == 0 => {
             let version_str = String::from_utf8_lossy(&output.stdout).trim().to_string();
             match parse_version(&version_str) {
@@ -69,7 +72,10 @@ pub async fn check_openssl(host: &dyn HostPlatform) -> PreflightCheck {
 /// Check that bash is present.
 pub async fn check_bash(host: &dyn HostPlatform) -> PreflightCheck {
     let name = "bash".to_string();
-    match host.exec("bash", &["--version"], None).await {
+    match host
+        .exec("bash", &["--version"], ExecOptions::default())
+        .await
+    {
         Ok(output) if output.exit_code == 0 => {
             let full = String::from_utf8_lossy(&output.stdout);
             let first_line = full.lines().next().unwrap_or("").trim().to_string();
@@ -96,7 +102,7 @@ pub async fn check_powershell(host: &dyn HostPlatform) -> PreflightCheck {
         .exec(
             "powershell",
             &["-Command", "$PSVersionTable.PSVersion"],
-            None,
+            ExecOptions::default(),
         )
         .await
     {
@@ -122,7 +128,10 @@ pub async fn check_powershell(host: &dyn HostPlatform) -> PreflightCheck {
 pub async fn check_security(host: &dyn HostPlatform) -> PreflightCheck {
     let name = "security".to_string();
     // `security help` exits non-zero intentionally — if we get any output, it's present.
-    match host.exec("security", &["help"], None).await {
+    match host
+        .exec("security", &["help"], ExecOptions::default())
+        .await
+    {
         Ok(_) => PreflightCheck {
             name,
             status: PreflightCheckStatus::Ok,
@@ -153,7 +162,10 @@ pub async fn check_security(host: &dyn HostPlatform) -> PreflightCheck {
 /// Check that secret-tool is present (Linux only).
 pub async fn check_secret_tool(host: &dyn HostPlatform) -> PreflightCheck {
     let name = "secret-tool".to_string();
-    match host.exec("secret-tool", &["--version"], None).await {
+    match host
+        .exec("secret-tool", &["--version"], ExecOptions::default())
+        .await
+    {
         Ok(output) if output.exit_code == 0 => {
             let version = String::from_utf8_lossy(&output.stdout).trim().to_string();
             PreflightCheck {
@@ -175,7 +187,10 @@ pub async fn check_secret_tool(host: &dyn HostPlatform) -> PreflightCheck {
 /// Check that 1Password CLI (op) is present (optional).
 pub async fn check_op(host: &dyn HostPlatform) -> PreflightCheck {
     let name = "op".to_string();
-    match host.exec("op", &["--version"], None).await {
+    match host
+        .exec("op", &["--version"], ExecOptions::default())
+        .await
+    {
         Ok(output) if output.exit_code == 0 => {
             let version = String::from_utf8_lossy(&output.stdout).trim().to_string();
             PreflightCheck {
@@ -197,7 +212,10 @@ pub async fn check_op(host: &dyn HostPlatform) -> PreflightCheck {
 /// Check that ykman (YubiKey Manager CLI) is present (optional).
 pub async fn check_ykman(host: &dyn HostPlatform) -> PreflightCheck {
     let name = "ykman".to_string();
-    match host.exec("ykman", &["--version"], None).await {
+    match host
+        .exec("ykman", &["--version"], ExecOptions::default())
+        .await
+    {
         Ok(output) if output.exit_code == 0 => {
             let version = String::from_utf8_lossy(&output.stdout).trim().to_string();
             PreflightCheck {

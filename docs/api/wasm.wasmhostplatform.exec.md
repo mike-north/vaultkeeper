@@ -7,7 +7,7 @@
 **Signature:**
 
 ```typescript
-exec(cmd: string, args: string[], stdin?: Uint8Array): Promise<{
+exec(cmd: string, args: string[], options?: ExecOptions): Promise<{
         stdout: Uint8Array;
         stderr: Uint8Array;
         exitCode: number;
@@ -62,17 +62,17 @@ string\[\]
 </td></tr>
 <tr><td>
 
-stdin
+options
 
 
 </td><td>
 
-Uint8Array
+[ExecOptions](./wasm.execoptions.md)
 
 
 </td><td>
 
-_(Optional)_
+_(Optional)_ Optional stdin/env/cwd (issue \#239). Omitting `options` (or all of its fields) preserves the exact pre-\#239 exec behavior.
 
 
 </td></tr>
