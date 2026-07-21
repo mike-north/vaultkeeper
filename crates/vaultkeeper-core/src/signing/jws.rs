@@ -193,6 +193,9 @@ pub fn verify_detached_jws(request: &VerifyRequest) -> Result<bool, VaultError> 
 mod tests {
     use super::*;
 
+    const TEST_PUBLIC_KEY_PEM: &str =
+        include_str!("../../tests/fixtures/signing/ed25519-test-key.spki.pem");
+
     #[test]
     fn protected_header_serializes_in_field_order_matching_jose() {
         let header = ProtectedHeader {
@@ -296,6 +299,50 @@ mod tests {
             payload: b"payload".to_vec(),
             jws: format!("{header_b64}..c2ln"),
             public_key: "not a pem at all".into(),
+        };
+        assert!(!verify_detached_jws(&request).unwrap());
+    }
+
+    #[test]
+    fn verify_detached_jws_rejects_protected_segment_that_is_not_base64url() {
+        // '!' is not in the base64url alphabet, so decoding the protected
+        // segment fails outright. Per the documented contract, a
+        // structurally malformed JWS is a non-verifying signature — `Ok(false)`
+        // — not a distinct decode error; only public-key parsing is typed.
+        let request = VerifyRequest {
+            payload: b"payload".to_vec(),
+            jws: "not-valid-base64url!..c2ln".into(),
+            public_key: TEST_PUBLIC_KEY_PEM.into(),
+        };
+        assert!(!verify_detached_jws(&request).unwrap());
+    }
+
+    #[test]
+    fn verify_detached_jws_rejects_protected_segment_that_decodes_to_non_json() {
+        // The segment is valid base64url, so it decodes cleanly, but the
+        // decoded bytes are not valid JSON at all (not just the wrong
+        // shape) — a distinct failure point from `has_expected_header`
+        // rejecting a well-formed-but-wrong-shape header.
+        let protected_b64 = Base64UrlUnpadded::encode_string(b"this is not json");
+        let request = VerifyRequest {
+            payload: b"payload".to_vec(),
+            jws: format!("{protected_b64}..c2ln"),
+            public_key: TEST_PUBLIC_KEY_PEM.into(),
+        };
+        assert!(!verify_detached_jws(&request).unwrap());
+    }
+
+    #[test]
+    fn verify_detached_jws_rejects_signature_segment_that_is_not_base64url() {
+        // A canonical, accepted header and a valid public key — isolating
+        // the failure to the signature segment's own base64url decode.
+        let header =
+            serde_json::json!({ "alg": "EdDSA", "b64": false, "crit": ["b64"], "kid": "k" });
+        let header_b64 = Base64UrlUnpadded::encode_string(&serde_json::to_vec(&header).unwrap());
+        let request = VerifyRequest {
+            payload: b"payload".to_vec(),
+            jws: format!("{header_b64}..not-valid-base64url!"),
+            public_key: TEST_PUBLIC_KEY_PEM.into(),
         };
         assert!(!verify_detached_jws(&request).unwrap());
     }

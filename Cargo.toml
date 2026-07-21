@@ -33,7 +33,7 @@ uuid = { version = "1", features = ["v4"] }
 # byte-for-byte with `jose`'s `importSPKI`/`importPKCS8` (both take PEM, not
 # raw DER). Deliberately not `ring` — RustCrypto keeps the whole crypto stack
 # in one ecosystem and wasm32-compatible.
-ed25519-dalek = { version = "2", features = ["pkcs8", "pem"] }
+ed25519-dalek = { version = "2", features = ["pkcs8", "pem", "zeroize"] }
 
 # WASM
 wasm-bindgen = "0.2"

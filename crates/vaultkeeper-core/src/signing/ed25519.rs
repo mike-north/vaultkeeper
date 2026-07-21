@@ -144,6 +144,34 @@ mod tests {
         assert!(!verify(&verifying_key, b"message", b"too-short"));
     }
 
+    #[test]
+    fn verify_rejects_too_long_signature() {
+        let verifying_key = parse_public_key_pem(TEST_PUBLIC_KEY_PEM).unwrap();
+        // Symmetric to `verify_rejects_wrong_length_signature` above: a raw
+        // Ed25519 signature is exactly 64 bytes, so 65 bytes (one too many)
+        // is rejected on length just as 9 bytes (too few) is.
+        let too_long_signature = [0u8; 65];
+        assert!(!verify(&verifying_key, b"message", &too_long_signature));
+    }
+
+    #[test]
+    fn verify_rejects_signature_from_a_different_key() {
+        // Basic wrong-key authentication negative case: a signature that is
+        // valid under one keypair must not verify against a different,
+        // unrelated (but otherwise valid) keypair.
+        let signing_key = parse_private_key_pem(TEST_PRIVATE_KEY_PEM).unwrap();
+        let message = b"hello vaultkeeper";
+        let signature = sign(&signing_key, message);
+
+        // A second, distinct valid Ed25519 keypair — deterministically
+        // derived from a fixed seed (not the fixture's) so the test needs no
+        // OS randomness while still being a genuinely different key.
+        let other_signing_key = SigningKey::from_bytes(&[0x42; 32]);
+        let other_verifying_key = other_signing_key.verifying_key();
+
+        assert!(!verify(&other_verifying_key, message, &signature));
+    }
+
     fn hex_decode(s: &str) -> Vec<u8> {
         (0..s.len())
             .step_by(2)
