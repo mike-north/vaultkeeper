@@ -57,7 +57,8 @@
 //! the TypeScript `usageCounts` map's `USAGE_MAP_MAX_SIZE` guard
 //! (`packages/vaultkeeper/src/vault.ts`) exactly.
 //!
-//! ## Why `expires_at` must stay caller-supplied, not hardcoded
+//! ## Why `expires_at` must stay caller-supplied, not hardcoded — and where
+//! ## that stops applying to signing handles (issue #282)
 //!
 //! There is an open product decision (issue #261) about custody of an
 //! automation agent's signing key — an agent that signs non-interactively,
@@ -76,11 +77,29 @@
 //!   (`authorize()`), which is exactly how a long-lived, machine-driven
 //!   caller with an unlimited or high `use_limit` keeps working — no human
 //!   in the loop, no forced short expiry.
-//! - Nothing in this table refuses to construct a handle with a distant
-//!   `expires_at` or an unlimited `use_limit`. A long-lived, non-interactive
-//!   holder (the automation-agent case from #261) is fully expressible with
-//!   today's primitives; #261 only has to decide *how* such an identity is
-//!   provisioned, not fight this table's lifetime model to do it.
+//! - This lifetime model stays structurally open for the **secret** path
+//!   (`insert_secret`/`authorize()`): nothing here hardcodes a short-lived-
+//!   only assumption, and #261 only has to decide *how* a long-lived
+//!   automation identity is provisioned, not fight this table's lifetime
+//!   model to do it.
+//!
+//! The **signing** path is deliberately narrower. Key-material
+//! non-extractability is already provided end-to-end —
+//! [`SigningBackend`](crate::backend::SigningBackend) never returns private
+//! key bytes, whether the caller reaches it through a
+//! handle or not. What is *not* provided anywhere in the system today is
+//! caller non-invocability: there is no invocation-time principal check (no
+//! executable-hash/trust/presence re-check) at the point a handle is
+//! resolved or used. `resolve_signing_claims` is non-consuming — a signing
+//! handle is repeatable, not one-shot — so a `None`-expiry, high-`use_limit`
+//! signing handle would be a durable ambient signing capability redeemable
+//! by mere possession of the [`HandleId`], strictly worse than no handle at
+//! all. Until the issuance-side principal check tracked in #282 exists,
+//! [`crate::vault::VaultKeeper::register_signing_handle`] refuses to mint a
+//! signing handle with `expires_at: None` (see its doc comment and
+//! [`VaultError::AuthorizationDenied`]). A caller-supplied finite
+//! `expires_at` is unaffected and works exactly as described above; only the
+//! never-expiring case is gated, and only for signing handles.
 //!
 //! # Usage-limit accounting: single authority (AC5)
 //!
