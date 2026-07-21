@@ -22,9 +22,11 @@ pub use backend::{
     get_backend_capabilities, is_presence_capable_backend,
 };
 pub use errors::{ExecutableTrustRequiredReason, VaultError};
+pub use identity::{HANDLE_TABLE_MAX_SIZE, HandleId, HandleTable, StoredClaims};
 pub use types::{
     BackendConfig, ExecRequest, ExecResult, FetchRequest, KeyStatus, PreflightCheck,
     PreflightCheckStatus, PreflightResult, ScopedPreflightCheck, SecretAccessor, SigningAlgorithm,
-    SigningPublicKey, TrustTier, VaultClaims, VaultConfig, VaultResponse, VerifyRequest,
+    SigningClaims, SigningPublicKey, TrustTier, VaultClaims, VaultConfig, VaultResponse,
+    VerifyRequest,
 };
 pub use vault::{VaultKeeper, enforce_presence_requirement};

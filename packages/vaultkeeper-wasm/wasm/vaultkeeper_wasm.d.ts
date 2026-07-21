@@ -8,6 +8,12 @@
  * secret behind a one-time read. The secret is deliberately not part of the
  * `claims` shape — callers must opt in explicitly via the exported
  * `readSecret()` method, which yields the value exactly once.
+ *
+ * Also carries the underlying core capability handle id (`handleId`, issue
+ * #241 AC6) so a caller can additionally use `WasmVaultKeeper`'s
+ * handle-based entry points (`resolveSecretClaims`/`releaseHandle`)
+ * directly — the primitives a future engine swap builds on instead of this
+ * eager wrapper.
  */
 export class WasmAuthorization {
     private constructor();
@@ -23,6 +29,11 @@ export class WasmAuthorization {
      * The validated token claims, with the raw secret (`val`) redacted.
      */
     readonly claims: any;
+    /**
+     * The underlying core capability handle id (issue #241 AC6). Usable
+     * with `WasmVaultKeeper.resolveSecretClaims`/`releaseHandle`.
+     */
+    readonly handleId: string;
     /**
      * The authorization response (key status, optional rotated token).
      */
@@ -46,9 +57,17 @@ export class WasmVaultKeeper {
      * [`WasmAuthorization`].
      *
      * The returned object's `claims` **never** contains the raw secret value
-     * (`val` is redacted). The secret is held internally and can be read
-     * exactly once via the exported `readSecret()` method, mirroring the TS
-     * library's one-time accessor pattern.
+     * (`val` is redacted) — `vaultkeeper_core::VaultKeeper::authorize` (issue
+     * #241) never returns it either; it stays behind a core-side capability
+     * handle. This call performs the one-time `read_secret` against that
+     * handle immediately, internally, and caches the result on the returned
+     * `WasmAuthorization` exactly as this method always has, so the
+     * `@vaultkeeper/wasm` public shape (`claims`, `response`,
+     * `secretAvailable`, `readSecret()`) is unchanged. The handle itself is
+     * also retained (exposed as `WasmAuthorization.handleId`) so a caller
+     * can additionally use the handle-based entry points below
+     * (`resolveSecretClaims`/`releaseHandle`) — the primitives a future
+     * engine swap would build directly on instead of this eager wrapper.
      */
     authorize(jwe: string): WasmAuthorization;
     /**
@@ -63,6 +82,21 @@ export class WasmVaultKeeper {
      * Run doctor checks and return a PreflightResult as JSON.
      */
     doctor(): Promise<any>;
+    /**
+     * Explicitly release a capability handle (issue #241 AC6). Returns
+     * `true` if a handle was actually present and removed. A caller that is
+     * done with a handle should call this rather than waiting on its
+     * expiry.
+     */
+    releaseHandle(handle_id: string): boolean;
+    /**
+     * Resolve the non-secret claims behind a capability handle id (issue
+     * #241 AC6 — a new, handle-based entry point for the future engine
+     * swap, alongside the eager `authorize()`/`WasmAuthorization` wrapper
+     * above). Returns the claims as JSON, with `val` always absent. Refuses
+     * a signing-key handle.
+     */
+    resolveSecretClaims(handle_id: string): any;
     /**
      * Retrieve a secret via the file backend.
      */

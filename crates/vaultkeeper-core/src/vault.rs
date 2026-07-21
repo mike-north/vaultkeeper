@@ -1,15 +1,18 @@
 //! VaultKeeper main struct — wires together all vaultkeeper subsystems.
 
-use std::collections::HashMap;
+use zeroize::Zeroizing;
 
 use crate::backend::{HostPlatform, PresenceOperation, SecretBackend, get_backend_capabilities};
 use crate::config;
 use crate::errors::{ExecutableTrustRequiredReason, VaultError};
+use crate::identity::handles::{HandleId, HandleTable};
 use crate::jwe::{
     CreateTokenOptions, block_token, create_token, decrypt_token, extract_kid, validate_claims,
 };
 use crate::keys::KeyManager;
-use crate::types::{KeyStatus, PreflightResult, VaultClaims, VaultConfig, VaultResponse};
+use crate::types::{
+    KeyStatus, PreflightResult, SigningClaims, VaultClaims, VaultConfig, VaultResponse,
+};
 
 /// A qualifying description of backends that can satisfy a presence-per-use
 /// requirement. Surfaced in [`VaultError::NotCapable`] messages so a caller
@@ -158,8 +161,10 @@ pub struct VaultKeeper {
     config: VaultConfig,
     key_manager: KeyManager,
     _backend: Option<Box<dyn SecretBackend>>,
-    /// Per-JTI usage counts for use-limited tokens.
-    usage_counts: HashMap<String, u64>,
+    /// Opaque capability-handle table (issue #241): the single accounting
+    /// authority for per-JTI usage counts and per-handle expiry/eviction. See
+    /// `crate::identity::handles` for the full design.
+    handle_table: HandleTable,
     /// Whether key state is persisted to the host's config directory.
     ///
     /// `false` when `VaultKeeperOptions::config` was supplied directly: the
@@ -217,7 +222,7 @@ impl VaultKeeper {
             config: cfg,
             key_manager,
             _backend: None,
-            usage_counts: HashMap::new(),
+            handle_table: HandleTable::new(),
             persist_keys,
         })
     }
@@ -460,10 +465,22 @@ impl VaultKeeper {
         Ok((pending.identity.hash.clone(), Some(pending)))
     }
 
-    /// Decrypt a JWE token, validate its claims, and return the claims
-    /// and key status. Tracks per-JTI usage counts and blocks tokens that
-    /// exceed their use limit.
-    pub fn authorize(&mut self, jwe: &str) -> Result<(VaultClaims, VaultResponse), VaultError> {
+    /// Decrypt a JWE token, validate its claims, and return an opaque
+    /// capability [`HandleId`] together with the (secret-redacted) claims and
+    /// key status. Tracks per-JTI usage counts and blocks tokens that exceed
+    /// their use limit.
+    ///
+    /// **The returned [`VaultClaims::val`] is always empty (issue #241 AC1)**
+    /// — the raw secret never leaves core memory through this return value.
+    /// It stays behind the returned handle, in a [`Zeroizing`] buffer, until
+    /// [`VaultKeeper::read_secret`] consumes it exactly once. The handle's
+    /// lifetime is bound to the token's own `exp`/`use_limit` claims, not to
+    /// any interactive session — see `crate::identity::handles` for the full
+    /// eviction-policy rationale.
+    pub fn authorize(
+        &mut self,
+        jwe: &str,
+    ) -> Result<(HandleId, VaultClaims, VaultResponse), VaultError> {
         let kid = extract_kid(jwe)?;
 
         let (key, is_current) = match &kid {
@@ -482,12 +499,11 @@ impl VaultKeeper {
 
         let claims = decrypt_token(&key.key, jwe)?;
 
-        let current_usage = self.usage_counts.get(&claims.jti).copied().unwrap_or(0);
+        let current_usage = self.handle_table.current_usage(&claims.jti);
         validate_claims(&claims, current_usage)?;
 
         // Increment usage count
-        let new_usage = current_usage + 1;
-        self.usage_counts.insert(claims.jti.clone(), new_usage);
+        let new_usage = self.handle_table.record_usage(&claims.jti);
 
         // If usage limit reached, block the token for future requests
         if let Some(limit) = claims.use_limit
@@ -520,6 +536,80 @@ impl VaultKeeper {
             response.rotated_jwt = Some(rotated);
         }
 
-        Ok((claims, response))
+        // The handle's expiry is bound to the token's own `exp` — a
+        // long-lived, non-interactively-refreshed token (see the "Why
+        // `expires_at` must stay caller-supplied" note in
+        // `crate::identity::handles`) produces a correspondingly long-lived
+        // handle, with no additional core-imposed shorter lifetime.
+        let expires_at = Some(claims.exp);
+        let mut public_claims = claims.clone();
+        // Defense in depth: clear the clone's `val` immediately, before it
+        // is ever returned to the caller — the authoritative copy lives only
+        // inside the handle table from this point on.
+        std::mem::take(&mut public_claims.val);
+        let handle_id = self.handle_table.insert_secret(claims, expires_at);
+
+        Ok((handle_id, public_claims, response))
+    }
+
+    /// Read the raw secret behind `handle` exactly once (issue #241 AC2). A
+    /// second read, or a call after the handle expired/was released, returns
+    /// a typed [`VaultError`] rather than the secret. Refuses a signing-key
+    /// handle (AC3).
+    pub fn read_secret(&mut self, handle: &HandleId) -> Result<Zeroizing<String>, VaultError> {
+        self.handle_table.read_secret(handle)
+    }
+
+    /// Resolve non-secret claims behind `handle` for a fetch/exec/`getSecret`
+    /// consumer (issue #241 AC2 — no secret egress). Refuses a signing-key
+    /// handle (AC3).
+    pub fn resolve_secret_claims(&mut self, handle: &HandleId) -> Result<VaultClaims, VaultError> {
+        self.handle_table.resolve_secret_claims(handle)
+    }
+
+    /// Resolve signing claims behind `handle` for a `sign()` consumer.
+    /// Refuses a secret handle (issue #241 AC3).
+    pub fn resolve_signing_claims(
+        &mut self,
+        handle: &HandleId,
+    ) -> Result<SigningClaims, VaultError> {
+        self.handle_table.resolve_signing_claims(handle)
+    }
+
+    /// Explicitly release `handle`, evicting it immediately. Returns `true`
+    /// if a handle was actually present and removed. See
+    /// `crate::identity::handles` for why this is the preferred eviction
+    /// path over waiting on expiry.
+    pub fn release_handle(&mut self, handle: &HandleId) -> bool {
+        self.handle_table.release(handle)
+    }
+
+    /// Proactively evict every handle past its expiry. Returns the number of
+    /// handles evicted. Not required for correctness (every resolve/read
+    /// path already checks expiry lazily) — exposed for a host that wants to
+    /// sweep eagerly (e.g. a CLI daemon loop's periodic tick).
+    pub fn sweep_expired_handles(&mut self) -> usize {
+        self.handle_table.sweep_expired()
+    }
+
+    /// Register a signing-key capability handle directly (issue #241
+    /// AC3/AC6 — a low-level primitive for the future engine swap).
+    ///
+    /// This does not itself mint or validate a token, nor call a
+    /// `SigningBackend` — a caller that has already resolved `(kid,
+    /// backend_ref)` for an enrolled signing key (e.g. a future Rust port of
+    /// the TypeScript `authorizeSigningKey()`) registers it here to obtain a
+    /// handle usable with [`VaultKeeper::resolve_signing_claims`]. `expires_at`
+    /// is caller-supplied and may be `None` for a handle that should not
+    /// expire on any core-imposed schedule — see `crate::identity::handles`
+    /// for why that must stay expressible.
+    pub fn register_signing_handle(
+        &mut self,
+        kid: String,
+        backend_ref: String,
+        expires_at: Option<u64>,
+    ) -> HandleId {
+        self.handle_table
+            .insert_signing(SigningClaims { kid, backend_ref }, expires_at)
     }
 }
