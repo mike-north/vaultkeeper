@@ -513,9 +513,11 @@ async fn cmd_backend(action: BackendAction) -> i32 {
 /// One row of `backend capabilities --json` output. Field declaration order
 /// matches the TypeScript CLI's `BackendCapabilityRow` (`type`,
 /// `displayName`, `presencePerUse` — see
-/// `packages/cli/src/commands/backend.ts`) so both CLIs emit byte-identical
-/// JSON; a `serde_json::Value` object built with `json!` would instead emit
-/// keys in the `BTreeMap`'s alphabetical order.
+/// `packages/cli/src/commands/backend.ts`) so a row shared by both CLIs
+/// serializes byte-identically (the TS CLI still emits more rows — it
+/// enumerates every registered backend type, while this CLI reports only the
+/// active backend); a `serde_json::Value` object built with `json!` would
+/// instead emit keys in the `BTreeMap`'s alphabetical order.
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 struct BackendCapabilityRow<'a> {
