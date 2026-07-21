@@ -206,36 +206,52 @@ impl Drop for SecretAccessor {
     }
 }
 
-/// Request for delegated signing.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SignRequest {
-    /// The data to sign (UTF-8 string).
-    pub data: String,
-    /// Override the hash algorithm (`"sha256"`, `"sha384"`, or `"sha512"`).
-    pub algorithm: Option<String>,
+/// A signing algorithm identifier from the strict JOSE registry (RFC 7518).
+///
+/// Only `EdDSA` (Ed25519) is supported today; the identifier is intentionally
+/// a strict JOSE `alg` value so future algorithms (`ES256`, `RS256`, …) each
+/// bind to their proper curve/key type rather than an ambiguous label. Mirrors
+/// the TypeScript `SigningAlgorithm` (`packages/vaultkeeper/src/types.ts`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SigningAlgorithm {
+    /// Ed25519 (the sole supported algorithm).
+    #[serde(rename = "EdDSA")]
+    EdDsa,
 }
 
-/// Result from a delegated signing operation.
+/// The public half of an enrolled signing key.
+///
+/// Mirrors the TypeScript `SigningPublicKey` (`packages/vaultkeeper/src/types.ts`).
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SignResult {
-    /// Base64-encoded signature.
-    pub signature: String,
-    /// Algorithm label describing how the signature was produced.
-    pub algorithm: String,
+#[serde(rename_all = "camelCase")]
+pub struct SigningPublicKey {
+    /// SPKI (SubjectPublicKeyInfo) PEM encoding of the public key.
+    pub public_key_pem: String,
+    /// The JOSE algorithm this key signs with.
+    pub algorithm: SigningAlgorithm,
+    /// Stable key identifier: the base64url-encoded SHA-256 of the SPKI DER.
+    /// Used as the JWS `kid` protected-header value so a verifier can select
+    /// the key.
+    pub kid: String,
 }
 
-/// Request for signature verification.
+/// Request for detached-signature verification (RFC 7515 §7.2.2 + RFC 7797).
+///
+/// This is a fully offline operation that only requires public key
+/// material — no `VaultKeeper` instance, backend, config, or capability token
+/// is needed. Mirrors the TypeScript `VerifyRequest`
+/// (`packages/vaultkeeper/src/types.ts`); replaces the stale, never-shipped
+/// generic hash+sign `VerifyRequest` this crate carried before issue #237.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct VerifyRequest {
-    /// The original data that was signed (UTF-8 string).
-    pub data: String,
-    /// Base64-encoded signature to verify.
-    pub signature: String,
+    /// The detached payload bytes that were signed.
+    pub payload: Vec<u8>,
+    /// The detached-payload compact JWS (`<protected>..<signature>`) produced
+    /// by [`crate::signing::create_detached_jws`].
+    pub jws: String,
     /// PEM-encoded public key (SPKI format).
     pub public_key: String,
-    /// Override the hash algorithm.
-    pub algorithm: Option<String>,
 }
 
 /// Vaultkeeper configuration file structure.

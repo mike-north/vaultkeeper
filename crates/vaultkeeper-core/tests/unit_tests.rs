@@ -1580,3 +1580,438 @@ mod doctor_scoping {
         );
     }
 }
+
+// ---------------------------------------------------------------------------
+// Detached-JWS signing stack tests (issue #237)
+//
+// @see https://www.rfc-editor.org/rfc/rfc7515#section-7.2.2 (RFC 7515 §7.2.2 detached-payload Compact JWS)
+// @see https://www.rfc-editor.org/rfc/rfc7797 (RFC 7797 `b64:false` unencoded payload option)
+// ---------------------------------------------------------------------------
+
+mod signing {
+    use ed25519_dalek::SigningKey;
+    use ed25519_dalek::pkcs8::EncodePublicKey;
+    use sha2::{Digest, Sha256};
+    use std::collections::HashMap;
+    use std::sync::Mutex;
+
+    use vaultkeeper_core::backend::SigningBackend;
+    use vaultkeeper_core::errors::VaultError;
+    use vaultkeeper_core::signing::ed25519::{
+        kid_for_verifying_key, parse_private_key_pem, parse_public_key_pem, sign as ed25519_sign,
+    };
+    use vaultkeeper_core::signing::{create_detached_jws, verify_detached_jws};
+    use vaultkeeper_core::types::{SigningAlgorithm, SigningPublicKey, VerifyRequest};
+
+    const TEST_PRIVATE_KEY_PEM: &str = include_str!("fixtures/signing/ed25519-test-key.pkcs8.pem");
+    const TEST_PUBLIC_KEY_PEM: &str = include_str!("fixtures/signing/ed25519-test-key.spki.pem");
+    const VECTORS_JSON: &str = include_str!("fixtures/signing/vectors.json");
+
+    #[derive(serde::Deserialize)]
+    struct GoldenVector {
+        name: String,
+        kid: String,
+        #[serde(rename = "payloadBase64")]
+        payload_base64: String,
+        jws: String,
+    }
+
+    #[derive(serde::Deserialize)]
+    struct GoldenVectorFile {
+        vectors: Vec<GoldenVector>,
+    }
+
+    fn golden_vectors() -> Vec<GoldenVector> {
+        let file: GoldenVectorFile =
+            serde_json::from_str(VECTORS_JSON).expect("vectors.json must parse");
+        file.vectors
+    }
+
+    fn decode_base64(s: &str) -> Vec<u8> {
+        use base64ct::{Base64, Encoding};
+        if s.is_empty() {
+            return Vec::new();
+        }
+        Base64::decode_vec(s).expect("valid standard base64")
+    }
+
+    /// A minimal [`SigningBackend`] test double: holds one or more
+    /// pre-loaded (or freshly minted) Ed25519 signing keys entirely
+    /// in-memory. Deliberately NOT a production backend (no persistence,
+    /// non-cryptographic deterministic key derivation in
+    /// `generate_signing_key`) — it exists solely to prove
+    /// `create_detached_jws` composes with the `SigningBackend` contract
+    /// (AC7) without ever touching key material itself.
+    struct FixtureSigningBackend {
+        keys: Mutex<HashMap<String, SigningKey>>,
+    }
+
+    impl FixtureSigningBackend {
+        fn new() -> Self {
+            Self {
+                keys: Mutex::new(HashMap::new()),
+            }
+        }
+
+        /// Load the fixed, jose-interoperable test keypair under `id`.
+        fn with_fixture_key(id: &str) -> Self {
+            let backend = Self::new();
+            let signing_key = parse_private_key_pem(TEST_PRIVATE_KEY_PEM)
+                .expect("fixture private key must parse");
+            backend
+                .keys
+                .lock()
+                .expect("lock poisoned")
+                .insert(id.to_string(), signing_key);
+            backend
+        }
+    }
+
+    #[cfg_attr(target_arch = "wasm32", async_trait::async_trait(?Send))]
+    #[cfg_attr(not(target_arch = "wasm32"), async_trait::async_trait)]
+    impl vaultkeeper_core::backend::SecretBackend for FixtureSigningBackend {
+        fn backend_type(&self) -> &str {
+            "fixture-signing"
+        }
+
+        fn display_name(&self) -> &str {
+            "Fixture Signing Backend (test-only)"
+        }
+
+        async fn is_available(&self) -> bool {
+            true
+        }
+
+        async fn store(&self, _id: &str, _secret: &str) -> Result<(), VaultError> {
+            Err(VaultError::Other("not a secret store".into()))
+        }
+
+        async fn retrieve(&self, _id: &str) -> Result<String, VaultError> {
+            Err(VaultError::Other("not a secret store".into()))
+        }
+
+        async fn delete(&self, _id: &str) -> Result<(), VaultError> {
+            Err(VaultError::Other("not a secret store".into()))
+        }
+
+        async fn exists(&self, _id: &str) -> Result<bool, VaultError> {
+            Ok(false)
+        }
+    }
+
+    #[cfg_attr(target_arch = "wasm32", async_trait::async_trait(?Send))]
+    #[cfg_attr(not(target_arch = "wasm32"), async_trait::async_trait)]
+    impl SigningBackend for FixtureSigningBackend {
+        async fn generate_signing_key(
+            &self,
+            id: &str,
+            algorithm: SigningAlgorithm,
+        ) -> Result<(), VaultError> {
+            let SigningAlgorithm::EdDsa = algorithm;
+            let mut keys = self.keys.lock().expect("lock poisoned");
+            if keys.contains_key(id) {
+                return Err(VaultError::SigningKeyAlreadyExists {
+                    message: format!("signing key already exists: {id}"),
+                    id: id.to_string(),
+                });
+            }
+            // Deterministic, non-cryptographic seed derivation — acceptable
+            // ONLY because this is a test double, never a real backend.
+            let seed: [u8; 32] = Sha256::digest(id.as_bytes()).into();
+            keys.insert(id.to_string(), SigningKey::from_bytes(&seed));
+            Ok(())
+        }
+
+        async fn get_public_key(&self, id: &str) -> Result<SigningPublicKey, VaultError> {
+            let keys = self.keys.lock().expect("lock poisoned");
+            let signing_key = keys.get(id).ok_or_else(|| VaultError::SigningKeyNotFound {
+                message: format!("signing key not found: {id}"),
+                id: id.to_string(),
+            })?;
+            let verifying_key = signing_key.verifying_key();
+            Ok(SigningPublicKey {
+                public_key_pem: verifying_key
+                    .to_public_key_pem(Default::default())
+                    .expect("encoding an in-memory key cannot fail")
+                    .to_string(),
+                algorithm: SigningAlgorithm::EdDsa,
+                kid: kid_for_verifying_key(&verifying_key),
+            })
+        }
+
+        async fn sign_with_key(&self, id: &str, data: &[u8]) -> Result<Vec<u8>, VaultError> {
+            let keys = self.keys.lock().expect("lock poisoned");
+            let signing_key = keys.get(id).ok_or_else(|| VaultError::SigningKeyNotFound {
+                message: format!("signing key not found: {id}"),
+                id: id.to_string(),
+            })?;
+            Ok(ed25519_sign(signing_key, data))
+        }
+    }
+
+    // --- AC4: golden-vector byte-exact equality + cross-verification ---
+
+    #[test]
+    fn golden_vector_kid_is_the_real_derived_kid_not_an_arbitrary_label() {
+        // Regression for a review finding on #237: the vectors' `kid` must be
+        // `base64url(sha256(spkiDer))` of the fixture public key (matching
+        // `computeKid` in `packages/vaultkeeper/src/backend/file-backend.ts`
+        // and the generator's own `computeKid`), not an arbitrary string —
+        // otherwise the vectors don't exercise real kid derivation.
+        let verifying_key = parse_public_key_pem(TEST_PUBLIC_KEY_PEM).unwrap();
+        let expected_kid = kid_for_verifying_key(&verifying_key);
+        for vector in golden_vectors() {
+            assert_eq!(
+                vector.kid, expected_kid,
+                "vector '{}' must carry the fixture key's derived kid",
+                vector.name
+            );
+        }
+    }
+
+    /// The backend's own (opaque, caller-chosen) storage identifier for the
+    /// fixture key — deliberately NOT equal to any vector's `kid`. `kid` is
+    /// always derived from the public key material
+    /// (`base64url(sha256(spkiDer))`); the backend key id is a separate,
+    /// arbitrary lookup name. Using two different values here proves
+    /// `create_detached_jws` doesn't conflate them.
+    const FIXTURE_BACKEND_KEY_ID: &str = "vaultkeeper-test-key-1";
+
+    #[tokio::test]
+    async fn create_detached_jws_matches_golden_vectors_byte_for_byte() {
+        let backend = FixtureSigningBackend::with_fixture_key(FIXTURE_BACKEND_KEY_ID);
+
+        for vector in golden_vectors() {
+            let payload = decode_base64(&vector.payload_base64);
+            let jws = create_detached_jws(&backend, &vector.kid, FIXTURE_BACKEND_KEY_ID, &payload)
+                .await
+                .unwrap_or_else(|e| panic!("vector '{}' failed to sign: {e}", vector.name));
+            assert_eq!(
+                jws, vector.jws,
+                "vector '{}': Rust output must byte-exact match the jose-produced vector",
+                vector.name
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn create_detached_jws_embeds_the_derived_kid_not_the_backend_key_id() {
+        // Regression for a review finding on #237: `kid` (header value,
+        // derived from the public key) and the backend's own key-lookup
+        // identifier are different concepts and must not be conflated.
+        let backend = FixtureSigningBackend::with_fixture_key(FIXTURE_BACKEND_KEY_ID);
+        let vector = golden_vectors()
+            .into_iter()
+            .find(|v| v.name == "ascii")
+            .unwrap();
+        let payload = decode_base64(&vector.payload_base64);
+
+        let jws = create_detached_jws(&backend, &vector.kid, FIXTURE_BACKEND_KEY_ID, &payload)
+            .await
+            .unwrap();
+
+        // Decode the protected header and confirm it carries the derived
+        // `kid`, NOT the unrelated backend storage id.
+        let parts: Vec<&str> = jws.split('.').collect();
+        let header_bytes = {
+            use base64ct::{Base64UrlUnpadded, Encoding};
+            Base64UrlUnpadded::decode_vec(parts[0]).unwrap()
+        };
+        let header: serde_json::Value = serde_json::from_slice(&header_bytes).unwrap();
+        assert_eq!(header["kid"], vector.kid);
+        assert_ne!(vector.kid, FIXTURE_BACKEND_KEY_ID);
+    }
+
+    #[test]
+    fn verify_detached_jws_accepts_every_golden_vector() {
+        for vector in golden_vectors() {
+            let payload = decode_base64(&vector.payload_base64);
+            let request = VerifyRequest {
+                payload,
+                jws: vector.jws.clone(),
+                public_key: TEST_PUBLIC_KEY_PEM.to_string(),
+            };
+            let verified = verify_detached_jws(&request)
+                .unwrap_or_else(|e| panic!("vector '{}' errored: {e}", vector.name));
+            assert!(verified, "vector '{}' must verify", vector.name);
+        }
+    }
+
+    #[test]
+    fn verify_detached_jws_rejects_golden_vector_with_tampered_payload() {
+        let vector = golden_vectors()
+            .into_iter()
+            .find(|v| v.name == "ascii")
+            .expect("ascii vector must exist");
+        let request = VerifyRequest {
+            payload: b"a different payload entirely".to_vec(),
+            jws: vector.jws,
+            public_key: TEST_PUBLIC_KEY_PEM.to_string(),
+        };
+        assert!(!verify_detached_jws(&request).unwrap());
+    }
+
+    // --- AC5: negative envelope cases mirroring TS `hasExpectedHeader` ---
+
+    /// Re-encode a golden vector's protected header with `patch` applied,
+    /// keeping the same signature — used to build structurally-plausible
+    /// but envelope-invalid JWS strings for the negative cases below.
+    fn jws_with_patched_header(
+        vector: &GoldenVector,
+        patch: impl FnOnce(&mut serde_json::Map<String, serde_json::Value>),
+    ) -> String {
+        use base64ct::{Base64UrlUnpadded, Encoding};
+        let parts: Vec<&str> = vector.jws.split('.').collect();
+        let header_bytes = Base64UrlUnpadded::decode_vec(parts[0]).unwrap();
+        let mut header: serde_json::Value = serde_json::from_slice(&header_bytes).unwrap();
+        patch(header.as_object_mut().unwrap());
+        let new_header_b64 =
+            Base64UrlUnpadded::encode_string(&serde_json::to_vec(&header).unwrap());
+        format!("{new_header_b64}..{}", parts[2])
+    }
+
+    #[test]
+    fn verify_detached_jws_rejects_crit_not_exactly_b64() {
+        let vector = golden_vectors()
+            .into_iter()
+            .find(|v| v.name == "ascii")
+            .unwrap();
+        let payload = decode_base64(&vector.payload_base64);
+        let jws = jws_with_patched_header(&vector, |h| {
+            h.insert("crit".into(), serde_json::json!(["b64", "x5t#S256"]));
+        });
+        let request = VerifyRequest {
+            payload,
+            jws,
+            public_key: TEST_PUBLIC_KEY_PEM.to_string(),
+        };
+        assert!(!verify_detached_jws(&request).unwrap());
+    }
+
+    #[test]
+    fn verify_detached_jws_rejects_alg_not_eddsa() {
+        let vector = golden_vectors()
+            .into_iter()
+            .find(|v| v.name == "ascii")
+            .unwrap();
+        let payload = decode_base64(&vector.payload_base64);
+        let jws = jws_with_patched_header(&vector, |h| {
+            h.insert("alg".into(), serde_json::json!("RS256"));
+        });
+        let request = VerifyRequest {
+            payload,
+            jws,
+            public_key: TEST_PUBLIC_KEY_PEM.to_string(),
+        };
+        assert!(!verify_detached_jws(&request).unwrap());
+    }
+
+    #[test]
+    fn verify_detached_jws_rejects_non_empty_middle_segment() {
+        let vector = golden_vectors()
+            .into_iter()
+            .find(|v| v.name == "ascii")
+            .unwrap();
+        let payload = decode_base64(&vector.payload_base64);
+        let parts: Vec<&str> = vector.jws.split('.').collect();
+        let jws = format!("{}.bm90LWVtcHR5.{}", parts[0], parts[2]);
+        let request = VerifyRequest {
+            payload,
+            jws,
+            public_key: TEST_PUBLIC_KEY_PEM.to_string(),
+        };
+        assert!(!verify_detached_jws(&request).unwrap());
+    }
+
+    #[test]
+    fn verify_detached_jws_rejects_private_key_supplied_as_public() {
+        let vector = golden_vectors()
+            .into_iter()
+            .find(|v| v.name == "ascii")
+            .unwrap();
+        let payload = decode_base64(&vector.payload_base64);
+        let request = VerifyRequest {
+            payload,
+            jws: vector.jws,
+            public_key: TEST_PRIVATE_KEY_PEM.to_string(),
+        };
+        let err = verify_detached_jws(&request).unwrap_err();
+        assert!(matches!(err, VaultError::InvalidKeyMaterial { .. }));
+    }
+
+    // --- AC1/AC7: retired stale types are gone; new types compile as used above ---
+
+    #[test]
+    fn signing_public_key_and_algorithm_serialize_matching_ts_contract() {
+        let key = SigningPublicKey {
+            public_key_pem: "-----BEGIN PUBLIC KEY-----\n...\n-----END PUBLIC KEY-----\n".into(),
+            algorithm: SigningAlgorithm::EdDsa,
+            kid: "abc123".into(),
+        };
+        let json = serde_json::to_value(&key).unwrap();
+        assert_eq!(json["algorithm"], "EdDSA");
+        assert!(json["publicKeyPem"].is_string());
+        assert_eq!(json["kid"], "abc123");
+    }
+
+    // --- SigningBackend trait smoke tests (AC7) ---
+
+    #[tokio::test]
+    async fn signing_backend_generate_key_then_sign_round_trips() {
+        let backend = FixtureSigningBackend::new();
+        // "k1" is the backend's own (opaque) storage id for the key — NOT
+        // the JWS `kid`, which is always the public key's derived value
+        // (mirrors `VaultKeeper.sign` calling
+        // `createDetachedJws(claims.kid, payload, (data) =>
+        // backend.signWithKey(claims.backendRef, data))` in vault.ts).
+        const BACKEND_KEY_ID: &str = "k1";
+        backend
+            .generate_signing_key(BACKEND_KEY_ID, SigningAlgorithm::EdDsa)
+            .await
+            .unwrap();
+        let public_key = backend.get_public_key(BACKEND_KEY_ID).await.unwrap();
+        let verifying_key = parse_public_key_pem(&public_key.public_key_pem).unwrap();
+
+        let jws = create_detached_jws(&backend, &public_key.kid, BACKEND_KEY_ID, b"payload bytes")
+            .await
+            .unwrap();
+        let request = VerifyRequest {
+            payload: b"payload bytes".to_vec(),
+            jws,
+            public_key: public_key.public_key_pem.clone(),
+        };
+        assert!(verify_detached_jws(&request).unwrap());
+        // Sanity: the kid embedded matches the public key's own kid.
+        assert_eq!(public_key.kid, kid_for_verifying_key(&verifying_key));
+    }
+
+    #[tokio::test]
+    async fn signing_backend_rejects_duplicate_generate() {
+        let backend = FixtureSigningBackend::new();
+        backend
+            .generate_signing_key("k1", SigningAlgorithm::EdDsa)
+            .await
+            .unwrap();
+        let err = backend
+            .generate_signing_key("k1", SigningAlgorithm::EdDsa)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, VaultError::SigningKeyAlreadyExists { .. }));
+    }
+
+    #[tokio::test]
+    async fn signing_backend_sign_with_unknown_key_errors() {
+        let backend = FixtureSigningBackend::new();
+        let err = backend.sign_with_key("missing", b"data").await.unwrap_err();
+        assert!(matches!(err, VaultError::SigningKeyNotFound { .. }));
+    }
+
+    #[tokio::test]
+    async fn create_detached_jws_propagates_signing_key_not_found() {
+        let backend = FixtureSigningBackend::new();
+        let err = create_detached_jws(&backend, "some-kid", "missing", b"data")
+            .await
+            .unwrap_err();
+        assert!(matches!(err, VaultError::SigningKeyNotFound { .. }));
+    }
+}
