@@ -42,6 +42,36 @@ fn dirs_fallback() -> PathBuf {
         .unwrap_or_else(|_| PathBuf::from("/tmp"))
 }
 
+/// Create a directory (and any missing parents) with owner-only (`0o700`)
+/// permissions on Unix, mirroring the TS library's
+/// `fs.mkdir(dir, { recursive: true, mode: 0o700 })` contract (see #255) so
+/// config/key/secret storage directories created by the native CLI are never
+/// left group/world-listable under a permissive umask.
+///
+/// If `path` already exists, it is left completely untouched — including its
+/// permissions — matching the TS side's behavior (`fs.mkdir` with
+/// `recursive: true` is a no-op on an existing path) and avoiding a
+/// chmod-on-startup surprise for a directory an operator deliberately made
+/// more permissive.
+///
+/// On non-Unix platforms (Windows), only directory creation happens; POSIX
+/// mode bits do not apply there.
+pub(crate) fn create_dir_all_secure(path: &Path) -> std::io::Result<()> {
+    if path.exists() {
+        return Ok(());
+    }
+
+    std::fs::create_dir_all(path)?;
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700))?;
+    }
+
+    Ok(())
+}
+
 #[async_trait::async_trait]
 impl HostPlatform for NativeHostPlatform {
     async fn exec(
@@ -111,9 +141,11 @@ impl HostPlatform for NativeHostPlatform {
     }
 
     async fn write_file(&self, path: &Path, content: &[u8], mode: u32) -> Result<(), VaultError> {
-        // Ensure parent directory exists
+        // Ensure parent directory exists, created owner-only (0o700) on Unix
+        // per #255 — matches the TS library's `fs.mkdir(dir, { mode: 0o700 })`
+        // contract for config/key/secret storage directories.
         if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent).map_err(|e| VaultError::Filesystem {
+            create_dir_all_secure(parent).map_err(|e| VaultError::Filesystem {
                 message: format!("Failed to create directory {}: {e}", parent.display()),
                 path: parent.display().to_string(),
                 permission: "write".to_string(),
@@ -375,5 +407,85 @@ mod tests {
             Err(VaultError::Exec { command, .. }) => assert_eq!(command, "echo"),
             other => panic!("expected VaultError::Exec, got {other:?}"),
         }
+    }
+
+    // -----------------------------------------------------------------
+    // Issue #255: config/key/secret storage directories must be created
+    // 0o700 (owner-only), matching the TS library's
+    // `fs.mkdir(dir, { recursive: true, mode: 0o700 })` contract.
+    // -----------------------------------------------------------------
+
+    /// AC1 + AC3: a directory implicitly created by `write_file` (via its
+    /// parent-directory mkdir step) must end up `0o700` on Unix, not
+    /// whatever the umask would otherwise produce (e.g. `0o755`).
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn write_file_creates_missing_parent_dir_as_0700() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let host = NativeHostPlatform::new(dir.path().to_path_buf());
+        let nested = dir.path().join("fresh-config-dir");
+        let target = nested.join("keys.enc");
+
+        host.write_file(&target, b"secret", 0o600).await.unwrap();
+
+        let mode = fs::metadata(&nested).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o700, "freshly created parent dir must be 0o700");
+    }
+
+    /// AC2: an already-existing directory with broader permissions must be
+    /// left untouched by `write_file` — no chmod-on-startup surprise for a
+    /// directory an operator deliberately made more permissive.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn write_file_leaves_existing_wider_permission_dir_untouched() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let host = NativeHostPlatform::new(dir.path().to_path_buf());
+        let existing = dir.path().join("already-here");
+        fs::create_dir(&existing).unwrap();
+        fs::set_permissions(&existing, fs::Permissions::from_mode(0o755)).unwrap();
+        let target = existing.join("keys.enc");
+
+        host.write_file(&target, b"secret", 0o600).await.unwrap();
+
+        let mode = fs::metadata(&existing).unwrap().permissions().mode() & 0o777;
+        assert_eq!(
+            mode, 0o755,
+            "pre-existing directory permissions must be left untouched"
+        );
+    }
+
+    /// Non-Unix (Windows) sanity check: `create_dir_all_secure` still
+    /// creates the directory even though POSIX mode bits don't apply there.
+    #[cfg(not(unix))]
+    #[tokio::test]
+    async fn write_file_creates_missing_parent_dir_on_non_unix() {
+        let dir = tempfile::tempdir().unwrap();
+        let host = NativeHostPlatform::new(dir.path().to_path_buf());
+        let nested = dir.path().join("fresh-config-dir");
+        let target = nested.join("keys.enc");
+
+        host.write_file(&target, b"secret", 0o600).await.unwrap();
+
+        assert!(nested.is_dir());
+    }
+
+    /// AC2 on non-Unix: an already-existing directory is left alone (no
+    /// error, no attempted recreation) by `create_dir_all_secure`.
+    #[cfg(not(unix))]
+    #[tokio::test]
+    async fn write_file_leaves_existing_dir_untouched_on_non_unix() {
+        let dir = tempfile::tempdir().unwrap();
+        let host = NativeHostPlatform::new(dir.path().to_path_buf());
+        let existing = dir.path().join("already-here");
+        fs::create_dir(&existing).unwrap();
+        let target = existing.join("keys.enc");
+
+        host.write_file(&target, b"secret", 0o600).await.unwrap();
+
+        assert!(existing.is_dir());
     }
 }
