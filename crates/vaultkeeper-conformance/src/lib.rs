@@ -379,6 +379,52 @@ fn dev_mode_cases() -> Vec<ConformanceCase> {
     ]
 }
 
+// ─── Backend capabilities cases (issue #262) ─────────────────────
+
+fn backend_capabilities_cases() -> Vec<ConformanceCase> {
+    vec![
+        ConformanceCase {
+            name:
+                "backend capabilities exits 0 and reports the file backend as not presence-capable"
+                    .into(),
+            command: vec!["backend".into(), "capabilities".into()],
+            stdin: None,
+            needs_config: true,
+            expected_exit_code: 0,
+            expected_stdout: OutputMatcher::Regex(
+                "(?s)Backend capabilities.*file.*presence-per-use: no".into(),
+            ),
+            expected_stderr: OutputMatcher::Any,
+            expected_config_file: None,
+        },
+        ConformanceCase {
+            name: "backend capabilities --json emits a row with type, displayName, presencePerUse"
+                .into(),
+            command: vec!["backend".into(), "capabilities".into(), "--json".into()],
+            stdin: None,
+            needs_config: true,
+            expected_exit_code: 0,
+            expected_stdout: OutputMatcher::JsonContains(serde_json::json!([{
+                "type": "file",
+                "displayName": "Encrypted File Store",
+                "presencePerUse": false
+            }])),
+            expected_stderr: OutputMatcher::Any,
+            expected_config_file: None,
+        },
+        ConformanceCase {
+            name: "backend with no subcommand exits 2".into(),
+            command: vec!["backend".into()],
+            stdin: None,
+            needs_config: false,
+            expected_exit_code: 2,
+            expected_stdout: OutputMatcher::Any,
+            expected_stderr: OutputMatcher::Any,
+            expected_config_file: None,
+        },
+    ]
+}
+
 // ─── Revoke-key cases ────────────────────────────────────────────
 
 fn revoke_key_cases() -> Vec<ConformanceCase> {
@@ -407,6 +453,7 @@ pub fn all_cases() -> Vec<ConformanceCase> {
     cases.extend(revoke_key_cases());
     cases.extend(approve_cases());
     cases.extend(dev_mode_cases());
+    cases.extend(backend_capabilities_cases());
     cases
 }
 

@@ -84,6 +84,7 @@ mod help {
                 .and(predicate::str::contains("store"))
                 .and(predicate::str::contains("delete"))
                 .and(predicate::str::contains("config"))
+                .and(predicate::str::contains("backend"))
                 .and(predicate::str::contains("rotate-key"))
                 .and(predicate::str::contains("revoke-key")),
         );
@@ -434,6 +435,70 @@ mod config {
             .stdout(predicate::str::contains("Config created at"));
 
         assert!(config_dir.is_dir());
+    }
+}
+
+// ─── Backend capabilities command (issue #262) ────────────────────
+
+mod backend_capabilities {
+    use super::*;
+
+    #[test]
+    fn capabilities_exits_0_and_reports_file_backend_as_not_presence_capable() {
+        let (mut cmd, _dir) = cli_test_env();
+        cmd.args(["backend", "capabilities"])
+            .assert()
+            .success()
+            .stdout(predicate::str::contains("Backend capabilities"))
+            .stdout(predicate::str::contains("file"))
+            .stdout(predicate::str::contains("presence-per-use: no"));
+    }
+
+    #[test]
+    fn capabilities_json_emits_a_row_with_type_display_name_and_presence_per_use() {
+        let (mut cmd, _dir) = cli_test_env();
+        let output = cmd
+            .args(["backend", "capabilities", "--json"])
+            .output()
+            .expect("failed to run");
+        assert!(output.status.success(), "expected exit 0");
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let parsed: serde_json::Value =
+            serde_json::from_str(&stdout).expect("stdout should be valid JSON");
+        let rows = parsed.as_array().expect("expected a JSON array");
+        assert!(!rows.is_empty(), "expected at least one row");
+        let file_row = rows
+            .iter()
+            .find(|r| r["type"] == "file")
+            .expect("expected a 'file' backend row");
+        assert_eq!(file_row["displayName"], "Encrypted File Store");
+        assert_eq!(file_row["presencePerUse"], false);
+    }
+
+    #[test]
+    fn capabilities_works_without_a_config_file() {
+        // Discovery must be available before any config exists, mirroring
+        // that `store`/`delete` refusal (--require-presence-per-use) is
+        // meant to be checkable ahead of time.
+        let (mut cmd, _dir) = cli_test_env_no_config();
+        cmd.args(["backend", "capabilities", "--json"])
+            .assert()
+            .success();
+    }
+
+    #[test]
+    fn backend_with_no_subcommand_exits_2() {
+        let (mut cmd, _dir) = cli_test_env();
+        cmd.arg("backend").assert().code(2);
+    }
+
+    #[test]
+    fn backend_help_documents_capabilities_subcommand() {
+        let (mut cmd, _dir) = cli_test_env();
+        cmd.args(["backend", "--help"])
+            .assert()
+            .success()
+            .stdout(predicate::str::contains("capabilities"));
     }
 }
 

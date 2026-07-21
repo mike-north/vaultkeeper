@@ -9,7 +9,9 @@ use host::NativeHostPlatform;
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use vaultkeeper_core::backend::{FileBackend, HostPlatform, PresenceOperation, SecretBackend};
+use vaultkeeper_core::backend::{
+    FileBackend, HostPlatform, PresenceOperation, SecretBackend, get_backend_capabilities,
+};
 use vaultkeeper_core::config;
 use vaultkeeper_core::vault::enforce_presence_requirement;
 
@@ -80,6 +82,11 @@ enum Commands {
         #[command(subcommand)]
         action: ConfigAction,
     },
+    /// Inspect registered backends (e.g. capabilities)
+    Backend {
+        #[command(subcommand)]
+        action: BackendAction,
+    },
     /// Rotate the encryption key
     RotateKey,
     /// Emergency key revocation
@@ -92,6 +99,16 @@ enum ConfigAction {
     Init,
     /// Show current configuration
     Show,
+}
+
+#[derive(Subcommand)]
+enum BackendAction {
+    /// List each registered backend and its security capabilities
+    Capabilities {
+        /// Emit a machine-readable JSON array instead of human-readable text
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 fn make_host() -> Arc<NativeHostPlatform> {
@@ -122,6 +139,7 @@ async fn main() {
             Commands::Approve { path } => cmd_approve(&path).await,
             Commands::DevMode { path, enable } => cmd_dev_mode(&path, enable).await,
             Commands::Config { action } => cmd_config(action).await,
+            Commands::Backend { action } => cmd_backend(action).await,
             Commands::RotateKey => cmd_rotate_key().await,
             Commands::RevokeKey => cmd_revoke_key().await,
         },
@@ -474,6 +492,64 @@ async fn cmd_config(action: ConfigAction) -> i32 {
             }
         }
     }
+}
+
+/// `backend capabilities` — resolves the active backend (the same `FileBackend`
+/// instance `store`/`delete` use) and reports its
+/// [`vaultkeeper_core::backend::BackendCapabilities`] via
+/// `get_backend_capabilities`, so a caller can check ahead of time whether the
+/// configured backend qualifies for `--require-presence-per-use` (issue #262).
+///
+/// Mirrors the TypeScript CLI's `vaultkeeper backend capabilities` command:
+/// the same subcommand name, `--json` flag, JSON row shape (`type`,
+/// `displayName`, `presencePerUse`), and human-readable text (see
+/// `packages/cli/src/commands/backend.ts`).
+async fn cmd_backend(action: BackendAction) -> i32 {
+    match action {
+        BackendAction::Capabilities { json } => cmd_backend_capabilities(json).await,
+    }
+}
+
+async fn cmd_backend_capabilities(json: bool) -> i32 {
+    let host = make_host();
+    let backend = FileBackend::new(host);
+
+    let capabilities = match get_backend_capabilities(&backend).await {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("Error: {e}");
+            return 1;
+        }
+    };
+
+    let backend_type = backend.backend_type();
+    let display_name = backend.display_name();
+
+    if json {
+        let rows = serde_json::json!([{
+            "type": backend_type,
+            "displayName": display_name,
+            "presencePerUse": capabilities.presence_per_use,
+        }]);
+        match serde_json::to_string_pretty(&rows) {
+            Ok(s) => println!("{s}"),
+            Err(e) => {
+                eprintln!("Error: {e}");
+                return 1;
+            }
+        }
+    } else {
+        let presence = if capabilities.presence_per_use {
+            "yes"
+        } else {
+            "no"
+        };
+        print!(
+            "Backend capabilities (per configured instance):\n\n  {backend_type}  {display_name}  presence-per-use: {presence}\n\nA backend with presence-per-use: yes forces a distinct, fresh human action\nper operation and can satisfy `--require-presence-per-use`.\n"
+        );
+    }
+
+    0
 }
 
 fn create_config_dir(dir: &Path) -> Result<(), String> {
