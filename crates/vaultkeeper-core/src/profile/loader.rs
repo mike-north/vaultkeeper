@@ -71,12 +71,50 @@ pub struct ProfileEntry {
 }
 
 /// A fully-validated, loaded profile.
-#[derive(Debug, Clone, serde::Serialize)]
-#[serde(rename_all = "camelCase")]
+///
+/// `entries` is a `Vec<(String, ProfileEntry)>` internally (not a `HashMap`)
+/// to preserve file order, but its wire form must match the *input* schema
+/// — a JSON object keyed by env-var name — not an array of pairs. See the
+/// manual [`serde::Serialize`] impl below.
+#[derive(Debug, Clone)]
 pub struct LoadedProfile {
     pub version: u32,
     pub name: String,
     pub entries: Vec<(String, ProfileEntry)>,
+}
+
+impl serde::Serialize for LoadedProfile {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+
+        /// Serializes `Vec<(String, ProfileEntry)>` as a JSON object
+        /// (`{ name: entry, ... }`), preserving entry order — the same
+        /// object shape `ProfileEntries` accepts on input.
+        struct EntriesAsObject<'a>(&'a [(String, ProfileEntry)]);
+
+        impl serde::Serialize for EntriesAsObject<'_> {
+            fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+            where
+                S: serde::Serializer,
+            {
+                use serde::ser::SerializeMap;
+                let mut map = serializer.serialize_map(Some(self.0.len()))?;
+                for (name, entry) in self.0 {
+                    map.serialize_entry(name, entry)?;
+                }
+                map.end()
+            }
+        }
+
+        let mut state = serializer.serialize_struct("LoadedProfile", 3)?;
+        state.serialize_field("version", &self.version)?;
+        state.serialize_field("name", &self.name)?;
+        state.serialize_field("entries", &EntriesAsObject(&self.entries))?;
+        state.end()
+    }
 }
 
 fn validation_error(entry: &str, field: &str, message: impl Into<String>) -> VaultError {
@@ -180,7 +218,8 @@ fn validate_entry(
             return Err(VaultError::MaterializeModeUnsupported {
                 message: format!(
                     "entries[{name}].materialize: mode \"{}\" is reserved and not yet \
-                     supported",
+                     supported. Valid forms are the strings \"secret\" or \"lease\", or a \
+                     reserved object naming its mode (e.g. {{ \"mode\": \"reference\", ... }})",
                     extended.mode
                 ),
                 mode: extended.mode.clone(),
@@ -459,6 +498,23 @@ mod tests {
         );
     }
 
+    #[test]
+    fn rejects_materialize_bare_empty_object_with_typed_unspecified_mode_error() {
+        // A `materialize: {}` with no `mode` key must still be caught by the
+        // typed reserved-mode error, not fall through to a generic
+        // untagged-enum parse failure.
+        let json = r#"{
+            "version": 1, "name": "p",
+            "entries": { "K": { "secret": "s", "materialize": {} } }
+        }"#;
+        let err = load_profile_from_str(json, &defaults()).unwrap_err();
+        assert!(!matches!(err, VaultError::ConfigParse { .. }));
+        assert_matches!(
+            err,
+            VaultError::MaterializeModeUnsupported { mode, .. } if mode == "unspecified"
+        );
+    }
+
     // --- Discriminated union: exactly one of secret/signingKey ---
 
     #[test]
@@ -535,5 +591,46 @@ mod tests {
         let defaults = ProfileDefaults::from_vault_defaults(&vault_defaults);
         assert_eq!(defaults.ttl_seconds, 900);
         assert_eq!(defaults.trust_tier, TrustTier::Sigstore);
+    }
+
+    // --- Wire-format symmetry: `entries` serializes as an object, matching
+    // --- the input schema, not as an array of pairs (review follow-up).
+
+    #[test]
+    fn loaded_profile_entries_serialize_as_an_object_not_an_array_of_pairs() {
+        let loaded = load_profile_from_str(SCHEMA_EXAMPLE, &defaults()).unwrap();
+        let value = serde_json::to_value(&loaded).unwrap();
+        let entries = value.get("entries").expect("entries field");
+        assert!(
+            entries.is_object(),
+            "entries must serialize as a JSON object, got {entries:?}"
+        );
+        assert!(entries.get("GITHUB_TOKEN").is_some());
+        assert!(entries.get("VK_DB_CREDENTIAL").is_some());
+        assert!(entries.get("VK_SIGNING_LEASE").is_some());
+    }
+
+    #[test]
+    fn loaded_profile_entries_preserve_file_order_when_serialized() {
+        // serde_json::Value collapses object keys into a sorted map (this
+        // crate's `serde_json` has no `preserve_order` feature), so order is
+        // asserted against the raw serialized string instead.
+        let loaded = load_profile_from_str(SCHEMA_EXAMPLE, &defaults()).unwrap();
+        let json = serde_json::to_string(&loaded).unwrap();
+        let github_pos = json.find("GITHUB_TOKEN").expect("GITHUB_TOKEN present");
+        let db_pos = json
+            .find("VK_DB_CREDENTIAL")
+            .expect("VK_DB_CREDENTIAL present");
+        let signing_pos = json
+            .find("VK_SIGNING_LEASE")
+            .expect("VK_SIGNING_LEASE present");
+        assert!(
+            github_pos < db_pos,
+            "GITHUB_TOKEN must precede VK_DB_CREDENTIAL"
+        );
+        assert!(
+            db_pos < signing_pos,
+            "VK_DB_CREDENTIAL must precede VK_SIGNING_LEASE"
+        );
     }
 }

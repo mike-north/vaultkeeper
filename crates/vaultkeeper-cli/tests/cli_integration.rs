@@ -890,6 +890,173 @@ mod profile {
         let (mut cmd, _dir) = cli_test_env();
         cmd.arg("profile").assert().code(2);
     }
+
+    // --- Security anchor: profile-name validation (review follow-up) ---
+
+    #[test]
+    fn init_rejects_a_parent_directory_traversal_name_and_writes_nothing_outside_profiles() {
+        let (mut cmd, dir) = cli_test_env();
+        cmd.args(["profile", "init", "../evil"])
+            .assert()
+            .code(1)
+            .stderr(predicate::str::contains("Error"));
+
+        // Nothing was written outside (or even inside) profiles/ — the
+        // rejection must happen before any path construction, let alone a
+        // file write.
+        assert!(
+            !dir.path().parent().unwrap().join("evil.json").exists(),
+            "must not have written a file outside the temp config dir"
+        );
+        let profiles_dir = dir.path().join("profiles");
+        if profiles_dir.exists() {
+            let remaining: Vec<_> = fs::read_dir(&profiles_dir)
+                .expect("failed to read profiles dir")
+                .collect();
+            assert!(
+                remaining.is_empty(),
+                "profiles dir must be empty after a rejected hostile name"
+            );
+        }
+    }
+
+    #[test]
+    fn init_rejects_a_bare_path_separator_name() {
+        let (mut cmd, _dir) = cli_test_env();
+        cmd.args(["profile", "init", "a/b"])
+            .assert()
+            .code(1)
+            .stderr(predicate::str::contains("Error"));
+    }
+
+    #[test]
+    fn show_rejects_a_parent_directory_traversal_name() {
+        let (mut cmd, _dir) = cli_test_env();
+        cmd.args(["profile", "show", "../../../etc/passwd"])
+            .assert()
+            .code(1)
+            .stderr(predicate::str::contains("Error"));
+    }
+
+    // --- CLI usage: NAME and --profile-file are mutually exclusive ---
+
+    #[test]
+    fn show_with_both_name_and_profile_file_is_a_usage_error() {
+        let (mut cmd, dir) = cli_test_env();
+        write_profile(
+            &dir,
+            "github-mcp",
+            &serde_json::json!({ "version": 1, "name": "github-mcp", "entries": {} }),
+        );
+        let profile_file_path = dir.path().join("profiles").join("github-mcp.json");
+        cmd.args([
+            "profile",
+            "show",
+            "foo",
+            "--profile-file",
+            &profile_file_path.to_string_lossy(),
+        ])
+        .assert()
+        .code(2);
+    }
+
+    #[test]
+    fn lint_with_both_name_and_profile_file_is_a_usage_error() {
+        let (mut cmd, dir) = cli_test_env();
+        write_profile(
+            &dir,
+            "github-mcp",
+            &serde_json::json!({ "version": 1, "name": "github-mcp", "entries": {} }),
+        );
+        let profile_file_path = dir.path().join("profiles").join("github-mcp.json");
+        cmd.args([
+            "profile",
+            "lint",
+            "foo",
+            "--profile-file",
+            &profile_file_path.to_string_lossy(),
+        ])
+        .assert()
+        .code(2);
+    }
+
+    #[test]
+    fn show_with_neither_name_nor_profile_file_is_a_usage_error() {
+        let (mut cmd, _dir) = cli_test_env();
+        cmd.args(["profile", "show"]).assert().code(2);
+    }
+
+    #[test]
+    fn show_loads_via_profile_file_without_a_name() {
+        let (mut cmd, dir) = cli_test_env();
+        write_profile(
+            &dir,
+            "github-mcp",
+            &serde_json::json!({ "version": 1, "name": "github-mcp", "entries": {} }),
+        );
+        let profile_file_path = dir.path().join("profiles").join("github-mcp.json");
+        cmd.args([
+            "profile",
+            "show",
+            "--profile-file",
+            &profile_file_path.to_string_lossy(),
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("github-mcp"));
+    }
+
+    // --- `profile lint` warnings: advisory-only, always exits 0 ---
+
+    #[test]
+    fn lint_reports_warnings_on_stdout_and_still_exits_0() {
+        // cli_test_env's config.json default trustTier is "3" (unverified);
+        // an entry requesting "sigstore" is *stronger*, not weaker, so no
+        // minTrust warning fires from that axis. useLimit absent and
+        // requirePresencePerUse absent (defaults to false) both loosen
+        // relative to LintBaseline::default() (useLimit: 1,
+        // requirePresencePerUse: true), which is enough to trigger warnings
+        // without needing a weaker minTrust.
+        let (mut cmd, dir) = cli_test_env();
+        write_profile(
+            &dir,
+            "loose",
+            &serde_json::json!({
+                "version": 1,
+                "name": "loose",
+                "entries": {
+                    "K": {
+                        "secret": "s",
+                        "materialize": "secret",
+                        "minTrust": "sigstore"
+                    }
+                }
+            }),
+        );
+        cmd.args(["profile", "lint", "loose"])
+            .assert()
+            .success()
+            .stdout(predicate::str::contains("Policy-loosening warnings"))
+            .stdout(predicate::str::contains("useLimit"))
+            .stdout(predicate::str::contains("requirePresencePerUse"));
+    }
+
+    // --- File mode: profiles are owner-only (0o600), matching config.json ---
+
+    #[cfg(unix)]
+    #[test]
+    fn init_writes_the_profile_file_owner_only() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let (mut cmd, dir) = cli_test_env();
+        cmd.args(["profile", "init", "my-profile"])
+            .assert()
+            .success();
+
+        let path = dir.path().join("profiles").join("my-profile.json");
+        let mode = fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600, "profile file must be owner-only (0o600)");
+    }
 }
 
 // ─── Dev-mode command ───────────────────────────────────────────

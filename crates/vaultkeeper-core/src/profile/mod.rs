@@ -16,6 +16,8 @@ pub mod loader;
 pub mod render;
 pub mod types;
 
+use crate::errors::VaultError;
+
 pub use lint::{LintBaseline, LintResult, LoosenWarning, UnattendedRestartWarning, lint_profile};
 pub use loader::{
     EntrySource, LoadedProfile, ProfileDefaults, ProfileEntry, load_profile_from_str,
@@ -31,12 +33,170 @@ pub const PROFILE_FILE_EXTENSION: &str = ".json";
 /// Directory name (relative to `$CONFIG_DIR`) that holds named profiles.
 pub const PROFILES_DIR_NAME: &str = "profiles";
 
+/// Hard cap on a profile name's length, in bytes.
+const MAX_PROFILE_NAME_LEN: usize = 128;
+
+/// Validate a profile name before it is ever used to construct a filesystem
+/// path (issue #277's `profile_path`/`profile init|show|lint <NAME>`
+/// surface).
+///
+/// Without this check a hostile name such as `../evil` or `a/b` lets
+/// `profile_path` join outside `$CONFIG_DIR/profiles/` entirely — an
+/// arbitrary-file-write via `write_file`'s parent-directory auto-creation on
+/// `init`, and an arbitrary-file-read on `show`/`lint`. The allowlist below
+/// is intentionally conservative: `[A-Za-z0-9][A-Za-z0-9._-]*`, no path
+/// separators, no `..` sequence anywhere in the name (not just at the
+/// start), non-empty, and capped at [`MAX_PROFILE_NAME_LEN`] bytes.
+///
+/// # Errors
+/// Returns [`VaultError::ConfigValidation`] naming the specific violation.
+pub fn validate_profile_name(name: &str) -> Result<(), VaultError> {
+    fn invalid(name: &str, reason: &str) -> VaultError {
+        VaultError::ConfigValidation {
+            message: format!("Invalid profile name \"{name}\": {reason}"),
+            field: "name".to_string(),
+            config_file_path: None,
+        }
+    }
+
+    if name.is_empty() {
+        return Err(invalid(name, "must not be empty"));
+    }
+    if name.len() > MAX_PROFILE_NAME_LEN {
+        return Err(invalid(
+            name,
+            &format!("must be at most {MAX_PROFILE_NAME_LEN} bytes"),
+        ));
+    }
+    if name.contains("..") {
+        return Err(invalid(name, "must not contain \"..\""));
+    }
+    if name.contains('/') || name.contains('\\') {
+        return Err(invalid(name, "must not contain a path separator"));
+    }
+
+    let mut chars = name.chars();
+    // Unwrap is safe: the emptiness check above guarantees a first char.
+    let first = chars.next().unwrap();
+    if !first.is_ascii_alphanumeric() {
+        return Err(invalid(
+            name,
+            "must start with an ASCII letter or digit (not '-', '.', or whitespace)",
+        ));
+    }
+    if !chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-')) {
+        return Err(invalid(
+            name,
+            "must match [A-Za-z0-9][A-Za-z0-9._-]* (no whitespace or other punctuation)",
+        ));
+    }
+
+    Ok(())
+}
+
 /// Compute the path a named profile would live at, under `config_dir`.
-#[must_use]
-pub fn profile_path(config_dir: &std::path::Path, name: &str) -> std::path::PathBuf {
-    config_dir
+///
+/// # Errors
+/// Returns [`VaultError::ConfigValidation`] if `name` fails
+/// [`validate_profile_name`] — checked *before* any path construction, so a
+/// hostile name never reaches the filesystem.
+pub fn profile_path(
+    config_dir: &std::path::Path,
+    name: &str,
+) -> Result<std::path::PathBuf, VaultError> {
+    validate_profile_name(name)?;
+    Ok(config_dir
         .join(PROFILES_DIR_NAME)
-        .join(format!("{name}{PROFILE_FILE_EXTENSION}"))
+        .join(format!("{name}{PROFILE_FILE_EXTENSION}")))
+}
+
+#[cfg(test)]
+mod profile_name_validation_tests {
+    use super::*;
+
+    #[test]
+    fn accepts_ordinary_names() {
+        assert!(validate_profile_name("github-mcp").is_ok());
+        assert!(validate_profile_name("my_profile.v2").is_ok());
+        assert!(validate_profile_name("A1").is_ok());
+    }
+
+    #[test]
+    fn rejects_parent_directory_traversal() {
+        assert!(validate_profile_name("../evil").is_err());
+        assert!(validate_profile_name("..").is_err());
+        assert!(validate_profile_name("a/../../etc/passwd").is_err());
+        assert!(validate_profile_name("foo..bar").is_err());
+    }
+
+    #[test]
+    fn rejects_path_separators() {
+        assert!(validate_profile_name("a/b").is_err());
+        assert!(validate_profile_name("a\\b").is_err());
+    }
+
+    #[test]
+    fn rejects_absolute_paths() {
+        assert!(validate_profile_name("/etc/passwd").is_err());
+    }
+
+    #[test]
+    fn rejects_empty_name() {
+        assert!(validate_profile_name("").is_err());
+    }
+
+    #[test]
+    fn rejects_dot_only_name() {
+        assert!(validate_profile_name(".").is_err());
+    }
+
+    #[test]
+    fn rejects_leading_dash() {
+        assert!(validate_profile_name("-rf").is_err());
+    }
+
+    #[test]
+    fn rejects_leading_dot() {
+        assert!(validate_profile_name(".hidden").is_err());
+    }
+
+    #[test]
+    fn rejects_leading_whitespace() {
+        assert!(validate_profile_name(" leading").is_err());
+    }
+
+    #[test]
+    fn rejects_embedded_whitespace() {
+        assert!(validate_profile_name("has space").is_err());
+    }
+
+    #[test]
+    fn rejects_overlong_name() {
+        let overlong = "a".repeat(MAX_PROFILE_NAME_LEN + 1);
+        assert!(validate_profile_name(&overlong).is_err());
+    }
+
+    #[test]
+    fn accepts_name_at_the_length_cap() {
+        let exactly_max = "a".repeat(MAX_PROFILE_NAME_LEN);
+        assert!(validate_profile_name(&exactly_max).is_ok());
+    }
+
+    #[test]
+    fn profile_path_rejects_a_hostile_name_before_constructing_any_path() {
+        let err =
+            profile_path(std::path::Path::new("/config"), "../evil").expect_err("must reject");
+        assert!(matches!(err, VaultError::ConfigValidation { .. }));
+    }
+
+    #[test]
+    fn profile_path_accepts_a_valid_name() {
+        let path = profile_path(std::path::Path::new("/config"), "github-mcp").unwrap();
+        assert_eq!(
+            path,
+            std::path::Path::new("/config/profiles/github-mcp.json")
+        );
+    }
 }
 
 #[cfg(test)]

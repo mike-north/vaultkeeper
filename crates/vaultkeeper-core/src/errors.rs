@@ -307,6 +307,44 @@ pub enum VaultError {
     Other(String),
 }
 
+impl VaultError {
+    /// Fill in the on-disk path a load failure originated from, when the
+    /// error was built without knowing it (e.g. a loader that parses/
+    /// validates from an in-memory string and only learns the real path at
+    /// its caller). A no-op for every other variant.
+    ///
+    /// Only ever *sets* the path — never overwrites one a variant already
+    /// carries — so a caller can apply this unconditionally after any
+    /// fallible load without clobbering a more specific path an inner layer
+    /// already attached.
+    #[must_use]
+    pub fn with_config_file_path(self, path: impl Into<String>) -> Self {
+        match self {
+            VaultError::ConfigParse {
+                message,
+                path: existing_path,
+                line,
+                column,
+            } if existing_path.is_empty() => VaultError::ConfigParse {
+                message,
+                path: path.into(),
+                line,
+                column,
+            },
+            VaultError::ConfigValidation {
+                message,
+                field,
+                config_file_path: None,
+            } => VaultError::ConfigValidation {
+                message,
+                field,
+                config_file_path: Some(path.into()),
+            },
+            other => other,
+        }
+    }
+}
+
 /// Why an executable-trust choice was rejected by `setup()`.
 ///
 /// A dedicated enum keeps the discriminator invariant compile-time enforced in
@@ -768,4 +806,76 @@ pub fn all_variants_for_parity_test() -> Vec<VaultError> {
         },
         VaultError::Other("generic vault error".into()),
     ]
+}
+
+#[cfg(test)]
+mod with_config_file_path_tests {
+    use super::VaultError;
+
+    #[test]
+    fn fills_in_config_parse_path_when_empty() {
+        let err = VaultError::ConfigParse {
+            message: "bad json".into(),
+            path: String::new(),
+            line: Some(1),
+            column: Some(2),
+        };
+        let filled = err.with_config_file_path("/config/profiles/p.json");
+        assert!(matches!(
+            filled,
+            VaultError::ConfigParse { path, .. } if path == "/config/profiles/p.json"
+        ));
+    }
+
+    #[test]
+    fn does_not_overwrite_an_existing_config_parse_path() {
+        let err = VaultError::ConfigParse {
+            message: "bad json".into(),
+            path: "/already/set.json".into(),
+            line: None,
+            column: None,
+        };
+        let filled = err.with_config_file_path("/should/not/apply.json");
+        assert!(matches!(
+            filled,
+            VaultError::ConfigParse { path, .. } if path == "/already/set.json"
+        ));
+    }
+
+    #[test]
+    fn fills_in_config_validation_file_path_when_absent() {
+        let err = VaultError::ConfigValidation {
+            message: "invalid".into(),
+            field: "name".into(),
+            config_file_path: None,
+        };
+        let filled = err.with_config_file_path("/config/profiles/p.json");
+        assert!(matches!(
+            filled,
+            VaultError::ConfigValidation { config_file_path: Some(p), .. }
+                if p == "/config/profiles/p.json"
+        ));
+    }
+
+    #[test]
+    fn does_not_overwrite_an_existing_config_validation_file_path() {
+        let err = VaultError::ConfigValidation {
+            message: "invalid".into(),
+            field: "name".into(),
+            config_file_path: Some("/already/set.json".into()),
+        };
+        let filled = err.with_config_file_path("/should/not/apply.json");
+        assert!(matches!(
+            filled,
+            VaultError::ConfigValidation { config_file_path: Some(p), .. }
+                if p == "/already/set.json"
+        ));
+    }
+
+    #[test]
+    fn is_a_no_op_for_other_variants() {
+        let err = VaultError::Other("generic".into());
+        let filled = err.with_config_file_path("/irrelevant.json");
+        assert!(matches!(filled, VaultError::Other(m) if m == "generic"));
+    }
 }

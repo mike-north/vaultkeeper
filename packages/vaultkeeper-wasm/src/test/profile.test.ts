@@ -46,7 +46,10 @@ function isBridgeErrorShape(value: unknown): value is BridgeErrorShape {
 interface LoadedProfileShape {
   version: number
   name: string
-  entries: [string, LoadedEntryShape][]
+  // `entries` is a JSON object keyed by env-var name, matching the input
+  // schema — not an array of pairs (review follow-up: wire-format symmetry
+  // between `LoadedProfile.entries` and `ProfileFile.entries`).
+  entries: Record<string, LoadedEntryShape>
 }
 
 interface LoadedEntryShape {
@@ -64,7 +67,10 @@ function assertLoadedProfileShape(value: unknown): asserts value is LoadedProfil
   const record: Record<string, unknown> = { ...value }
   assert.ok(typeof record.version === 'number')
   assert.ok(typeof record.name === 'string')
-  assert.ok(Array.isArray(record.entries))
+  assert.ok(
+    typeof record.entries === 'object' && record.entries !== null && !Array.isArray(record.entries),
+    'entries must be a JSON object, not an array',
+  )
 }
 
 const SCHEMA_EXAMPLE = JSON.stringify({
@@ -93,12 +99,10 @@ describe('__testLoadProfile — the core profile loader through the WASM bridge 
     const result = bindings.__testLoadProfile(SCHEMA_EXAMPLE, { ttlMinutes: 60, trustTier: 3 })
     assertLoadedProfileShape(result)
     assert.equal(result.name, 'github-mcp')
-    assert.equal(result.entries.length, 2)
+    assert.deepEqual(Object.keys(result.entries), ['GITHUB_TOKEN', 'VK_DB_CREDENTIAL'])
 
-    const first = result.entries[0]
-    assert.ok(first !== undefined, 'expected at least one entry')
-    const [githubName, githubEntry] = first
-    assert.equal(githubName, 'GITHUB_TOKEN')
+    const githubEntry = result.entries.GITHUB_TOKEN
+    assert.ok(githubEntry !== undefined, 'expected a GITHUB_TOKEN entry')
     assert.equal(githubEntry.source.secret, 'github-pat')
     assert.equal(githubEntry.materialize, 'secret')
     assert.equal(githubEntry.minTrust, 'registry')
@@ -116,9 +120,8 @@ describe('__testLoadProfile — the core profile loader through the WASM bridge 
     })
     const result = bindings.__testLoadProfile(json, { ttlMinutes: 5, trustTier: 3 })
     assertLoadedProfileShape(result)
-    const first = result.entries[0]
-    assert.ok(first !== undefined, 'expected at least one entry')
-    const [, entry] = first
+    const entry = result.entries.K
+    assert.ok(entry !== undefined, 'expected a K entry')
     assert.equal(entry.ttlSeconds, 300)
   })
 

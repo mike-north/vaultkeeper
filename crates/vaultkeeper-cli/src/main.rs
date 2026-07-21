@@ -103,7 +103,8 @@ enum Commands {
 enum ProfileAction {
     /// Scaffold a new profile at `$CONFIG_DIR/profiles/<NAME>.json`
     Init {
-        /// Profile name
+        /// Profile name — also embedded as the scaffold's `name` field, even
+        /// when `--profile-file` overrides the write location.
         name: String,
         /// Write the scaffold to this path instead of the default profiles directory
         #[arg(long)]
@@ -111,20 +112,26 @@ enum ProfileAction {
     },
     /// Render a profile's shape and policy. Never prints secret values.
     Show {
-        /// Profile name
-        name: String,
-        /// Load from this path instead of the default profiles directory
-        #[arg(long)]
+        /// Profile name — mutually exclusive with `--profile-file`
+        #[arg(required_unless_present = "profile_file")]
+        name: Option<String>,
+        /// Load from this path instead of the default profiles directory —
+        /// mutually exclusive with NAME
+        #[arg(long, conflicts_with = "name")]
         profile_file: Option<String>,
     },
     /// List profiles in the default profiles directory
     List,
-    /// Validate a profile's schema and report policy warnings
+    /// Validate a profile's schema and report policy warnings. Advisory
+    /// only — always exits 0 on a successfully-loaded profile, regardless
+    /// of any warnings printed.
     Lint {
-        /// Profile name
-        name: String,
-        /// Load from this path instead of the default profiles directory
-        #[arg(long)]
+        /// Profile name — mutually exclusive with `--profile-file`
+        #[arg(required_unless_present = "profile_file")]
+        name: Option<String>,
+        /// Load from this path instead of the default profiles directory —
+        /// mutually exclusive with NAME
+        #[arg(long, conflicts_with = "name")]
         profile_file: Option<String>,
     },
 }
@@ -703,26 +710,47 @@ async fn cmd_revoke_key() -> i32 {
 async fn cmd_profile(action: ProfileAction) -> i32 {
     match action {
         ProfileAction::Init { name, profile_file } => cmd_profile_init(&name, profile_file).await,
-        ProfileAction::Show { name, profile_file } => cmd_profile_show(&name, profile_file).await,
+        ProfileAction::Show { name, profile_file } => cmd_profile_show(name, profile_file).await,
         ProfileAction::List => cmd_profile_list().await,
-        ProfileAction::Lint { name, profile_file } => cmd_profile_lint(&name, profile_file).await,
+        ProfileAction::Lint { name, profile_file } => cmd_profile_lint(name, profile_file).await,
     }
 }
 
+/// Resolve the on-disk path a profile subcommand should read/write.
+///
+/// `name` and `profile_file` are mutually exclusive at the clap layer for
+/// `show`/`lint` (`--profile-file` `conflicts_with` NAME) — `name` is only
+/// `None` when `profile_file` is `Some`. `init` always supplies `name`
+/// (it is also embedded in the scaffold body), so passes `Some` even when
+/// `profile_file` overrides the write location.
+///
+/// # Errors
+/// Returns [`vaultkeeper_core::errors::VaultError::ConfigValidation`] if
+/// `name` fails `vaultkeeper_core::profile::validate_profile_name` — checked
+/// before any path is constructed.
 fn resolve_profile_path(
     host: &NativeHostPlatform,
-    name: &str,
+    name: Option<&str>,
     profile_file: Option<String>,
-) -> PathBuf {
-    profile_file.map_or_else(
-        || vaultkeeper_core::profile::profile_path(host.config_dir(), name),
-        PathBuf::from,
-    )
+) -> Result<PathBuf, vaultkeeper_core::errors::VaultError> {
+    if let Some(file) = profile_file {
+        return Ok(PathBuf::from(file));
+    }
+    let name = name.expect(
+        "clap enforces NAME is present when --profile-file is absent (required_unless_present)",
+    );
+    vaultkeeper_core::profile::profile_path(host.config_dir(), name)
 }
 
 async fn cmd_profile_init(name: &str, profile_file: Option<String>) -> i32 {
     let host = make_host();
-    let path = resolve_profile_path(&host, name, profile_file);
+    let path = match resolve_profile_path(&host, Some(name), profile_file) {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("Error: {e}");
+            return 1;
+        }
+    };
 
     match host.file_exists(&path).await {
         Ok(true) => {
@@ -745,10 +773,14 @@ async fn cmd_profile_init(name: &str, profile_file: Option<String>) -> i32 {
         }
     };
 
-    // Profiles carry no secrets — only names and policy — so they are meant
-    // to be committed, unlike config/key/secret storage (0o600).
+    // Profiles carry no secret *values* — only names and policy — so
+    // unlike config/key/secret storage they are safe to freely copy or
+    // commit elsewhere (e.g. into a project repo). They are still written
+    // owner-only (0o600), matching every other file this CLI writes (#267);
+    // that is a filesystem-permissions default, not a secrecy requirement,
+    // and callers are free to loosen or relocate the copy they commit.
     if let Err(e) = host
-        .write_file(&path, format!("{json}\n").as_bytes(), 0o644)
+        .write_file(&path, format!("{json}\n").as_bytes(), 0o600)
         .await
     {
         eprintln!("Error: {e}");
@@ -760,11 +792,20 @@ async fn cmd_profile_init(name: &str, profile_file: Option<String>) -> i32 {
 }
 
 /// Load a validated profile from `path`, resolving TTL/trust defaults from
-/// the active `config.json`.
+/// the active `config.json`. Returns the loaded profile alongside the same
+/// `VaultConfig` it loaded, so a caller that also needs config fields (e.g.
+/// `profile lint`'s active backend) doesn't have to load `config.json` a
+/// second time.
 async fn load_named_profile(
     host: &NativeHostPlatform,
     path: &Path,
-) -> Result<vaultkeeper_core::profile::LoadedProfile, String> {
+) -> Result<
+    (
+        vaultkeeper_core::profile::LoadedProfile,
+        vaultkeeper_core::types::VaultConfig,
+    ),
+    String,
+> {
     if !host.file_exists(path).await.map_err(|e| e.to_string())? {
         return Err(format!("No profile found at {}", path.display()));
     }
@@ -776,15 +817,26 @@ async fn load_named_profile(
         .map_err(|e| e.to_string())?;
     let defaults = vaultkeeper_core::profile::ProfileDefaults::from_vault_defaults(&cfg.defaults);
 
-    vaultkeeper_core::profile::load_profile_from_str(&json, &defaults).map_err(|e| e.to_string())
+    let profile =
+        vaultkeeper_core::profile::load_profile_from_str(&json, &defaults).map_err(|e| {
+            e.with_config_file_path(path.display().to_string())
+                .to_string()
+        })?;
+    Ok((profile, cfg))
 }
 
-async fn cmd_profile_show(name: &str, profile_file: Option<String>) -> i32 {
+async fn cmd_profile_show(name: Option<String>, profile_file: Option<String>) -> i32 {
     let host = make_host();
-    let path = resolve_profile_path(&host, name, profile_file);
+    let path = match resolve_profile_path(&host, name.as_deref(), profile_file) {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("Error: {e}");
+            return 1;
+        }
+    };
 
     match load_named_profile(&host, &path).await {
-        Ok(profile) => {
+        Ok((profile, _cfg)) => {
             print!("{}", vaultkeeper_core::profile::render_show(&profile));
             0
         }
@@ -823,11 +875,9 @@ async fn cmd_profile_list() -> i32 {
     0
 }
 
-async fn cmd_profile_lint(name: &str, profile_file: Option<String>) -> i32 {
+async fn cmd_profile_lint(name: Option<String>, profile_file: Option<String>) -> i32 {
     let host = make_host();
-    let path = resolve_profile_path(&host, name, profile_file);
-
-    let profile = match load_named_profile(&host, &path).await {
+    let path = match resolve_profile_path(&host, name.as_deref(), profile_file) {
         Ok(p) => p,
         Err(e) => {
             eprintln!("Error: {e}");
@@ -835,8 +885,10 @@ async fn cmd_profile_lint(name: &str, profile_file: Option<String>) -> i32 {
         }
     };
 
-    let cfg = match vaultkeeper_core::config::load_config(host.as_ref()).await {
-        Ok(c) => c,
+    // Single config.json load, shared with the profile loader above — see
+    // `load_named_profile`'s doc comment.
+    let (profile, cfg) = match load_named_profile(&host, &path).await {
+        Ok(loaded) => loaded,
         Err(e) => {
             eprintln!("Error: {e}");
             return 1;

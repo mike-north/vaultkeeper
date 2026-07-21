@@ -184,13 +184,27 @@ pub enum Materialize {
 /// The reserved object form of `materialize`. Only `mode` is inspected;
 /// everything else is captured (but ignored) so future fields don't break
 /// parsing of an otherwise-recognized reserved shape.
+///
+/// `mode` defaults to `"unspecified"` when absent (e.g. a bare
+/// `"materialize": {}`) so that shape still parses as `Extended` rather
+/// than falling through to a generic untagged-enum parse failure; the
+/// loader then rejects it with the typed
+/// [`crate::errors::VaultError::MaterializeModeUnsupported`] error naming
+/// `"unspecified"`, which is discoverable and precise, rather than an opaque
+/// serde message.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MaterializeExtended {
-    /// The reserved mode name (e.g. `"reference"`).
+    /// The reserved mode name (e.g. `"reference"`), or `"unspecified"` when
+    /// the object omitted `mode` entirely.
+    #[serde(default = "unspecified_materialize_mode")]
     pub mode: String,
     /// Any additional fields the reserved shape carries. Not interpreted.
     #[serde(flatten)]
     pub extra: serde_json::Map<String, serde_json::Value>,
+}
+
+fn unspecified_materialize_mode() -> String {
+    "unspecified".to_string()
 }
 
 /// The profile-facing minimum-trust name. Ordered `Sigstore > Registry >
@@ -241,5 +255,38 @@ impl MinTrust {
             Self::Registry => "registry",
             Self::Unverified => "unverified",
         }
+    }
+}
+
+#[cfg(test)]
+mod materialize_extended_tests {
+    use super::*;
+
+    #[test]
+    fn empty_object_parses_as_extended_with_unspecified_mode() {
+        let parsed: Materialize = serde_json::from_str("{}").unwrap();
+        match parsed {
+            Materialize::Extended(extended) => assert_eq!(extended.mode, "unspecified"),
+            Materialize::Simple(_) => panic!("expected Extended, got Simple"),
+        }
+    }
+
+    #[test]
+    fn reserved_mode_object_round_trips_through_serde_unchanged() {
+        let original: Materialize =
+            serde_json::from_str(r#"{ "mode": "reference", "backend": "1password" }"#).unwrap();
+        let round_tripped: serde_json::Value = serde_json::to_value(&original).unwrap();
+        let expected: serde_json::Value =
+            serde_json::from_str(r#"{ "mode": "reference", "backend": "1password" }"#).unwrap();
+        assert_eq!(round_tripped, expected);
+    }
+
+    #[test]
+    fn simple_string_form_still_parses_as_simple() {
+        let parsed: Materialize = serde_json::from_str(r#""secret""#).unwrap();
+        assert!(matches!(
+            parsed,
+            Materialize::Simple(MaterializeMode::Secret)
+        ));
     }
 }

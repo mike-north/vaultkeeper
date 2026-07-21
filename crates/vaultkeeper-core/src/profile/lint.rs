@@ -67,10 +67,19 @@ impl LintResult {
     /// The caveat every `lint` rendering must carry: `config.json` is
     /// per-machine while the profile is per-repository, so "loosening" is
     /// evaluated only against the linting machine's defaults, and is always
-    /// advisory — never a hard gate.
+    /// advisory — never a hard gate. Also spells out which of the two
+    /// baselines each policy field is compared against (see
+    /// [`loosening_warnings_for_entry`]'s per-warning `message`, which
+    /// already says "machine default" vs. "lint baseline" for the field it
+    /// concerns), so a warning's provenance is clear without re-deriving it.
     pub const CAVEAT: &'static str = "Note: config.json is per-machine while the profile is \
         per-repository, so this loosening check is evaluated against the linting machine's \
-        current defaults. It is advisory only, never a hard gate or CI failure.";
+        current defaults. minTrust and ttlSeconds warnings compare against this machine's \
+        config.json defaults; useLimit and requirePresencePerUse warnings compare against a \
+        fixed, conservative baseline (config.json carries no per-field default for either) — \
+        each warning's message says which. This whole check is advisory only, never a hard gate \
+        or CI failure; `profile lint` always exits 0 on a successfully-loaded profile regardless \
+        of warnings.";
 }
 
 /// Compare `entry` against `defaults`/`baseline` and collect any loosening
