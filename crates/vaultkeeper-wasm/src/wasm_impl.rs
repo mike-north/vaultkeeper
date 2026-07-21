@@ -238,15 +238,21 @@ fn coded_js_error(code: &str, message: &str) -> JsValue {
 /// entry point (`resolveSecretClaims`, `releaseHandle`) — issue #241 group B.
 ///
 /// A real `HandleId` (`crates/vaultkeeper-core/src/identity/handles.rs`) is
-/// always the canonical hyphenated string form of a UUID v4 — a fixed 36
-/// characters. A JS caller (a hostile or simply buggy host) can hand these
-/// entry points an arbitrary string of any length, and both used to
-/// `.to_string()`-allocate it immediately and feed it straight into a core
-/// lookup before anything checked its shape. This rejects anything that
-/// isn't a syntactically valid UUID *before* that allocation/lookup —
-/// including before the [`HandleId`](vaultkeeper_core::HandleId)-and-hash
-/// work `Display`/`Debug`'s redaction does on a failed lookup — so an
-/// attacker handing in a multi-megabyte string pays for none of that.
+/// generated as the canonical hyphenated string form of a UUID v4, but this
+/// guard is a cheap bound/shape sanity check, not a canonical-form
+/// authority — it accepts a bounded UUID string, and `Uuid::parse_str`'s
+/// leniency (e.g. accepting other RFC 4122 UUID string forms besides the
+/// canonical 36-character hyphenated one) is fine here, because a
+/// shape-valid-but-non-live id simply misses the table lookup and gets the
+/// same `authorization-denied` verdict either way. A JS caller (a hostile or
+/// simply buggy host) can hand these entry points an arbitrary string of any
+/// length, and both used to `.to_string()`-allocate it immediately and feed
+/// it straight into a core lookup before anything checked its shape. This
+/// rejects anything that isn't a syntactically plausible UUID *before* that
+/// allocation/lookup — including before the
+/// [`HandleId`](vaultkeeper_core::HandleId)-and-hash work `Display`/`Debug`'s
+/// redaction does on a failed lookup — so an attacker handing in a
+/// multi-megabyte string pays for none of that.
 ///
 /// Deliberately does not distinguish "too long", "too short", or
 /// "wrong shape" in the error message: any of those already means the value

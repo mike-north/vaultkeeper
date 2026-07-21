@@ -616,17 +616,123 @@ impl VaultKeeper {
     /// `SigningBackend` — a caller that has already resolved `(kid,
     /// backend_ref)` for an enrolled signing key (e.g. a future Rust port of
     /// the TypeScript `authorizeSigningKey()`) registers it here to obtain a
-    /// handle usable with [`VaultKeeper::resolve_signing_claims`]. `expires_at`
-    /// is caller-supplied and may be `None` for a handle that should not
-    /// expire on any core-imposed schedule — see `crate::identity::handles`
-    /// for why that must stay expressible.
-    pub fn register_signing_handle(
+    /// handle usable with [`VaultKeeper::resolve_signing_claims`]. The
+    /// underlying lifetime model stays structurally open to a caller-chosen
+    /// `expires_at` — see `crate::identity::handles` — but a never-expiring
+    /// (`None`) signing handle is refused with
+    /// [`VaultError::AuthorizationDenied`] until an issuance-side principal
+    /// check exists — an open product decision tracked in issue #261, with
+    /// this gate itself tracked in issue #282: with no invocation-time
+    /// re-check anywhere in the system, a `None` expiry would mint a
+    /// durable ambient signing capability redeemable by mere possession of
+    /// the returned [`HandleId`]. A finite `expires_at` is unaffected and
+    /// registers exactly as before.
+    ///
+    /// Only reachable from within this crate — `register_signing_handle` has
+    /// no callers today; the future lease-mint path referenced above is
+    /// in-crate.
+    // Allowed: no in-crate caller exists yet — the future lease-mint path
+    // (issue #282) is the intended first caller. `#[cfg(test)]` exercises
+    // this method directly in the meantime.
+    #[allow(dead_code)]
+    pub(crate) fn register_signing_handle(
         &mut self,
         kid: String,
         backend_ref: String,
         expires_at: Option<u64>,
-    ) -> HandleId {
-        self.handle_table
-            .insert_signing(SigningClaims { kid, backend_ref }, expires_at)
+    ) -> Result<HandleId, VaultError> {
+        let Some(expires_at) = expires_at else {
+            return Err(VaultError::AuthorizationDenied {
+                message: "long-lived signing handles are gated on an issuance-side principal check — see #282".into(),
+            });
+        };
+        Ok(self
+            .handle_table
+            .insert_signing(SigningClaims { kid, backend_ref }, Some(expires_at)))
+    }
+}
+
+#[cfg(test)]
+mod register_signing_handle_tests {
+    use std::collections::HashMap;
+
+    use super::{HandleTable, KeyManager, VaultError, VaultKeeper};
+    use crate::types::{BackendConfig, KeyRotationPolicy, TrustTier, VaultConfig, VaultDefaults};
+
+    /// A minimal in-memory `VaultKeeper` — bypasses `init()`'s host/doctor/
+    /// disk-persistence machinery (issue #282 regression tests only need the
+    /// handle table and a key manager, not a real backend).
+    fn test_vault_keeper() -> VaultKeeper {
+        let mut key_manager = KeyManager::new();
+        key_manager.init().expect("key manager init");
+        VaultKeeper {
+            config: VaultConfig {
+                version: 1,
+                backends: vec![BackendConfig {
+                    backend_type: "file".to_string(),
+                    enabled: true,
+                    plugin: None,
+                    path: Some("/tmp/vault-282".to_string()),
+                    options: Some(HashMap::new()),
+                }],
+                key_rotation: KeyRotationPolicy {
+                    grace_period_days: 7,
+                },
+                defaults: VaultDefaults {
+                    ttl_minutes: 60,
+                    trust_tier: TrustTier::Dev,
+                },
+                development_mode: None,
+            },
+            key_manager,
+            _backend: None,
+            handle_table: HandleTable::new(),
+            persist_keys: false,
+        }
+    }
+
+    /// Regression test for issue #282: a signing handle registered with
+    /// `expires_at: None` must be refused — pre-fix code minted it
+    /// unconditionally, producing a repeatable, never-expiring signing
+    /// capability redeemable by mere possession of the `HandleId`, with no
+    /// invocation-time principal check anywhere in the system.
+    #[test]
+    fn none_expiry_signing_handle_is_gated() {
+        let mut vault = test_vault_keeper();
+
+        let result =
+            vault.register_signing_handle("kid-1".to_string(), "backend-ref-1".to_string(), None);
+
+        let err = result.expect_err("None expiry must be refused");
+        match err {
+            VaultError::AuthorizationDenied { message } => {
+                assert!(
+                    message.contains("282"),
+                    "gate error message should name the tracking issue: {message}"
+                );
+            }
+            other => panic!("expected AuthorizationDenied, got {other:?}"),
+        }
+    }
+
+    /// A finite `expires_at` must keep registering and resolving exactly as
+    /// before the #282 gate was added.
+    #[test]
+    fn finite_expiry_signing_handle_still_registers_and_resolves() {
+        let mut vault = test_vault_keeper();
+
+        let handle = vault
+            .register_signing_handle(
+                "kid-2".to_string(),
+                "backend-ref-2".to_string(),
+                Some(u64::MAX),
+            )
+            .expect("finite expiry must register");
+
+        let claims = vault
+            .resolve_signing_claims(&handle)
+            .expect("registered signing handle must resolve");
+        assert_eq!(claims.kid, "kid-2");
+        assert_eq!(claims.backend_ref, "backend-ref-2");
     }
 }
