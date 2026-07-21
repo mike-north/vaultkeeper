@@ -98,6 +98,21 @@ pub trait SecretBackend: Send + Sync {
 
     /// Check whether a secret exists for the given id.
     async fn exists(&self, id: &str) -> Result<bool, VaultError>;
+
+    /// Returns this backend's presence-capability view when it implements
+    /// [`PresenceCapableBackend`], or `None` otherwise.
+    ///
+    /// Mirrors the TypeScript library's `isPresenceCapableBackend` runtime
+    /// duck-type check (`packages/vaultkeeper/src/backend/types.ts`) via a
+    /// static probe, since Rust has no structural interface check on trait
+    /// objects: a backend that implements [`PresenceCapableBackend`] MUST
+    /// override this to return `Some(self)`. The default `None` is what makes
+    /// [`get_backend_capabilities`] safely report `presence_per_use: false`
+    /// for a backend that never opted in — an unknown backend never silently
+    /// claims presence.
+    fn as_presence_capable(&self) -> Option<&dyn PresenceCapableBackend> {
+        None
+    }
 }
 
 /// Backend that can enumerate stored secret IDs.
@@ -106,4 +121,200 @@ pub trait SecretBackend: Send + Sync {
 pub trait ListableBackend: SecretBackend {
     /// List IDs of all secrets managed by this backend.
     async fn list(&self) -> Result<Vec<String>, VaultError>;
+}
+
+/// A keyed backend operation that a presence-per-use requirement can gate.
+///
+/// Mirrors the TypeScript library's `PresenceOperation`
+/// (`packages/vaultkeeper/src/backend/types.ts`). Used by
+/// [`BackendCapabilities::presence_enforced_operations`] to express that an
+/// instance forces a fresh per-use action for only *some* operations. `Read`
+/// covers a backend retrieve; `Store`, `Delete`, and `Sign` are the write,
+/// removal, and signing paths.
+///
+/// In the TypeScript library, `Read` gates the secret read behind
+/// `setup`/`exec` (`setup` fetches the secret from the backend before minting
+/// the token). `vaultkeeper-core`'s `VaultKeeper::setup()` does not — it mints
+/// a token directly from the caller-supplied secret value with no backend
+/// read, and its CLI `exec` gets the secret from the JWE claims rather than a
+/// live retrieve (see the seam note on
+/// [`crate::vault::enforce_presence_requirement`]). `Read` here names the
+/// backend operation the capability model gates, independent of which
+/// caller-facing operation eventually performs it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum PresenceOperation {
+    Read,
+    Store,
+    Delete,
+    Sign,
+}
+
+impl PresenceOperation {
+    /// Stable lowercase name matching the TypeScript `PresenceOperation`
+    /// string-literal union (`'read' | 'store' | 'delete' | 'sign'`), used in
+    /// `NotCapable` error messages.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            PresenceOperation::Read => "read",
+            PresenceOperation::Store => "store",
+            PresenceOperation::Delete => "delete",
+            PresenceOperation::Sign => "sign",
+        }
+    }
+}
+
+impl std::fmt::Display for PresenceOperation {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// The set of security capabilities a configured backend instance advertises.
+///
+/// Mirrors the TypeScript library's `BackendCapabilities`
+/// (`packages/vaultkeeper/src/backend/types.ts`).
+///
+/// Capabilities describe what a **specific configured instance** guarantees,
+/// not what its backend *type* is generally able to do. Two instances of the
+/// same backend type can report different capabilities depending on their
+/// configuration (e.g. a YubiKey slot with a touch policy vs. one without, or
+/// 1Password in `per-access` vs. `session` mode). Never derive a capability
+/// from [`SecretBackend::backend_type`] alone.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BackendCapabilities {
+    /// `true` when this configured instance can force a distinct, fresh
+    /// physical human action (e.g. a YubiKey touch, a gpg-smartcard tap, or a
+    /// 1Password per-use biometric approval) — a deliberate action taken *for
+    /// this operation, right now*, not merely "a vault was unlocked at some
+    /// point."
+    ///
+    /// The guarantee is **operation-scoped**, not blanket: see
+    /// [`BackendCapabilities::presence_enforced_operations`] and
+    /// [`BackendCapabilities::enforces`].
+    ///
+    /// Backends that do not implement [`PresenceCapableBackend`] are treated
+    /// as `false` by [`get_backend_capabilities`] — an unknown backend never
+    /// silently claims presence.
+    pub presence_per_use: bool,
+
+    /// The keyed operations for which this instance actually forces a fresh
+    /// per-use human action. When `None`, a `presence_per_use: true` instance
+    /// is taken to force presence for **all** keyed operations — the default
+    /// for a touch device (e.g. a YubiKey whose challenge-response touch fires
+    /// on every `store`/`retrieve`/`delete`).
+    ///
+    /// A backend that can force presence for only *some* operations must list
+    /// exactly those, so a presence-per-use request for an **uncovered**
+    /// operation fails closed with [`VaultError::NotCapable`] rather than
+    /// silently passing without a fresh action. For example, 1Password
+    /// `per-access` forces a fresh biometric on reads (`setup`/`exec`) but
+    /// routes `store`/`delete` through the cached session client, so it
+    /// reports `Some(vec![PresenceOperation::Read])` — a flagged
+    /// `store`/`delete` is then correctly refused.
+    ///
+    /// Ignored when [`BackendCapabilities::presence_per_use`] is `false`.
+    pub presence_enforced_operations: Option<Vec<PresenceOperation>>,
+}
+
+impl BackendCapabilities {
+    /// The safe default reported for a backend that does not implement
+    /// [`PresenceCapableBackend`] — never silently claims presence.
+    pub fn none() -> Self {
+        Self {
+            presence_per_use: false,
+            presence_enforced_operations: None,
+        }
+    }
+
+    /// Whether this capability report forces a fresh per-use human action for
+    /// `operation`.
+    ///
+    /// `false` whenever [`BackendCapabilities::presence_per_use`] is `false`.
+    /// When `presence_per_use` is `true` and
+    /// [`BackendCapabilities::presence_enforced_operations`] is `None`, every
+    /// keyed operation is covered (a touch device). Otherwise only the listed
+    /// operations are covered.
+    pub fn enforces(&self, operation: PresenceOperation) -> bool {
+        if !self.presence_per_use {
+            return false;
+        }
+        match &self.presence_enforced_operations {
+            None => true,
+            Some(ops) => ops.contains(&operation),
+        }
+    }
+}
+
+/// Backend that can report its security [`BackendCapabilities`] for its
+/// configured instance.
+///
+/// Mirrors the TypeScript library's `PresenceCapableBackend`
+/// (`packages/vaultkeeper/src/backend/types.ts`).
+///
+/// This is an optional extension interface, mirroring [`ListableBackend`]: it
+/// is **not** a required member of [`SecretBackend`]. Prefer
+/// [`get_backend_capabilities`] over calling
+/// [`PresenceCapableBackend::get_capabilities`] directly, so a backend that
+/// does not implement the interface safely defaults to no capabilities rather
+/// than being assumed to have them.
+///
+/// [`PresenceCapableBackend::get_capabilities`] must reflect the **current
+/// configured/live state** of the instance (configuration, or a live
+/// device/session probe) rather than a hardcoded per-type answer, and must
+/// not itself trigger a human-presence prompt.
+///
+/// # Capability self-report trust limit (issue #242 AC5)
+///
+/// [`BackendCapabilities`] is **host-attested**: the core trusts the value a
+/// backend implementation chooses to report rather than independently
+/// verifying it. Core-owned backends (e.g. [`super::FileBackend`],
+/// [`super::InMemoryBackend`], and other backends implemented directly in
+/// this crate) are trustworthy self-reporters because their
+/// `get_capabilities` bodies ship as part of this codebase and are reviewed
+/// like any other core logic. A backend bridged from a **dishonest host**
+/// (for example, a JS-callback backend running under a compromised embedder)
+/// that falsely reports `presence_per_use: true` could defeat this guarantee.
+/// Defending against a dishonest host is explicitly out of scope — the trust
+/// boundary is the host itself, which is assumed to be the trusted embedder
+/// (see `docs/specs/005-single-core-consolidation.md`).
+#[cfg_attr(target_arch = "wasm32", async_trait::async_trait(?Send))]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait::async_trait)]
+pub trait PresenceCapableBackend: SecretBackend {
+    /// Report the capabilities of this configured instance.
+    async fn get_capabilities(&self) -> Result<BackendCapabilities, VaultError>;
+}
+
+/// Type-level probe for backends that implement the capability-reporting
+/// contract, mirroring the TypeScript library's `isPresenceCapableBackend`.
+///
+/// Prefer [`get_backend_capabilities`] for actually reading capabilities;
+/// this is exposed for parity with the TS API and for callers that only need
+/// the yes/no answer.
+pub fn is_presence_capable_backend(backend: &dyn SecretBackend) -> bool {
+    backend.as_presence_capable().is_some()
+}
+
+/// Resolve a backend's [`BackendCapabilities`], defaulting safely for
+/// backends that do not implement [`PresenceCapableBackend`].
+///
+/// Mirrors the TypeScript library's `getBackendCapabilities`
+/// (`packages/vaultkeeper/src/backend/types.ts`).
+///
+/// A backend without the capability interface reports
+/// [`BackendCapabilities::none`] (`presence_per_use: false`) — an unknown
+/// backend never silently claims a security guarantee it cannot prove. This
+/// is the only supported way to query capabilities; callers must not assume a
+/// capability from [`SecretBackend::backend_type`] alone.
+///
+/// Propagates whatever error a capable backend's own `get_capabilities()`
+/// call returns, so a backend whose capability probe itself fails is refused
+/// by callers (see [`crate::vault::enforce_presence_requirement`]) rather
+/// than silently treated as either capable or non-capable.
+pub async fn get_backend_capabilities(
+    backend: &dyn SecretBackend,
+) -> Result<BackendCapabilities, VaultError> {
+    match backend.as_presence_capable() {
+        Some(capable) => capable.get_capabilities().await,
+        None => Ok(BackendCapabilities::none()),
+    }
 }

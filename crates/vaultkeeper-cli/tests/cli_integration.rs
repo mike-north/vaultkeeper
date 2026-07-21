@@ -222,6 +222,51 @@ mod store_delete {
             .success()
             .stdout(predicate::str::contains("Secret \"some-key\" deleted"));
     }
+
+    // ─── Presence-per-use enforcement (issue #242) ───────────────
+    //
+    // The `file` backend never implements `PresenceCapableBackend`, so it is
+    // never presence-per-use capable — `--require-presence-per-use` must
+    // refuse with a `NotCapable` error before the backend is touched at all.
+
+    #[test]
+    fn store_with_require_presence_per_use_refuses_before_touching_backend() {
+        let (mut cmd, _dir) = cli_test_env();
+        cmd.args(["store", "--name", "api-key", "--require-presence-per-use"])
+            .write_stdin("sk-live-abc123")
+            .assert()
+            .code(1)
+            .stderr(predicate::str::contains("active backend ('file')"))
+            .stderr(predicate::str::contains("YubiKey"))
+            .stderr(predicate::str::contains("1Password"));
+    }
+
+    #[test]
+    fn store_without_the_flag_is_not_gated() {
+        let (mut cmd, _dir) = cli_test_env();
+        cmd.args(["store", "--name", "api-key"])
+            .write_stdin("sk-live-abc123")
+            .assert()
+            .success();
+    }
+
+    #[test]
+    fn delete_with_require_presence_per_use_refuses_before_touching_backend() {
+        // Note: this CLI's `delete` is deliberately idempotent for a missing
+        // secret (see cmd_delete), so a follow-up unflagged `delete` can't be
+        // used as after-the-fact proof the backend was untouched — that
+        // guarantee is structural (the presence check runs before
+        // `backend.delete()` is ever called) and is covered directly by the
+        // `fresh_action_demands` assertions in
+        // `crates/vaultkeeper-core/tests/presence_capability.rs`.
+        let (mut cmd, _dir) = cli_test_env();
+        cmd.args(["delete", "--name", "api-key", "--require-presence-per-use"])
+            .assert()
+            .code(1)
+            .stderr(predicate::str::contains("active backend ('file')"))
+            .stderr(predicate::str::contains("YubiKey"))
+            .stderr(predicate::str::contains("1Password"));
+    }
 }
 
 // ─── Config command ──────────────────────────────────────────────
