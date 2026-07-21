@@ -3,7 +3,7 @@
  */
 
 import { CompactEncrypt, compactDecrypt } from 'jose'
-import type { VaultClaims } from '../types.js'
+import type { LeasePresence, VaultClaims } from '../types.js'
 import { InvalidTokenError } from '../errors.js'
 
 const ALGORITHM = 'dir'
@@ -57,15 +57,39 @@ function isObject(value: unknown): value is Record<string, unknown> {
 }
 
 /**
+ * Type guard for a signing lease's `pres` (most-recent presence-per-use
+ * action) claim.
+ */
+function isLeasePresence(value: unknown): value is LeasePresence {
+  if (!isObject(value)) return false
+  const { op, at, method, backend } = value
+  return (
+    typeof op === 'string' &&
+    typeof at === 'number' &&
+    typeof method === 'string' &&
+    typeof backend === 'string'
+  )
+}
+
+/**
  * Parses a raw JSON payload object into VaultClaims, validating that all required fields
  * are present and of the correct types. Returns `undefined` if validation fails.
+ *
+ * `bkd`/`val` are optional (present only for a secret claim); `kty`, `kid`,
+ * `kgen`, and `pres` are the session signing-key lease fields (issue #280) —
+ * all parsed and preserved here so `validateClaims` (the actual
+ * secret-vs-lease business-rule chokepoint) sees the real payload shape
+ * rather than one that was already silently stripped at this boundary. A
+ * `kty` present but not one of the two known values fails the parse outright
+ * — this mirrors the Rust core, where `ClaimsKind` has no catch-all variant
+ * and `serde` rejects an unrecognized value at deserialization.
  */
 function parseVaultClaims(raw: unknown): VaultClaims | undefined {
   if (!isObject(raw)) {
     return undefined
   }
 
-  const { jti, exp, iat, sub, exe, use, tid, bkd, val, ref } = raw
+  const { jti, exp, iat, sub, exe, use, tid, bkd, val, ref, kty, kid, kgen, pres } = raw
 
   if (typeof jti !== 'string') return undefined
   if (typeof exp !== 'number') return undefined
@@ -74,11 +98,30 @@ function parseVaultClaims(raw: unknown): VaultClaims | undefined {
   if (typeof exe !== 'string') return undefined
   if (use !== null && typeof use !== 'number') return undefined
   if (tid !== 1 && tid !== 2 && tid !== 3) return undefined
-  if (typeof bkd !== 'string') return undefined
-  if (typeof val !== 'string') return undefined
+  if (bkd !== undefined && typeof bkd !== 'string') return undefined
+  if (val !== undefined && typeof val !== 'string') return undefined
   if (typeof ref !== 'string') return undefined
+  if (kty !== undefined && kty !== 'secret' && kty !== 'signing-key') return undefined
+  if (kid !== undefined && typeof kid !== 'string') return undefined
+  if (kgen !== undefined && typeof kgen !== 'number') return undefined
+  if (pres !== undefined && !isLeasePresence(pres)) return undefined
 
-  return { jti, exp, iat, sub, exe, use: use ?? null, tid, bkd, val, ref }
+  return {
+    jti,
+    exp,
+    iat,
+    sub,
+    exe,
+    use: use ?? null,
+    tid,
+    bkd,
+    val,
+    ref,
+    kty,
+    kid,
+    kgen,
+    pres,
+  }
 }
 
 /**

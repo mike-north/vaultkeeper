@@ -236,4 +236,115 @@ describe('validateClaims / validate_claims cross-language parity (issue #280)', 
     expect(runTs(claims)).toBeUndefined()
     expect(runRust(claims)).toBeUndefined()
   })
+
+  it('both reject a signing-key lease carrying an empty val — no empty-string exemption', () => {
+    const claims = makeLeaseClaims({ val: '' })
+    const tsMessage = runTs(claims)
+    const rustError = runRust(claims)
+    expect(tsMessage).toBe('Invalid token: signing lease must not carry a val')
+    expect(rustError?.message).toBe(tsMessage)
+  })
+
+  it('both reject a signing-key lease carrying a whitespace-only val — no exemption', () => {
+    const claims = makeLeaseClaims({ val: '   ' })
+    const tsMessage = runTs(claims)
+    const rustError = runRust(claims)
+    expect(tsMessage).toBe('Invalid token: signing lease must not carry a val')
+    expect(rustError?.message).toBe(tsMessage)
+  })
+
+  it('both reject a signing-key lease with a whitespace-only kid', () => {
+    const claims = makeLeaseClaims({ kid: '   ' })
+    const tsMessage = runTs(claims)
+    const rustError = runRust(claims)
+    expect(tsMessage).toBe('Invalid token: kid must not be empty')
+    expect(rustError?.message).toBe(tsMessage)
+  })
+
+  it('both reject a secret claim carrying a signing-lease kid — cross-shape leakage', () => {
+    const claims = makeSecretClaims({ kid: 'kid-should-not-be-here' })
+    const tsMessage = runTs(claims)
+    const rustError = runRust(claims)
+    expect(tsMessage).toBe(
+      'Invalid token: secret claim must not carry signing-lease fields (kid/kgen/pres)',
+    )
+    expect(rustError?.message).toBe(tsMessage)
+  })
+
+  it('both reject a secret claim carrying a signing-lease kgen — cross-shape leakage', () => {
+    const claims = makeSecretClaims({ kgen: 1 })
+    const tsMessage = runTs(claims)
+    const rustError = runRust(claims)
+    expect(tsMessage).toBe(
+      'Invalid token: secret claim must not carry signing-lease fields (kid/kgen/pres)',
+    )
+    expect(rustError?.message).toBe(tsMessage)
+  })
+
+  it('both reject a secret claim carrying a signing-lease pres — cross-shape leakage', () => {
+    const claims = makeSecretClaims({
+      pres: { op: 'sign', at: Math.floor(Date.now() / 1000), method: 'touch', backend: 'yubikey' },
+    })
+    const tsMessage = runTs(claims)
+    const rustError = runRust(claims)
+    expect(tsMessage).toBe(
+      'Invalid token: secret claim must not carry signing-lease fields (kid/kgen/pres)',
+    )
+    expect(rustError?.message).toBe(tsMessage)
+  })
+
+  // An unrecognized `kty` cannot be fed through `runRust`'s normal path: the
+  // Rust core's `ClaimsKind` has no catch-all variant, so `serde` rejects it
+  // at *deserialization* — before `validate_claims` is even reached — while
+  // the TS side rejects it inside `validateClaims` itself (a defense-in-depth
+  // check, since `parseVaultClaims` already rejects it earlier in the real
+  // decrypt pipeline too). The two therefore cannot produce byte-identical
+  // messages; this asserts outcome parity (both reject) and documents why the
+  // messages differ, following this suite's established convention for that
+  // case (see the header comment).
+  it('both reject an unrecognized kty rather than silently treating it as a secret claim', () => {
+    const claims = makeSecretClaims()
+    const record: Record<string, unknown> = { ...claims, kty: 'wat' }
+    if (!isRecordVaultClaimsShapedIgnoringKty(record)) {
+      throw new Error('unreachable: base claims always satisfy the minimal shape')
+    }
+
+    expect(() => {
+      validateClaims(record)
+    }).toThrow('Invalid token: unrecognized claim kind kty=wat')
+
+    // Rust: `serde_json::from_str::<VaultClaims>` fails outright for an
+    // unknown `ClaimsKind` string — bridged as `invalid-token`, not the
+    // typed validation error `validateClaims` itself would raise for a
+    // recognized-but-invalid shape. The messages therefore cannot be
+    // byte-identical; this asserts outcome parity (both reject) instead.
+    if (__testValidateClaims === undefined) {
+      throw new Error('__testValidateClaims not loaded — beforeAll did not run')
+    }
+    expect(() => {
+      __testValidateClaims?.(JSON.stringify({ ...record, tid: String(record.tid) }), BigInt(0))
+    }).toThrow()
+  })
 })
+
+/**
+ * Type predicate used only to build a deliberately malformed claims payload
+ * (an unrecognized `kty`) for testing `validateClaims`'s own defense-in-depth
+ * rejection. The real decrypt pipeline's `parseVaultClaims`
+ * (`packages/vaultkeeper/src/jwe/token.ts`) already rejects this earlier and
+ * is not exercised by this path — this validates only the minimal shape
+ * `validateClaims` itself relies on, treating `kty` as an arbitrary string
+ * rather than requiring it to be a known `ClaimsKind`.
+ */
+function isRecordVaultClaimsShapedIgnoringKty(value: unknown): value is VaultClaims {
+  if (typeof value !== 'object' || value === null) return false
+  const record: Record<string, unknown> = { ...value }
+  return (
+    typeof record.jti === 'string' &&
+    typeof record.exp === 'number' &&
+    typeof record.iat === 'number' &&
+    typeof record.sub === 'string' &&
+    typeof record.exe === 'string' &&
+    typeof record.ref === 'string'
+  )
+}

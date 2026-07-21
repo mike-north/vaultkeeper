@@ -248,11 +248,18 @@ pub fn extract_kid(jwe: &str) -> Result<Option<String>, VaultError> {
 /// split on the TypeScript side):
 ///
 /// - A **secret** claim (`kty` omitted or `Secret`) requires a non-empty
-///   `bkd` and `val`.
-/// - A **signing-key lease** (`kty: SigningKey`) MUST NOT carry a `val`,
-///   requires a non-empty `kid`, and requires `kgen` to be present — a lease
-///   missing `kgen` is rejected outright, never defaulted to generation 0
-///   (fail-closed; the revocation design depends on this being explicit).
+///   `bkd` and `val`, and must not carry any signing-lease-only field
+///   (`kid`/`kgen`/`pres`).
+/// - A **signing-key lease** (`kty: SigningKey`) MUST NOT carry a `val` key
+///   at all (present-but-empty/whitespace is rejected the same as
+///   present-and-non-empty), requires a non-empty `kid`, and requires `kgen`
+///   to be present — a lease missing `kgen` is rejected outright, never
+///   defaulted to generation 0 (fail-closed; the revocation design depends on
+///   this being explicit).
+///
+/// An unrecognized `kty` value can never reach this function: [`ClaimsKind`]
+/// has no catch-all variant, so `serde` rejects it at deserialization,
+/// before `validate_claims` is even called.
 ///
 /// `current_usage` is the number of times this token has already been used.
 /// Pass `0` when usage tracking is not yet implemented at the storage layer.
@@ -282,34 +289,48 @@ pub fn validate_claims(claims: &VaultClaims, current_usage: u64) -> Result<(), V
         ));
     }
 
-    if matches!(claims.kty, Some(ClaimsKind::SigningKey)) {
-        // Signing-key lease: no secret value ever travels on this claims shape.
-        if claims.val.as_deref().is_some_and(|v| !v.trim().is_empty()) {
-            return Err(VaultError::Other(
-                "Invalid token: signing lease must not carry a val".to_string(),
-            ));
+    match claims.kty {
+        Some(ClaimsKind::SigningKey) => {
+            // Signing-key lease: no secret value ever travels on this claims
+            // shape — a `val` key present at all (even empty/whitespace) is
+            // rejected, not just a non-empty one.
+            if claims.val.is_some() {
+                return Err(VaultError::Other(
+                    "Invalid token: signing lease must not carry a val".to_string(),
+                ));
+            }
+            if claims.kid.as_deref().unwrap_or("").trim().is_empty() {
+                return Err(VaultError::Other(
+                    "Invalid token: kid must not be empty".to_string(),
+                ));
+            }
+            if claims.kgen.is_none() {
+                return Err(VaultError::Other(
+                    "Invalid token: kgen is required for a signing lease".to_string(),
+                ));
+            }
         }
-        if claims.kid.as_deref().unwrap_or("").trim().is_empty() {
-            return Err(VaultError::Other(
-                "Invalid token: kid must not be empty".to_string(),
-            ));
-        }
-        if claims.kgen.is_none() {
-            return Err(VaultError::Other(
-                "Invalid token: kgen is required for a signing lease".to_string(),
-            ));
-        }
-    } else {
-        // Ordinary secret claim (kty omitted or Secret).
-        if claims.bkd.as_deref().unwrap_or("").trim().is_empty() {
-            return Err(VaultError::Other(
-                "Invalid token: bkd must not be empty".to_string(),
-            ));
-        }
-        if claims.val.as_deref().unwrap_or("").trim().is_empty() {
-            return Err(VaultError::Other(
-                "Invalid token: val must not be empty".to_string(),
-            ));
+        None | Some(ClaimsKind::Secret) => {
+            // Ordinary secret claim (kty omitted or Secret).
+            if claims.bkd.as_deref().unwrap_or("").trim().is_empty() {
+                return Err(VaultError::Other(
+                    "Invalid token: bkd must not be empty".to_string(),
+                ));
+            }
+            if claims.val.as_deref().unwrap_or("").trim().is_empty() {
+                return Err(VaultError::Other(
+                    "Invalid token: val must not be empty".to_string(),
+                ));
+            }
+            // Cross-shape field leakage: a secret claim must never carry
+            // signing-lease-only fields.
+            if claims.kid.is_some() || claims.kgen.is_some() || claims.pres.is_some() {
+                return Err(VaultError::Other(
+                    "Invalid token: secret claim must not carry signing-lease fields \
+                     (kid/kgen/pres)"
+                        .to_string(),
+                ));
+            }
         }
     }
 
@@ -410,7 +431,7 @@ pub fn clear_blocklist() {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::TrustTier;
+    use crate::types::{LeasePresence, TrustTier};
 
     fn test_claims() -> VaultClaims {
         let now = time::now_secs();
@@ -761,5 +782,73 @@ mod tests {
         let mut claims = test_claims();
         claims.kty = None;
         assert!(validate_claims(&claims, 0).is_ok());
+    }
+
+    #[test]
+    fn validate_claims_rejects_signing_lease_with_empty_val() {
+        // A `val` key present at all — even empty or whitespace-only — must
+        // be rejected identically to a non-empty one; there is no
+        // empty-string exemption (issue #287 follow-up).
+        let mut claims = test_signing_lease_claims();
+        claims.val = Some(String::new());
+        let err = validate_claims(&claims, 0).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Invalid token: signing lease must not carry a val"
+        );
+
+        let mut claims = test_signing_lease_claims();
+        claims.val = Some("   ".to_string());
+        let err = validate_claims(&claims, 0).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Invalid token: signing lease must not carry a val"
+        );
+    }
+
+    #[test]
+    fn validate_claims_rejects_signing_lease_with_whitespace_only_kid() {
+        let mut claims = test_signing_lease_claims();
+        claims.kid = Some("   ".to_string());
+        let err = validate_claims(&claims, 0).unwrap_err();
+        assert_eq!(err.to_string(), "Invalid token: kid must not be empty");
+    }
+
+    #[test]
+    fn validate_claims_rejects_secret_claim_carrying_kid() {
+        let mut claims = test_claims();
+        claims.kid = Some("kid-should-not-be-here".to_string());
+        let err = validate_claims(&claims, 0).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Invalid token: secret claim must not carry signing-lease fields (kid/kgen/pres)"
+        );
+    }
+
+    #[test]
+    fn validate_claims_rejects_secret_claim_carrying_kgen() {
+        let mut claims = test_claims();
+        claims.kgen = Some(1);
+        let err = validate_claims(&claims, 0).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Invalid token: secret claim must not carry signing-lease fields (kid/kgen/pres)"
+        );
+    }
+
+    #[test]
+    fn validate_claims_rejects_secret_claim_carrying_pres() {
+        let mut claims = test_claims();
+        claims.pres = Some(LeasePresence {
+            op: "sign".to_string(),
+            at: time::now_secs(),
+            method: "touch".to_string(),
+            backend: "yubikey".to_string(),
+        });
+        let err = validate_claims(&claims, 0).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Invalid token: secret claim must not carry signing-lease fields (kid/kgen/pres)"
+        );
     }
 }

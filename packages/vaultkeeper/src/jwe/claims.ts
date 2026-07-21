@@ -112,24 +112,54 @@ export function validateClaims(claims: VaultClaims, usedCount = 0): void {
     throw new VaultError('Invalid token: ref must not be empty')
   }
 
-  if (claims.kty === 'signing-key') {
-    // Signing-key lease: no secret value ever travels on this claims shape.
-    if (claims.val !== undefined && claims.val.trim() !== '') {
-      throw new VaultError('Invalid token: signing lease must not carry a val')
+  // A `switch` (rather than `if`/`else if`) keeps the `default` branch below
+  // reachable to the type checker's `no-unnecessary-condition` lint even
+  // though `ClaimsKind` only has two known values — it exists as a runtime
+  // defense against a `claims` value that did not actually go through
+  // `parseVaultClaims`'s narrowing (this function is also exercised directly
+  // in tests, and could in principle be called by some other caller with an
+  // unvalidated payload).
+  switch (claims.kty) {
+    case 'signing-key': {
+      // Signing-key lease: no secret value ever travels on this claims
+      // shape — a `val` key present at all (even empty/whitespace) is
+      // rejected, not just a non-empty one.
+      if (claims.val !== undefined) {
+        throw new VaultError('Invalid token: signing lease must not carry a val')
+      }
+      if (claims.kid === undefined || claims.kid.trim() === '') {
+        throw new VaultError('Invalid token: kid must not be empty')
+      }
+      if (claims.kgen === undefined) {
+        throw new VaultError('Invalid token: kgen is required for a signing lease')
+      }
+      break
     }
-    if (claims.kid === undefined || claims.kid.trim() === '') {
-      throw new VaultError('Invalid token: kid must not be empty')
+    case 'secret':
+    case undefined: {
+      // Ordinary secret claim (kty omitted or 'secret').
+      if (claims.bkd === undefined || claims.bkd.trim() === '') {
+        throw new VaultError('Invalid token: bkd must not be empty')
+      }
+      if (claims.val === undefined || claims.val.trim() === '') {
+        throw new VaultError('Invalid token: val must not be empty')
+      }
+      // Cross-shape field leakage: a secret claim must never carry
+      // signing-lease-only fields, even if some future caller mistakenly
+      // sets them alongside a secret payload.
+      if (claims.kid !== undefined || claims.kgen !== undefined || claims.pres !== undefined) {
+        throw new VaultError(
+          'Invalid token: secret claim must not carry signing-lease fields (kid/kgen/pres)',
+        )
+      }
+      break
     }
-    if (claims.kgen === undefined) {
-      throw new VaultError('Invalid token: kgen is required for a signing lease')
-    }
-  } else {
-    // Ordinary secret claim (kty omitted or 'secret').
-    if (claims.bkd === undefined || claims.bkd.trim() === '') {
-      throw new VaultError('Invalid token: bkd must not be empty')
-    }
-    if (claims.val === undefined || claims.val.trim() === '') {
-      throw new VaultError('Invalid token: val must not be empty')
+    default: {
+      // `kty` present but neither 'secret' nor 'signing-key' — the Rust core
+      // rejects this at deserialization (ClaimsKind has no catch-all
+      // variant); mirror that fail-closed behavior here rather than
+      // silently treating an unrecognized kind as a secret claim.
+      throw new VaultError(`Invalid token: unrecognized claim kind kty=${String(claims.kty)}`)
     }
   }
 

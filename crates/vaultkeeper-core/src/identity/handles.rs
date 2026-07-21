@@ -272,8 +272,13 @@ impl From<String> for HandleId {
 /// accidentally observe it.
 #[derive(Debug, Clone)]
 pub enum StoredClaims {
-    /// Claims for an ordinary secret-access handle.
-    Secret(VaultClaims),
+    /// Claims for an ordinary secret-access handle. Boxed: `VaultClaims` grew
+    /// past clippy's `large_enum_variant` threshold once the signing-lease
+    /// fields (`kty`/`kid`/`kgen`/`pres`, issue #280) were added, and the much
+    /// smaller `Signing(SigningClaims)` variant would otherwise pad every
+    /// `StoredClaims` value (including every `Signing` one) up to the larger
+    /// variant's size.
+    Secret(Box<VaultClaims>),
     /// Claims for a signing-key handle. Carries only references (`kid`,
     /// `backend_ref`) — never key material.
     Signing(SigningClaims),
@@ -429,7 +434,7 @@ impl HandleTable {
         // for the separate, not-yet-wired engine-swap primitive — see
         // `VaultKeeper::register_signing_handle`).
         let secret = claims.val.take().map(Zeroizing::new);
-        self.insert(StoredClaims::Secret(claims), secret, expires_at)
+        self.insert(StoredClaims::Secret(Box::new(claims)), secret, expires_at)
     }
 
     /// Register a signing-key handle. Carries no secret — a signing-key
@@ -492,7 +497,7 @@ impl HandleTable {
         // ensure_live just confirmed presence and non-expiry.
         let entry = self.entries.get(id).expect("checked live above");
         match &entry.claims {
-            StoredClaims::Secret(claims) => Ok(claims.clone()),
+            StoredClaims::Secret(claims) => Ok((**claims).clone()),
             StoredClaims::Signing(_) => Err(wrong_kind_error("secret", "signing key")),
         }
     }
@@ -853,7 +858,10 @@ mod tests {
                 table.entries.insert(
                     id.clone(),
                     HandleEntry {
-                        claims: StoredClaims::Secret(secret_claims(&format!("jti-exp-{i}"), "x")),
+                        claims: StoredClaims::Secret(Box::new(secret_claims(
+                            &format!("jti-exp-{i}"),
+                            "x",
+                        ))),
                         secret: None,
                         expires_at: Some(now - 1),
                     },
