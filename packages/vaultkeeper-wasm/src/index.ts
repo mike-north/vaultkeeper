@@ -85,6 +85,7 @@ export {
   UnknownBackendTypeError,
   ConfigParseError,
   SetupError,
+  MaterializeModeUnsupportedError,
 } from './errors.js'
 export type { ExecutableTrustRequiredReason } from './errors.js'
 

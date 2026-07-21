@@ -677,6 +677,388 @@ mod approve {
     }
 }
 
+// ─── Profile command (issue #277) ───────────────────────────────
+
+mod profile {
+    use super::*;
+
+    fn write_profile(dir: &TempDir, name: &str, json: &serde_json::Value) {
+        let profiles_dir = dir.path().join("profiles");
+        fs::create_dir_all(&profiles_dir).expect("failed to create profiles dir");
+        fs::write(
+            profiles_dir.join(format!("{name}.json")),
+            serde_json::to_string_pretty(json).unwrap(),
+        )
+        .expect("failed to write profile");
+    }
+
+    #[test]
+    fn init_creates_a_loadable_profile() {
+        let (mut cmd, dir) = cli_test_env();
+        cmd.args(["profile", "init", "my-profile"])
+            .assert()
+            .success()
+            .stdout(predicate::str::contains("Profile created at"));
+
+        let content = fs::read_to_string(dir.path().join("profiles").join("my-profile.json"))
+            .expect("profile file should exist");
+        let parsed: serde_json::Value =
+            serde_json::from_str(&content).expect("should be valid JSON");
+        assert_eq!(parsed["name"], "my-profile");
+        assert_eq!(parsed["version"], 1);
+    }
+
+    #[test]
+    fn init_exits_1_when_profile_already_exists() {
+        let (mut cmd, dir) = cli_test_env();
+        write_profile(
+            &dir,
+            "my-profile",
+            &serde_json::json!({ "version": 1, "name": "my-profile", "entries": {} }),
+        );
+        cmd.args(["profile", "init", "my-profile"])
+            .assert()
+            .code(1)
+            .stderr(predicate::str::contains("already exists"));
+    }
+
+    #[test]
+    fn list_reports_no_profiles_when_none_exist() {
+        let (mut cmd, _dir) = cli_test_env();
+        cmd.args(["profile", "list"])
+            .assert()
+            .success()
+            .stdout(predicate::str::contains("(no profiles)"));
+    }
+
+    #[test]
+    fn list_reports_created_profile_names() {
+        let (mut cmd, dir) = cli_test_env();
+        write_profile(
+            &dir,
+            "github-mcp",
+            &serde_json::json!({ "version": 1, "name": "github-mcp", "entries": {} }),
+        );
+        cmd.args(["profile", "list"])
+            .assert()
+            .success()
+            .stdout(predicate::eq("github-mcp\n"));
+    }
+
+    #[test]
+    fn show_exits_1_when_profile_does_not_exist() {
+        let (mut cmd, _dir) = cli_test_env();
+        cmd.args(["profile", "show", "does-not-exist"])
+            .assert()
+            .code(1)
+            .stderr(predicate::str::contains("No profile found"));
+    }
+
+    #[test]
+    fn show_reports_shape_and_never_the_stored_secret_value() {
+        // AC5 (UAT): plant a known sentinel secret value reachable from the
+        // profile, then grep the FULL command output for its absence.
+        const SENTINEL: &str = "sk-live-VERY-SECRET-SENTINEL-VALUE-0xdeadbeef";
+
+        let (mut store_cmd, dir) = cli_test_env();
+        store_cmd
+            .args(["store", "--name", "github-pat"])
+            .write_stdin(SENTINEL)
+            .assert()
+            .success();
+
+        write_profile(
+            &dir,
+            "github-mcp",
+            &serde_json::json!({
+                "version": 1,
+                "name": "github-mcp",
+                "entries": {
+                    "GITHUB_TOKEN": {
+                        "secret": "github-pat",
+                        "materialize": "secret",
+                        "minTrust": "registry"
+                    }
+                }
+            }),
+        );
+
+        let mut show_cmd = Command::cargo_bin("vaultkeeper").unwrap();
+        let output = show_cmd
+            .env("VAULTKEEPER_CONFIG_DIR", dir.path())
+            .args(["profile", "show", "github-mcp"])
+            .output()
+            .expect("failed to run");
+        let stdout = String::from_utf8(output.stdout).expect("stdout should be valid UTF-8");
+        let stderr = String::from_utf8(output.stderr).expect("stderr should be valid UTF-8");
+
+        assert!(output.status.success(), "expected exit 0: {stderr}");
+        assert!(
+            stdout.contains("GITHUB_TOKEN"),
+            "expected entry name in output: {stdout}"
+        );
+        assert!(
+            stdout.contains("github-pat"),
+            "the secret *name* is safe to print: {stdout}"
+        );
+        assert!(
+            !stdout.contains(SENTINEL) && !stderr.contains(SENTINEL),
+            "show must never print the secret value: stdout={stdout} stderr={stderr}"
+        );
+    }
+
+    #[test]
+    fn lint_reports_shape_and_never_the_stored_secret_value() {
+        // AC5 (UAT), lint half of the same requirement.
+        const SENTINEL: &str = "sk-live-ANOTHER-SECRET-SENTINEL-0xfeedface";
+
+        let (mut store_cmd, dir) = cli_test_env();
+        store_cmd
+            .args(["store", "--name", "github-pat"])
+            .write_stdin(SENTINEL)
+            .assert()
+            .success();
+
+        write_profile(
+            &dir,
+            "github-mcp",
+            &serde_json::json!({
+                "version": 1,
+                "name": "github-mcp",
+                "entries": {
+                    "GITHUB_TOKEN": {
+                        "secret": "github-pat",
+                        "materialize": "secret",
+                        "minTrust": "unverified",
+                        "requirePresencePerUse": false
+                    }
+                }
+            }),
+        );
+
+        let mut lint_cmd = Command::cargo_bin("vaultkeeper").unwrap();
+        let output = lint_cmd
+            .env("VAULTKEEPER_CONFIG_DIR", dir.path())
+            .args(["profile", "lint", "github-mcp"])
+            .output()
+            .expect("failed to run");
+        let stdout = String::from_utf8(output.stdout).expect("stdout should be valid UTF-8");
+        let stderr = String::from_utf8(output.stderr).expect("stderr should be valid UTF-8");
+
+        assert!(output.status.success(), "expected exit 0: {stderr}");
+        assert!(
+            stdout.contains("schema OK"),
+            "expected schema-OK line: {stdout}"
+        );
+        assert!(
+            stdout.contains("per-machine") && stdout.contains("per-repository"),
+            "expected the per-machine/per-repository caveat: {stdout}"
+        );
+        // The config.json default trustTier ("3" == Dev/unverified in this
+        // test env) matches the profile's "unverified" minTrust exactly, so
+        // no loosening warning is expected here — this test is about the
+        // secret-value guarantee, not the warning logic (covered by Rust
+        // unit tests in crates/vaultkeeper-core/src/profile/lint.rs).
+        assert!(
+            !stdout.contains(SENTINEL) && !stderr.contains(SENTINEL),
+            "lint must never print the secret value: stdout={stdout} stderr={stderr}"
+        );
+    }
+
+    #[test]
+    fn show_and_lint_reject_a_profile_that_violates_a_load_time_invariant() {
+        let (mut cmd, dir) = cli_test_env();
+        write_profile(
+            &dir,
+            "broken",
+            &serde_json::json!({
+                "version": 1,
+                "name": "broken",
+                "entries": {
+                    "K": { "signingKey": "sk", "materialize": "secret" }
+                }
+            }),
+        );
+        cmd.args(["profile", "show", "broken"])
+            .assert()
+            .code(1)
+            .stderr(predicate::str::contains("materialize"));
+    }
+
+    #[test]
+    fn profile_with_no_subcommand_exits_2() {
+        let (mut cmd, _dir) = cli_test_env();
+        cmd.arg("profile").assert().code(2);
+    }
+
+    // --- Security anchor: profile-name validation (review follow-up) ---
+
+    #[test]
+    fn init_rejects_a_parent_directory_traversal_name_and_writes_nothing_outside_profiles() {
+        let (mut cmd, dir) = cli_test_env();
+        cmd.args(["profile", "init", "../evil"])
+            .assert()
+            .code(1)
+            .stderr(predicate::str::contains("Error"));
+
+        // Nothing was written outside (or even inside) profiles/ — the
+        // rejection must happen before any path construction, let alone a
+        // file write.
+        assert!(
+            !dir.path().parent().unwrap().join("evil.json").exists(),
+            "must not have written a file outside the temp config dir"
+        );
+        let profiles_dir = dir.path().join("profiles");
+        if profiles_dir.exists() {
+            let remaining: Vec<_> = fs::read_dir(&profiles_dir)
+                .expect("failed to read profiles dir")
+                .collect();
+            assert!(
+                remaining.is_empty(),
+                "profiles dir must be empty after a rejected hostile name"
+            );
+        }
+    }
+
+    #[test]
+    fn init_rejects_a_bare_path_separator_name() {
+        let (mut cmd, _dir) = cli_test_env();
+        cmd.args(["profile", "init", "a/b"])
+            .assert()
+            .code(1)
+            .stderr(predicate::str::contains("Error"));
+    }
+
+    #[test]
+    fn show_rejects_a_parent_directory_traversal_name() {
+        let (mut cmd, _dir) = cli_test_env();
+        cmd.args(["profile", "show", "../../../etc/passwd"])
+            .assert()
+            .code(1)
+            .stderr(predicate::str::contains("Error"));
+    }
+
+    // --- CLI usage: NAME and --profile-file are mutually exclusive ---
+
+    #[test]
+    fn show_with_both_name_and_profile_file_is_a_usage_error() {
+        let (mut cmd, dir) = cli_test_env();
+        write_profile(
+            &dir,
+            "github-mcp",
+            &serde_json::json!({ "version": 1, "name": "github-mcp", "entries": {} }),
+        );
+        let profile_file_path = dir.path().join("profiles").join("github-mcp.json");
+        cmd.args([
+            "profile",
+            "show",
+            "foo",
+            "--profile-file",
+            &profile_file_path.to_string_lossy(),
+        ])
+        .assert()
+        .code(2);
+    }
+
+    #[test]
+    fn lint_with_both_name_and_profile_file_is_a_usage_error() {
+        let (mut cmd, dir) = cli_test_env();
+        write_profile(
+            &dir,
+            "github-mcp",
+            &serde_json::json!({ "version": 1, "name": "github-mcp", "entries": {} }),
+        );
+        let profile_file_path = dir.path().join("profiles").join("github-mcp.json");
+        cmd.args([
+            "profile",
+            "lint",
+            "foo",
+            "--profile-file",
+            &profile_file_path.to_string_lossy(),
+        ])
+        .assert()
+        .code(2);
+    }
+
+    #[test]
+    fn show_with_neither_name_nor_profile_file_is_a_usage_error() {
+        let (mut cmd, _dir) = cli_test_env();
+        cmd.args(["profile", "show"]).assert().code(2);
+    }
+
+    #[test]
+    fn show_loads_via_profile_file_without_a_name() {
+        let (mut cmd, dir) = cli_test_env();
+        write_profile(
+            &dir,
+            "github-mcp",
+            &serde_json::json!({ "version": 1, "name": "github-mcp", "entries": {} }),
+        );
+        let profile_file_path = dir.path().join("profiles").join("github-mcp.json");
+        cmd.args([
+            "profile",
+            "show",
+            "--profile-file",
+            &profile_file_path.to_string_lossy(),
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("github-mcp"));
+    }
+
+    // --- `profile lint` warnings: advisory-only, always exits 0 ---
+
+    #[test]
+    fn lint_reports_warnings_on_stdout_and_still_exits_0() {
+        // cli_test_env's config.json default trustTier is "3" (unverified);
+        // an entry requesting "sigstore" is *stronger*, not weaker, so no
+        // minTrust warning fires from that axis. useLimit absent and
+        // requirePresencePerUse absent (defaults to false) both loosen
+        // relative to LintBaseline::default() (useLimit: 1,
+        // requirePresencePerUse: true), which is enough to trigger warnings
+        // without needing a weaker minTrust.
+        let (mut cmd, dir) = cli_test_env();
+        write_profile(
+            &dir,
+            "loose",
+            &serde_json::json!({
+                "version": 1,
+                "name": "loose",
+                "entries": {
+                    "K": {
+                        "secret": "s",
+                        "materialize": "secret",
+                        "minTrust": "sigstore"
+                    }
+                }
+            }),
+        );
+        cmd.args(["profile", "lint", "loose"])
+            .assert()
+            .success()
+            .stdout(predicate::str::contains("Policy-loosening warnings"))
+            .stdout(predicate::str::contains("useLimit"))
+            .stdout(predicate::str::contains("requirePresencePerUse"));
+    }
+
+    // --- File mode: profiles are owner-only (0o600), matching config.json ---
+
+    #[cfg(unix)]
+    #[test]
+    fn init_writes_the_profile_file_owner_only() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let (mut cmd, dir) = cli_test_env();
+        cmd.args(["profile", "init", "my-profile"])
+            .assert()
+            .success();
+
+        let path = dir.path().join("profiles").join("my-profile.json");
+        let mode = fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600, "profile file must be owner-only (0o600)");
+    }
+}
+
 // ─── Dev-mode command ───────────────────────────────────────────
 
 mod dev_mode {

@@ -11,6 +11,7 @@ export const __testJsSecretBackendList: (a: any) => any;
 export const __testJsSecretBackendMeta: (a: any) => [number, number, number];
 export const __testJsSecretBackendRetrieve: (a: any, b: number, c: number) => any;
 export const __testJsSecretBackendStore: (a: any, b: number, c: number, d: number, e: number) => any;
+export const __testLoadProfile: (a: number, b: number, c: any) => [number, number, number];
 export const __testPromptApproval: (a: any, b: number, c: number, d: number, e: number) => any;
 export const __wbg_wasmauthorization_free: (a: number, b: number) => void;
 export const __wbg_wasmvaultkeeper_free: (a: number, b: number) => void;

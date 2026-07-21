@@ -233,6 +233,21 @@ export function __testJsSecretBackendRetrieve(host: any, id: string): Promise<st
 export function __testJsSecretBackendStore(host: any, id: string, secret: string): Promise<void>;
 
 /**
+ * Diagnostic-only export proving the core-resident environment-profile
+ * loader (issue #277) is reachable from the TS path through the real WASM
+ * binary (AC7's wasm-bridge half; the Rust half is
+ * `crates/vaultkeeper-core/tests/profile_loader_integration.rs`). Not part
+ * of the SDK's public TypeScript API — `packages/vaultkeeper-wasm/src/index.ts`
+ * does not re-export it.
+ *
+ * `config_defaults` is `{ ttlMinutes: number, trustTier: 1 | 2 | 3 }`,
+ * mirroring `config.json`'s `defaults` shape; this function performs the
+ * same `ttlMinutes` → seconds conversion
+ * `vaultkeeper_core::profile::ProfileDefaults::from_vault_defaults` does.
+ */
+export function __testLoadProfile(json: string, config_defaults: any): any;
+
+/**
  * Diagnostic-only export exercising `HostPlatform::prompt_approval`
  * directly through the real `JsHostPlatform` bridge (issue #239 AC3). Not
  * part of the SDK's public TypeScript API.

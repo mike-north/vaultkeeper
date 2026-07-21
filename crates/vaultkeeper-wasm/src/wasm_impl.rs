@@ -1512,3 +1512,39 @@ fn to_js_value<T: serde::Serialize>(value: &T) -> Result<JsValue, JsError> {
     let json = serde_json::to_string(value).map_err(|e| JsError::new(&e.to_string()))?;
     js_sys::JSON::parse(&json).map_err(|e| JsError::new(&format!("JSON parse error: {e:?}")))
 }
+
+/// Diagnostic-only export proving the core-resident environment-profile
+/// loader (issue #277) is reachable from the TS path through the real WASM
+/// binary (AC7's wasm-bridge half; the Rust half is
+/// `crates/vaultkeeper-core/tests/profile_loader_integration.rs`). Not part
+/// of the SDK's public TypeScript API — `packages/vaultkeeper-wasm/src/index.ts`
+/// does not re-export it.
+///
+/// `config_defaults` is `{ ttlMinutes: number, trustTier: 1 | 2 | 3 }`,
+/// mirroring `config.json`'s `defaults` shape; this function performs the
+/// same `ttlMinutes` → seconds conversion
+/// `vaultkeeper_core::profile::ProfileDefaults::from_vault_defaults` does.
+#[wasm_bindgen(js_name = "__testLoadProfile")]
+pub fn __test_load_profile(json: &str, config_defaults: JsValue) -> Result<JsValue, JsValue> {
+    let ttl_minutes = Reflect::get(&config_defaults, &JsValue::from_str("ttlMinutes"))
+        .ok()
+        .and_then(|v| v.as_f64())
+        .unwrap_or(60.0) as u32;
+    let trust_tier_num = Reflect::get(&config_defaults, &JsValue::from_str("trustTier"))
+        .ok()
+        .and_then(|v| v.as_f64())
+        .unwrap_or(3.0) as u8;
+    let trust_tier = match trust_tier_num {
+        1 => vaultkeeper_core::TrustTier::Sigstore,
+        2 => vaultkeeper_core::TrustTier::Tofu,
+        _ => vaultkeeper_core::TrustTier::Dev,
+    };
+    let defaults = vaultkeeper_core::profile::ProfileDefaults {
+        ttl_seconds: u64::from(ttl_minutes) * 60,
+        trust_tier,
+    };
+
+    let loaded = vaultkeeper_core::profile::load_profile_from_str(json, &defaults)
+        .map_err(|e| vault_error_to_js(&e))?;
+    to_js_value(&loaded).map_err(JsValue::from)
+}
