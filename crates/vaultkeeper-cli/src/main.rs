@@ -250,10 +250,20 @@ async fn cmd_exec(token: &str, command: &[String]) -> i32 {
     };
 
     // Decrypt and validate the JWE token
-    let (claims, _response) = match vault.authorize(token) {
+    let (handle, _claims, _response) = match vault.authorize(token) {
         Ok(r) => r,
         Err(e) => {
             eprintln!("Error: Failed to authorize token: {e}");
+            return 1;
+        }
+    };
+
+    // Read the secret exactly once (issue #241) — it never traveled through
+    // `authorize()`'s return value.
+    let secret = match vault.read_secret(&handle) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("Error: Failed to read secret: {e}");
             return 1;
         }
     };
@@ -265,7 +275,7 @@ async fn cmd_exec(token: &str, command: &[String]) -> i32 {
     use std::process::Command;
     let status = Command::new(cmd_name)
         .args(&cmd_args)
-        .env("VAULTKEEPER_SECRET", &claims.val)
+        .env("VAULTKEEPER_SECRET", secret.as_str())
         .status();
 
     match status {

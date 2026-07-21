@@ -111,6 +111,21 @@ pub struct VaultClaims {
     pub reference: String,
 }
 
+/// Claims for a signing-key capability handle: `{ kid, backendRef }`, never
+/// any key material. Mirrors the TypeScript `SigningClaims`
+/// (`packages/vaultkeeper/src/types.ts`), minus the `keyType: 'signing-key'`
+/// discriminator field — the Rust side discriminates via
+/// [`crate::identity::handles::StoredClaims`]'s enum variant instead of an
+/// inline tag.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SigningClaims {
+    /// The signing key's stable identifier (see [`SigningPublicKey::kid`]).
+    pub kid: String,
+    /// The backend key identifier used to invoke `signWithKey` (never the key).
+    pub backend_ref: String,
+}
+
 /// Response from a vault access operation.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

@@ -15,6 +15,7 @@ use vaultkeeper_core::types::{
 };
 use vaultkeeper_core::vault::VaultKeeperOptions;
 use vaultkeeper_core::{InMemoryBackend, VaultKeeper};
+use zeroize::Zeroizing;
 
 // ---------------------------------------------------------------------------
 // Config validation tests
@@ -912,7 +913,7 @@ mod vault_keeper {
             ..Default::default()
         };
         let token = vault.setup(&host, "s", "v", Some(&opts)).await.unwrap();
-        let (claims, _) = vault.authorize(&token).unwrap();
+        let (_handle, claims, _) = vault.authorize(&token).unwrap();
         assert_eq!(claims.exe, "dev");
     }
 
@@ -929,7 +930,7 @@ mod vault_keeper {
             ..Default::default()
         };
         let token = vault.setup(&host, "s", "v", Some(&opts)).await.unwrap();
-        let (claims, _) = vault.authorize(&token).unwrap();
+        let (_handle, claims, _) = vault.authorize(&token).unwrap();
 
         // exe claim holds the verified hash (mirrors the TS library), not the path.
         assert_eq!(claims.exe, HASH_APP_BINARY_BYTES);
@@ -956,7 +957,7 @@ mod vault_keeper {
         vault.setup(&host, "s", "v", Some(&opts)).await.unwrap();
         // Second setup finds the matching hash and still binds it.
         let token = vault.setup(&host, "s", "v", Some(&opts)).await.unwrap();
-        let (claims, _) = vault.authorize(&token).unwrap();
+        let (_handle, claims, _) = vault.authorize(&token).unwrap();
         assert_eq!(claims.exe, HASH_APP_BINARY_BYTES);
     }
 
@@ -1069,14 +1070,90 @@ mod vault_keeper {
             )
             .await
             .unwrap();
-        let (claims, response) = vault.authorize(&token).unwrap();
+        let (handle, claims, response) = vault.authorize(&token).unwrap();
 
         assert_eq!(claims.sub, "db-password");
-        assert_eq!(claims.val, "hunter2");
+        // issue #241 AC1: authorize() never returns the raw secret.
+        assert_eq!(claims.val, "");
         assert_eq!(claims.reference, "db-password");
         assert_eq!(claims.tid, TrustTier::Dev);
         assert_eq!(response.key_status, KeyStatus::Current);
         assert!(response.rotated_jwt.is_none());
+
+        // The secret is readable exactly once, via the handle.
+        let secret = vault.read_secret(&handle).unwrap();
+        assert_eq!(secret.as_str(), "hunter2");
+        let err = vault.read_secret(&handle).unwrap_err();
+        assert!(matches!(err, VaultError::AccessorConsumed { .. }));
+    }
+
+    /// Regression test: `authorize()` used to build its returned (redacted)
+    /// claims by cloning the *full* `VaultClaims` — secret `val` included —
+    /// into a second `String` allocation, then `std::mem::take`-ing that
+    /// clone's `val` back out and dropping it. A plain `String`'s `Drop`
+    /// does not zero its buffer before freeing, so that dropped clone left
+    /// the plaintext secret sitting in freed heap memory — never zeroized,
+    /// contradicting the "Zero `Buffer` instances containing secrets after
+    /// use" rule. The fix builds the redacted `VaultClaims` field-by-field,
+    /// never touching (let alone cloning) `val`, so `claims.val`'s only
+    /// value ever assigned is `String::new()` and the *sole* copy of the
+    /// secret bytes moves straight from the decrypted claims into the
+    /// handle table's `Zeroizing<String>` buffer via `insert_secret`.
+    ///
+    /// **What this test can and cannot prove:** it structurally asserts
+    /// (a) the returned claims never carry the secret in `val` or anywhere
+    /// else observable, and (b) the only way to recover the secret is
+    /// through `read_secret`, which returns a `Zeroizing<String>` (a type
+    /// that zeroes its buffer on drop — enforced by the `zeroize` crate, not
+    /// re-derived here). It cannot directly observe heap contents to prove
+    /// no *unprotected* copy was ever created and dropped along the way —
+    /// that would need unsafe memory inspection or a custom allocator
+    /// harness, which is out of scope here. The regression this guards
+    /// against is a *source-level* one (a `clone()` that pulls the secret
+    /// into a second, non-zeroizing buffer before scrubbing it) — reading
+    /// this test alongside `authorize()`'s implementation is what actually
+    /// closes the loop: there is no `claims.clone()` left in that function
+    /// to reintroduce the bug.
+    #[tokio::test]
+    async fn authorize_never_clones_the_secret_into_public_claims() {
+        let host = TestHost::with_config();
+        let mut vault = VaultKeeper::init(
+            &host,
+            Some(VaultKeeperOptions {
+                skip_doctor: true,
+                ..Default::default()
+            }),
+        )
+        .await
+        .unwrap();
+
+        let token = vault
+            .setup(
+                &host,
+                "db-password",
+                "hunter2-clone-regression",
+                Some(&vaultkeeper_core::vault::SetupOptions {
+                    skip_trust: Some(true),
+                    ..Default::default()
+                }),
+            )
+            .await
+            .unwrap();
+
+        let (handle, claims, _response) = vault.authorize(&token).unwrap();
+        assert_eq!(
+            claims.val, "",
+            "returned claims must never carry the secret"
+        );
+        // The claims struct's Debug output is the most likely accidental
+        // leak path (a log statement, a test failure message) — assert the
+        // secret does not appear there either.
+        assert!(!format!("{claims:?}").contains("hunter2-clone-regression"));
+
+        // The secret is recoverable exactly once, and only through the
+        // Zeroizing-typed one-time accessor.
+        let secret: Zeroizing<String> = vault.read_secret(&handle).unwrap();
+        assert_eq!(secret.as_str(), "hunter2-clone-regression");
     }
 
     #[tokio::test]
@@ -1110,16 +1187,18 @@ mod vault_keeper {
         vault.rotate_key(&host).await.unwrap();
 
         // Authorize should succeed (finds previous key) and provide a rotated JWT
-        let (claims, response) = vault.authorize(&token).unwrap();
-        assert_eq!(claims.val, "abc123");
+        let (handle, claims, response) = vault.authorize(&token).unwrap();
+        assert_eq!(claims.val, "");
+        assert_eq!(vault.read_secret(&handle).unwrap().as_str(), "abc123");
         assert_eq!(response.key_status, KeyStatus::Previous);
         assert!(response.rotated_jwt.is_some());
 
         // The rotated JWT should decrypt with the current key
-        let (claims2, response2) = vault
+        let (handle2, claims2, response2) = vault
             .authorize(response.rotated_jwt.as_ref().unwrap())
             .unwrap();
-        assert_eq!(claims2.val, "abc123");
+        assert_eq!(claims2.val, "");
+        assert_eq!(vault.read_secret(&handle2).unwrap().as_str(), "abc123");
         assert_eq!(response2.key_status, KeyStatus::Current);
         assert!(response2.rotated_jwt.is_none());
     }
@@ -1177,7 +1256,7 @@ mod vault_keeper {
             ..Default::default()
         };
         let token = vault.setup(&host, "key", "val", Some(&opts)).await.unwrap();
-        let (claims, _) = vault.authorize(&token).unwrap();
+        let (_handle, claims, _) = vault.authorize(&token).unwrap();
 
         // Token should expire in ~5 minutes
         let expected_ttl = 5 * 60;
@@ -1236,10 +1315,12 @@ mod vault_keeper {
             .unwrap();
 
         // First two authorizations succeed
-        let (claims, _) = vault.authorize(&token).unwrap();
-        assert_eq!(claims.val, "val");
-        let (claims2, _) = vault.authorize(&token).unwrap();
-        assert_eq!(claims2.val, "val");
+        let (handle, claims, _) = vault.authorize(&token).unwrap();
+        assert_eq!(claims.val, "");
+        assert_eq!(vault.read_secret(&handle).unwrap().as_str(), "val");
+        let (handle2, claims2, _) = vault.authorize(&token).unwrap();
+        assert_eq!(claims2.val, "");
+        assert_eq!(vault.read_secret(&handle2).unwrap().as_str(), "val");
 
         // Third should fail — usage limit exceeded
         let result = vault.authorize(&token);
@@ -1303,8 +1384,9 @@ mod vault_keeper {
         )
         .await
         .unwrap();
-        let (claims, _) = second.authorize(&token).unwrap();
-        assert_eq!(claims.val, "s3cret");
+        let (handle, claims, _) = second.authorize(&token).unwrap();
+        assert_eq!(claims.val, "");
+        assert_eq!(second.read_secret(&handle).unwrap().as_str(), "s3cret");
     }
 
     /// AC5: the rotation grace-period guard (`RotationInProgress`) survives a

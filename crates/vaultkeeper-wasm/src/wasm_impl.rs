@@ -6,6 +6,7 @@ use std::sync::Arc;
 use js_sys::{Function, Promise, Reflect, Uint8Array};
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::JsFuture;
+use zeroize::Zeroizing;
 
 use vaultkeeper_core::backend::{
     ApprovalContext, ExecOptions, ExecOutput, FileBackend, HostPlatform, HttpRequest, HttpResponse,
@@ -231,6 +232,34 @@ fn coded_js_error(code: &str, message: &str) -> JsValue {
         &JsValue::from_str(message),
     );
     obj.into()
+}
+
+/// Shared shape guard for `handle_id` parameters at every handle-based WASM
+/// entry point (`resolveSecretClaims`, `releaseHandle`) — issue #241 group B.
+///
+/// A real `HandleId` (`crates/vaultkeeper-core/src/identity/handles.rs`) is
+/// always the canonical hyphenated string form of a UUID v4 — a fixed 36
+/// characters. A JS caller (a hostile or simply buggy host) can hand these
+/// entry points an arbitrary string of any length, and both used to
+/// `.to_string()`-allocate it immediately and feed it straight into a core
+/// lookup before anything checked its shape. This rejects anything that
+/// isn't a syntactically valid UUID *before* that allocation/lookup —
+/// including before the [`HandleId`](vaultkeeper_core::HandleId)-and-hash
+/// work `Display`/`Debug`'s redaction does on a failed lookup — so an
+/// attacker handing in a multi-megabyte string pays for none of that.
+///
+/// Deliberately does not distinguish "too long", "too short", or
+/// "wrong shape" in the error message: any of those already means the value
+/// cannot possibly be a handle this table minted, which is exactly the
+/// `authorization-denied` a real (shape-valid but unrecognized) lookup would
+/// eventually return anyway — this just returns the same verdict cheaper.
+fn validate_handle_id_shape(handle_id: &str) -> Result<(), JsValue> {
+    uuid::Uuid::parse_str(handle_id).map(|_| ()).map_err(|_| {
+        coded_js_error(
+            "authorization-denied",
+            "Malformed capability handle id: not a recognizable handle",
+        )
+    })
 }
 
 #[async_trait::async_trait(?Send)]
@@ -1202,22 +1231,40 @@ impl WasmVaultKeeper {
     /// [`WasmAuthorization`].
     ///
     /// The returned object's `claims` **never** contains the raw secret value
-    /// (`val` is redacted). The secret is held internally and can be read
-    /// exactly once via the exported `readSecret()` method, mirroring the TS
-    /// library's one-time accessor pattern.
+    /// (`val` is redacted) — `vaultkeeper_core::VaultKeeper::authorize` (issue
+    /// #241) never returns it either; it stays behind a core-side capability
+    /// handle. This call performs the one-time `read_secret` against that
+    /// handle immediately, internally, and caches the result on the returned
+    /// `WasmAuthorization` exactly as this method always has, so the
+    /// `@vaultkeeper/wasm` public shape (`claims`, `response`,
+    /// `secretAvailable`, `readSecret()`) is unchanged. The handle itself is
+    /// also retained (exposed as `WasmAuthorization.handleId`) so a caller
+    /// can additionally use the handle-based entry points below
+    /// (`resolveSecretClaims`/`releaseHandle`) — the primitives a future
+    /// engine swap would build directly on instead of this eager wrapper.
     pub fn authorize(&mut self, jwe: &str) -> Result<WasmAuthorization, JsValue> {
         // Any non-typed (`Other`) failure while decrypting or validating a
         // token means the token itself is invalid or unprocessable, so it maps
         // to `invalid-token`. Typed variants (expiry, revocation, usage limit,
         // unknown key) keep their own codes.
-        let (mut claims, response) = self.vault.authorize(jwe).map_err(|e| match &e {
+        let (handle_id, claims, response) = self.vault.authorize(jwe).map_err(|e| match &e {
             VaultError::Other(msg) => coded_js_error("invalid-token", msg),
             _ => vault_error_to_js(&e),
         })?;
 
-        // Move the raw secret out of the claims before anything is serialized,
-        // so it can never appear in the returned `claims` object.
-        let secret = std::mem::take(&mut claims.val);
+        // The one-time read against the handle table — `claims.val` is
+        // already empty (see `VaultKeeper::authorize`'s doc comment), so this
+        // is the only place the raw secret is ever materialized on this side
+        // of the WASM boundary. `read_secret` already returns a
+        // `Zeroizing<String>`; move it straight into `WasmAuthorization`
+        // rather than `.to_string()`-cloning it into a second, non-zeroizing
+        // `String` (the same leak class fixed in `VaultKeeper::authorize` —
+        // see that function's doc comment). No extra unprotected Rust-side
+        // copy of the secret exists between here and `read_secret()` below.
+        let secret = self
+            .vault
+            .read_secret(&handle_id)
+            .map_err(|e| vault_error_to_js(&e))?;
 
         let mut claims_value =
             serde_json::to_value(&claims).map_err(|e| JsError::new(&e.to_string()))?;
@@ -1234,7 +1281,43 @@ impl WasmVaultKeeper {
             claims_json,
             response_json,
             secret: Some(secret),
+            handle_id: handle_id.as_str().to_string(),
         })
+    }
+
+    /// Resolve the non-secret claims behind a capability handle id (issue
+    /// #241 AC6 — a new, handle-based entry point for the future engine
+    /// swap, alongside the eager `authorize()`/`WasmAuthorization` wrapper
+    /// above). Returns the claims as JSON, with `val` always absent. Refuses
+    /// a signing-key handle.
+    #[wasm_bindgen(js_name = "resolveSecretClaims")]
+    pub fn resolve_secret_claims(&mut self, handle_id: &str) -> Result<JsValue, JsValue> {
+        validate_handle_id_shape(handle_id)?;
+        let handle = vaultkeeper_core::HandleId::from(handle_id.to_string());
+        let claims = self
+            .vault
+            .resolve_secret_claims(&handle)
+            .map_err(|e| vault_error_to_js(&e))?;
+        let mut claims_value =
+            serde_json::to_value(&claims).map_err(|e| JsError::new(&e.to_string()))?;
+        if let Some(obj) = claims_value.as_object_mut() {
+            obj.remove("val");
+        }
+        to_js_value(&claims_value).map_err(JsValue::from)
+    }
+
+    /// Explicitly release a capability handle (issue #241 AC6). Returns
+    /// `true` if a handle was actually present and removed, `false` if it
+    /// was already gone (released, expired, or evicted). A caller that is
+    /// done with a handle should call this rather than waiting on its
+    /// expiry. Throws an `authorization-denied` error for a `handleId` that
+    /// is not even shaped like a real handle (see
+    /// `validate_handle_id_shape`), rather than allocating/looking it up.
+    #[wasm_bindgen(js_name = "releaseHandle")]
+    pub fn release_handle(&mut self, handle_id: &str) -> Result<bool, JsValue> {
+        validate_handle_id_shape(handle_id)?;
+        let handle = vaultkeeper_core::HandleId::from(handle_id.to_string());
+        Ok(self.vault.release_handle(&handle))
     }
 
     /// Rotate the encryption key.
@@ -1294,11 +1377,22 @@ impl WasmVaultKeeper {
 /// secret behind a one-time read. The secret is deliberately not part of the
 /// `claims` shape — callers must opt in explicitly via the exported
 /// `readSecret()` method, which yields the value exactly once.
+///
+/// Also carries the underlying core capability handle id (`handleId`, issue
+/// #241 AC6) so a caller can additionally use `WasmVaultKeeper`'s
+/// handle-based entry points (`resolveSecretClaims`/`releaseHandle`)
+/// directly — the primitives a future engine swap builds on instead of this
+/// eager wrapper.
 #[wasm_bindgen]
 pub struct WasmAuthorization {
     claims_json: String,
     response_json: String,
-    secret: Option<String>,
+    /// `Zeroizing`-wrapped so an authorization whose secret is never read
+    /// (`readSecret()` not called before this value is dropped) still has
+    /// its buffer scrubbed, rather than sitting unzeroized until the
+    /// allocator reuses it.
+    secret: Option<Zeroizing<String>>,
+    handle_id: String,
 }
 
 // SAFETY: Single-threaded WASM — no concurrent access.
@@ -1328,17 +1422,38 @@ impl WasmAuthorization {
         self.secret.is_some()
     }
 
+    /// The underlying core capability handle id (issue #241 AC6). Usable
+    /// with `WasmVaultKeeper.resolveSecretClaims`/`releaseHandle`.
+    #[wasm_bindgen(getter, js_name = "handleId")]
+    pub fn handle_id(&self) -> String {
+        self.handle_id.clone()
+    }
+
     /// Read the raw secret value exactly once. Subsequent calls throw an
     /// `accessor-consumed` error. This is the explicit, deliberately-named
     /// escape hatch for flows that must touch the plaintext secret.
+    ///
+    /// The Rust side never clones the secret to produce this value: the
+    /// plaintext is moved out of the `Zeroizing<String>` wrapper (leaving it
+    /// holding an empty string, which is a no-op to scrub on drop) rather
+    /// than copied out. The one residual, unprotected copy this cannot close
+    /// is on the far side of the `wasm-bindgen`-generated FFI glue itself —
+    /// returning an owned `String` from a `#[wasm_bindgen]` method has that
+    /// glue copy the bytes into a fresh JS string and then free this Rust
+    /// `String` via ordinary (non-zeroizing) `Drop`. That hand-off is
+    /// generated code we do not control, and JS strings are immutable and
+    /// cannot be scrubbed by this crate regardless — the same trust boundary
+    /// already noted for a dishonest/misbehaving JS host elsewhere in this
+    /// file (see `JsHostPlatform`'s "No-reentrancy contract").
     #[wasm_bindgen(js_name = "readSecret")]
     pub fn read_secret(&mut self) -> Result<String, JsValue> {
-        self.secret.take().ok_or_else(|| {
+        let mut secret = self.secret.take().ok_or_else(|| {
             coded_js_error(
                 "accessor-consumed",
                 "Secret has already been read; the one-time accessor is consumed",
             )
-        })
+        })?;
+        Ok(std::mem::take(&mut *secret))
     }
 }
 

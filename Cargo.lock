@@ -1327,6 +1327,7 @@ dependencies = [
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "wasm-bindgen-test",
+ "zeroize",
 ]
 
 [[package]]
