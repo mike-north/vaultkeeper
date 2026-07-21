@@ -234,6 +234,34 @@ fn coded_js_error(code: &str, message: &str) -> JsValue {
     obj.into()
 }
 
+/// Shared shape guard for `handle_id` parameters at every handle-based WASM
+/// entry point (`resolveSecretClaims`, `releaseHandle`) — issue #241 group B.
+///
+/// A real `HandleId` (`crates/vaultkeeper-core/src/identity/handles.rs`) is
+/// always the canonical hyphenated string form of a UUID v4 — a fixed 36
+/// characters. A JS caller (a hostile or simply buggy host) can hand these
+/// entry points an arbitrary string of any length, and both used to
+/// `.to_string()`-allocate it immediately and feed it straight into a core
+/// lookup before anything checked its shape. This rejects anything that
+/// isn't a syntactically valid UUID *before* that allocation/lookup —
+/// including before the [`HandleId`](vaultkeeper_core::HandleId)-and-hash
+/// work `Display`/`Debug`'s redaction does on a failed lookup — so an
+/// attacker handing in a multi-megabyte string pays for none of that.
+///
+/// Deliberately does not distinguish "too long", "too short", or
+/// "wrong shape" in the error message: any of those already means the value
+/// cannot possibly be a handle this table minted, which is exactly the
+/// `authorization-denied` a real (shape-valid but unrecognized) lookup would
+/// eventually return anyway — this just returns the same verdict cheaper.
+fn validate_handle_id_shape(handle_id: &str) -> Result<(), JsValue> {
+    uuid::Uuid::parse_str(handle_id).map(|_| ()).map_err(|_| {
+        coded_js_error(
+            "authorization-denied",
+            "Malformed capability handle id: not a recognizable handle",
+        )
+    })
+}
+
 #[async_trait::async_trait(?Send)]
 impl HostPlatform for JsHostPlatform {
     async fn exec(
@@ -1264,6 +1292,7 @@ impl WasmVaultKeeper {
     /// a signing-key handle.
     #[wasm_bindgen(js_name = "resolveSecretClaims")]
     pub fn resolve_secret_claims(&mut self, handle_id: &str) -> Result<JsValue, JsValue> {
+        validate_handle_id_shape(handle_id)?;
         let handle = vaultkeeper_core::HandleId::from(handle_id.to_string());
         let claims = self
             .vault
@@ -1278,13 +1307,17 @@ impl WasmVaultKeeper {
     }
 
     /// Explicitly release a capability handle (issue #241 AC6). Returns
-    /// `true` if a handle was actually present and removed. A caller that is
+    /// `true` if a handle was actually present and removed, `false` if it
+    /// was already gone (released, expired, or evicted). A caller that is
     /// done with a handle should call this rather than waiting on its
-    /// expiry.
+    /// expiry. Throws an `authorization-denied` error for a `handleId` that
+    /// is not even shaped like a real handle (see
+    /// `validate_handle_id_shape`), rather than allocating/looking it up.
     #[wasm_bindgen(js_name = "releaseHandle")]
-    pub fn release_handle(&mut self, handle_id: &str) -> bool {
+    pub fn release_handle(&mut self, handle_id: &str) -> Result<bool, JsValue> {
+        validate_handle_id_shape(handle_id)?;
         let handle = vaultkeeper_core::HandleId::from(handle_id.to_string());
-        self.vault.release_handle(&handle)
+        Ok(self.vault.release_handle(&handle))
     }
 
     /// Rotate the encryption key.

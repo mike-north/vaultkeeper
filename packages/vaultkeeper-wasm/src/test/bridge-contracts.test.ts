@@ -13,8 +13,17 @@ import { describe, it } from 'node:test'
 import * as assert from 'node:assert/strict'
 import { createServer } from 'node:http'
 import type { AddressInfo } from 'node:net'
+import { mkdtemp, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { createNodeHost } from '../node-host.js'
-import { mapWasmError, FetchError, NotCapableError, VaultError } from '../errors.js'
+import {
+  mapWasmError,
+  FetchError,
+  NotCapableError,
+  VaultError,
+  AuthorizationDeniedError,
+} from '../errors.js'
 import type { HostSecretBackend } from '../types.js'
 
 /** Loose shape of a value thrown across the WASM boundary (see `../errors.ts`). */
@@ -657,4 +666,68 @@ describe('__testHttpFetch — rejects a malformed request.body (js_value_to_http
       }),
     )
   })
+})
+
+// ---------------------------------------------------------------------------
+// issue #241 group B: handle-based entry points reject a malformed
+// `handleId` before allocating/looking it up.
+// ---------------------------------------------------------------------------
+
+/** The subset of `WasmVaultKeeper`'s handle-based entry points under test. */
+interface HandleEntryPoints {
+  resolveSecretClaims: (handleId: string) => unknown
+  releaseHandle: (handleId: string) => boolean
+}
+
+interface HandleBindings {
+  createVaultKeeper: (host: unknown, options: unknown) => Promise<HandleEntryPoints>
+}
+
+async function loadHandleBindings(): Promise<HandleBindings> {
+  return import('../../wasm/vaultkeeper_wasm.js')
+}
+
+async function withTempConfigDir(fn: (dir: string) => Promise<void>): Promise<void> {
+  const dir = await mkdtemp(join(tmpdir(), 'vk-wasm-handle-shape-test-'))
+  try {
+    await fn(dir)
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+}
+
+describe('WasmVaultKeeper handle-based entry points reject a malformed handleId (issue #241 group B)', () => {
+  // A real HandleId is always the canonical 36-character hyphenated string
+  // form of a UUID v4 (crates/vaultkeeper-core/src/identity/handles.rs).
+  // Neither of these could ever be one.
+  const overLong = 'x'.repeat(10_000)
+  const wrongShape = 'not-a-uuid-at-all'
+
+  for (const malformed of [overLong, wrongShape]) {
+    const label = malformed === overLong ? 'an over-long string' : 'a wrong-shape string'
+
+    it(`resolveSecretClaims() rejects ${label} with a typed AuthorizationDeniedError`, async () => {
+      await withTempConfigDir(async (dir) => {
+        const bindings = await loadHandleBindings()
+        const host = createNodeHost(dir)
+        const vault = await bindings.createVaultKeeper(host, { skipDoctor: true })
+        assert.throws(
+          () => vault.resolveSecretClaims(malformed),
+          (err: unknown) => mapWasmError(err) instanceof AuthorizationDeniedError,
+        )
+      })
+    })
+
+    it(`releaseHandle() rejects ${label} with a typed AuthorizationDeniedError`, async () => {
+      await withTempConfigDir(async (dir) => {
+        const bindings = await loadHandleBindings()
+        const host = createNodeHost(dir)
+        const vault = await bindings.createVaultKeeper(host, { skipDoctor: true })
+        assert.throws(
+          () => vault.releaseHandle(malformed),
+          (err: unknown) => mapWasmError(err) instanceof AuthorizationDeniedError,
+        )
+      })
+    })
+  }
 })

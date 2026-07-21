@@ -150,7 +150,12 @@ pub const HANDLE_TABLE_MAX_SIZE: usize = 10_000;
 /// An id this table does not recognize (already released, evicted, or never
 /// minted by this table) errors with [`VaultError::AuthorizationDenied`],
 /// mirroring `validateCapabilityToken` rejecting a token from a different
-/// `WeakMap`/module instance.
+/// `WeakMap`/module instance — and, like every other error this module
+/// raises that names a handle, that message carries only
+/// [`HandleId::redacted`]'s non-reversible fingerprint, never the bearer id
+/// itself (see [`fmt::Display`] below): these errors are exactly the kind
+/// that get logged or shipped to telemetry, so the id must not round-trip
+/// through them.
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub struct HandleId(String);
 
@@ -168,28 +173,44 @@ impl HandleId {
     pub fn as_str(&self) -> &str {
         &self.0
     }
+
+    /// A short, non-reversible fingerprint of this id, safe to include in
+    /// error messages, logs, or telemetry: `"hid_"` followed by the first 8
+    /// hex characters of the id's SHA-256 digest. Two different handle ids
+    /// fingerprint differently with overwhelming probability, so log lines
+    /// can still be correlated against each other, but — unlike a truncated
+    /// prefix of the id itself — the fingerprint cannot be reversed or
+    /// combined with brute force to recover the bearer id, since a
+    /// cryptographic hash destroys that relationship. This is what backs
+    /// both [`fmt::Display`] and [`fmt::Debug`] below, so every call site
+    /// that interpolates a `HandleId` into a message is safe by
+    /// construction — there is no separate "redacted" formatting path to
+    /// forget to use.
+    #[must_use]
+    pub fn redacted(&self) -> String {
+        let digest = crate::identity::hash::hash_bytes(self.0.as_bytes());
+        format!("hid_{}", &digest[..8])
+    }
 }
 
 impl fmt::Display for HandleId {
-    /// Renders the full id. Used deliberately by this module's own error
-    /// messages (`unknown_handle_error`, the expiry branch of `ensure_live`)
-    /// to name *which* handle was invalid/expired for the caller's own
-    /// debugging — that is a reviewed, intentional call site, not the
-    /// accidental-logging path `Debug` guards against below.
+    /// Renders only [`HandleId::redacted`]'s fingerprint — never the full
+    /// bearer id. This module's own error messages (`unknown_handle_error`,
+    /// the expiry branch of `ensure_live`, `read_secret`'s
+    /// `AccessorConsumed`) interpolate a `HandleId` directly (`{id}`) and
+    /// rely on this to stay leak-safe without a separate call at each site.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.0)
+        write!(f, "{}", self.redacted())
     }
 }
 
 impl fmt::Debug for HandleId {
-    /// Redacted on purpose: `{:?}` is the common *accidental* logging path
-    /// (`debug!("{:?}", handle)`, a bare `dbg!(handle)`, an auto-derived
-    /// `Debug` on a containing struct). Printing only a short, non-redeemable
-    /// prefix still lets log lines be correlated with each other without
-    /// handing a log sink the bearer token itself.
+    /// Same fingerprint as `Display` (see [`HandleId::redacted`]) — `{:?}`
+    /// is the common *accidental* logging path (`debug!("{:?}", handle)`, a
+    /// bare `dbg!(handle)`, an auto-derived `Debug` on a containing struct),
+    /// so it must be exactly as safe as the deliberate `Display` path.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let prefix = self.0.get(..8).unwrap_or(&self.0);
-        write!(f, "HandleId({prefix}…)")
+        write!(f, "HandleId({})", self.redacted())
     }
 }
 
@@ -522,34 +543,95 @@ mod tests {
     }
 
     /// Regression test: `HandleId` is bearer capability material (see the
-    /// struct docs) — mere possession redeems it, so the derived `Debug`
-    /// impl this type used to have printed the full bearer id via the most
-    /// common *accidental* logging path (`{:?}`, `dbg!(..)`, an
-    /// auto-derived `Debug` on a containing struct), directly contradicting
-    /// a "do not log it" handling requirement. `Display` is intentionally
-    /// left showing the full id (this module's own error messages rely on
-    /// it to name which handle failed) — only the accidental-logging path
-    /// is guarded.
+    /// struct docs) — mere possession redeems it. Both `Debug` (the common
+    /// *accidental* logging path: `{:?}`, `dbg!(..)`, an auto-derived
+    /// `Debug` on a containing struct) and `Display` (the deliberate path
+    /// this module's own error messages use) must never print the full
+    /// bearer id — both now render only [`HandleId::redacted`]'s
+    /// non-reversible fingerprint.
     #[test]
-    fn handle_id_debug_output_does_not_reveal_the_full_bearer_id() {
+    fn handle_id_debug_and_display_never_reveal_the_full_bearer_id() {
         let mut table = HandleTable::new();
         let id = table.insert_secret(secret_claims("jti-1", "s3cret"), None);
 
         let debug_output = format!("{id:?}");
-        assert_ne!(
-            debug_output,
-            id.as_str(),
-            "Debug must not print the full bearer id verbatim"
-        );
-        assert!(
-            !debug_output.contains(id.as_str()),
-            "Debug output {debug_output:?} must not contain the full bearer id {}",
-            id.as_str()
-        );
+        let display_output = format!("{id}");
 
-        // Display remains the full id — used deliberately by this module's
-        // own diagnostic error messages.
-        assert_eq!(format!("{id}"), id.as_str());
+        for (label, output) in [("Debug", &debug_output), ("Display", &display_output)] {
+            assert_ne!(
+                output,
+                id.as_str(),
+                "{label} must not print the full bearer id verbatim"
+            );
+            assert!(
+                !output.contains(id.as_str()),
+                "{label} output {output:?} must not contain the full bearer id {}",
+                id.as_str()
+            );
+            assert!(
+                output.contains(&id.redacted()),
+                "{label} output {output:?} should contain the redacted fingerprint {}",
+                id.redacted()
+            );
+        }
+
+        // The fingerprint itself is stable (same id -> same fingerprint,
+        // so log lines about the same handle can be correlated) and short
+        // (cheap to embed in every error message).
+        assert_eq!(id.redacted(), id.redacted());
+        assert!(id.redacted().len() < id.as_str().len());
+    }
+
+    /// Group A regression test: the three error constructions that name a
+    /// handle (`AuthorizationDenied` for an unrecognized/wrong-kind id,
+    /// `TokenExpired` for an expired one, `AccessorConsumed` for a
+    /// double-read) must never leak the full bearer id through their
+    /// `Display`/`Debug` output — only the redacted fingerprint.
+    #[test]
+    fn handle_related_errors_never_leak_the_full_bearer_id() {
+        let mut table = HandleTable::new();
+
+        // AuthorizationDenied via an unrecognized id.
+        let unknown = table.insert_secret(secret_claims("jti-1", "s3cret"), None);
+        table.release(&unknown);
+        let denied = table.resolve_secret_claims(&unknown).unwrap_err();
+        assert!(matches!(denied, VaultError::AuthorizationDenied { .. }));
+        assert_message_omits_full_id_but_has_fingerprint(&denied, &unknown);
+
+        // TokenExpired via an already-expired handle.
+        let expired = table.insert_secret(secret_claims("jti-2", "s3cret"), Some(now_secs() - 1));
+        let expired_err = table.resolve_secret_claims(&expired).unwrap_err();
+        assert!(matches!(expired_err, VaultError::TokenExpired { .. }));
+        assert_message_omits_full_id_but_has_fingerprint(&expired_err, &expired);
+
+        // AccessorConsumed via a double-read.
+        let consumed = table.insert_secret(secret_claims("jti-3", "s3cret"), None);
+        table.read_secret(&consumed).unwrap();
+        let consumed_err = table.read_secret(&consumed).unwrap_err();
+        assert!(matches!(consumed_err, VaultError::AccessorConsumed { .. }));
+        assert_message_omits_full_id_but_has_fingerprint(&consumed_err, &consumed);
+    }
+
+    /// Shared assertion for the test above: neither the `Display` (via
+    /// `VaultError`'s `#[error("{message}")]`) nor the `Debug` rendering of
+    /// `err` may contain `id`'s full bearer string, but both should contain
+    /// its redacted fingerprint (proving the fingerprint is what actually
+    /// went into the message, not that the id was omitted by accident).
+    fn assert_message_omits_full_id_but_has_fingerprint(err: &VaultError, id: &HandleId) {
+        let display = err.to_string();
+        let debug = format!("{err:?}");
+        for (label, output) in [("Display", &display), ("Debug", &debug)] {
+            assert!(
+                !output.contains(id.as_str()),
+                "{label} of {err:?} must not contain the full bearer id {}",
+                id.as_str()
+            );
+            assert!(
+                output.contains(&id.redacted()),
+                "{label} of {err:?} should contain the redacted fingerprint {}",
+                id.redacted()
+            );
+        }
     }
 
     #[test]

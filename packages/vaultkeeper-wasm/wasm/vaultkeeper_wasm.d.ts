@@ -97,9 +97,12 @@ export class WasmVaultKeeper {
     doctor(): Promise<any>;
     /**
      * Explicitly release a capability handle (issue #241 AC6). Returns
-     * `true` if a handle was actually present and removed. A caller that is
+     * `true` if a handle was actually present and removed, `false` if it
+     * was already gone (released, expired, or evicted). A caller that is
      * done with a handle should call this rather than waiting on its
-     * expiry.
+     * expiry. Throws an `authorization-denied` error for a `handleId` that
+     * is not even shaped like a real handle (see
+     * `validate_handle_id_shape`), rather than allocating/looking it up.
      */
     releaseHandle(handle_id: string): boolean;
     /**

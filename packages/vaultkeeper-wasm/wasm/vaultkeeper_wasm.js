@@ -202,9 +202,12 @@ class WasmVaultKeeper {
     }
     /**
      * Explicitly release a capability handle (issue #241 AC6). Returns
-     * `true` if a handle was actually present and removed. A caller that is
+     * `true` if a handle was actually present and removed, `false` if it
+     * was already gone (released, expired, or evicted). A caller that is
      * done with a handle should call this rather than waiting on its
-     * expiry.
+     * expiry. Throws an `authorization-denied` error for a `handleId` that
+     * is not even shaped like a real handle (see
+     * `validate_handle_id_shape`), rather than allocating/looking it up.
      * @param {string} handle_id
      * @returns {boolean}
      */
@@ -212,7 +215,10 @@ class WasmVaultKeeper {
         const ptr0 = passStringToWasm0(handle_id, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         const len0 = WASM_VECTOR_LEN;
         const ret = wasm.wasmvaultkeeper_releaseHandle(this.__wbg_ptr, ptr0, len0);
-        return ret !== 0;
+        if (ret[2]) {
+            throw takeFromExternrefTable0(ret[1]);
+        }
+        return ret[0] !== 0;
     }
     /**
      * Resolve the non-secret claims behind a capability handle id (issue
