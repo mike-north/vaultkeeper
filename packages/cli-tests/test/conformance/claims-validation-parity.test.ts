@@ -325,6 +325,31 @@ describe('validateClaims / validate_claims cross-language parity (issue #280)', 
       __testValidateClaims?.(JSON.stringify({ ...record, tid: String(record.tid) }), BigInt(0))
     }).toThrow()
   })
+
+  // Same outcome-parity convention as the unrecognized-kty case above: Rust
+  // deserializes `kgen` as a `u64`, so a fractional value fails in serde
+  // (bridged as `invalid-token`) before `validate_claims` runs, while TS
+  // rejects it inside `validateClaims` with its own typed message. Both must
+  // reject — a fractional kgen accepted by TS would mint a lease the Rust
+  // core can never deserialize.
+  it('both reject a fractional kgen rather than minting a lease Rust cannot deserialize', () => {
+    const claims = makeLeaseClaims()
+    const record: Record<string, unknown> = { ...claims, kgen: 1.5 }
+    if (!isRecordVaultClaimsShapedIgnoringKty(record)) {
+      throw new Error('unreachable: base lease claims always satisfy the minimal shape')
+    }
+
+    expect(() => {
+      validateClaims(record)
+    }).toThrow('Invalid token: kgen must be a non-negative integer')
+
+    if (__testValidateClaims === undefined) {
+      throw new Error('__testValidateClaims not loaded — beforeAll did not run')
+    }
+    expect(() => {
+      __testValidateClaims?.(JSON.stringify({ ...record, tid: String(record.tid) }), BigInt(0))
+    }).toThrow()
+  })
 })
 
 /**

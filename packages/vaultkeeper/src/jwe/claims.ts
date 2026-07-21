@@ -133,6 +133,12 @@ export function validateClaims(claims: VaultClaims, usedCount = 0): void {
       if (claims.kgen === undefined) {
         throw new VaultError('Invalid token: kgen is required for a signing lease')
       }
+      // Cross-language invariant: the Rust core deserializes kgen as a u64,
+      // so a fractional, negative, NaN, or unsafely-large value would mint a
+      // token Rust can never accept. Enforce the same domain here.
+      if (!Number.isSafeInteger(claims.kgen) || claims.kgen < 0) {
+        throw new VaultError('Invalid token: kgen must be a non-negative integer')
+      }
       break
     }
     case 'secret':

@@ -291,6 +291,30 @@ describe('validateClaims', () => {
       }).not.toThrow()
     })
 
+    it('rejects a fractional kgen — Rust deserializes kgen as u64, so a non-integer would mint a token Rust can never accept', () => {
+      expect(() => {
+        validateClaims(makeLeaseClaims({ kgen: 1.5 }))
+      }).toThrow('Invalid token: kgen must be a non-negative integer')
+    })
+
+    it('rejects a negative kgen', () => {
+      expect(() => {
+        validateClaims(makeLeaseClaims({ kgen: -1 }))
+      }).toThrow('Invalid token: kgen must be a non-negative integer')
+    })
+
+    it('rejects a NaN kgen', () => {
+      expect(() => {
+        validateClaims(makeLeaseClaims({ kgen: Number.NaN }))
+      }).toThrow('Invalid token: kgen must be a non-negative integer')
+    })
+
+    it('accepts kgen 0 — a valid first generation, distinct from a missing kgen', () => {
+      expect(() => {
+        validateClaims(makeLeaseClaims({ kgen: 0 }))
+      }).not.toThrow()
+    })
+
     it('rejects a signing lease carrying an empty val — no empty-string exemption', () => {
       expect(() => {
         validateClaims(makeLeaseClaims({ val: '' }))
