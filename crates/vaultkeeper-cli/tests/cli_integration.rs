@@ -677,6 +677,221 @@ mod approve {
     }
 }
 
+// ─── Profile command (issue #277) ───────────────────────────────
+
+mod profile {
+    use super::*;
+
+    fn write_profile(dir: &TempDir, name: &str, json: &serde_json::Value) {
+        let profiles_dir = dir.path().join("profiles");
+        fs::create_dir_all(&profiles_dir).expect("failed to create profiles dir");
+        fs::write(
+            profiles_dir.join(format!("{name}.json")),
+            serde_json::to_string_pretty(json).unwrap(),
+        )
+        .expect("failed to write profile");
+    }
+
+    #[test]
+    fn init_creates_a_loadable_profile() {
+        let (mut cmd, dir) = cli_test_env();
+        cmd.args(["profile", "init", "my-profile"])
+            .assert()
+            .success()
+            .stdout(predicate::str::contains("Profile created at"));
+
+        let content = fs::read_to_string(dir.path().join("profiles").join("my-profile.json"))
+            .expect("profile file should exist");
+        let parsed: serde_json::Value =
+            serde_json::from_str(&content).expect("should be valid JSON");
+        assert_eq!(parsed["name"], "my-profile");
+        assert_eq!(parsed["version"], 1);
+    }
+
+    #[test]
+    fn init_exits_1_when_profile_already_exists() {
+        let (mut cmd, dir) = cli_test_env();
+        write_profile(
+            &dir,
+            "my-profile",
+            &serde_json::json!({ "version": 1, "name": "my-profile", "entries": {} }),
+        );
+        cmd.args(["profile", "init", "my-profile"])
+            .assert()
+            .code(1)
+            .stderr(predicate::str::contains("already exists"));
+    }
+
+    #[test]
+    fn list_reports_no_profiles_when_none_exist() {
+        let (mut cmd, _dir) = cli_test_env();
+        cmd.args(["profile", "list"])
+            .assert()
+            .success()
+            .stdout(predicate::str::contains("(no profiles)"));
+    }
+
+    #[test]
+    fn list_reports_created_profile_names() {
+        let (mut cmd, dir) = cli_test_env();
+        write_profile(
+            &dir,
+            "github-mcp",
+            &serde_json::json!({ "version": 1, "name": "github-mcp", "entries": {} }),
+        );
+        cmd.args(["profile", "list"])
+            .assert()
+            .success()
+            .stdout(predicate::eq("github-mcp\n"));
+    }
+
+    #[test]
+    fn show_exits_1_when_profile_does_not_exist() {
+        let (mut cmd, _dir) = cli_test_env();
+        cmd.args(["profile", "show", "does-not-exist"])
+            .assert()
+            .code(1)
+            .stderr(predicate::str::contains("No profile found"));
+    }
+
+    #[test]
+    fn show_reports_shape_and_never_the_stored_secret_value() {
+        // AC5 (UAT): plant a known sentinel secret value reachable from the
+        // profile, then grep the FULL command output for its absence.
+        const SENTINEL: &str = "sk-live-VERY-SECRET-SENTINEL-VALUE-0xdeadbeef";
+
+        let (mut store_cmd, dir) = cli_test_env();
+        store_cmd
+            .args(["store", "--name", "github-pat"])
+            .write_stdin(SENTINEL)
+            .assert()
+            .success();
+
+        write_profile(
+            &dir,
+            "github-mcp",
+            &serde_json::json!({
+                "version": 1,
+                "name": "github-mcp",
+                "entries": {
+                    "GITHUB_TOKEN": {
+                        "secret": "github-pat",
+                        "materialize": "secret",
+                        "minTrust": "registry"
+                    }
+                }
+            }),
+        );
+
+        let mut show_cmd = Command::cargo_bin("vaultkeeper").unwrap();
+        let output = show_cmd
+            .env("VAULTKEEPER_CONFIG_DIR", dir.path())
+            .args(["profile", "show", "github-mcp"])
+            .output()
+            .expect("failed to run");
+        let stdout = String::from_utf8(output.stdout).expect("stdout should be valid UTF-8");
+        let stderr = String::from_utf8(output.stderr).expect("stderr should be valid UTF-8");
+
+        assert!(output.status.success(), "expected exit 0: {stderr}");
+        assert!(
+            stdout.contains("GITHUB_TOKEN"),
+            "expected entry name in output: {stdout}"
+        );
+        assert!(
+            stdout.contains("github-pat"),
+            "the secret *name* is safe to print: {stdout}"
+        );
+        assert!(
+            !stdout.contains(SENTINEL) && !stderr.contains(SENTINEL),
+            "show must never print the secret value: stdout={stdout} stderr={stderr}"
+        );
+    }
+
+    #[test]
+    fn lint_reports_shape_and_never_the_stored_secret_value() {
+        // AC5 (UAT), lint half of the same requirement.
+        const SENTINEL: &str = "sk-live-ANOTHER-SECRET-SENTINEL-0xfeedface";
+
+        let (mut store_cmd, dir) = cli_test_env();
+        store_cmd
+            .args(["store", "--name", "github-pat"])
+            .write_stdin(SENTINEL)
+            .assert()
+            .success();
+
+        write_profile(
+            &dir,
+            "github-mcp",
+            &serde_json::json!({
+                "version": 1,
+                "name": "github-mcp",
+                "entries": {
+                    "GITHUB_TOKEN": {
+                        "secret": "github-pat",
+                        "materialize": "secret",
+                        "minTrust": "unverified",
+                        "requirePresencePerUse": false
+                    }
+                }
+            }),
+        );
+
+        let mut lint_cmd = Command::cargo_bin("vaultkeeper").unwrap();
+        let output = lint_cmd
+            .env("VAULTKEEPER_CONFIG_DIR", dir.path())
+            .args(["profile", "lint", "github-mcp"])
+            .output()
+            .expect("failed to run");
+        let stdout = String::from_utf8(output.stdout).expect("stdout should be valid UTF-8");
+        let stderr = String::from_utf8(output.stderr).expect("stderr should be valid UTF-8");
+
+        assert!(output.status.success(), "expected exit 0: {stderr}");
+        assert!(
+            stdout.contains("schema OK"),
+            "expected schema-OK line: {stdout}"
+        );
+        assert!(
+            stdout.contains("per-machine") && stdout.contains("per-repository"),
+            "expected the per-machine/per-repository caveat: {stdout}"
+        );
+        // The config.json default trustTier ("3" == Dev/unverified in this
+        // test env) matches the profile's "unverified" minTrust exactly, so
+        // no loosening warning is expected here — this test is about the
+        // secret-value guarantee, not the warning logic (covered by Rust
+        // unit tests in crates/vaultkeeper-core/src/profile/lint.rs).
+        assert!(
+            !stdout.contains(SENTINEL) && !stderr.contains(SENTINEL),
+            "lint must never print the secret value: stdout={stdout} stderr={stderr}"
+        );
+    }
+
+    #[test]
+    fn show_and_lint_reject_a_profile_that_violates_a_load_time_invariant() {
+        let (mut cmd, dir) = cli_test_env();
+        write_profile(
+            &dir,
+            "broken",
+            &serde_json::json!({
+                "version": 1,
+                "name": "broken",
+                "entries": {
+                    "K": { "signingKey": "sk", "materialize": "secret" }
+                }
+            }),
+        );
+        cmd.args(["profile", "show", "broken"])
+            .assert()
+            .code(1)
+            .stderr(predicate::str::contains("materialize"));
+    }
+
+    #[test]
+    fn profile_with_no_subcommand_exits_2() {
+        let (mut cmd, _dir) = cli_test_env();
+        cmd.arg("profile").assert().code(2);
+    }
+}
+
 // ─── Dev-mode command ───────────────────────────────────────────
 
 mod dev_mode {

@@ -91,6 +91,42 @@ enum Commands {
     RotateKey,
     /// Emergency key revocation
     RevokeKey,
+    /// Manage environment profiles (env-var name → secret source →
+    /// materialization mode → policy)
+    Profile {
+        #[command(subcommand)]
+        action: ProfileAction,
+    },
+}
+
+#[derive(Subcommand)]
+enum ProfileAction {
+    /// Scaffold a new profile at `$CONFIG_DIR/profiles/<NAME>.json`
+    Init {
+        /// Profile name
+        name: String,
+        /// Write the scaffold to this path instead of the default profiles directory
+        #[arg(long)]
+        profile_file: Option<String>,
+    },
+    /// Render a profile's shape and policy. Never prints secret values.
+    Show {
+        /// Profile name
+        name: String,
+        /// Load from this path instead of the default profiles directory
+        #[arg(long)]
+        profile_file: Option<String>,
+    },
+    /// List profiles in the default profiles directory
+    List,
+    /// Validate a profile's schema and report policy warnings
+    Lint {
+        /// Profile name
+        name: String,
+        /// Load from this path instead of the default profiles directory
+        #[arg(long)]
+        profile_file: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -142,6 +178,7 @@ async fn main() {
             Commands::Backend { action } => cmd_backend(action).await,
             Commands::RotateKey => cmd_rotate_key().await,
             Commands::RevokeKey => cmd_revoke_key().await,
+            Commands::Profile { action } => cmd_profile(action).await,
         },
     };
 
@@ -656,5 +693,173 @@ async fn cmd_revoke_key() -> i32 {
     }
 
     println!("Key revoked successfully.");
+    0
+}
+
+/// `profile` — dispatches to the `init`/`show`/`list`/`lint` subcommands.
+/// All schema, validation, and output rendering live in
+/// `vaultkeeper_core::profile`; this function only parses arguments and
+/// resolves file paths (issue #277).
+async fn cmd_profile(action: ProfileAction) -> i32 {
+    match action {
+        ProfileAction::Init { name, profile_file } => cmd_profile_init(&name, profile_file).await,
+        ProfileAction::Show { name, profile_file } => cmd_profile_show(&name, profile_file).await,
+        ProfileAction::List => cmd_profile_list().await,
+        ProfileAction::Lint { name, profile_file } => cmd_profile_lint(&name, profile_file).await,
+    }
+}
+
+fn resolve_profile_path(
+    host: &NativeHostPlatform,
+    name: &str,
+    profile_file: Option<String>,
+) -> PathBuf {
+    profile_file.map_or_else(
+        || vaultkeeper_core::profile::profile_path(host.config_dir(), name),
+        PathBuf::from,
+    )
+}
+
+async fn cmd_profile_init(name: &str, profile_file: Option<String>) -> i32 {
+    let host = make_host();
+    let path = resolve_profile_path(&host, name, profile_file);
+
+    match host.file_exists(&path).await {
+        Ok(true) => {
+            eprintln!("Error: Profile already exists at {}", path.display());
+            return 1;
+        }
+        Ok(false) => {}
+        Err(e) => {
+            eprintln!("Error: {e}");
+            return 1;
+        }
+    }
+
+    let scaffold = vaultkeeper_core::profile::scaffold_profile(name);
+    let json = match serde_json::to_string_pretty(&scaffold) {
+        Ok(j) => j,
+        Err(e) => {
+            eprintln!("Error: {e}");
+            return 1;
+        }
+    };
+
+    // Profiles carry no secrets — only names and policy — so they are meant
+    // to be committed, unlike config/key/secret storage (0o600).
+    if let Err(e) = host
+        .write_file(&path, format!("{json}\n").as_bytes(), 0o644)
+        .await
+    {
+        eprintln!("Error: {e}");
+        return 1;
+    }
+
+    println!("Profile created at {}", path.display());
+    0
+}
+
+/// Load a validated profile from `path`, resolving TTL/trust defaults from
+/// the active `config.json`.
+async fn load_named_profile(
+    host: &NativeHostPlatform,
+    path: &Path,
+) -> Result<vaultkeeper_core::profile::LoadedProfile, String> {
+    if !host.file_exists(path).await.map_err(|e| e.to_string())? {
+        return Err(format!("No profile found at {}", path.display()));
+    }
+    let content = host.read_file(path).await.map_err(|e| e.to_string())?;
+    let json = String::from_utf8(content).map_err(|e| e.to_string())?;
+
+    let cfg = vaultkeeper_core::config::load_config(host)
+        .await
+        .map_err(|e| e.to_string())?;
+    let defaults = vaultkeeper_core::profile::ProfileDefaults::from_vault_defaults(&cfg.defaults);
+
+    vaultkeeper_core::profile::load_profile_from_str(&json, &defaults).map_err(|e| e.to_string())
+}
+
+async fn cmd_profile_show(name: &str, profile_file: Option<String>) -> i32 {
+    let host = make_host();
+    let path = resolve_profile_path(&host, name, profile_file);
+
+    match load_named_profile(&host, &path).await {
+        Ok(profile) => {
+            print!("{}", vaultkeeper_core::profile::render_show(&profile));
+            0
+        }
+        Err(e) => {
+            eprintln!("Error: {e}");
+            1
+        }
+    }
+}
+
+async fn cmd_profile_list() -> i32 {
+    let host = make_host();
+    let profiles_dir = host
+        .config_dir()
+        .join(vaultkeeper_core::profile::PROFILES_DIR_NAME);
+
+    let entries = match host.list_dir(&profiles_dir).await {
+        Ok(e) => e,
+        Err(e) => {
+            eprintln!("Error: {e}");
+            return 1;
+        }
+    };
+
+    let mut names: Vec<String> = entries
+        .into_iter()
+        .filter_map(|entry| {
+            entry
+                .strip_suffix(vaultkeeper_core::profile::PROFILE_FILE_EXTENSION)
+                .map(str::to_string)
+        })
+        .collect();
+    names.sort();
+
+    print!("{}", vaultkeeper_core::profile::render_list(&names));
+    0
+}
+
+async fn cmd_profile_lint(name: &str, profile_file: Option<String>) -> i32 {
+    let host = make_host();
+    let path = resolve_profile_path(&host, name, profile_file);
+
+    let profile = match load_named_profile(&host, &path).await {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("Error: {e}");
+            return 1;
+        }
+    };
+
+    let cfg = match vaultkeeper_core::config::load_config(host.as_ref()).await {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("Error: {e}");
+            return 1;
+        }
+    };
+
+    let active_backend_type = cfg
+        .backends
+        .iter()
+        .find(|b| b.enabled)
+        .map(|b| b.backend_type.as_str())
+        .unwrap_or("none");
+
+    let lint = vaultkeeper_core::profile::lint_profile(
+        &profile,
+        cfg.defaults.trust_tier,
+        u64::from(cfg.defaults.ttl_minutes) * 60,
+        vaultkeeper_core::profile::LintBaseline::default(),
+    );
+
+    print!(
+        "{}",
+        vaultkeeper_core::profile::render_lint(&profile, &lint, active_backend_type)
+    );
     0
 }

@@ -11,6 +11,7 @@ pub mod errors;
 pub mod identity;
 pub mod jwe;
 pub mod keys;
+pub mod profile;
 pub mod signing;
 pub mod types;
 pub(crate) mod util;

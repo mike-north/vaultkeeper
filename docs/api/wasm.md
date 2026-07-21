@@ -244,6 +244,17 @@ Thrown when the encryption key used to create a JWE has been rotated out of the 
 </td></tr>
 <tr><td>
 
+[MaterializeModeUnsupportedError](./wasm.materializemodeunsupportederror.md)
+
+
+</td><td>
+
+Thrown when a profile's `materialize` field uses the reserved object form (`{ "mode": "...", ... }`<!-- -->). The object form is polymorphic by design but v1 only implements the plain string values (`"secret"` \| `"lease"`<!-- -->) — every object-form `mode` is refused with this typed error, naming the reserved mode, rather than a generic parse failure.
+
+
+</td></tr>
+<tr><td>
+
 [NotCapableError](./wasm.notcapableerror.md)
 
 

@@ -288,6 +288,20 @@ pub enum VaultError {
         column: Option<u32>,
     },
 
+    // --- Environment Profile Failures (issue #277) ---
+    /// A profile's `materialize` field used the reserved object form
+    /// (`{ "mode": "...", ... }`). The object form is polymorphic by design
+    /// but v1 only implements the plain string values (`"secret"` |
+    /// `"lease"`) — every object-form `mode` is refused with this typed
+    /// error rather than a generic parse failure, so the reservation is
+    /// discoverable and a real v2 implementation can be non-breaking later.
+    #[error("{message}")]
+    MaterializeModeUnsupported {
+        message: String,
+        /// The reserved `mode` name the profile requested (e.g. `"reference"`).
+        mode: String,
+    },
+
     /// Generic vault error for cases that don't fit a specific variant.
     #[error("{0}")]
     Other(String),
@@ -382,6 +396,7 @@ pub const ALL_ERROR_CODES: &[&str] = &[
     "config-validation",
     "unknown-backend-type",
     "config-parse",
+    "materialize-mode-unsupported",
     "vault-error",
 ];
 
@@ -427,6 +442,7 @@ pub fn vault_error_code(e: &VaultError) -> &'static str {
         VaultError::ConfigValidation { .. } => "config-validation",
         VaultError::UnknownBackendType { .. } => "unknown-backend-type",
         VaultError::ConfigParse { .. } => "config-parse",
+        VaultError::MaterializeModeUnsupported { .. } => "materialize-mode-unsupported",
         VaultError::Other(_) => "vault-error",
     }
 }
@@ -591,6 +607,9 @@ pub fn vault_error_fields(e: &VaultError) -> serde_json::Map<String, serde_json:
                 fields.insert("column".into(), (*column).into());
             }
         }
+        VaultError::MaterializeModeUnsupported { mode, .. } => {
+            fields.insert("mode".into(), mode.clone().into());
+        }
         _ => {}
     }
     fields
@@ -742,6 +761,10 @@ pub fn all_variants_for_parity_test() -> Vec<VaultError> {
             path: "/config/config.json".into(),
             line: Some(3),
             column: Some(12),
+        },
+        VaultError::MaterializeModeUnsupported {
+            message: "materialize mode unsupported".into(),
+            mode: "reference".into(),
         },
         VaultError::Other("generic vault error".into()),
     ]

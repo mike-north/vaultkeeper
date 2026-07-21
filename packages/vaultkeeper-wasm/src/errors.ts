@@ -757,6 +757,30 @@ export class SetupError extends VaultError {
 }
 
 /**
+ * Thrown when a profile's `materialize` field uses the reserved object form
+ * (`{ "mode": "...", ... }`). The object form is polymorphic by design but
+ * v1 only implements the plain string values (`"secret"` | `"lease"`) —
+ * every object-form `mode` is refused with this typed error, naming the
+ * reserved mode, rather than a generic parse failure.
+ */
+export class MaterializeModeUnsupportedError extends VaultError {
+  /**
+   * The reserved `mode` name the profile requested (e.g. `"reference"`).
+   * `undefined` only if the WASM boundary did not supply one — never
+   * fabricated.
+   */
+  readonly mode?: string
+
+  constructor(message: string, mode?: string) {
+    super(message)
+    this.name = 'MaterializeModeUnsupportedError'
+    if (mode !== undefined) {
+      this.mode = mode
+    }
+  }
+}
+
+/**
  * Canonical list of every machine-readable `vaultErrorCode` the TypeScript
  * reconstruction map ({@link mapWasmError}) knows how to turn into a
  * dedicated typed subclass, plus the generic `'vault-error'` fallback that
@@ -802,6 +826,7 @@ export const ALL_VAULT_ERROR_CODES = [
   'config-validation',
   'unknown-backend-type',
   'config-parse',
+  'materialize-mode-unsupported',
   'vault-error',
 ] as const
 
@@ -839,6 +864,7 @@ interface WasmErrorShape {
   line?: unknown
   column?: unknown
   dependency?: unknown
+  mode?: unknown
 }
 
 /**
@@ -1064,6 +1090,8 @@ export function mapWasmError(thrown: unknown): VaultError {
           optionalString(thrown.path),
           toConfigParseLocation(thrown.line, thrown.column),
         )
+      case 'materialize-mode-unsupported':
+        return new MaterializeModeUnsupportedError(message, optionalString(thrown.mode))
       case 'vault-error':
         // The generic fallback code deliberately stays the base VaultError —
         // it represents a malformed/validation failure the core hasn't given

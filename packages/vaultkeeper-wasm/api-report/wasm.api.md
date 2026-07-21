@@ -200,6 +200,12 @@ export class KeyRotatedError extends VaultError {
 export type KeyStatus = 'current' | 'previous' | 'deprecated';
 
 // @public
+export class MaterializeModeUnsupportedError extends VaultError {
+    constructor(message: string, mode?: string);
+    readonly mode?: string;
+}
+
+// @public
 export class NotCapableError extends VaultError {
     constructor(message: string, backendType?: string, capability?: string);
     readonly backendType?: string;
