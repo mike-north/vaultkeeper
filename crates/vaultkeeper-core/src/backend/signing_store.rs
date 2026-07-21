@@ -36,7 +36,7 @@ use ed25519_dalek::pkcs8::spki::der::pem::LineEnding;
 use ed25519_dalek::pkcs8::{DecodePrivateKey, EncodePrivateKey, EncodePublicKey};
 use hkdf::Hkdf;
 use sha2::Sha256;
-use zeroize::Zeroize;
+use zeroize::{Zeroize, Zeroizing};
 
 use crate::backend::HostPlatform;
 use crate::errors::VaultError;
@@ -104,7 +104,7 @@ fn encrypt_gcm(key: &[u8], plaintext: &str) -> Result<String, VaultError> {
     ))
 }
 
-fn decrypt_gcm(key: &[u8], encoded: &str) -> Result<String, VaultError> {
+fn decrypt_gcm(key: &[u8], encoded: &str) -> Result<Zeroizing<String>, VaultError> {
     let parts: Vec<&str> = encoded.split(':').collect();
     if parts.len() != 3 {
         return Err(VaultError::Other(
@@ -138,12 +138,25 @@ fn decrypt_gcm(key: &[u8], encoded: &str) -> Result<String, VaultError> {
     let mut combined = ciphertext;
     combined.extend_from_slice(&auth_tag);
 
-    let plaintext = cipher
+    let mut plaintext = cipher
         .decrypt(nonce, combined.as_slice())
         .map_err(|e| VaultError::Other(format!("Decryption failed: {e}")))?;
 
-    String::from_utf8(plaintext)
-        .map_err(|e| VaultError::Other(format!("Decrypted data is not valid UTF-8: {e}")))
+    match String::from_utf8(plaintext) {
+        Ok(s) => Ok(Zeroizing::new(s)),
+        Err(e) => {
+            // The decrypted bytes are private key material (or, on a
+            // corrupt/tampered envelope, whatever GCM happened to decrypt to
+            // — still sensitive enough to treat the same way) even though
+            // they failed UTF-8 validation. `FromUtf8Error` owns those bytes;
+            // recover and zeroize them before the error is dropped rather
+            // than leaving them to a plain `Vec<u8>` drop.
+            let message = format!("Decrypted data is not valid UTF-8: {}", e.utf8_error());
+            plaintext = e.into_bytes();
+            plaintext.zeroize();
+            Err(VaultError::Other(message))
+        }
+    }
 }
 
 /// Derive the signing-key seal key: HKDF-SHA256 over the shared `.keys.wrap`
@@ -218,7 +231,7 @@ async fn load_signing_key(host: &dyn HostPlatform, id: &str) -> Result<SigningKe
     let mut seal_key = get_signing_seal_key(host).await?;
     let pem = decrypt_gcm(&seal_key, &envelope);
     seal_key.zeroize();
-    let pem = pem.map_err(|e| VaultError::Decryption {
+    let pem: Zeroizing<String> = pem.map_err(|e| VaultError::Decryption {
         message: format!("Failed to decrypt signing key: {e}"),
         path: path.display().to_string(),
     })?;
@@ -591,6 +604,27 @@ mod tests {
             b"msg",
             &signature
         ));
+
+        // Deleting the stored secret under the shared name must not touch
+        // the signing key sealed under a wholly separate `signing/`
+        // directory and HKDF namespace — it must still load and sign
+        // exactly as before.
+        backend.delete("shared-name").await.unwrap();
+        assert!(!backend.exists("shared-name").await.unwrap());
+
+        let signature_after_delete = sign_with_key(host.as_ref(), "shared-name", b"msg")
+            .await
+            .unwrap();
+        let public_key_after_delete = get_public_key(host.as_ref(), "shared-name").await.unwrap();
+        assert_eq!(
+            public_key_after_delete.public_key_pem, public_key.public_key_pem,
+            "the signing key must be unaffected by deleting the coexisting secret"
+        );
+        assert!(crate::signing::ed25519::verify(
+            &verifying_key,
+            b"msg",
+            &signature_after_delete
+        ));
     }
 
     // -----------------------------------------------------------------
@@ -689,5 +723,61 @@ mod tests {
 
         let err = get_public_key(&host, "garbage").await.unwrap_err();
         assert!(matches!(err, VaultError::Decryption { .. }));
+    }
+
+    // -----------------------------------------------------------------
+    // FileBackend is the first production SigningBackend. The golden-vector
+    // tests in `tests/unit_tests.rs::signing` only ever exercise
+    // `create_detached_jws`/`verify_detached_jws` against an in-memory test
+    // double (`FixtureSigningBackend`), which never touches this module. The
+    // fixture private key has no seam to import into `FileBackend`'s sealed
+    // `signing/` storage without adding public API solely for this test, so
+    // this instead proves the real backend end-to-end: a freshly generated
+    // key, signed and verified through the same `crate::signing` module the
+    // golden vectors exercise, using only the backend's own
+    // `get_public_key` output — never a key reached into directly.
+    // -----------------------------------------------------------------
+
+    #[tokio::test]
+    async fn file_backend_signing_key_round_trips_through_create_and_verify_detached_jws() {
+        use crate::backend::{FileBackend, SigningBackend};
+        use crate::signing::{create_detached_jws, verify_detached_jws};
+        use crate::types::VerifyRequest;
+        use std::sync::Arc;
+
+        let host = Arc::new(TestHost::new());
+        let backend = FileBackend::new(host);
+        backend
+            .generate_signing_key("real-backend-key", SigningAlgorithm::EdDsa)
+            .await
+            .unwrap();
+
+        let public_key = backend.get_public_key("real-backend-key").await.unwrap();
+        let payload = b"vaultkeeper issue #251 real-backend golden-vector coverage";
+
+        let jws = create_detached_jws(&backend, &public_key.kid, "real-backend-key", payload)
+            .await
+            .unwrap();
+
+        let verified = verify_detached_jws(&VerifyRequest {
+            payload: payload.to_vec(),
+            jws: jws.clone(),
+            public_key: public_key.public_key_pem.clone(),
+        })
+        .unwrap();
+        assert!(
+            verified,
+            "a JWS signed by the real FileBackend must verify against its own public key"
+        );
+
+        // A tampered payload must fail verification — proves this is a real
+        // signature check, not a JWS that verifies unconditionally.
+        let tampered = verify_detached_jws(&VerifyRequest {
+            payload: b"a different payload entirely".to_vec(),
+            jws,
+            public_key: public_key.public_key_pem,
+        })
+        .unwrap();
+        assert!(!tampered);
     }
 }

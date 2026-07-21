@@ -627,6 +627,40 @@ mod tests {
         }
     }
 
+    /// Signing-key private material (issue #289) is sealed under
+    /// `<config_dir>/signing/`, a directory `FileBackend::generate_signing_key`
+    /// creates the same way every other storage directory is created — via
+    /// `write_file`'s implicit parent-dir creation. Mirrors the `file/`-dir
+    /// permission tests above: driven through the real production path
+    /// (`FileBackend` + `NativeHostPlatform`, not the generic `write_file`
+    /// helper directly), this proves `signing/` itself, not just an
+    /// arbitrary directory, lands owner-only `0o700` and is never left at a
+    /// permissive umask default.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn generate_signing_key_creates_signing_dir_as_0700() {
+        use std::os::unix::fs::PermissionsExt;
+        use std::sync::Arc;
+        use vaultkeeper_core::backend::{FileBackend, SigningBackend};
+        use vaultkeeper_core::types::SigningAlgorithm;
+
+        let dir = tempfile::tempdir().unwrap();
+        let host = Arc::new(NativeHostPlatform::new(dir.path().to_path_buf()));
+        let backend = FileBackend::new(host);
+
+        backend
+            .generate_signing_key("cli-signing-key", SigningAlgorithm::EdDsa)
+            .await
+            .unwrap();
+
+        let signing_dir = dir.path().join("signing");
+        let mode = fs::metadata(&signing_dir).unwrap().permissions().mode() & 0o777;
+        assert_eq!(
+            mode, 0o700,
+            "freshly created signing/ dir must be 0o700, got {mode:o}"
+        );
+    }
+
     /// Non-Unix (Windows) sanity check: `create_dir_all_secure` still
     /// creates the directory even though POSIX mode bits don't apply there.
     #[cfg(not(unix))]
