@@ -2,17 +2,17 @@
   "version": 1,
   "tools": [
     {
-      "name": "gh-review-comment",
-      "path": "scripts/agent-tools/gh-review-comment",
-      "purpose": "Print the full body (path:line, author, complete text) of one PR review comment in this repo — the piece gh-reviews truncates",
-      "args": "<comment-id>",
+      "name": "gh-review",
+      "path": "scripts/agent-tools/gh-review",
+      "purpose": "Read-only review helpers as a noun-verb tree; 'comment view <id>' prints the full body (path:line, author, complete text) of one PR review comment — the piece gh-reviews truncates. Supersedes gh-review-comment.",
+      "args": "comment view <comment-id>",
       "scope": "repo:mike-north/vaultkeeper (read-only GET to pulls/comments/<id>; refuses outside the repo; id must be a positive integer)",
       "covers": [
         "gh\\s+api\\b.*/pulls/comments/\\d+"
       ],
       "status": "approved",
-      "approvedSha256": "0c3174fae0927b6a8ed8e80231e2613bf005dfc219c00d9374a40d954de60954",
-      "permissionRule": "Bash(scripts/agent-tools/gh-review-comment:*)"
+      "approvedSha256": "5ec8c48fe496f58ab662152a8f117f4038bf124b112ccfc896132c4aec39a23e",
+      "permissionRule": "Bash(scripts/agent-tools/gh-review:*)"
     },
     {
       "name": "gh-pr",
@@ -25,7 +25,7 @@
         "gh\\s+run\\s+view\\b.*--log-failed"
       ],
       "status": "approved",
-      "approvedSha256": "664a7a2d0f8fa35f82c917105c5d4912fd671ca9569e02bb8d8da40c2c97aed1",
+      "approvedSha256": "972b39b479273db8eede7880aca711e193ed9e5849a366936f29ff64cc8b1cc6",
       "permissionRule": "Bash(scripts/agent-tools/gh-pr:*)"
     },
     {
@@ -39,7 +39,7 @@
         "gh\\s+api\\s+graphql\\b.*reviewThreads"
       ],
       "status": "approved",
-      "approvedSha256": "998949bececa676bf853e57a35257bc7b714533eb074e796e68fc72ded0d667d",
+      "approvedSha256": "29c72daeb2b2c3583ef54f0f3df070cd2fe81300982d1da153566085210a4e98",
       "permissionRule": "Bash(scripts/agent-tools/pr-health:*)"
     }
   ]
