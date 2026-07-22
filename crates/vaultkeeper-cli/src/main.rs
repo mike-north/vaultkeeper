@@ -6,14 +6,15 @@ mod host;
 
 use clap::{Parser, Subcommand};
 use host::NativeHostPlatform;
-use std::io::{self, Read};
+use std::io::{self, IsTerminal, Read};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use vaultkeeper_core::backend::{
     FileBackend, HostPlatform, PresenceOperation, SecretBackend, get_backend_capabilities,
 };
 use vaultkeeper_core::config;
-use vaultkeeper_core::vault::enforce_presence_requirement;
+use vaultkeeper_core::profile::{EntrySource, MaterializeMode};
+use vaultkeeper_core::vault::{MintLeaseOptions, enforce_presence_requirement};
 
 #[derive(Parser)]
 #[command(
@@ -97,7 +98,7 @@ enum Commands {
         #[command(subcommand)]
         action: ProfileAction,
     },
-    /// Manage signing-key leases (revocation)
+    /// Manage signing-key leases (mint, revoke)
     Session {
         #[command(subcommand)]
         action: SessionAction,
@@ -115,6 +116,16 @@ enum SessionAction {
         /// Revoke every outstanding lease for this signing key name
         #[arg(long, conflicts_with = "jti")]
         key: Option<String>,
+    },
+    /// Mint a session signing-key lease for a `signingKey` +
+    /// `materialize: "lease"` profile entry, printing the JWE to stdout
+    Mint {
+        /// The profile to resolve the entry from — positional, matching
+        /// every other profile-scoped command (`profile show`/`profile lint`)
+        profile: String,
+        /// The env-var entry name within the profile
+        #[arg(long)]
+        entry: String,
     },
 }
 
@@ -750,6 +761,7 @@ async fn cmd_session(action: SessionAction) -> i32 {
                 unreachable!("clap's conflicts_with rejects --jti and --key together")
             }
         },
+        SessionAction::Mint { profile, entry } => cmd_session_mint(&profile, &entry).await,
     }
 }
 
@@ -810,6 +822,106 @@ async fn cmd_session_revoke_key(key: &str) -> i32 {
 
     println!("Every outstanding lease for key \"{key}\" revoked.");
     0
+}
+
+/// `session mint <PROFILE> --entry <VAR>` (issue #299): resolve a
+/// `signingKey` + `materialize: "lease"` profile entry and mint a session
+/// signing-key lease, printing the JWE to stdout.
+///
+/// `interactive` (whether `stderr` is a terminal) is computed here, once, and
+/// threaded into [`MintLeaseOptions::interactive`] — core never queries the
+/// terminal itself, keeping the presence-mint logic platform-agnostic. When
+/// `stderr` is not a terminal, [`vaultkeeper_core::vault::VaultKeeper::mint_signing_lease`]
+/// never calls [`HostPlatform::prompt_approval`] at all for a
+/// presence-requiring entry — see that method's doc comment for the
+/// non-interactive fail-closed rule this guarantees (issue #299).
+async fn cmd_session_mint(profile: &str, entry: &str) -> i32 {
+    let host = make_host();
+
+    let path = match resolve_profile_path(&host, Some(profile), None) {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("Error: {e}");
+            return 1;
+        }
+    };
+
+    let (loaded_profile, _cfg) = match load_named_profile(&host, &path).await {
+        Ok(loaded) => loaded,
+        Err(e) => {
+            eprintln!("Error: {e}");
+            return 1;
+        }
+    };
+
+    let Some((_, profile_entry)) = loaded_profile
+        .entries
+        .iter()
+        .find(|(name, _)| name == entry)
+    else {
+        eprintln!(
+            "Error: profile '{profile}' has no entry '{entry}' \
+             (run `vaultkeeper profile show {profile}` to see its entries)"
+        );
+        return 1;
+    };
+
+    // Friendlier, earlier rejection than core's own — `mint_signing_lease`
+    // re-checks `source`/`materialize` itself and fails closed regardless,
+    // so this is UX only, not the enforcement point (issue #299).
+    if matches!(profile_entry.source, EntrySource::Secret(_)) {
+        eprintln!(
+            "Error: entry '{entry}' in profile '{profile}' is secret-backed; \
+             `session mint` only mints signing-key leases"
+        );
+        return 1;
+    }
+
+    if profile_entry.materialize != MaterializeMode::Lease {
+        eprintln!(
+            "Error: entry '{entry}' in profile '{profile}' does not use \
+             materialize: \"lease\" — nothing to mint"
+        );
+        return 1;
+    }
+
+    let ttl_seconds = profile_entry
+        .ttl_seconds
+        .unwrap_or(vaultkeeper_core::profile::SIGNING_LEASE_DEFAULT_TTL_SECONDS);
+
+    let mut vault = match init_vault(&host).await {
+        Ok(v) => v,
+        Err(code) => return code,
+    };
+
+    let backend = FileBackend::new(host.clone());
+    let interactive = io::stderr().is_terminal();
+
+    let options = MintLeaseOptions {
+        profile_name: profile,
+        entry_name: entry,
+        source: &profile_entry.source,
+        materialize: profile_entry.materialize,
+        ttl_seconds,
+        trust_tier: profile_entry.min_trust.to_trust_tier(),
+        use_limit: profile_entry.use_limit,
+        require_presence_at_mint: profile_entry.require_presence_at_mint,
+        interactive,
+    };
+
+    match vault
+        .mint_signing_lease(host.as_ref(), &backend, &options)
+        .await
+    {
+        Ok(jwe) => {
+            println!("{jwe}");
+            0
+        }
+        Err(e) => {
+            eprintln!("Error: {e}");
+            1
+        }
+    }
 }
 
 /// `profile` — dispatches to the `init`/`show`/`list`/`lint` subcommands.

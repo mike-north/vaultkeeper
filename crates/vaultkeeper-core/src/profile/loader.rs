@@ -587,6 +587,22 @@ mod tests {
         );
     }
 
+    /// Pins the literal values, not just the symbol: issue #299 / the
+    /// PRFAQ's session-signing-lease bound is an 8h default, hard-capped at
+    /// 24h — a change to either constant is a deliberate spec change, not a
+    /// refactor, and must fail this test to be noticed (`docs/product/PRFAQ.md`).
+    #[test]
+    fn signing_lease_ttl_constants_match_the_issue_299_spec() {
+        assert_eq!(
+            SIGNING_LEASE_DEFAULT_TTL_SECONDS, 28_800,
+            "8h default session-signing-lease TTL (issue #299)"
+        );
+        assert_eq!(
+            SIGNING_LEASE_MAX_TTL_SECONDS, 86_400,
+            "24h hard cap on a session-signing-lease TTL (issue #299)"
+        );
+    }
+
     #[test]
     fn signing_lease_rejects_ttl_over_the_hard_cap() {
         let json = r#"{
