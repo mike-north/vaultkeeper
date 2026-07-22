@@ -267,6 +267,12 @@ fn validate_entry(
     })
 }
 
+/// Hard cap for a secret-backed lease's `ttlSeconds`, matching the
+/// resolver's `LEASE_TTL_MAX_SECONDS` (30 days). Enforced here at load time
+/// with a typed error so a profile requesting more is refused rather than
+/// silently minted shorter.
+pub(crate) const SECRET_LEASE_MAX_TTL_SECONDS: u64 = 30 * 24 * 60 * 60;
+
 fn resolve_ttl_seconds(
     name: &str,
     source: &EntrySource,
@@ -277,6 +283,17 @@ fn resolve_ttl_seconds(
     if materialize != MaterializeMode::Lease {
         // TTL/lease-lifetime does not apply to a raw secret materialization.
         return Ok(None);
+    }
+
+    // An explicit `ttlSeconds: 0` would mint an already-expired lease the
+    // instant it's created — reject it at load time rather than letting it
+    // reach the resolver as a silently-useless lease.
+    if ttl_seconds == Some(0) {
+        return Err(validation_error(
+            name,
+            "ttlSeconds",
+            "ttlSeconds must not be 0 — a 0-second TTL would mint an already-expired lease",
+        ));
     }
 
     match source {
@@ -294,7 +311,23 @@ fn resolve_ttl_seconds(
             }
             Ok(Some(resolved))
         }
-        EntrySource::Secret(_) => Ok(Some(ttl_seconds.unwrap_or(defaults.ttl_seconds))),
+        EntrySource::Secret(_) => {
+            let resolved = ttl_seconds.unwrap_or(defaults.ttl_seconds);
+            // Fail closed instead of silently rewriting: a profile asking
+            // for more than the resolver's hard cap gets a typed validation
+            // error at load time, never a quietly shortened lease.
+            if resolved > SECRET_LEASE_MAX_TTL_SECONDS {
+                return Err(validation_error(
+                    name,
+                    "ttlSeconds",
+                    format!(
+                        "ttlSeconds {resolved} exceeds the secret-backed-lease hard cap of \
+                         {SECRET_LEASE_MAX_TTL_SECONDS} seconds (30 days)"
+                    ),
+                ));
+            }
+            Ok(Some(resolved))
+        }
     }
 }
 
@@ -561,6 +594,59 @@ mod tests {
             "entries": {
                 "K": { "signingKey": "sk", "materialize": "lease", "ttlSeconds": 86401 }
             }
+        }"#;
+        let err = load_profile_from_str(json, &defaults()).unwrap_err();
+        assert_matches!(err, VaultError::ConfigValidation { field, .. } if field == "entries[K].ttlSeconds");
+    }
+
+    #[test]
+    fn rejects_secret_backed_lease_ttl_above_the_thirty_day_cap() {
+        let json = format!(
+            r#"{{
+                "version": 1, "name": "p",
+                "entries": {{
+                    "K": {{ "secret": "s", "materialize": "lease", "ttlSeconds": {} }}
+                }}
+            }}"#,
+            SECRET_LEASE_MAX_TTL_SECONDS + 1
+        );
+        let err = load_profile_from_str(&json, &defaults()).unwrap_err();
+        assert_matches!(
+            err,
+            VaultError::ConfigValidation { ref message, ref field, .. }
+                if message.contains("hard cap") && field.contains("K")
+        );
+    }
+
+    #[test]
+    fn accepts_secret_backed_lease_ttl_at_exactly_the_cap() {
+        let json = format!(
+            r#"{{
+                "version": 1, "name": "p",
+                "entries": {{
+                    "K": {{ "secret": "s", "materialize": "lease", "ttlSeconds": {} }}
+                }}
+            }}"#,
+            SECRET_LEASE_MAX_TTL_SECONDS
+        );
+        assert!(load_profile_from_str(&json, &defaults()).is_ok());
+    }
+
+    #[test]
+    fn rejects_explicit_ttl_seconds_zero_on_a_secret_backed_lease() {
+        let json = r#"{
+            "version": 1, "name": "p",
+            "entries": { "K": { "secret": "s", "materialize": "lease", "ttlSeconds": 0 } }
+        }"#;
+        let err = load_profile_from_str(json, &defaults()).unwrap_err();
+        assert_matches!(err, VaultError::ConfigValidation { field, .. } if field == "entries[K].ttlSeconds");
+    }
+
+    #[test]
+    fn rejects_explicit_ttl_seconds_zero_on_a_signing_key_backed_lease() {
+        let json = r#"{
+            "version": 1, "name": "p",
+            "entries": { "K": { "signingKey": "sk", "materialize": "lease", "ttlSeconds": 0 } }
         }"#;
         let err = load_profile_from_str(json, &defaults()).unwrap_err();
         assert_matches!(err, VaultError::ConfigValidation { field, .. } if field == "entries[K].ttlSeconds");

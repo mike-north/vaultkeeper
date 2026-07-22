@@ -289,16 +289,29 @@ pub enum VaultError {
     },
 
     // --- Environment Profile Failures (issue #277) ---
-    /// A profile's `materialize` field used the reserved object form
-    /// (`{ "mode": "...", ... }`). The object form is polymorphic by design
-    /// but v1 only implements the plain string values (`"secret"` |
-    /// `"lease"`) — every object-form `mode` is refused with this typed
-    /// error rather than a generic parse failure, so the reservation is
-    /// discoverable and a real v2 implementation can be non-breaking later.
+    /// A profile requested a materialization the current implementation
+    /// does not support. Two request shapes produce this error:
+    ///
+    /// 1. The `materialize` field used the reserved object form
+    ///    (`{ "mode": "...", ... }`). The object form is polymorphic by
+    ///    design but v1 only implements the plain string values (`"secret"`
+    ///    | `"lease"`) — every object-form `mode` is refused with this typed
+    ///    error rather than a generic parse failure, so the reservation is
+    ///    discoverable and a real v2 implementation can be non-breaking
+    ///    later. `mode` carries the reserved mode name (e.g. `"reference"`).
+    /// 2. A materialization *combination* the resolver cannot yet satisfy,
+    ///    refused at resolve time. `mode` then carries a stable kebab-case
+    ///    slug naming the unsupported request — currently
+    ///    `"signing-key-lease"` (session signing leases, pending the epic's
+    ///    session-mint work) and `"secret-lease-presence-at-mint"`
+    ///    (`requirePresenceAtMint` on a secret-backed lease; no
+    ///    `HostPlatform` exists at resolve time to prompt with). These slugs
+    ///    are a documented, stable contract for programmatic callers.
     #[error("{message}")]
     MaterializeModeUnsupported {
         message: String,
-        /// The reserved `mode` name the profile requested (e.g. `"reference"`).
+        /// The reserved `mode` name or unsupported-request slug — see the
+        /// variant docs for the enumerated values.
         mode: String,
     },
 

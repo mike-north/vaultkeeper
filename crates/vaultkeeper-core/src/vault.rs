@@ -119,6 +119,67 @@ pub async fn enforce_presence_requirement(
     Ok(())
 }
 
+/// Build a [`VaultClaims`] shape and mint it into a compact JWE, using the
+/// active key manager's current key.
+///
+/// The single, shared claims-building + minting primitive for every call
+/// site that mints a `VaultClaims`-shaped token from a plaintext secret
+/// value: [`VaultKeeper::setup`] and `resolve.rs`'s private lease-mint path (reached via [`crate::resolve::resolve_profile`])
+/// both call this rather than each constructing `VaultClaims` and calling
+/// [`create_token`] independently, so the two claims shapes cannot silently
+/// drift apart. Crate-internal only — not part of the public API.
+///
+/// `now` and `exp` are supplied by the caller (rather than computed here) so
+/// a single `now_secs()` read backs both the `iat` claim and whatever
+/// (possibly capped/overflow-checked) `exp` computation the caller already
+/// performed from it.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn build_and_mint_claims(
+    key_manager: &KeyManager,
+    secret_name: &str,
+    secret_value: &str,
+    now: u64,
+    exp: u64,
+    exe: String,
+    use_limit: Option<u64>,
+    tid: crate::types::TrustTier,
+    backend_type: String,
+) -> Result<String, VaultError> {
+    let mut claims = VaultClaims {
+        jti: uuid::Uuid::new_v4().to_string(),
+        exp,
+        iat: now,
+        sub: secret_name.to_string(),
+        exe,
+        use_limit,
+        tid,
+        bkd: Some(backend_type),
+        val: Some(secret_value.to_string()),
+        reference: secret_name.to_string(),
+        kty: None,
+        kid: None,
+        kgen: None,
+        pres: None,
+    };
+
+    let current_key = key_manager.get_current_key()?;
+    let token = create_token(
+        &current_key.key,
+        &claims,
+        &CreateTokenOptions {
+            kid: Some(current_key.id.clone()),
+        },
+    );
+    // The claims copy of the plaintext is scrubbed once the JWE is minted —
+    // success or error — so this helper never leaves a second unzeroized
+    // heap copy behind (the caller owns the lifetime of its own copy).
+    if let Some(val) = claims.val.as_mut() {
+        use zeroize::Zeroize;
+        val.zeroize();
+    }
+    token
+}
+
 /// Options for initializing VaultKeeper.
 #[derive(Debug, Default)]
 pub struct VaultKeeperOptions {
@@ -454,30 +515,16 @@ impl VaultKeeper {
 
         let now = crate::util::time::now_secs();
 
-        let claims = VaultClaims {
-            jti: uuid::Uuid::new_v4().to_string(),
-            exp: now + u64::from(ttl_minutes) * 60,
-            iat: now,
-            sub: secret_name.to_string(),
+        let token = build_and_mint_claims(
+            &self.key_manager,
+            secret_name,
+            secret_value,
+            now,
+            now + u64::from(ttl_minutes) * 60,
             exe,
             use_limit,
-            tid: trust_tier,
-            bkd: Some(backend_type),
-            val: Some(secret_value.to_string()),
-            reference: secret_name.to_string(),
-            kty: None,
-            kid: None,
-            kgen: None,
-            pres: None,
-        };
-
-        let current_key = self.key_manager.get_current_key()?;
-        let token = create_token(
-            &current_key.key,
-            &claims,
-            &CreateTokenOptions {
-                kid: Some(current_key.id.clone()),
-            },
+            trust_tier,
+            backend_type,
         )?;
 
         // Commit the deferred TOFU manifest write only now that the token has
