@@ -84,7 +84,42 @@ pub struct PreflightResult {
     pub next_steps: Vec<String>,
 }
 
+/// Discriminates a [`VaultClaims`] payload's kind: an ordinary secret claim
+/// (the default — used when `kty` is omitted, for backward compatibility with
+/// tokens minted before this discriminator existed) or a session signing-key
+/// lease, which carries no secret value.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ClaimsKind {
+    /// An ordinary secret-value claim.
+    Secret,
+    /// A session signing-key lease — no secret value.
+    SigningKey,
+}
+
+/// A signing lease's most recent presence-per-use action, if the backend
+/// enforces one. Informational only — not validated by `validate_claims`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LeasePresence {
+    /// The operation the presence action covered (e.g. `"sign"`).
+    pub op: String,
+    /// Unix timestamp (seconds) the presence action was recorded.
+    pub at: u64,
+    /// The presence mechanism used (e.g. `"touch"`).
+    pub method: String,
+    /// The backend type that enforced the presence action.
+    pub backend: String,
+}
+
 /// JWE claim payload.
+///
+/// A claim payload is one of two kinds, discriminated by [`VaultClaims::kty`]:
+/// an ordinary **secret** claim (`kty` omitted or `Secret`), which requires a
+/// non-empty [`VaultClaims::bkd`] and [`VaultClaims::val`]; or a session
+/// **signing-key lease** (`kty: SigningKey`), which carries no secret value at
+/// all and instead requires [`VaultClaims::kid`] and [`VaultClaims::kgen`].
+/// See [`crate::jwe::token::validate_claims`] for the exact rules.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VaultClaims {
     /// Unique token ID.
@@ -102,13 +137,35 @@ pub struct VaultClaims {
     pub use_limit: Option<u64>,
     /// Trust tier.
     pub tid: TrustTier,
-    /// Backend identifier hint.
-    pub bkd: String,
-    /// Encrypted secret value.
-    pub val: String,
+    /// Backend identifier hint. Required (non-empty) for a secret claim;
+    /// absent for a signing-key lease.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bkd: Option<String>,
+    /// Encrypted secret value. Required (non-empty) for a secret claim; MUST
+    /// be absent (or empty) for a signing-key lease — a lease carrying a
+    /// `val` is rejected outright.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub val: Option<String>,
     /// Backend-specific reference path.
     #[serde(rename = "ref")]
     pub reference: String,
+    /// Discriminates a secret claim (default, when omitted) from a session
+    /// signing-key lease.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kty: Option<ClaimsKind>,
+    /// The leased signing key's stable identifier. Required (non-empty) for a
+    /// signing-key lease.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kid: Option<String>,
+    /// The signing key's generation at lease-mint time. Required for a
+    /// signing-key lease — a lease missing `kgen` is rejected rather than
+    /// defaulted to generation 0, since the revocation design depends on this
+    /// being an explicit, honest claim.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kgen: Option<u64>,
+    /// The lease's most recent presence-per-use action, if any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pres: Option<LeasePresence>,
 }
 
 /// Claims for a signing-key capability handle: `{ kid, backendRef }`, never

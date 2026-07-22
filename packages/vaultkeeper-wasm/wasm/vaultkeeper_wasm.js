@@ -526,6 +526,40 @@ function __testPromptApproval(host, action, detail) {
 exports.__testPromptApproval = __testPromptApproval;
 
 /**
+ * Diagnostic-only export: runs the Rust core's `validate_claims` — the
+ * single validation chokepoint every token passes through — directly against
+ * a caller-supplied claims payload, without needing a real JWE, key, or
+ * `VaultKeeper` instance.
+ *
+ * `claims_json` must deserialize as `VaultClaims`. Returns `Ok(())` when
+ * validation passes, or a `JsValue` produced by the real `vault_error_to_js`
+ * bridge (matching every other error surfaced from this binary) when it
+ * fails.
+ *
+ * This exists so `packages/cli-tests/test/conformance/claims-validation-parity.test.ts`
+ * can assert the Rust core and the TypeScript library's `validateClaims`
+ * (`packages/vaultkeeper/src/jwe/claims.ts`) produce byte-identical error
+ * messages for the same malformed claims payload (issue #280) — it is not
+ * part of the SDK's public TypeScript API (`../index.ts` does not re-export
+ * it) and is never called from a real code path.
+ *
+ * # Errors
+ * Returns the bridged `VaultError` when `claims_json` fails to parse as
+ * `VaultClaims`, or when `validate_claims` rejects the parsed claims.
+ * @param {string} claims_json
+ * @param {bigint} used_count
+ */
+function __testValidateClaims(claims_json, used_count) {
+    const ptr0 = passStringToWasm0(claims_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.__testValidateClaims(ptr0, len0, used_count);
+    if (ret[1]) {
+        throw takeFromExternrefTable0(ret[0]);
+    }
+}
+exports.__testValidateClaims = __testValidateClaims;
+
+/**
  * The canonical list of every machine-readable `vaultErrorCode` this WASM
  * binary can throw — the single source of truth for the error taxonomy (see
  * `ALL_ERROR_CODES` in `crates/vaultkeeper-core/src/errors.rs`).
@@ -798,7 +832,7 @@ function __wbg_get_imports() {
             return ret;
         },
         __wbindgen_cast_0000000000000001: function(arg0, arg1) {
-            // Cast intrinsic for `Closure(Closure { dtor_idx: 227, function: Function { arguments: [Externref], shim_idx: 228, ret: Result(Unit), inner_ret: Some(Result(Unit)) }, mutable: true }) -> Externref`.
+            // Cast intrinsic for `Closure(Closure { dtor_idx: 233, function: Function { arguments: [Externref], shim_idx: 234, ret: Result(Unit), inner_ret: Some(Result(Unit)) }, mutable: true }) -> Externref`.
             const ret = makeMutClosure(arg0, arg1, wasm.wasm_bindgen__closure__destroy__h1722208547e491cb, wasm_bindgen__convert__closures_____invoke__h8760ba3086f56474);
             return ret;
         },

@@ -142,7 +142,39 @@ export interface PreflightResult {
 }
 
 /**
+ * Discriminates a {@link VaultClaims} payload's kind: an ordinary secret claim
+ * (the default, used when `kty` is omitted — for backward compatibility with
+ * tokens minted before this discriminator existed) or a session signing-key
+ * lease, which carries no secret value.
+ * @internal
+ */
+export type ClaimsKind = 'secret' | 'signing-key'
+
+/**
+ * A signing lease's most recent presence-per-use action, if the backend
+ * enforces one. Informational only — not validated by `validateClaims`.
+ * @internal
+ */
+export interface LeasePresence {
+  /** The operation the presence action covered (e.g. `'sign'`). */
+  op: string
+  /** Unix timestamp (seconds) the presence action was recorded. */
+  at: number
+  /** The presence mechanism used (e.g. `'touch'`). */
+  method: string
+  /** The backend type that enforced the presence action. */
+  backend: string
+}
+
+/**
  * JWE claim payload.
+ *
+ * A claim payload is one of two kinds, discriminated by {@link VaultClaims.kty}:
+ * an ordinary **secret** claim (`kty` omitted or `'secret'`), which requires a
+ * non-empty {@link VaultClaims.bkd} and {@link VaultClaims.val}; or a session
+ * **signing-key lease** (`kty: 'signing-key'`), which carries no secret value
+ * at all and instead requires {@link VaultClaims.kid} and
+ * {@link VaultClaims.kgen}. See `validateClaims` for the exact rules.
  * @internal
  */
 export interface VaultClaims {
@@ -160,12 +192,39 @@ export interface VaultClaims {
   use: number | null
   /** Trust tier */
   tid: TrustTier
-  /** Backend identifier hint */
-  bkd: string
-  /** Encrypted secret value */
-  val: string
+  /**
+   * Backend identifier hint. Required (non-empty) for a secret claim; absent
+   * for a signing-key lease.
+   */
+  bkd?: string | undefined
+  /**
+   * Encrypted secret value. Required (non-empty) for a secret claim; MUST be
+   * absent (or empty) for a signing-key lease — a lease carrying a `val` is
+   * rejected outright.
+   */
+  val?: string | undefined
   /** Backend-specific reference path */
   ref: string
+  /**
+   * Discriminates a secret claim (default, when omitted) from a session
+   * signing-key lease.
+   */
+  kty?: ClaimsKind | undefined
+  /**
+   * The leased signing key's stable identifier (see
+   * {@link SigningPublicKey.kid}). Required (non-empty) for a signing-key
+   * lease.
+   */
+  kid?: string | undefined
+  /**
+   * The signing key's generation at lease-mint time. Required for a
+   * signing-key lease — a lease missing `kgen` is rejected rather than
+   * defaulted to generation 0, since the revocation design depends on this
+   * being an explicit, honest claim.
+   */
+  kgen?: number | undefined
+  /** The lease's most recent presence-per-use action, if any. */
+  pres?: LeasePresence | undefined
 }
 
 /** Response from a vault access operation. */

@@ -255,6 +255,30 @@ export function __testLoadProfile(json: string, config_defaults: any): any;
 export function __testPromptApproval(host: any, action: string, detail: string): Promise<boolean>;
 
 /**
+ * Diagnostic-only export: runs the Rust core's `validate_claims` — the
+ * single validation chokepoint every token passes through — directly against
+ * a caller-supplied claims payload, without needing a real JWE, key, or
+ * `VaultKeeper` instance.
+ *
+ * `claims_json` must deserialize as `VaultClaims`. Returns `Ok(())` when
+ * validation passes, or a `JsValue` produced by the real `vault_error_to_js`
+ * bridge (matching every other error surfaced from this binary) when it
+ * fails.
+ *
+ * This exists so `packages/cli-tests/test/conformance/claims-validation-parity.test.ts`
+ * can assert the Rust core and the TypeScript library's `validateClaims`
+ * (`packages/vaultkeeper/src/jwe/claims.ts`) produce byte-identical error
+ * messages for the same malformed claims payload (issue #280) — it is not
+ * part of the SDK's public TypeScript API (`../index.ts` does not re-export
+ * it) and is never called from a real code path.
+ *
+ * # Errors
+ * Returns the bridged `VaultError` when `claims_json` fails to parse as
+ * `VaultClaims`, or when `validate_claims` rejects the parsed claims.
+ */
+export function __testValidateClaims(claims_json: string, used_count: bigint): void;
+
+/**
  * The canonical list of every machine-readable `vaultErrorCode` this WASM
  * binary can throw — the single source of truth for the error taxonomy (see
  * `ALL_ERROR_CODES` in `crates/vaultkeeper-core/src/errors.rs`).

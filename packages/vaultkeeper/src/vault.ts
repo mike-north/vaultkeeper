@@ -836,6 +836,26 @@ export class VaultKeeper {
           'it cannot be read with getSecret(). Use sign() instead.',
       )
     }
+    // Defense in depth: a JWE-based signing-key lease (kty: 'signing-key')
+    // wraps the same VaultClaims shape as a secret token, so it is not caught
+    // by the isSigningClaims() check above (which only recognizes the
+    // separate in-memory `keyType` marker). A validated lease never carries a
+    // `val`, so this also guards the narrowing below.
+    if (claims.kty === 'signing-key') {
+      throw new AuthorizationDeniedError(
+        'This capability token authorizes a signing key, not a secret — ' +
+          'it cannot be read with getSecret(). Use sign() instead.',
+      )
+    }
+    // Distinct from the lease case above: a secret-kind token with no `val`
+    // is malformed (validateClaims requires a non-empty `val` for secret
+    // claims), so report it as such rather than mislabeling it a signing key.
+    if (claims.val === undefined) {
+      throw new AuthorizationDeniedError(
+        'This capability token does not carry a secret value — ' +
+          'it is malformed or was not minted as a secret token.',
+      )
+    }
     return createSecretAccessor(claims.val)
   }
 
@@ -1222,7 +1242,7 @@ export class VaultKeeper {
 
   static #resolveSecrets(token: CapabilityToken | SecretTokenMap): string | Record<string, string> {
     if (token instanceof CapabilityToken) {
-      return VaultKeeper.#requireSecretClaims(token).val
+      return VaultKeeper.#requireSecretValue(token)
     }
     const result: Record<string, string> = {}
     for (const [name, t] of Object.entries(token)) {
@@ -1231,7 +1251,7 @@ export class VaultKeeper {
           `Invalid capability token for secret "${name}" — expected a CapabilityToken from authorize()`,
         )
       }
-      result[name] = VaultKeeper.#requireSecretClaims(t).val
+      result[name] = VaultKeeper.#requireSecretValue(t)
     }
     return result
   }
@@ -1240,7 +1260,10 @@ export class VaultKeeper {
    * Resolve a token to its secret claims, rejecting a signing-key token.
    *
    * Defense in depth: a signing-key capability must never be injectable as a
-   * secret through `fetch()`/`exec()`.
+   * secret through `fetch()`/`exec()`. This rejects both the in-memory
+   * signing-key token (`isSigningClaims`) and a JWE-based signing-key lease
+   * (`kty: 'signing-key'`) — the two capability shapes are discriminated
+   * differently but neither ever carries a secret value.
    */
   static #requireSecretClaims(token: CapabilityToken): VaultClaims {
     const claims = validateCapabilityToken(token)
@@ -1250,7 +1273,22 @@ export class VaultKeeper {
           'it cannot be injected into fetch() or exec().',
       )
     }
+    if (claims.kty === 'signing-key') {
+      throw new AuthorizationDeniedError(
+        'This capability token authorizes a signing-key lease, not a secret — ' +
+          'it cannot be injected into fetch() or exec().',
+      )
+    }
     return claims
+  }
+
+  /** Resolve a token to its secret value, rejecting a claims shape with no `val`. */
+  static #requireSecretValue(token: CapabilityToken): string {
+    const claims = VaultKeeper.#requireSecretClaims(token)
+    if (claims.val === undefined || claims.val.trim() === '') {
+      throw new AuthorizationDeniedError('This capability token does not authorize a secret value.')
+    }
+    return claims.val
   }
 
   /**

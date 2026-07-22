@@ -16,6 +16,8 @@ import * as delegatedFetchModule from '../../src/access/delegated-fetch.js'
 import * as delegatedExecModule from '../../src/access/delegated-exec.js'
 import * as crypto from 'node:crypto'
 import { CompactSign } from 'jose'
+import { createCapabilityToken } from '../../src/identity/session.js'
+import type { VaultClaims } from '../../src/types.js'
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -553,6 +555,57 @@ describe('VaultKeeper', () => {
       expect(execSpy).toHaveBeenCalledWith('hunter2', expect.objectContaining({ command: 'echo' }))
       expect(result.exitCode).toBe(0)
       expect(vaultResponse.keyStatus).toBe('current')
+    })
+  })
+
+  // Defense in depth (issue #280/#287): a JWE-based signing-key lease shares
+  // the same `VaultClaims` shape as a secret token, so it is not caught by
+  // the `isSigningClaims()` check that only recognizes the separate
+  // in-memory `keyType` marker (see `vault-sign.test.ts` for that path).
+  // getSecret/fetch/exec must each independently reject a hand-constructed
+  // lease claims payload via the `kty: 'signing-key'` discriminator.
+  describe('JWE-based signing-key lease rejected by secret-access paths', () => {
+    function makeLeaseClaims(overrides: Partial<VaultClaims> = {}): VaultClaims {
+      const now = Math.floor(Date.now() / 1000)
+      return {
+        jti: 'lease-jti-1',
+        exp: now + 3600,
+        iat: now,
+        sub: 'release-key',
+        exe: 'a'.repeat(64),
+        use: null,
+        tid: 1,
+        ref: 'release-key',
+        kty: 'signing-key',
+        kid: 'kid-abc123',
+        kgen: 1,
+        ...overrides,
+      }
+    }
+
+    it('getSecret rejects a signing-key lease', async () => {
+      const vault = await initVault()
+      const token = createCapabilityToken(makeLeaseClaims())
+
+      expect(() => vault.getSecret(token)).toThrow(AuthorizationDeniedError)
+    })
+
+    it('fetch rejects a signing-key lease', async () => {
+      const vault = await initVault()
+      const token = createCapabilityToken(makeLeaseClaims())
+
+      await expect(vault.fetch(token, { url: 'https://example.com' })).rejects.toBeInstanceOf(
+        AuthorizationDeniedError,
+      )
+    })
+
+    it('exec rejects a signing-key lease', async () => {
+      const vault = await initVault()
+      const token = createCapabilityToken(makeLeaseClaims())
+
+      await expect(vault.exec(token, { command: 'echo' })).rejects.toBeInstanceOf(
+        AuthorizationDeniedError,
+      )
     })
   })
 

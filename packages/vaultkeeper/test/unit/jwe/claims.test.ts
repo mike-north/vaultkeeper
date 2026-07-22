@@ -262,4 +262,130 @@ describe('validateClaims', () => {
       }).toThrow(VaultError)
     })
   })
+
+  // ─── kty discrimination (issue #280/#287) ──────────────────────────────
+
+  /** Builds a well-formed signing-key lease claims payload. */
+  function makeLeaseClaims(overrides: Partial<VaultClaims> = {}): VaultClaims {
+    const now = Math.floor(Date.now() / 1000)
+    return {
+      jti: 'lease-jti-1',
+      exp: now + 3600,
+      iat: now,
+      sub: 'release-key',
+      exe: 'a'.repeat(64),
+      use: null,
+      tid: 1,
+      ref: 'release-key',
+      kty: 'signing-key',
+      kid: 'kid-abc123',
+      kgen: 1,
+      ...overrides,
+    }
+  }
+
+  describe('kty discrimination', () => {
+    it('accepts a well-formed signing-key lease', () => {
+      expect(() => {
+        validateClaims(makeLeaseClaims())
+      }).not.toThrow()
+    })
+
+    it('rejects a fractional kgen — Rust deserializes kgen as u64, so a non-integer would mint a token Rust can never accept', () => {
+      expect(() => {
+        validateClaims(makeLeaseClaims({ kgen: 1.5 }))
+      }).toThrow('Invalid token: kgen must be a non-negative integer')
+    })
+
+    it('rejects a negative kgen', () => {
+      expect(() => {
+        validateClaims(makeLeaseClaims({ kgen: -1 }))
+      }).toThrow('Invalid token: kgen must be a non-negative integer')
+    })
+
+    it('rejects a NaN kgen', () => {
+      expect(() => {
+        validateClaims(makeLeaseClaims({ kgen: Number.NaN }))
+      }).toThrow('Invalid token: kgen must be a non-negative integer')
+    })
+
+    it('accepts kgen 0 — a valid first generation, distinct from a missing kgen', () => {
+      expect(() => {
+        validateClaims(makeLeaseClaims({ kgen: 0 }))
+      }).not.toThrow()
+    })
+
+    it('rejects a signing lease carrying an empty val — no empty-string exemption', () => {
+      expect(() => {
+        validateClaims(makeLeaseClaims({ val: '' }))
+      }).toThrow('Invalid token: signing lease must not carry a val')
+    })
+
+    it('rejects a signing lease carrying a whitespace-only val — no exemption', () => {
+      expect(() => {
+        validateClaims(makeLeaseClaims({ val: '   ' }))
+      }).toThrow('Invalid token: signing lease must not carry a val')
+    })
+
+    it('rejects a signing lease with a whitespace-only kid', () => {
+      expect(() => {
+        validateClaims(makeLeaseClaims({ kid: '   ' }))
+      }).toThrow('Invalid token: kid must not be empty')
+    })
+
+    it('rejects a secret claim carrying a signing-lease kid', () => {
+      expect(() => {
+        validateClaims(makeValidClaims({ kid: 'kid-should-not-be-here' }))
+      }).toThrow('Invalid token: secret claim must not carry signing-lease fields (kid/kgen/pres)')
+    })
+
+    it('rejects a secret claim carrying a signing-lease kgen', () => {
+      expect(() => {
+        validateClaims(makeValidClaims({ kgen: 1 }))
+      }).toThrow('Invalid token: secret claim must not carry signing-lease fields (kid/kgen/pres)')
+    })
+
+    it('rejects a secret claim carrying a signing-lease pres', () => {
+      expect(() => {
+        validateClaims(
+          makeValidClaims({
+            pres: { op: 'sign', at: Math.floor(Date.now() / 1000), method: 'touch', backend: 'yubikey' },
+          }),
+        )
+      }).toThrow('Invalid token: secret claim must not carry signing-lease fields (kid/kgen/pres)')
+    })
+
+    it('rejects an unrecognized kty rather than silently treating it as a secret claim', () => {
+      const claims = makeValidClaims()
+      const record: Record<string, unknown> = { ...claims, kty: 'wat' }
+      if (!isRecordVaultClaimsShapedIgnoringKty(record)) {
+        throw new Error('unreachable: base claims always satisfy the minimal shape')
+      }
+      expect(() => {
+        validateClaims(record)
+      }).toThrow('Invalid token: unrecognized claim kind kty=wat')
+    })
+  })
 })
+
+/**
+ * Type predicate used only to build a deliberately malformed claims payload
+ * (an unrecognized `kty`) for testing `validateClaims`'s own defense-in-depth
+ * rejection. `parseVaultClaims` (the JWE-decrypt-time parser,
+ * `packages/vaultkeeper/src/jwe/token.ts`) already rejects this earlier in
+ * the real pipeline and is not exercised by this path — this validates the
+ * minimal shape `validateClaims` itself relies on, treating `kty` as an
+ * arbitrary string rather than requiring it to be a known `ClaimsKind`.
+ */
+function isRecordVaultClaimsShapedIgnoringKty(value: unknown): value is VaultClaims {
+  if (typeof value !== 'object' || value === null) return false
+  const record: Record<string, unknown> = { ...value }
+  return (
+    typeof record.jti === 'string' &&
+    typeof record.exp === 'number' &&
+    typeof record.iat === 'number' &&
+    typeof record.sub === 'string' &&
+    typeof record.exe === 'string' &&
+    typeof record.ref === 'string'
+  )
+}
