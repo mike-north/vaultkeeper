@@ -296,6 +296,19 @@ impl EphemeralKeychain {
             String::from_utf8_lossy(&settings.stderr)
         );
 
+        // Construct the RAII guard BEFORE the first global mutation below:
+        // if `default-keychain -s` panics after `list-keychains -s` already
+        // ran, the guard's Drop must still restore the captured session
+        // state. Everything above this point only touched the ephemeral
+        // keychain file, never global state, so a panic earlier leaves
+        // nothing to restore.
+        let guard = Self {
+            path,
+            previous_search_list,
+            previous_default,
+        };
+        let path_str = guard.path.to_str().expect("temp path must be valid UTF-8");
+
         // Replace (not prepend) the search list with just the ephemeral
         // keychain. This is what actually isolates `list()`'s
         // `dump-keychain` scan from a developer's or runner's real
@@ -315,11 +328,7 @@ impl EphemeralKeychain {
             String::from_utf8_lossy(&set_default.stderr)
         );
 
-        Self {
-            path,
-            previous_search_list,
-            previous_default,
-        }
+        guard
     }
 }
 
