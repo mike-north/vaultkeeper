@@ -21,20 +21,31 @@
 //!
 //! `KeychainBackend` (like the TS backend it ports) never passes `-k
 //! <keychain>` to `security` — every command implicitly targets the current
-//! *default* keychain. To exercise the real backend without touching
-//! whatever keychain a developer or CI runner already has as their default,
-//! this test:
+//! *default* keychain for writes, and the current *search list* for reads
+//! (`find-generic-password`, `delete-generic-password`, and critically
+//! `dump-keychain`, which `list()` uses, walk every keychain on the search
+//! list, not just the default one). To exercise the real backend without
+//! observing — or polluting — whatever keychains a developer or CI runner
+//! already has configured, this test:
 //!
 //! 1. Creates a throwaway keychain file in a temp directory with a random
 //!    password (`security create-keychain`).
-//! 2. Adds it to the keychain search list and unlocks it, then makes it the
-//!    default keychain (`security list-keychains -s`, `unlock-keychain`,
-//!    `default-keychain -s`) so unqualified `security` commands resolve to
-//!    it.
-//! 3. Disables auto-lock for the duration of the test
+//! 2. Captures the current search list, then **replaces** it with just the
+//!    ephemeral keychain (`security list-keychains -s <ephemeral>`) — not
+//!    merely prepends it — so `dump-keychain`'s `list()` scan can only ever
+//!    observe entries this test itself wrote, never a developer's or
+//!    runner's real login-keychain entries. (Relying on `default-keychain
+//!    -s` alone to also fix up the search list was tried and rejected: it
+//!    was observed, empirically, to sometimes silently mutate the search
+//!    list as a side effect and sometimes not, which is exactly the kind of
+//!    OS/version-dependent behavior this isolation must not depend on.)
+//! 3. Unlocks the ephemeral keychain and makes it the default
+//!    (`unlock-keychain`, `default-keychain -s`) so unqualified `security`
+//!    write commands (`add-generic-password`) resolve to it.
+//! 4. Disables auto-lock for the duration of the test
 //!    (`set-keychain-settings`) so a slow CI run doesn't hit a relock.
-//! 4. Runs the full store/retrieve/exists/list/delete conformance flow.
-//! 5. Restores the previous default keychain and search list, then deletes
+//! 5. Runs the full store/retrieve/exists/list/delete conformance flow.
+//! 6. Restores the previous search list and default keychain, then deletes
 //!    the ephemeral keychain file (`security delete-keychain`) — via an RAII
 //!    guard so this cleanup runs even if an assertion above panics.
 //!
@@ -181,11 +192,24 @@ fn run_security(args: &[&str]) -> std::process::Output {
         .unwrap_or_else(|e| panic!("failed to spawn `security {args:?}`: {e}"))
 }
 
+/// Parse `security list-keychains`/`security default-keychain` output —
+/// one double-quoted path per line — into bare path strings.
+fn parse_quoted_keychain_paths(stdout: &[u8]) -> Vec<String> {
+    String::from_utf8_lossy(stdout)
+        .lines()
+        .map(|line| line.trim().trim_matches('"').to_string())
+        .filter(|s| !s.is_empty())
+        .collect()
+}
+
 /// RAII guard that creates an ephemeral keychain for the duration of the
-/// test and restores the prior default keychain + search list on drop, so
-/// cleanup runs even if an assertion panics mid-test.
+/// test, replaces the search list with just that keychain (so `list()`'s
+/// `dump-keychain` scan can never observe a pre-existing login-keychain
+/// entry), and restores the prior search list + default keychain on drop —
+/// so cleanup runs even if an assertion panics mid-test.
 struct EphemeralKeychain {
     path: PathBuf,
+    previous_search_list: Vec<String>,
     previous_default: Option<String>,
 }
 
@@ -196,19 +220,12 @@ impl EphemeralKeychain {
         // Best-effort: clear out a stale keychain from a previous crashed run.
         let _ = std::fs::remove_file(&path);
 
-        let previous_default = {
-            let output = run_security(&["default-keychain"]);
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            stdout
-                .trim()
-                .trim_matches('"')
-                .to_string()
-                .split_whitespace()
-                .next()
-                .map(str::to_string)
-                .or_else(|| Some(stdout.trim().trim_matches('"').to_string()))
-                .filter(|s| !s.is_empty())
-        };
+        let previous_search_list =
+            parse_quoted_keychain_paths(&run_security(&["list-keychains"]).stdout);
+        let previous_default =
+            parse_quoted_keychain_paths(&run_security(&["default-keychain"]).stdout)
+                .into_iter()
+                .next();
 
         let password = format!(
             "vk-conformance-{}-{}",
@@ -244,6 +261,18 @@ impl EphemeralKeychain {
             String::from_utf8_lossy(&settings.stderr)
         );
 
+        // Replace (not prepend) the search list with just the ephemeral
+        // keychain. This is what actually isolates `list()`'s
+        // `dump-keychain` scan from a developer's or runner's real
+        // login-keychain entries — `dump-keychain` (no `-k`) walks every
+        // keychain on the search list, not just the default one.
+        let set_search_list = run_security(&["list-keychains", "-s", path_str]);
+        assert!(
+            set_search_list.status.success(),
+            "security list-keychains -s failed: {}",
+            String::from_utf8_lossy(&set_search_list.stderr)
+        );
+
         let set_default = run_security(&["default-keychain", "-s", path_str]);
         assert!(
             set_default.status.success(),
@@ -253,6 +282,7 @@ impl EphemeralKeychain {
 
         Self {
             path,
+            previous_search_list,
             previous_default,
         }
     }
@@ -260,6 +290,11 @@ impl EphemeralKeychain {
 
 impl Drop for EphemeralKeychain {
     fn drop(&mut self) {
+        if !self.previous_search_list.is_empty() {
+            let mut args = vec!["list-keychains", "-s"];
+            args.extend(self.previous_search_list.iter().map(String::as_str));
+            let _ = run_security(&args);
+        }
         if let Some(previous) = &self.previous_default {
             let _ = run_security(&["default-keychain", "-s", previous]);
         }
@@ -317,9 +352,15 @@ async fn keychain_backend_conformance_against_real_security_binary() {
     );
 
     let listed = backend.list().await.expect("list must succeed");
-    assert!(
-        listed.contains(&name),
-        "list must include the just-stored id: {listed:?}"
+    // Not just `contains` — the search-list replacement in
+    // `EphemeralKeychain::create` is what actually isolates this scan from
+    // a developer's or runner's real login-keychain entries, so assert the
+    // *only* thing visible is what this test itself stored.
+    assert_eq!(
+        listed,
+        vec![name.clone()],
+        "list must observe exactly this test's own entry, nothing from a \
+         pre-existing login keychain: {listed:?}"
     );
 
     backend

@@ -228,11 +228,24 @@ impl SecretBackend for KeychainBackend {
             )
             .await?;
         if output.exit_code != 0 {
+            // Deliberately does NOT embed `output.stderr` here, unlike every
+            // other error path in this file. Every other `security`
+            // subprocess in this backend is invoked with an argv-only
+            // command (no stdin secret involved), so its stderr is safe to
+            // surface verbatim for diagnostics. This is the one process
+            // whose stdin carries the secret (in `encoded`, base64-encoded)
+            // — verified empirically that real `security -i`'s stderr never
+            // echoes the command line or `-w` value back (only a status
+            // line like `add-generic-password: returned -25299`), but that
+            // is an unenforced behavioral property of a third-party binary,
+            // not a contract this backend can rely on. Omitting stderr here
+            // entirely removes any path for a future `security` version (or
+            // an unanticipated error mode) to leak the secret or its base64
+            // encoding into a `VaultError` message that might be logged.
             return Err(VaultError::Exec {
                 message: format!(
-                    "security add-generic-password failed with exit code {}: {}",
-                    output.exit_code,
-                    String::from_utf8_lossy(&output.stderr)
+                    "security add-generic-password failed with exit code {}",
+                    output.exit_code
                 ),
                 command: "security".to_string(),
             });
@@ -616,6 +629,33 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn store_overwrites_an_existing_entry_via_the_pre_delete_line() {
+        // Regression coverage for the load-bearing `delete-generic-password`
+        // line that precedes `add-generic-password` in store()'s -i script:
+        // without it, a second store() for the same id would fail with the
+        // real `security`'s "item already exists" error (verified
+        // empirically — see module docs), since add-generic-password alone
+        // never overwrites. TestHost's `run_interactive_script` mirrors
+        // that duplicate-add failure, so this test genuinely fails if the
+        // pre-delete line is removed.
+        let host = TestHost::new();
+        let backend = KeychainBackend::new(host.clone());
+
+        backend.store("upsert-id", "first-value").await.unwrap();
+        assert_eq!(backend.retrieve("upsert-id").await.unwrap(), "first-value");
+
+        backend
+            .store("upsert-id", "second-value")
+            .await
+            .expect("storing the same id again must succeed by overwriting, not erroring");
+        assert_eq!(
+            backend.retrieve("upsert-id").await.unwrap(),
+            "second-value",
+            "the second store must have replaced the first value"
+        );
+    }
+
+    #[tokio::test]
     async fn store_passes_secret_and_its_base64_encoding_on_stdin_not_argv() {
         let host = TestHost::new();
         let backend = KeychainBackend::new(host.clone());
@@ -925,6 +965,81 @@ mod tests {
         assert!(
             matches!(err, VaultError::Exec { ref command, .. } if command == "security"),
             "expected VaultError::Exec carrying the failing command, got {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn store_failure_never_embeds_raw_stderr_in_the_error_message() {
+        // Unlike every other error path in this file, store()'s error
+        // message must never echo `security`'s stderr verbatim: it's the
+        // one subprocess whose stdin carries the secret, so an
+        // unanticipated future `security` error mode that echoes its input
+        // back on stderr must not have a path into a `VaultError` message
+        // that could get logged. Fake a stderr that would fail this test if
+        // it leaked through — including the base64 form of a sentinel
+        // secret, mirroring how the real secret is encoded before it's
+        // embedded in the -i script.
+        struct EchoingStderrHost {
+            inner: Arc<TestHost>,
+        }
+
+        const SENTINEL: &str = "store-error-sentinel-should-never-leak-into-message";
+
+        #[async_trait::async_trait]
+        impl HostPlatform for EchoingStderrHost {
+            async fn exec(
+                &self,
+                _cmd: &str,
+                _args: &[&str],
+                _options: ExecOptions<'_>,
+            ) -> Result<ExecOutput, VaultError> {
+                let encoded = Base64::encode_string(SENTINEL.as_bytes());
+                Ok(ExecOutput {
+                    stdout: Vec::new(),
+                    stderr: format!(
+                        "security: unexpected error near `add-generic-password -a vaultkeeper \
+                         -s \"vaultkeeper:id\" -w {encoded}`"
+                    )
+                    .into_bytes(),
+                    exit_code: 1,
+                })
+            }
+            async fn read_file(&self, p: &Path) -> Result<Vec<u8>, VaultError> {
+                self.inner.read_file(p).await
+            }
+            async fn write_file(&self, p: &Path, c: &[u8], m: u32) -> Result<(), VaultError> {
+                self.inner.write_file(p, c, m).await
+            }
+            async fn file_exists(&self, p: &Path) -> Result<bool, VaultError> {
+                self.inner.file_exists(p).await
+            }
+            async fn delete_file(&self, p: &Path) -> Result<(), VaultError> {
+                self.inner.delete_file(p).await
+            }
+            async fn list_dir(&self, p: &Path) -> Result<Vec<String>, VaultError> {
+                self.inner.list_dir(p).await
+            }
+            fn platform(&self) -> Platform {
+                self.inner.platform()
+            }
+            fn config_dir(&self) -> &Path {
+                self.inner.config_dir()
+            }
+        }
+
+        let host = Arc::new(EchoingStderrHost {
+            inner: TestHost::new(),
+        });
+        let err = KeychainBackend::new(host)
+            .store("id", SENTINEL)
+            .await
+            .unwrap_err();
+        let message = err.to_string();
+        let encoded = Base64::encode_string(SENTINEL.as_bytes());
+        assert!(
+            !message.contains(SENTINEL) && !message.contains(&encoded),
+            "store()'s error message must never embed raw stderr (which could carry the \
+             secret or its base64 encoding): {message:?}"
         );
     }
 

@@ -50,6 +50,11 @@ jobs:
     # crates/vaultkeeper-core/tests/keychain_conformance.rs), so it needs its
     # own macOS runner to actually execute.
     runs-on: macos-latest
+    # macOS runner minutes bill at ~10x Linux minutes — cap this well below
+    # the 6h default so a hung interactive `security` process (e.g. an
+    # unexpected TTY prompt) can't run away with cost instead of failing
+    # fast.
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
 
