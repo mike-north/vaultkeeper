@@ -279,6 +279,17 @@ fn resolve_ttl_seconds(
         return Ok(None);
     }
 
+    // An explicit `ttlSeconds: 0` would mint an already-expired lease the
+    // instant it's created — reject it at load time rather than letting it
+    // reach the resolver as a silently-useless lease.
+    if ttl_seconds == Some(0) {
+        return Err(validation_error(
+            name,
+            "ttlSeconds",
+            "ttlSeconds must not be 0 — a 0-second TTL would mint an already-expired lease",
+        ));
+    }
+
     match source {
         EntrySource::SigningKey(_) => {
             let resolved = ttl_seconds.unwrap_or(SIGNING_LEASE_DEFAULT_TTL_SECONDS);
@@ -561,6 +572,26 @@ mod tests {
             "entries": {
                 "K": { "signingKey": "sk", "materialize": "lease", "ttlSeconds": 86401 }
             }
+        }"#;
+        let err = load_profile_from_str(json, &defaults()).unwrap_err();
+        assert_matches!(err, VaultError::ConfigValidation { field, .. } if field == "entries[K].ttlSeconds");
+    }
+
+    #[test]
+    fn rejects_explicit_ttl_seconds_zero_on_a_secret_backed_lease() {
+        let json = r#"{
+            "version": 1, "name": "p",
+            "entries": { "K": { "secret": "s", "materialize": "lease", "ttlSeconds": 0 } }
+        }"#;
+        let err = load_profile_from_str(json, &defaults()).unwrap_err();
+        assert_matches!(err, VaultError::ConfigValidation { field, .. } if field == "entries[K].ttlSeconds");
+    }
+
+    #[test]
+    fn rejects_explicit_ttl_seconds_zero_on_a_signing_key_backed_lease() {
+        let json = r#"{
+            "version": 1, "name": "p",
+            "entries": { "K": { "signingKey": "sk", "materialize": "lease", "ttlSeconds": 0 } }
         }"#;
         let err = load_profile_from_str(json, &defaults()).unwrap_err();
         assert_matches!(err, VaultError::ConfigValidation { field, .. } if field == "entries[K].ttlSeconds");

@@ -44,27 +44,52 @@
 //! A `materialize: "lease"` entry backed by a `signingKey` source (a session
 //! signing lease) is not yet implemented — see the epic
 //! (issue #276)'s "session mint, presence-at-mint... (to be filed)" work
-//! item — and returns [`VaultError::Other`] naming the entry rather than
-//! silently no-oping or minting an incomplete claims shape.
+//! item — and is refused with [`VaultError::MaterializeModeUnsupported`],
+//! naming both the entry and its `signingKey` source, rather than silently
+//! no-oping or minting an incomplete claims shape.
+//!
+//! A `materialize: "lease"` entry with `requirePresenceAtMint: true` on a
+//! `secret` source is refused the same way: [`ResolveOptions`] carries no
+//! [`crate::backend::HostPlatform`] to actually prompt for presence at mint
+//! time, so resolving such an entry would otherwise silently mint a
+//! presence-less lease that claims a guarantee it never enforced.
+//!
+//! A `materialize: "secret"` (or `"lease"`) entry's `requirePresencePerUse`
+//! is enforced via the shared [`crate::vault::enforce_presence_requirement`]
+//! primitive — the same one [`crate::vault::VaultKeeper::setup`] and other
+//! backend-touching operations use — called with
+//! [`crate::backend::PresenceOperation::Read`] immediately before
+//! [`SecretBackend::retrieve`]. A flagged entry against a non-qualifying
+//! backend is refused before the backend is ever touched.
+//!
+//! A `materialize: "lease"` entry's minted `exe` claim is bound to a real,
+//! caller-supplied [`ResolveOptions::executable_hash`] whenever the entry's
+//! resolved trust tier is `Sigstore` or `Tofu` — binding an unverified
+//! `"dev"` sentinel under a claimed-verified tier would be incoherent. An
+//! entry resolving to such a tier with no `executable_hash` supplied is
+//! refused rather than silently minting the incoherent pair; a `Dev`-tier
+//! entry always keeps the `"dev"` sentinel regardless.
 //!
 //! A `materialize: "lease"` entry's `exp` computation ([`mint_secret_lease`])
 //! is deliberately overflow-safe: `ttl_seconds` is capped at
 //! [`LEASE_TTL_MAX_SECONDS`] and `now + ttl_seconds` uses `saturating_add`,
 //! so neither an adversarial/malformed profile's huge `ttlSeconds` nor the
 //! (never-`0`) defensive fallback ([`DEFENSIVE_DEFAULT_TTL_SECONDS`]) can
-//! panic or mint an already-expired lease.
+//! panic or mint an already-expired lease. The #277 loader itself now
+//! rejects an explicit `ttlSeconds: 0` at load time; the resolver's fallback
+//! is defense in depth for a `ProfileEntry` built by some other path.
 
 use std::collections::HashMap;
 
 use zeroize::Zeroizing;
 
-use crate::backend::SecretBackend;
+use crate::backend::{PresenceOperation, SecretBackend};
 use crate::errors::VaultError;
-use crate::jwe::{CreateTokenOptions, create_token};
 use crate::keys::KeyManager;
 use crate::profile::loader::{EntrySource, LoadedProfile, ProfileEntry};
 use crate::profile::types::MaterializeMode;
-use crate::types::VaultClaims;
+use crate::types::TrustTier;
+use crate::vault::{build_and_mint_claims, enforce_presence_requirement};
 
 /// A resolved environment: env-var name → resolved string value (either the
 /// real secret, for `materialize: "secret"`, or a compact JWE lease string,
@@ -77,8 +102,9 @@ pub type ResolvedEnv = HashMap<String, String>;
 /// Deliberately narrow: a [`SecretBackend`] trait object (never a concrete
 /// backend type) for `materialize: "secret"` retrieval, and a [`KeyManager`]
 /// reference to mint `materialize: "lease"` JWEs. No
-/// [`crate::backend::HostPlatform`] is required — resolution never spawns a
-/// process and never touches the filesystem.
+/// [`crate::backend::HostPlatform`] is required — resolution requires no
+/// `HostPlatform` and never spawns a process (`retrieve`/`KeyManager` do
+/// their own I/O, so resolution is not filesystem-free in general).
 pub struct ResolveOptions<'a> {
     /// The active secret backend, used only through the [`SecretBackend`]
     /// trait — never named as a concrete type.
@@ -86,6 +112,17 @@ pub struct ResolveOptions<'a> {
     /// The active key manager, used to mint a `materialize: "lease"` entry's
     /// JWE with the same current key `VaultKeeper::setup()` would use.
     pub key_manager: &'a KeyManager,
+    /// A pre-verified executable identity hash to bind into a minted
+    /// lease's `exe` claim, when the entry's resolved trust tier is
+    /// `Sigstore` or `Tofu`. `resolve_profile` performs no executable-trust
+    /// verification itself (see the module docs) — this is the caller's
+    /// attestation that it already ran that verification (e.g. a future
+    /// `run` verb, before invoking `resolve_profile`). `None` when no such
+    /// verification has been performed; an entry whose resolved tier is
+    /// `Sigstore`/`Tofu` is refused rather than minted with the `"dev"`
+    /// sentinel in that case. Ignored for `Dev`-tier entries, which always
+    /// keep the `"dev"` sentinel.
+    pub executable_hash: Option<String>,
 }
 
 /// Resolve every entry of a loaded profile into a single environment map.
@@ -110,7 +147,7 @@ pub async fn resolve_profile(
     let mut resolved: Vec<(String, Zeroizing<String>)> = Vec::with_capacity(profile.entries.len());
 
     for (name, entry) in &profile.entries {
-        let value = resolve_entry(entry, opts).await?;
+        let value = resolve_entry(name, entry, opts).await?;
         resolved.push((name.clone(), Zeroizing::new(value)));
     }
 
@@ -122,6 +159,7 @@ pub async fn resolve_profile(
 
 /// Resolve a single entry to its materialized string value.
 async fn resolve_entry(
+    name: &str,
     entry: &ProfileEntry,
     opts: &ResolveOptions<'_>,
 ) -> Result<String, VaultError> {
@@ -135,17 +173,43 @@ async fn resolve_entry(
             // a distinct, not-yet-implemented work item (see the module
             // docs), so it is refused explicitly rather than silently
             // producing an incomplete/incorrect claims shape.
-            Err(VaultError::Other(format!(
-                "Profile entry resolution for signingKey \"{key_name}\" (session signing lease) \
-                 is not yet supported by resolve_profile — this is a separate work item tracked \
-                 by the environment-profiles epic (issue #276)."
-            )))
+            Err(VaultError::MaterializeModeUnsupported {
+                message: format!(
+                    "Profile entry \"{name}\" (signingKey \"{key_name}\") requests a session \
+                     signing lease, which resolve_profile does not yet support — this is a \
+                     separate work item tracked by the environment-profiles epic (issue #276)."
+                ),
+                mode: "signing-key-lease".to_string(),
+            })
         }
         EntrySource::Secret(secret_name) => {
+            // requirePresenceAtMint on a secret-backed lease: resolve_profile
+            // has no HostPlatform to actually prompt for presence at mint
+            // time (see the module docs), so refuse rather than silently
+            // minting a lease that claims a guarantee it never enforced.
+            if entry.materialize == MaterializeMode::Lease && entry.require_presence_at_mint {
+                return Err(VaultError::MaterializeModeUnsupported {
+                    message: format!(
+                        "Profile entry \"{name}\" (secret \"{secret_name}\") requests \
+                         requirePresenceAtMint on a materialize: \"lease\" entry, but \
+                         resolve_profile has no HostPlatform to prompt for presence at mint \
+                         time — refusing rather than silently minting a presence-less lease."
+                    ),
+                    mode: "secret-lease-presence-at-mint".to_string(),
+                });
+            }
+
+            enforce_presence_requirement(
+                opts.backend,
+                PresenceOperation::Read,
+                Some(entry.require_presence_per_use),
+            )
+            .await?;
+
             let value = opts.backend.retrieve(secret_name).await?;
             match entry.materialize {
                 MaterializeMode::Secret => Ok(value),
-                MaterializeMode::Lease => mint_secret_lease(secret_name, &value, entry, opts),
+                MaterializeMode::Lease => mint_secret_lease(name, secret_name, &value, entry, opts),
             }
         }
     }
@@ -178,53 +242,80 @@ const LEASE_TTL_MAX_SECONDS: u64 = 30 * 24 * 60 * 60;
 const DEFENSIVE_DEFAULT_TTL_SECONDS: u64 =
     crate::profile::loader::SIGNING_LEASE_DEFAULT_TTL_SECONDS;
 
-/// Mint a `materialize: "lease"` entry's JWE, reusing the same claims shape
-/// and [`create_token`] primitive [`crate::vault::VaultKeeper::setup`] uses
-/// internally — see the module docs for why the full `setup()` method (and
-/// its executable-trust binding) is not called here.
+/// Mint a `materialize: "lease"` entry's JWE, reusing the same claims-shape
+/// and minting primitive ([`build_and_mint_claims`])
+/// [`crate::vault::VaultKeeper::setup`] uses internally — see the module
+/// docs for why the full `setup()` method (and its executable-trust binding)
+/// is not called here.
 fn mint_secret_lease(
+    name: &str,
     secret_name: &str,
     value: &str,
     entry: &ProfileEntry,
     opts: &ResolveOptions<'_>,
 ) -> Result<String, VaultError> {
-    let ttl_seconds = entry
+    let mut ttl_seconds = entry
         .ttl_seconds
         .unwrap_or(DEFENSIVE_DEFAULT_TTL_SECONDS)
         .min(LEASE_TTL_MAX_SECONDS);
-    let now = crate::util::time::now_secs();
+    debug_assert_ne!(
+        ttl_seconds, 0,
+        "ttl_seconds must never be 0 here — the #277 loader now rejects an explicit \
+         ttlSeconds: 0 at load time, so reaching 0 here would indicate a ProfileEntry built \
+         by some other path"
+    );
+    // Defense in depth, matching the debug_assert above: a `0` here would
+    // mint an already-expired lease in a release build, where the assert is
+    // compiled out.
+    if ttl_seconds == 0 {
+        ttl_seconds = DEFENSIVE_DEFAULT_TTL_SECONDS;
+    }
 
-    let claims = VaultClaims {
-        jti: uuid::Uuid::new_v4().to_string(),
-        // `saturating_add` rather than `+`: `now` plus an (already capped,
-        // but defense-in-depth) `ttl_seconds` must never panic on overflow
-        // (debug builds) or silently wrap into a past `exp` (release
-        // builds) — both would mint a lease that is either broken or,
-        // worse, already expired the instant it's minted.
-        exp: now.saturating_add(ttl_seconds),
-        iat: now,
-        sub: secret_name.to_string(),
-        // Unverified sentinel — profile resolution does not perform
-        // executable-trust binding; see the module docs.
-        exe: "dev".to_string(),
-        use_limit: entry.use_limit,
-        tid: entry.min_trust.to_trust_tier(),
-        bkd: Some(opts.backend.backend_type().to_string()),
-        val: Some(value.to_string()),
-        reference: secret_name.to_string(),
-        kty: None,
-        kid: None,
-        kgen: None,
-        pres: None,
+    let tier = entry.min_trust.to_trust_tier();
+    // The `exe` claim must not carry the unverified `"dev"` sentinel under a
+    // trust tier that claims Sigstore/TOFU verification — that pairing is
+    // incoherent (a claimed-verified tier with an admittedly-unverified
+    // executable). resolve_profile performs no executable-trust
+    // verification itself, so the only way to mint a coherent Sigstore/Tofu
+    // lease is for the caller to supply an already-verified hash.
+    let exe = match tier {
+        TrustTier::Dev => "dev".to_string(),
+        TrustTier::Sigstore | TrustTier::Tofu => match &opts.executable_hash {
+            Some(hash) => hash.clone(),
+            None => {
+                return Err(VaultError::ExecutableTrustRequired {
+                    message: format!(
+                        "Profile entry \"{name}\" (secret \"{secret_name}\") resolves to trust \
+                         tier {tier:?}, but resolve_profile was given no executable_hash to bind \
+                         — minting a lease with an unverified \"dev\" exe marker under a \
+                         Sigstore/TOFU trust tier would be incoherent. Supply \
+                         ResolveOptions::executable_hash (a pre-verified executable identity) or \
+                         lower the entry's minTrust to \"unverified\"."
+                    ),
+                    reason: crate::errors::ExecutableTrustRequiredReason::MissingChoice,
+                });
+            }
+        },
     };
 
-    let current_key = opts.key_manager.get_current_key()?;
-    create_token(
-        &current_key.key,
-        &claims,
-        &CreateTokenOptions {
-            kid: Some(current_key.id.clone()),
-        },
+    let now = crate::util::time::now_secs();
+    // `saturating_add` rather than `+`: `now` plus an (already capped, but
+    // defense-in-depth) `ttl_seconds` must never panic on overflow (debug
+    // builds) or silently wrap into a past `exp` (release builds) — both
+    // would mint a lease that is either broken or, worse, already expired
+    // the instant it's minted.
+    let exp = now.saturating_add(ttl_seconds);
+
+    build_and_mint_claims(
+        opts.key_manager,
+        secret_name,
+        value,
+        now,
+        exp,
+        exe,
+        entry.use_limit,
+        tier,
+        opts.backend.backend_type().to_string(),
     )
 }
 
@@ -285,6 +376,10 @@ mod tests {
         let opts = ResolveOptions {
             backend: &backend,
             key_manager: &km,
+            // The entry's minTrust ("sigstore") requires a verified
+            // executable hash to mint a coherent lease — see the
+            // exe/tid trust-seam tests below for the refusal without one.
+            executable_hash: Some("verified-caller-hash".to_string()),
         };
 
         let resolved = resolve_profile(&profile, &opts).await.unwrap();
@@ -305,6 +400,7 @@ mod tests {
         assert_eq!(claims.sub, "prod-db-password");
         assert_eq!(claims.val.as_deref(), Some("s3cr3t-db-pw"));
         assert_eq!(claims.tid, TrustTier::Sigstore);
+        assert_eq!(claims.exe, "verified-caller-hash");
         assert_eq!(claims.use_limit, Some(5));
         assert_eq!(claims.exp, claims.iat + 900);
     }
@@ -321,6 +417,10 @@ mod tests {
     struct SpyBackend {
         inner: InMemoryBackend,
         retrieve_calls: Mutex<Vec<String>>,
+        /// When `true`, this backend reports `presence_per_use: true` for
+        /// every operation — used by the requirePresencePerUse tests below
+        /// to model a qualifying backend.
+        presence_capable: bool,
     }
 
     impl SpyBackend {
@@ -328,6 +428,15 @@ mod tests {
             Self {
                 inner: InMemoryBackend::new(),
                 retrieve_calls: Mutex::new(Vec::new()),
+                presence_capable: false,
+            }
+        }
+
+        fn new_presence_capable() -> Self {
+            Self {
+                inner: InMemoryBackend::new(),
+                retrieve_calls: Mutex::new(Vec::new()),
+                presence_capable: true,
             }
         }
 
@@ -370,6 +479,27 @@ mod tests {
         async fn exists(&self, id: &str) -> Result<bool, VaultError> {
             self.inner.exists(id).await
         }
+
+        fn as_presence_capable(&self) -> Option<&dyn crate::backend::PresenceCapableBackend> {
+            if self.presence_capable {
+                Some(self)
+            } else {
+                None
+            }
+        }
+    }
+
+    #[cfg_attr(target_arch = "wasm32", async_trait::async_trait(?Send))]
+    #[cfg_attr(not(target_arch = "wasm32"), async_trait::async_trait)]
+    impl crate::backend::PresenceCapableBackend for SpyBackend {
+        async fn get_capabilities(
+            &self,
+        ) -> Result<crate::backend::BackendCapabilities, VaultError> {
+            Ok(crate::backend::BackendCapabilities {
+                presence_per_use: true,
+                presence_enforced_operations: None,
+            })
+        }
     }
 
     #[tokio::test]
@@ -394,6 +524,7 @@ mod tests {
         let opts = ResolveOptions {
             backend: &backend,
             key_manager: &km,
+            executable_hash: None,
         };
 
         let err = resolve_profile(&profile, &opts).await.unwrap_err();
@@ -431,6 +562,7 @@ mod tests {
         let opts = ResolveOptions {
             backend: &backend,
             key_manager: &km,
+            executable_hash: None,
         };
 
         let resolved = resolve_profile(&profile, &opts).await.unwrap();
@@ -462,6 +594,7 @@ mod tests {
         let opts = ResolveOptions {
             backend: &backend,
             key_manager: &km,
+            executable_hash: None,
         };
 
         // Must not panic (this call alone is the overflow regression check).
@@ -507,6 +640,7 @@ mod tests {
         let opts = ResolveOptions {
             backend: &backend,
             key_manager: &km,
+            executable_hash: None,
         };
 
         let resolved = resolve_profile(&profile, &opts).await.unwrap();
@@ -537,9 +671,302 @@ mod tests {
         let opts = ResolveOptions {
             backend: &backend,
             key_manager: &km,
+            executable_hash: None,
         };
 
         let err = resolve_profile(&profile, &opts).await.unwrap_err();
-        assert_matches!(err, VaultError::Other(message) if message.contains("release-signer"));
+        assert_matches!(
+            err,
+            VaultError::MaterializeModeUnsupported { ref message, .. }
+                if message.contains("SESSION") && message.contains("release-signer")
+        );
+    }
+
+    // --- Item 2: requirePresenceAtMint on a secret-backed lease is refused,
+    // --- not silently minted presence-less ---
+
+    #[tokio::test]
+    async fn require_presence_at_mint_on_a_secret_backed_lease_is_refused() {
+        let json = r#"{
+            "version": 1, "name": "p",
+            "entries": {
+                "DB_LEASE": {
+                    "secret": "prod-db-password", "materialize": "lease",
+                    "requirePresenceAtMint": true
+                }
+            }
+        }"#;
+        let profile = load_profile_from_str(json, &defaults()).unwrap();
+        let backend = seeded_backend(&[("prod-db-password", "s3cr3t")]).await;
+        let km = key_manager();
+        let opts = ResolveOptions {
+            backend: &backend,
+            key_manager: &km,
+            executable_hash: None,
+        };
+
+        let err = resolve_profile(&profile, &opts).await.unwrap_err();
+        assert_matches!(
+            err,
+            VaultError::MaterializeModeUnsupported { ref message, .. }
+                if message.contains("DB_LEASE") && message.contains("prod-db-password")
+        );
+    }
+
+    // --- Item 1: requirePresencePerUse is enforced before retrieve ---
+
+    #[tokio::test]
+    async fn require_presence_per_use_refuses_before_retrieve_when_backend_is_not_capable() {
+        let json = r#"{
+            "version": 1, "name": "p",
+            "entries": {
+                "TOKEN": {
+                    "secret": "s", "materialize": "secret", "requirePresencePerUse": true
+                }
+            }
+        }"#;
+        let profile = load_profile_from_str(json, &defaults()).unwrap();
+        let backend = SpyBackend::new();
+        backend.store("s", "v").await.unwrap();
+        let km = key_manager();
+        let opts = ResolveOptions {
+            backend: &backend,
+            key_manager: &km,
+            executable_hash: None,
+        };
+
+        let err = resolve_profile(&profile, &opts).await.unwrap_err();
+        assert_matches!(err, VaultError::NotCapable { .. });
+        assert!(
+            backend.retrieve_calls().is_empty(),
+            "retrieve must never be attempted when presence enforcement refuses"
+        );
+    }
+
+    #[tokio::test]
+    async fn require_presence_per_use_permits_retrieve_when_backend_is_capable() {
+        let json = r#"{
+            "version": 1, "name": "p",
+            "entries": {
+                "TOKEN": {
+                    "secret": "s", "materialize": "secret", "requirePresencePerUse": true
+                }
+            }
+        }"#;
+        let profile = load_profile_from_str(json, &defaults()).unwrap();
+        let backend = SpyBackend::new_presence_capable();
+        backend.store("s", "v").await.unwrap();
+        let km = key_manager();
+        let opts = ResolveOptions {
+            backend: &backend,
+            key_manager: &km,
+            executable_hash: None,
+        };
+
+        let resolved = resolve_profile(&profile, &opts).await.unwrap();
+        assert_eq!(resolved.get("TOKEN").unwrap(), "v");
+        assert_eq!(backend.retrieve_calls(), vec!["s"]);
+    }
+
+    // --- Item 5: exe/tid trust seam ---
+
+    #[tokio::test]
+    async fn sigstore_tier_lease_without_executable_hash_is_refused() {
+        let json = r#"{
+            "version": 1, "name": "p",
+            "entries": {
+                "K": { "secret": "s", "materialize": "lease", "minTrust": "sigstore" }
+            }
+        }"#;
+        let profile = load_profile_from_str(json, &defaults()).unwrap();
+        let backend = seeded_backend(&[("s", "v")]).await;
+        let km = key_manager();
+        let opts = ResolveOptions {
+            backend: &backend,
+            key_manager: &km,
+            executable_hash: None,
+        };
+
+        let err = resolve_profile(&profile, &opts).await.unwrap_err();
+        assert_matches!(
+            err,
+            VaultError::ExecutableTrustRequired { ref message, .. } if message.contains('K')
+        );
+    }
+
+    #[tokio::test]
+    async fn tofu_tier_lease_without_executable_hash_is_refused() {
+        let json = r#"{
+            "version": 1, "name": "p",
+            "entries": {
+                "K": { "secret": "s", "materialize": "lease", "minTrust": "registry" }
+            }
+        }"#;
+        let profile = load_profile_from_str(json, &defaults()).unwrap();
+        let backend = seeded_backend(&[("s", "v")]).await;
+        let km = key_manager();
+        let opts = ResolveOptions {
+            backend: &backend,
+            key_manager: &km,
+            executable_hash: None,
+        };
+
+        let err = resolve_profile(&profile, &opts).await.unwrap_err();
+        assert_matches!(err, VaultError::ExecutableTrustRequired { .. });
+    }
+
+    #[tokio::test]
+    async fn sigstore_tier_lease_with_executable_hash_binds_it_into_the_exe_claim() {
+        let json = r#"{
+            "version": 1, "name": "p",
+            "entries": {
+                "K": { "secret": "s", "materialize": "lease", "minTrust": "sigstore" }
+            }
+        }"#;
+        let profile = load_profile_from_str(json, &defaults()).unwrap();
+        let backend = seeded_backend(&[("s", "v")]).await;
+        let km = key_manager();
+        let opts = ResolveOptions {
+            backend: &backend,
+            key_manager: &km,
+            executable_hash: Some("verified-hash".to_string()),
+        };
+
+        let resolved = resolve_profile(&profile, &opts).await.unwrap();
+        let current_key = km.get_current_key().unwrap();
+        let claims = decrypt_token(&current_key.key, resolved.get("K").unwrap()).unwrap();
+        assert_eq!(claims.tid, TrustTier::Sigstore);
+        assert_eq!(claims.exe, "verified-hash");
+    }
+
+    #[tokio::test]
+    async fn dev_tier_lease_keeps_the_dev_marker_even_when_executable_hash_is_supplied() {
+        let json = r#"{
+            "version": 1, "name": "p",
+            "entries": {
+                "K": { "secret": "s", "materialize": "lease", "minTrust": "unverified" }
+            }
+        }"#;
+        let profile = load_profile_from_str(json, &defaults()).unwrap();
+        let backend = seeded_backend(&[("s", "v")]).await;
+        let km = key_manager();
+        let opts = ResolveOptions {
+            backend: &backend,
+            key_manager: &km,
+            // A caller-supplied hash must not leak into a Dev-tier lease's
+            // exe claim — Dev always keeps the "dev" sentinel.
+            executable_hash: Some("verified-hash".to_string()),
+        };
+
+        let resolved = resolve_profile(&profile, &opts).await.unwrap();
+        let current_key = km.get_current_key().unwrap();
+        let claims = decrypt_token(&current_key.key, resolved.get("K").unwrap()).unwrap();
+        assert_eq!(claims.tid, TrustTier::Dev);
+        assert_eq!(claims.exe, "dev");
+    }
+
+    #[tokio::test]
+    async fn min_trust_matrix_flows_through_to_the_minted_tid_and_exe() {
+        let json = r#"{
+            "version": 1, "name": "p",
+            "entries": {
+                "REG": { "secret": "a", "materialize": "lease", "minTrust": "registry" },
+                "UNV": { "secret": "b", "materialize": "lease", "minTrust": "unverified" },
+                "DEF": { "secret": "c", "materialize": "lease" }
+            }
+        }"#;
+        // `defaults()` uses TrustTier::Dev, so the DEF entry (omitted
+        // minTrust) resolves to Dev via the profile/config default.
+        let profile = load_profile_from_str(json, &defaults()).unwrap();
+        let backend = seeded_backend(&[("a", "va"), ("b", "vb"), ("c", "vc")]).await;
+        let km = key_manager();
+        let opts = ResolveOptions {
+            backend: &backend,
+            key_manager: &km,
+            executable_hash: Some("verified-hash".to_string()),
+        };
+
+        let resolved = resolve_profile(&profile, &opts).await.unwrap();
+        let current_key = km.get_current_key().unwrap();
+
+        let reg_claims = decrypt_token(&current_key.key, resolved.get("REG").unwrap()).unwrap();
+        assert_eq!(reg_claims.tid, TrustTier::Tofu);
+        assert_eq!(reg_claims.exe, "verified-hash");
+
+        let unv_claims = decrypt_token(&current_key.key, resolved.get("UNV").unwrap()).unwrap();
+        assert_eq!(unv_claims.tid, TrustTier::Dev);
+        assert_eq!(unv_claims.exe, "dev");
+
+        let def_claims = decrypt_token(&current_key.key, resolved.get("DEF").unwrap()).unwrap();
+        assert_eq!(def_claims.tid, TrustTier::Dev);
+        assert_eq!(def_claims.exe, "dev");
+    }
+
+    // --- Coverage additions ---
+
+    #[tokio::test]
+    async fn zero_entry_profile_resolves_to_an_empty_map_with_no_backend_calls() {
+        let json = r#"{ "version": 1, "name": "empty", "entries": {} }"#;
+        let profile = load_profile_from_str(json, &defaults()).unwrap();
+        let backend = SpyBackend::new();
+        let km = key_manager();
+        let opts = ResolveOptions {
+            backend: &backend,
+            key_manager: &km,
+            executable_hash: None,
+        };
+
+        let resolved = resolve_profile(&profile, &opts).await.unwrap();
+        assert!(resolved.is_empty());
+        // No entry means the loop body never runs at all, so neither
+        // `SecretBackend::retrieve` nor `KeyManager::get_current_key` (which
+        // is only ever reached from within that loop, via
+        // `mint_secret_lease`) is ever called.
+        assert!(backend.retrieve_calls().is_empty());
+    }
+
+    #[tokio::test]
+    async fn get_current_key_failure_propagates_from_resolve_profile() {
+        let json = r#"{
+            "version": 1, "name": "p",
+            "entries": { "K": { "secret": "s", "materialize": "lease" } }
+        }"#;
+        let profile = load_profile_from_str(json, &defaults()).unwrap();
+        let backend = seeded_backend(&[("s", "v")]).await;
+        // Deliberately uninitialized — `get_current_key()` fails.
+        let km = KeyManager::new();
+        let opts = ResolveOptions {
+            backend: &backend,
+            key_manager: &km,
+            executable_hash: None,
+        };
+
+        let err = resolve_profile(&profile, &opts).await.unwrap_err();
+        assert_matches!(err, VaultError::Other(ref message) if message.contains("not initialized"));
+    }
+
+    #[tokio::test]
+    async fn loader_default_ttl_flows_end_to_end_through_the_resolver() {
+        let config_defaults = ProfileDefaults {
+            ttl_seconds: 3600,
+            trust_tier: TrustTier::Dev,
+        };
+        let json = r#"{
+            "version": 1, "name": "p",
+            "entries": { "K": { "secret": "s", "materialize": "lease" } }
+        }"#;
+        let profile = load_profile_from_str(json, &config_defaults).unwrap();
+        let backend = seeded_backend(&[("s", "v")]).await;
+        let km = key_manager();
+        let opts = ResolveOptions {
+            backend: &backend,
+            key_manager: &km,
+            executable_hash: None,
+        };
+
+        let resolved = resolve_profile(&profile, &opts).await.unwrap();
+        let current_key = km.get_current_key().unwrap();
+        let claims = decrypt_token(&current_key.key, resolved.get("K").unwrap()).unwrap();
+        assert_eq!(claims.exp - claims.iat, 3600);
     }
 }
