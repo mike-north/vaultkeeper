@@ -97,13 +97,33 @@ impl DpapiBackend {
 
     /// Encode `path` as a PowerShell double-quoted string literal.
     ///
-    /// Reuses JSON string escaping (backslash/quote escaping is a superset
-    /// compatible with what a PowerShell double-quoted string needs for a
-    /// filesystem path), matching the TS backend's
-    /// `JSON.stringify(entryPath)` byte-for-byte.
+    /// Starts from JSON string escaping (backslash/quote escaping is a
+    /// superset compatible with what a PowerShell double-quoted string needs
+    /// for a filesystem path), matching the TS backend's
+    /// `JSON.stringify(entryPath)` byte-for-byte for the characters JSON
+    /// itself escapes.
+    ///
+    /// `serde_json::to_string` does not escape PowerShell's own
+    /// double-quoted-string metacharacters, though: a bare backtick starts an
+    /// escape sequence, and a bare `$` triggers variable/subexpression
+    /// interpolation (`$name`, `${name}`, `$(...)`). Since the only input to
+    /// this function is the operator-configured `BackendConfig.path` (an
+    /// entry path under it, specifically), this is low-severity — it is not
+    /// attacker-controlled the way a secret id could be — but it is hardened
+    /// here anyway: after JSON-escaping, backtick and `$` are additionally
+    /// backtick-escaped per PowerShell double-quoted string rules, so a path
+    /// containing either is embedded as literal text rather than
+    /// interpreted. Backtick is escaped first so the backtick this step adds
+    /// ahead of `$` is not itself re-escaped by the same pass.
+    ///
+    /// Note: the TS backend's `dpapi-backend.ts` uses a plain
+    /// `JSON.stringify(entryPath)` without this additional hardening — this
+    /// is a candidate for TS lockstep, but is out of scope here (TS is not
+    /// touched by this change).
     fn ps_string_literal(path: &std::path::Path) -> Result<String, VaultError> {
-        serde_json::to_string(&path.to_string_lossy().into_owned())
-            .map_err(|e| VaultError::Other(format!("failed to encode entry path: {e}")))
+        let json = serde_json::to_string(&path.to_string_lossy().into_owned())
+            .map_err(|e| VaultError::Other(format!("failed to encode entry path: {e}")))?;
+        Ok(json.replace('`', "``").replace('$', "`$"))
     }
 }
 
@@ -865,5 +885,105 @@ mod tests {
         let encoded = hex_encode(data.as_bytes());
         let decoded = hex_decode(&encoded).unwrap();
         assert_eq!(decoded, data.as_bytes());
+    }
+
+    // ── ps_string_literal hardening: backtick and `$` are escaped in
+    //    addition to JSON's backslash/quote escaping, so a storage path
+    //    containing PowerShell metacharacters is embedded as literal text ──
+
+    #[test]
+    fn ps_string_literal_escapes_dollar_sign_interpolation_trigger() {
+        let path = std::path::Path::new("/custom/$env:USERPROFILE/dpapi");
+        let literal = DpapiBackend::ps_string_literal(path).unwrap();
+        assert!(
+            literal.contains("`$env:USERPROFILE"),
+            "expected `$` to be backtick-escaped, got: {literal}"
+        );
+        assert!(
+            !literal.contains("\"$env"),
+            "a bare, unescaped `$` must never appear after the opening quote: {literal}"
+        );
+    }
+
+    #[test]
+    fn ps_string_literal_escapes_backtick() {
+        let path = std::path::Path::new("/custom/dir`whoami`/dpapi");
+        let literal = DpapiBackend::ps_string_literal(path).unwrap();
+        assert!(
+            literal.contains("dir``whoami``"),
+            "expected each backtick to be doubled, got: {literal}"
+        );
+    }
+
+    #[test]
+    fn ps_string_literal_escapes_quotes_backticks_and_dollar_together() {
+        let path = std::path::Path::new("/custom/\"quoted`tick$var\"/dpapi");
+        let literal = DpapiBackend::ps_string_literal(path).unwrap();
+        // JSON already escapes the embedded double quote as `\"`; the
+        // backtick and `$` must additionally be escaped for PowerShell.
+        assert!(
+            literal.contains("\\\""),
+            "expected JSON quote escaping preserved: {literal}"
+        );
+        assert!(
+            literal.contains("``"),
+            "expected backtick doubled: {literal}"
+        );
+        assert!(literal.contains("`$var"), "expected `$` escaped: {literal}");
+    }
+
+    #[test]
+    fn ps_string_literal_leaves_benign_paths_unchanged_from_prior_json_only_behavior() {
+        // No backtick or `$` present, so hardening must be a no-op: on-disk
+        // behavior for ordinary paths is identical to plain
+        // `serde_json::to_string`.
+        let path = std::path::Path::new("/custom/dpapi/dir/my-secret.enc");
+        let literal = DpapiBackend::ps_string_literal(path).unwrap();
+        let json_only = serde_json::to_string(&path.to_string_lossy().into_owned()).unwrap();
+        assert_eq!(literal, json_only);
+    }
+
+    // ── Hostile ids are made path-safe by hex-encoding before any script
+    //    construction, so they can never influence the PowerShell script text
+    //    (`entry_path` hex-encodes the id into the filename, and only that
+    //    hex string, never the raw id, is interpolated into the script via
+    //    `ps_string_literal`) ────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn hostile_id_round_trips_and_never_appears_in_recorded_scripts() {
+        let host = TestHost::new();
+        let backend = new_backend(host.clone());
+        // Characters that would be meaningful to PowerShell script parsing if
+        // ever interpolated raw: quotes, backticks, `$` interpolation
+        // triggers, parens, statement separators, and embedded newlines.
+        let hostile_id = "he\"llo`$(rm -rf /); 'oops'\ninjected\r\nid";
+        let secret = "hostile-id-secret-value";
+
+        backend.store(hostile_id, secret).await.unwrap();
+        assert!(backend.exists(hostile_id).await.unwrap());
+        let retrieved = backend.retrieve(hostile_id).await.unwrap();
+        assert_eq!(retrieved, secret);
+        backend.delete(hostile_id).await.unwrap();
+        assert!(!backend.exists(hostile_id).await.unwrap());
+
+        // By-construction safety property: the raw hostile id bytes must
+        // never appear in any recorded PowerShell -Command script text (or
+        // anywhere else in argv) across the whole round trip — only its
+        // hex-encoded, path-safe form should ever reach `entry_path`.
+        let calls = host.calls.lock().unwrap();
+        assert!(
+            !calls.is_empty(),
+            "expected at least one recorded exec call"
+        );
+        for call in calls.iter() {
+            for arg in &call.args {
+                assert!(
+                    !arg.contains(hostile_id),
+                    "the raw hostile id must never appear in child process \
+                     argv: {:?}",
+                    call.args
+                );
+            }
+        }
     }
 }

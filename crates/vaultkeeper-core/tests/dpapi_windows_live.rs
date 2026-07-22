@@ -150,10 +150,20 @@ impl HostPlatform for WindowsNativeHost {
     }
 }
 
+/// Distinguishes concurrently-running tests within the same test binary
+/// process: `cargo test` runs each `#[tokio::test]` in this file on its own
+/// thread of the same process by default, so `std::process::id()` alone is
+/// not unique enough to keep two tests' (or two runs') temp directories from
+/// colliding on the same path. Mirrors the ephemeral-keychain harness's
+/// atomic-sequence pattern (`crates/vaultkeeper-core/tests/keychain_conformance.rs`,
+/// `EPHEMERAL_KEYCHAIN_SEQ`, #304).
+static TEMP_DIR_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
 fn temp_dir(name: &str) -> PathBuf {
+    let seq = TEMP_DIR_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let mut dir = std::env::temp_dir();
     dir.push(format!(
-        "vaultkeeper-dpapi-live-{name}-{}",
+        "vaultkeeper-dpapi-live-{name}-{}-{seq}",
         std::process::id()
     ));
     dir
