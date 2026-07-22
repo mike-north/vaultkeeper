@@ -55,6 +55,12 @@ export type InMemoryBackendFaultOperation =
   | 'getPublicKey'
   | 'signWithKey'
 
+const KEY_ABSENT_INCOMPATIBLE_OPERATIONS: ReadonlySet<InMemoryBackendFaultOperation> = new Set([
+  'generateSigningKey',
+  'store',
+  'list',
+])
+
 const SIGNING_OPERATIONS: ReadonlySet<InMemoryBackendFaultOperation> = new Set([
   'generateSigningKey',
   'getPublicKey',
@@ -190,6 +196,9 @@ export class InMemoryBackend implements ListableBackend, SigningBackend, Presenc
   // --- SigningBackend ---
 
   /** @public */
+  // The try block covers the whole body — including the synchronous Node
+  // crypto call — so every failure is delivered as a rejected promise,
+  // matching the other backend methods.
   generateSigningKey(id: string, algorithm: SigningAlgorithm): Promise<void> {
     try {
       this.#maybeThrowFault('generateSigningKey', id)
@@ -203,43 +212,45 @@ export class InMemoryBackend implements ListableBackend, SigningBackend, Presenc
       if (this.#signingKeys.has(id)) {
         throw new SigningKeyAlreadyExistsError(`Signing key already exists: ${id}`, id)
       }
+      const { privateKey, publicKey } = crypto.generateKeyPairSync('ed25519')
+      this.#signingKeys.set(id, { privateKey, publicKey })
+      return Promise.resolve()
     } catch (err) {
       return Promise.reject(err instanceof Error ? err : new Error(String(err)))
     }
-    const { privateKey, publicKey } = crypto.generateKeyPairSync('ed25519')
-    this.#signingKeys.set(id, { privateKey, publicKey })
-    return Promise.resolve()
   }
 
   /** @public */
+  // The try block covers KeyObject.export and computeKid too, so their
+  // synchronous failures reject rather than throw.
   getPublicKey(id: string): Promise<SigningPublicKey> {
-    let record: SigningKeyRecord
     try {
       this.#maybeThrowFault('getPublicKey', id)
-      record = this.#requireSigningKey(id)
+      const record = this.#requireSigningKey(id)
+      const publicKeyPem = record.publicKey.export({ type: 'spki', format: 'pem' }).toString()
+      const spkiDer = record.publicKey.export({ type: 'spki', format: 'der' })
+      return Promise.resolve({
+        publicKeyPem,
+        algorithm: 'EdDSA',
+        kid: computeKid(spkiDer),
+      })
     } catch (err) {
       return Promise.reject(err instanceof Error ? err : new Error(String(err)))
     }
-    const publicKeyPem = record.publicKey.export({ type: 'spki', format: 'pem' }).toString()
-    const spkiDer = record.publicKey.export({ type: 'spki', format: 'der' })
-    return Promise.resolve({
-      publicKeyPem,
-      algorithm: 'EdDSA',
-      kid: computeKid(spkiDer),
-    })
   }
 
   /** @public */
+  // The try block covers crypto.sign, so a synchronous signing failure
+  // rejects instead of throwing.
   signWithKey(id: string, data: Buffer): Promise<Buffer> {
-    let record: SigningKeyRecord
     try {
       this.#maybeThrowFault('signWithKey', id)
-      record = this.#requireSigningKey(id)
+      const record = this.#requireSigningKey(id)
+      // Ed25519: the algorithm is implicit in the key, so pass null.
+      return Promise.resolve(crypto.sign(null, data, record.privateKey))
     } catch (err) {
       return Promise.reject(err instanceof Error ? err : new Error(String(err)))
     }
-    // Ed25519: the algorithm is implicit in the key, so pass null.
-    return Promise.resolve(crypto.sign(null, data, record.privateKey))
   }
 
   #requireSigningKey(id: string): SigningKeyRecord {
@@ -305,11 +316,12 @@ export class InMemoryBackend implements ListableBackend, SigningBackend, Presenc
     mode: FaultMode,
     options?: FaultOptions,
   ): void {
-    if (mode === 'key-absent' && operation === 'generateSigningKey') {
-      throw new Error(
-        "Cannot inject 'key-absent' against 'generateSigningKey': enrollment has no existing " +
-          "key to be absent. Use a different fault mode (e.g. 'backend-unavailable'), or target " +
-          "an operation that reads an existing key ('getPublicKey', 'signWithKey').",
+    if (mode === 'key-absent' && KEY_ABSENT_INCOMPATIBLE_OPERATIONS.has(operation)) {
+      throw new TypeError(
+        `Cannot inject 'key-absent' against '${operation}': the mode is only meaningful for ` +
+          "operations that read an existing secret ('retrieve', 'delete', 'exists') or an " +
+          "existing signing key ('getPublicKey', 'signWithKey'). Use a different fault mode " +
+          "(e.g. 'backend-unavailable') for this operation.",
       )
     }
     this.#faultPlan.inject(operation, mode, options)

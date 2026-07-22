@@ -144,6 +144,20 @@ describe('InMemoryBackend fault injection', () => {
     })
   })
 
+  it("rejects arming 'key-absent' against 'store' at inject time", () => {
+    const backend = new InMemoryBackend()
+    expect(() => {
+      backend.injectFault('store', 'key-absent')
+    }).toThrowError(TypeError)
+  })
+
+  it("rejects arming 'key-absent' against 'list' at inject time", () => {
+    const backend = new InMemoryBackend()
+    expect(() => {
+      backend.injectFault('list', 'key-absent')
+    }).toThrowError(TypeError)
+  })
+
   describe('error precedence on generateSigningKey', () => {
     // Coverage addition: pins the ordering when multiple failure conditions
     // could apply — an armed fault always wins, then invalid-algorithm,
