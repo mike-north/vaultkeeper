@@ -274,6 +274,15 @@ Workflow:
 
 ## Conventions
 
+### Releases are human-gated
+
+Merging the changesets bot PR — branch `changeset-release/main`, titled
+"Version Packages" — **is** the release trigger: it runs the release workflow, publishing
+to npm (OIDC trusted publishing) and crates.io. No agent may merge that PR,
+enable auto-merge on it, or otherwise cause it to merge — regardless of CI or
+review-thread state. Only a human merges it. If its state blocks other work,
+report that to the user and stop.
+
 ### Errors
 
 All errors extend `VaultError` (defined in `packages/vaultkeeper/src/errors.ts`). When adding a new error class:
