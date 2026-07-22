@@ -98,7 +98,7 @@ impl HostPlatform for WindowsNativeHost {
             std::fs::create_dir_all(parent).map_err(|e| VaultError::Filesystem {
                 message: format!("failed to create {}: {e}", parent.display()),
                 path: parent.display().to_string(),
-                permission: "write".to_string(),
+                permission: "create".to_string(),
                 code: e.raw_os_error().map(|c| c.to_string()),
             })?;
         }

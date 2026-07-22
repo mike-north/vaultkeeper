@@ -253,17 +253,31 @@ impl SecretBackend for DpapiBackend {
             )
             .await?;
 
-        // Any non-zero exit here means Unprotect itself failed — the
-        // canonical cause is a corrupted/truncated blob (AC4), since a
-        // missing entry was already ruled out above. Never fall through to
-        // returning partial/garbage stdout as a secret.
+        // Never fall through to returning partial/garbage stdout as a
+        // secret. A non-zero exit is classified by stderr: .NET's Unprotect
+        // failure surfaces as a CryptographicException (the canonical
+        // corrupted/truncated-blob case, AC4 — a missing entry was already
+        // ruled out above) and maps to Decryption; anything else (access
+        // denied on ReadAllBytes, a file race, a PowerShell execution
+        // failure) is an exec-level error, not a crypto one, and is reported
+        // as such so operators get accurate remediation.
         if output.exit_code != 0 {
-            return Err(VaultError::Decryption {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            if stderr
+                .to_ascii_lowercase()
+                .contains("cryptographicexception")
+            {
+                return Err(VaultError::Decryption {
+                    message: format!("Failed to decrypt DPAPI entry: {stderr}"),
+                    path: entry_path.display().to_string(),
+                });
+            }
+            return Err(VaultError::Exec {
                 message: format!(
-                    "Failed to decrypt DPAPI entry: {}",
-                    String::from_utf8_lossy(&output.stderr)
+                    "powershell DPAPI retrieve failed with exit code {}: {stderr}",
+                    output.exit_code
                 ),
-                path: entry_path.display().to_string(),
+                command: "powershell".to_string(),
             });
         }
 
@@ -360,6 +374,10 @@ mod tests {
         calls: Mutex<Vec<RecordedExec>>,
         platform: Platform,
         version_unavailable: bool,
+        /// When true, the decrypt script fails with a NON-crypto stderr
+        /// (access denied) so tests can pin the Exec-vs-Decryption
+        /// classification of retrieve() failures.
+        retrieve_access_denied: bool,
     }
 
     /// Magic prefix the fake `Protect` step adds, so the fake `Unprotect`
@@ -374,6 +392,18 @@ mod tests {
                 calls: Mutex::new(Vec::new()),
                 platform: Platform::Windows,
                 version_unavailable: false,
+                retrieve_access_denied: false,
+            })
+        }
+
+        fn with_retrieve_access_denied() -> Arc<Self> {
+            Arc::new(Self {
+                config_dir: PathBuf::from("/test/config"),
+                files: Mutex::new(HashMap::new()),
+                calls: Mutex::new(Vec::new()),
+                platform: Platform::Windows,
+                version_unavailable: false,
+                retrieve_access_denied: true,
             })
         }
 
@@ -473,7 +503,7 @@ mod tests {
                         if secret_bytes.len() != declared_len {
                             Ok(ExecOutput {
                                 stdout: Vec::new(),
-                                stderr: b"Unprotect: the data is invalid (length mismatch)"
+                                stderr: b"System.Security.Cryptography.CryptographicException: the data is invalid (length mismatch)"
                                     .to_vec(),
                                 exit_code: 1,
                             })
@@ -485,9 +515,14 @@ mod tests {
                             })
                         }
                     }
+                    _ if self.retrieve_access_denied => Ok(ExecOutput {
+                        stdout: Vec::new(),
+                        stderr: b"Access to the path 'C:\\entry.dpapi' is denied.".to_vec(),
+                        exit_code: 1,
+                    }),
                     _ => Ok(ExecOutput {
                         stdout: Vec::new(),
-                        stderr: b"Unprotect: the data is invalid".to_vec(),
+                        stderr: b"System.Security.Cryptography.CryptographicException: the data is invalid".to_vec(),
                         exit_code: 1,
                     }),
                 };
@@ -716,6 +751,26 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn retrieve_non_crypto_failure_reports_exec_not_decryption() {
+        // A non-zero exit whose stderr is NOT a CryptographicException (e.g.
+        // ReadAllBytes access denied) must surface as an exec-level error so
+        // operators get accurate remediation, never as a crypto failure.
+        let host = TestHost::with_retrieve_access_denied();
+        let backend = new_backend(host.clone());
+        let entry_path = backend.entry_path("denied-id");
+        host.files
+            .lock()
+            .unwrap()
+            .insert(entry_path, b"not-a-real-dpapi-blob".to_vec());
+
+        let err = backend.retrieve("denied-id").await.unwrap_err();
+        assert!(
+            matches!(err, VaultError::Exec { ref command, .. } if command == "powershell"),
+            "expected Exec for a non-crypto failure, got {err:?}"
+        );
+    }
+
+    #[tokio::test]
     async fn retrieve_truncated_blob_returns_decryption_error() {
         let host = TestHost::new();
         let backend = new_backend(host.clone());
@@ -846,6 +901,7 @@ mod tests {
             calls: Mutex::new(Vec::new()),
             platform: Platform::Darwin,
             version_unavailable: false,
+            retrieve_access_denied: false,
         });
         let backend = new_backend(host);
         assert!(!backend.is_available().await);
@@ -866,6 +922,7 @@ mod tests {
             calls: Mutex::new(Vec::new()),
             platform: Platform::Windows,
             version_unavailable: true,
+            retrieve_access_denied: false,
         });
         let backend = new_backend(host);
         assert!(!backend.is_available().await);
