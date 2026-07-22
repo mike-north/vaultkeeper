@@ -2,7 +2,10 @@
 
 use zeroize::Zeroizing;
 
-use crate::backend::{HostPlatform, PresenceOperation, SecretBackend, get_backend_capabilities};
+use crate::backend::{
+    ApprovalContext, HostPlatform, PresenceOperation, SecretBackend, SigningBackend,
+    get_backend_capabilities,
+};
 use crate::config;
 use crate::errors::{ExecutableTrustRequiredReason, VaultError};
 use crate::identity::handles::{HandleId, HandleTable};
@@ -11,7 +14,8 @@ use crate::jwe::{
 };
 use crate::keys::KeyManager;
 use crate::types::{
-    ClaimsKind, KeyStatus, PreflightResult, SigningClaims, VaultClaims, VaultConfig, VaultResponse,
+    ClaimsKind, KeyStatus, LeasePresence, PreflightResult, SigningClaims, TrustTier, VaultClaims,
+    VaultConfig, VaultResponse,
 };
 
 /// A qualifying description of backends that can satisfy a presence-per-use
@@ -153,6 +157,74 @@ pub struct SetupOptions {
     pub trust_tier: Option<crate::types::TrustTier>,
     /// Backend type to use.
     pub backend_type: Option<String>,
+}
+
+/// Options for [`VaultKeeper::mint_signing_lease`] (issue #299).
+///
+/// The caller (the native CLI's `session mint` command, resolving a
+/// `signingKey` + `materialize: "lease"` profile entry — see
+/// `crate::profile`) has already resolved every field from the profile entry
+/// and its defaults; this function performs no profile lookup itself.
+#[derive(Debug, Clone, Copy)]
+pub struct MintLeaseOptions<'a> {
+    /// The profile this mint request came from — surfaced only in the
+    /// non-interactive fail-closed error message (issue #299's documented
+    /// wording), never used to look anything up.
+    pub profile_name: &'a str,
+    /// The profile entry (env var) name — same surfacing-only role as
+    /// [`MintLeaseOptions::profile_name`].
+    pub entry_name: &'a str,
+    /// The signing key's name (matches [`VaultClaims::sub`] and the
+    /// revocation store's `key_generations` axis — see
+    /// [`crate::keys::RevocationState`]).
+    pub key_name: &'a str,
+    /// Requested TTL in seconds. Capped to
+    /// [`crate::profile::SIGNING_LEASE_MAX_TTL_SECONDS`] defensively — the
+    /// profile loader already rejects an over-cap `ttlSeconds` before this
+    /// function ever runs, but this is not the only caller this function is
+    /// designed to have, so the cap is re-enforced here rather than trusted
+    /// from the caller.
+    pub ttl_seconds: u64,
+    /// Trust tier to bind into the lease's `tid` claim.
+    pub trust_tier: TrustTier,
+    /// Usage limit (`None` for unlimited).
+    pub use_limit: Option<u64>,
+    /// Whether the entry's `requirePresenceAtMint` policy applies to this
+    /// mint.
+    pub require_presence_at_mint: bool,
+    /// Whether the invocation environment can support an interactive
+    /// host-approval fallback when the backend itself cannot force a fresh
+    /// touch for `sign` (native CLI: `stderr` is a terminal). `false` means
+    /// [`HostPlatform::prompt_approval`] is never called at all — see
+    /// [`VaultKeeper::mint_signing_lease`]'s non-interactive fail-closed rule.
+    pub interactive: bool,
+}
+
+/// Namespace a signing key's caller-facing name into the backend id used to
+/// invoke [`SigningBackend`] methods — mirrors the TypeScript library's
+/// private `VaultKeeper.#signingKeyId` (`packages/vaultkeeper/src/vault.ts`)
+/// so a signing key and an ordinary secret can share the same caller-facing
+/// name with no collision risk.
+fn signing_key_id(name: &str) -> String {
+    format!("signing-key:{name}")
+}
+
+/// The non-interactive fail-closed error message (issue #299's documented
+/// wording — reproduced verbatim, not paraphrased, since it is part of the
+/// design). `profile_lint_hint` is the profile name to embed in the
+/// suggested `vaultkeeper profile lint <NAME>` recovery command.
+fn non_interactive_presence_error_message(profile_name: &str, entry_name: &str) -> String {
+    format!(
+        "profile '{profile_name}' entry '{entry_name}' requires human presence at mint,\n\
+         but this invocation is non-interactive — stderr is not a terminal and this host\n\
+         offers no approval mechanism. A presence-requiring entry cannot be resolved during\n\
+         an unattended restart.\n\
+         \n\
+         Resolve by one of:\n\
+         \u{20}\u{20}- Remove requirePresenceAtMint from the entry; it will then resolve unattended.\n\
+         \u{20}\u{20}- Do not use this profile as an MCP server `command` — run\n\
+         \u{20}\u{20}\u{20}\u{20}'vaultkeeper profile lint {profile_name}' for the full report."
+    )
 }
 
 /// Main entry point for vaultkeeper. Orchestrates backends, keys, JWE tokens,
@@ -599,6 +671,151 @@ impl VaultKeeper {
         Ok((pending.identity.hash.clone(), Some(pending)))
     }
 
+    /// Mint a session signing-key lease (issue #299): a serializable,
+    /// expiring, revocable, presence-minted authorization to use a signing
+    /// key. Same JWE envelope as [`VaultKeeper::setup`] — encrypted under the
+    /// vault key via [`KeyManager`], so rotation and `revokeKey()` already
+    /// apply — but a distinct claims payload with no `val` (see
+    /// [`VaultClaims`]'s kty-discriminated shape).
+    ///
+    /// **Presence-at-mint** (`options.require_presence_at_mint`): proven via
+    /// exactly one of two mechanisms, never both, never neither with a
+    /// fabricated `pres`:
+    /// - `"backend-touch"` — [`enforce_presence_requirement`] with
+    ///   [`PresenceOperation::Sign`] succeeds (the backend advertises
+    ///   [`crate::backend::BackendCapabilities::enforces`] for `Sign`).
+    /// - `"host-approval"` — [`HostPlatform::prompt_approval`] returns
+    ///   `Ok(true)`, tried only when `options.interactive` is `true` and only
+    ///   after backend-touch has already failed.
+    ///
+    /// When `options.interactive` is `false` and backend-touch is
+    /// unavailable, `prompt_approval` is never called at all — this is the
+    /// non-interactive fail-closed rule (issue #299): a restart with no human
+    /// present must refuse promptly (bounded, never an unbounded hang, never
+    /// a cached/reuse-window fallback) rather than block on an approval
+    /// channel that cannot be satisfied. When neither mechanism is available,
+    /// this returns [`VaultError::NotCapable`] — never a lease with an
+    /// empty/fabricated `pres`.
+    ///
+    /// `kgen` is stamped from the signing key's *current* generation, read
+    /// fresh from the persisted revocation store (issue #298) via
+    /// [`crate::keys::load_revocation_for_validation`] — never cached, never
+    /// defaulted — so a lease minted after a `session revoke --key` bump
+    /// carries the post-revocation generation, and a corrupt/missing
+    /// revocation store fails the mint closed rather than stamping a
+    /// fabricated `kgen`.
+    ///
+    /// # Errors
+    /// Returns [`VaultError::SigningKeyNotFound`] if `options.key_name` has no
+    /// enrolled signing key. Returns [`VaultError::NotCapable`] if presence is
+    /// required but unprovable (see above). Returns [`VaultError::TokenRevoked`]
+    /// if the persisted revocation store cannot be read (see
+    /// [`crate::keys::load_revocation_for_validation`]'s fail-closed
+    /// contract).
+    pub async fn mint_signing_lease(
+        &self,
+        host: &dyn HostPlatform,
+        backend: &dyn SigningBackend,
+        options: &MintLeaseOptions<'_>,
+    ) -> Result<String, VaultError> {
+        let backend_ref = signing_key_id(options.key_name);
+        let public_key = backend.get_public_key(&backend_ref).await?;
+
+        let pres = if options.require_presence_at_mint {
+            Some(Self::prove_presence_at_mint(host, backend, options).await?)
+        } else {
+            None
+        };
+
+        // Fresh on every mint (issue #298): never cached, so a revocation
+        // recorded after the last mint is always reflected here.
+        let revocation = crate::keys::load_revocation_for_validation(host, 0).await?;
+        let kgen = revocation.min_generation_for(options.key_name);
+
+        let now = crate::util::time::now_secs();
+        let ttl_seconds = options
+            .ttl_seconds
+            .min(crate::profile::SIGNING_LEASE_MAX_TTL_SECONDS);
+
+        let claims = VaultClaims {
+            jti: uuid::Uuid::new_v4().to_string(),
+            exp: now + ttl_seconds,
+            iat: now,
+            sub: options.key_name.to_string(),
+            exe: "dev".to_string(),
+            use_limit: options.use_limit,
+            tid: options.trust_tier,
+            bkd: None,
+            val: None,
+            reference: backend_ref,
+            kty: Some(ClaimsKind::SigningKey),
+            kid: Some(public_key.kid),
+            kgen: Some(kgen),
+            pres,
+        };
+
+        let current_key = self.key_manager.get_current_key()?;
+        create_token(
+            &current_key.key,
+            &claims,
+            &CreateTokenOptions {
+                kid: Some(current_key.id.clone()),
+            },
+        )
+    }
+
+    /// Prove presence for a [`VaultKeeper::mint_signing_lease`] call — see
+    /// that method's doc comment for the two mechanisms and the
+    /// non-interactive fail-closed rule.
+    async fn prove_presence_at_mint(
+        host: &dyn HostPlatform,
+        backend: &dyn SecretBackend,
+        options: &MintLeaseOptions<'_>,
+    ) -> Result<LeasePresence, VaultError> {
+        let now = crate::util::time::now_secs();
+
+        match enforce_presence_requirement(backend, PresenceOperation::Sign, Some(true)).await {
+            Ok(()) => Ok(LeasePresence {
+                op: "sign".to_string(),
+                at: now,
+                method: "backend-touch".to_string(),
+                backend: backend.backend_type().to_string(),
+            }),
+            Err(backend_touch_err) => {
+                if !options.interactive {
+                    // Never call prompt_approval at all here — the guard that
+                    // guarantees this path can never hang waiting on an
+                    // approval channel with no human behind it.
+                    return Err(VaultError::NotCapable {
+                        message: non_interactive_presence_error_message(
+                            options.profile_name,
+                            options.entry_name,
+                        ),
+                        backend_type: backend.backend_type().to_string(),
+                        capability: "presenceAtMint".to_string(),
+                    });
+                }
+
+                match host
+                    .prompt_approval(ApprovalContext {
+                        action: "session-mint",
+                        detail: options.entry_name,
+                    })
+                    .await
+                {
+                    Ok(true) => Ok(LeasePresence {
+                        op: "sign".to_string(),
+                        at: now,
+                        method: "host-approval".to_string(),
+                        backend: backend.backend_type().to_string(),
+                    }),
+                    Ok(false) => Err(backend_touch_err),
+                    Err(e) => Err(e),
+                }
+            }
+        }
+    }
+
     /// Decrypt a JWE token, validate its claims, and return an opaque
     /// capability [`HandleId`] together with the (secret-redacted) claims and
     /// key status. Tracks per-JTI usage counts and blocks tokens that exceed
@@ -873,5 +1090,467 @@ mod register_signing_handle_tests {
             .expect("registered signing handle must resolve");
         assert_eq!(claims.kid, "kid-2");
         assert_eq!(claims.backend_ref, "backend-ref-2");
+    }
+}
+
+#[cfg(test)]
+mod mint_signing_lease_tests {
+    use super::*;
+    use crate::backend::{
+        BackendCapabilities, ExecOptions, ExecOutput, Platform, PresenceCapableBackend,
+    };
+    use crate::jwe::decrypt_token;
+    use crate::types::SigningAlgorithm;
+    use std::collections::HashMap;
+    use std::path::{Path, PathBuf};
+    use std::sync::Mutex;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    // -------------------------------------------------------------------
+    // Test doubles
+    // -------------------------------------------------------------------
+
+    /// A `HostPlatform` backed by an in-memory file map — real enough to
+    /// exercise `VaultKeeper::init`'s key-state persistence (so
+    /// `load_revocation_for_validation` has a genuine store to read) without
+    /// touching the filesystem. `approve` controls the canned
+    /// `prompt_approval` answer; `prompt_calls` counts how many times it was
+    /// actually invoked, so the non-interactive fail-closed path can assert
+    /// it is *never* called (not merely that it answers `false`).
+    struct TestHost {
+        files: Mutex<HashMap<PathBuf, Vec<u8>>>,
+        config_dir: PathBuf,
+        approve: bool,
+        prompt_calls: AtomicUsize,
+    }
+
+    impl TestHost {
+        fn new(approve: bool) -> Self {
+            Self {
+                files: Mutex::new(HashMap::new()),
+                config_dir: PathBuf::from("/test/config"),
+                approve,
+                prompt_calls: AtomicUsize::new(0),
+            }
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl HostPlatform for TestHost {
+        async fn exec(
+            &self,
+            _cmd: &str,
+            _args: &[&str],
+            _options: ExecOptions<'_>,
+        ) -> Result<ExecOutput, VaultError> {
+            Ok(ExecOutput {
+                stdout: Vec::new(),
+                stderr: Vec::new(),
+                exit_code: 0,
+            })
+        }
+        async fn prompt_approval(&self, _context: ApprovalContext<'_>) -> Result<bool, VaultError> {
+            self.prompt_calls.fetch_add(1, Ordering::SeqCst);
+            Ok(self.approve)
+        }
+        async fn read_file(&self, path: &Path) -> Result<Vec<u8>, VaultError> {
+            self.files
+                .lock()
+                .unwrap()
+                .get(path)
+                .cloned()
+                .ok_or_else(|| VaultError::Other(format!("not found: {}", path.display())))
+        }
+        async fn write_file(
+            &self,
+            path: &Path,
+            content: &[u8],
+            _mode: u32,
+        ) -> Result<(), VaultError> {
+            self.files
+                .lock()
+                .unwrap()
+                .insert(path.to_path_buf(), content.to_vec());
+            Ok(())
+        }
+        async fn file_exists(&self, path: &Path) -> Result<bool, VaultError> {
+            Ok(self.files.lock().unwrap().contains_key(path))
+        }
+        async fn delete_file(&self, path: &Path) -> Result<(), VaultError> {
+            self.files.lock().unwrap().remove(path);
+            Ok(())
+        }
+        async fn rename_file(&self, from: &Path, to: &Path) -> Result<(), VaultError> {
+            let data = self
+                .files
+                .lock()
+                .unwrap()
+                .remove(from)
+                .ok_or_else(|| VaultError::Other(format!("not found: {}", from.display())))?;
+            self.files.lock().unwrap().insert(to.to_path_buf(), data);
+            Ok(())
+        }
+        async fn list_dir(&self, _path: &Path) -> Result<Vec<String>, VaultError> {
+            Ok(Vec::new())
+        }
+        fn platform(&self) -> Platform {
+            Platform::Linux
+        }
+        fn config_dir(&self) -> &Path {
+            &self.config_dir
+        }
+    }
+
+    /// A `SigningBackend` test double whose presence capabilities are
+    /// configurable per test — `get_public_key`/`sign_with_key` are stubs
+    /// that never touch real key material.
+    struct MockSigningBackend {
+        capabilities: BackendCapabilities,
+    }
+
+    #[async_trait::async_trait]
+    impl SecretBackend for MockSigningBackend {
+        fn backend_type(&self) -> &str {
+            "mock-signing"
+        }
+        fn display_name(&self) -> &str {
+            "Mock Signing Backend"
+        }
+        async fn is_available(&self) -> bool {
+            true
+        }
+        async fn store(&self, _id: &str, _secret: &str) -> Result<(), VaultError> {
+            Ok(())
+        }
+        async fn retrieve(&self, _id: &str) -> Result<String, VaultError> {
+            Err(VaultError::Other("not supported".to_string()))
+        }
+        async fn delete(&self, _id: &str) -> Result<(), VaultError> {
+            Ok(())
+        }
+        async fn exists(&self, _id: &str) -> Result<bool, VaultError> {
+            Ok(false)
+        }
+        fn as_presence_capable(&self) -> Option<&dyn PresenceCapableBackend> {
+            Some(self)
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl PresenceCapableBackend for MockSigningBackend {
+        async fn get_capabilities(&self) -> Result<BackendCapabilities, VaultError> {
+            Ok(self.capabilities.clone())
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl SigningBackend for MockSigningBackend {
+        async fn generate_signing_key(
+            &self,
+            _id: &str,
+            _algorithm: SigningAlgorithm,
+        ) -> Result<(), VaultError> {
+            Ok(())
+        }
+        async fn get_public_key(
+            &self,
+            id: &str,
+        ) -> Result<crate::types::SigningPublicKey, VaultError> {
+            Ok(crate::types::SigningPublicKey {
+                public_key_pem: "PEM".to_string(),
+                algorithm: SigningAlgorithm::EdDsa,
+                kid: format!("kid-for-{id}"),
+            })
+        }
+        async fn sign_with_key(&self, _id: &str, _data: &[u8]) -> Result<Vec<u8>, VaultError> {
+            Ok(Vec::new())
+        }
+    }
+
+    async fn init_vault(host: &TestHost) -> VaultKeeper {
+        VaultKeeper::init(
+            host,
+            Some(VaultKeeperOptions {
+                config: None,
+                skip_doctor: true,
+            }),
+        )
+        .await
+        .expect("vault init")
+    }
+
+    fn base_options(
+        interactive: bool,
+        require_presence_at_mint: bool,
+    ) -> MintLeaseOptions<'static> {
+        MintLeaseOptions {
+            profile_name: "github-mcp",
+            entry_name: "VK_SIGNING_LEASE",
+            key_name: "release-signer",
+            ttl_seconds: crate::profile::SIGNING_LEASE_DEFAULT_TTL_SECONDS,
+            trust_tier: TrustTier::Dev,
+            use_limit: None,
+            require_presence_at_mint,
+            interactive,
+        }
+    }
+
+    // --- AC1: no Sign presence -> NotCapable, never a fabricated pres ---
+
+    #[tokio::test]
+    async fn backend_with_no_sign_presence_fails_with_not_capable() {
+        let host = TestHost::new(false);
+        let vault = init_vault(&host).await;
+        let backend = MockSigningBackend {
+            capabilities: BackendCapabilities::none(),
+        };
+        let options = base_options(true, true);
+
+        let err = vault
+            .mint_signing_lease(&host, &backend, &options)
+            .await
+            .expect_err("must refuse without a proven presence mechanism");
+
+        assert!(
+            matches!(err, VaultError::NotCapable { .. }),
+            "expected NotCapable, got {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn backend_that_enforces_only_other_operations_fails_with_not_capable() {
+        let host = TestHost::new(false);
+        let vault = init_vault(&host).await;
+        let backend = MockSigningBackend {
+            capabilities: BackendCapabilities {
+                presence_per_use: true,
+                presence_enforced_operations: Some(vec![PresenceOperation::Read]),
+            },
+        };
+        let options = base_options(true, true);
+
+        let err = vault
+            .mint_signing_lease(&host, &backend, &options)
+            .await
+            .expect_err("Read-only presence coverage must not satisfy Sign");
+
+        assert!(matches!(err, VaultError::NotCapable { .. }));
+    }
+
+    // --- AC2: pres.method reflects the mechanism actually used ---
+
+    #[tokio::test]
+    async fn pres_method_is_backend_touch_when_the_backend_enforces_sign() {
+        let host = TestHost::new(false);
+        let vault = init_vault(&host).await;
+        let backend = MockSigningBackend {
+            capabilities: BackendCapabilities {
+                presence_per_use: true,
+                presence_enforced_operations: None,
+            },
+        };
+        let options = base_options(true, true);
+
+        let jwe = vault
+            .mint_signing_lease(&host, &backend, &options)
+            .await
+            .expect("capable backend must mint");
+        let key = vault.key_manager().get_current_key().unwrap();
+        let claims = decrypt_token(&key.key, &jwe).unwrap();
+
+        let pres = claims
+            .pres
+            .expect("presence-required lease must carry pres");
+        assert_eq!(pres.method, "backend-touch");
+        assert_eq!(pres.op, "sign");
+        assert_eq!(pres.backend, "mock-signing");
+        assert_eq!(host.prompt_calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn pres_method_is_host_approval_when_the_backend_is_incapable_but_host_approves() {
+        let host = TestHost::new(true);
+        let vault = init_vault(&host).await;
+        let backend = MockSigningBackend {
+            capabilities: BackendCapabilities::none(),
+        };
+        let options = base_options(true, true);
+
+        let jwe = vault
+            .mint_signing_lease(&host, &backend, &options)
+            .await
+            .expect("host approval must satisfy presence");
+        let key = vault.key_manager().get_current_key().unwrap();
+        let claims = decrypt_token(&key.key, &jwe).unwrap();
+
+        let pres = claims
+            .pres
+            .expect("presence-required lease must carry pres");
+        assert_eq!(pres.method, "host-approval");
+        assert_eq!(host.prompt_calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn no_presence_required_mints_with_no_pres_and_no_prompt() {
+        let host = TestHost::new(false);
+        let vault = init_vault(&host).await;
+        let backend = MockSigningBackend {
+            capabilities: BackendCapabilities::none(),
+        };
+        let options = base_options(true, false);
+
+        let jwe = vault
+            .mint_signing_lease(&host, &backend, &options)
+            .await
+            .expect("presence-not-required entry must mint unattended");
+        let key = vault.key_manager().get_current_key().unwrap();
+        let claims = decrypt_token(&key.key, &jwe).unwrap();
+
+        assert!(claims.pres.is_none());
+        assert_eq!(host.prompt_calls.load(Ordering::SeqCst), 0);
+    }
+
+    // --- Non-interactive fail-closed rule ---
+
+    #[tokio::test]
+    async fn non_interactive_invocation_fails_closed_without_ever_calling_prompt_approval() {
+        let host = TestHost::new(true); // would approve if ever asked
+        let vault = init_vault(&host).await;
+        let backend = MockSigningBackend {
+            capabilities: BackendCapabilities::none(),
+        };
+        let options = base_options(false, true);
+
+        let err = vault
+            .mint_signing_lease(&host, &backend, &options)
+            .await
+            .expect_err("non-interactive + presence-required must fail closed");
+
+        match err {
+            VaultError::NotCapable { message, .. } => {
+                assert!(message.contains("github-mcp"), "{message}");
+                assert!(message.contains("VK_SIGNING_LEASE"), "{message}");
+                assert!(message.contains("non-interactive"), "{message}");
+                assert!(message.contains("unattended restart"), "{message}");
+            }
+            other => panic!("expected NotCapable, got {other:?}"),
+        }
+        assert_eq!(
+            host.prompt_calls.load(Ordering::SeqCst),
+            0,
+            "prompt_approval must never be called when non-interactive"
+        );
+    }
+
+    // --- AC3: exp derived from ttlSeconds (default + hard cap), kgen matches
+    // --- the current key generation ---
+
+    #[tokio::test]
+    async fn exp_defaults_to_the_eight_hour_ttl() {
+        let host = TestHost::new(false);
+        let vault = init_vault(&host).await;
+        let backend = MockSigningBackend {
+            capabilities: BackendCapabilities::none(),
+        };
+        let options = base_options(true, false);
+
+        let jwe = vault
+            .mint_signing_lease(&host, &backend, &options)
+            .await
+            .unwrap();
+        let key = vault.key_manager().get_current_key().unwrap();
+        let claims = decrypt_token(&key.key, &jwe).unwrap();
+
+        assert_eq!(
+            claims.exp - claims.iat,
+            crate::profile::SIGNING_LEASE_DEFAULT_TTL_SECONDS
+        );
+    }
+
+    #[tokio::test]
+    async fn a_requested_ttl_above_the_hard_cap_is_capped_not_rejected() {
+        let host = TestHost::new(false);
+        let vault = init_vault(&host).await;
+        let backend = MockSigningBackend {
+            capabilities: BackendCapabilities::none(),
+        };
+        let mut options = base_options(true, false);
+        options.ttl_seconds = crate::profile::SIGNING_LEASE_MAX_TTL_SECONDS + 1_000_000;
+
+        let jwe = vault
+            .mint_signing_lease(&host, &backend, &options)
+            .await
+            .expect("mint must cap rather than reject an over-cap ttl");
+        let key = vault.key_manager().get_current_key().unwrap();
+        let claims = decrypt_token(&key.key, &jwe).unwrap();
+
+        assert_eq!(
+            claims.exp - claims.iat,
+            crate::profile::SIGNING_LEASE_MAX_TTL_SECONDS
+        );
+    }
+
+    #[tokio::test]
+    async fn kgen_equals_the_current_key_generation_at_mint() {
+        let host = TestHost::new(false);
+        let mut vault = init_vault(&host).await;
+        let backend = MockSigningBackend {
+            capabilities: BackendCapabilities::none(),
+        };
+        let options = base_options(true, false);
+
+        let first_jwe = vault
+            .mint_signing_lease(&host, &backend, &options)
+            .await
+            .unwrap();
+        let key = vault.key_manager().get_current_key().unwrap();
+        let first_claims = decrypt_token(&key.key, &first_jwe).unwrap();
+        assert_eq!(first_claims.kgen, Some(0));
+
+        vault
+            .revoke_lease_key(&host, options.key_name)
+            .await
+            .expect("revoke_lease_key must persist");
+
+        let second_jwe = vault
+            .mint_signing_lease(&host, &backend, &options)
+            .await
+            .unwrap();
+        let key = vault.key_manager().get_current_key().unwrap();
+        let second_claims = decrypt_token(&key.key, &second_jwe).unwrap();
+        assert_eq!(
+            second_claims.kgen,
+            Some(1),
+            "kgen must reflect the post-revoke generation"
+        );
+    }
+
+    // --- Claims shape sanity: no val, kty is SigningKey, ref is the
+    // --- namespaced backend id (review anchor, not a formal AC) ---
+
+    #[tokio::test]
+    async fn minted_lease_carries_no_val_and_is_kty_signing_key() {
+        let host = TestHost::new(false);
+        let vault = init_vault(&host).await;
+        let backend = MockSigningBackend {
+            capabilities: BackendCapabilities::none(),
+        };
+        let options = base_options(true, false);
+
+        let jwe = vault
+            .mint_signing_lease(&host, &backend, &options)
+            .await
+            .unwrap();
+        let key = vault.key_manager().get_current_key().unwrap();
+        let claims = decrypt_token(&key.key, &jwe).unwrap();
+
+        assert!(claims.val.is_none());
+        assert_eq!(claims.kty, Some(ClaimsKind::SigningKey));
+        assert_eq!(claims.sub, "release-signer");
+        assert_eq!(claims.reference, "signing-key:release-signer");
+        assert_eq!(
+            claims.kid,
+            Some("kid-for-signing-key:release-signer".to_string())
+        );
     }
 }

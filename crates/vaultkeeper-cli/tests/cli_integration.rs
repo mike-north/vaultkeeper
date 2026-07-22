@@ -1175,6 +1175,349 @@ mod session {
     }
 }
 
+// ─── Session mint command (issue #299) ───────────────────────────
+//
+// Deep presence-mechanism unit coverage (backend-touch vs. host-approval,
+// NotCapable on an incapable backend, exp/kgen derivation) lives at the
+// `vaultkeeper-core` layer (`crates/vaultkeeper-core/src/vault.rs`'s
+// `mint_signing_lease_tests`), using mock `SigningBackend`/`HostPlatform`
+// doubles the `file` backend can't provide (it never advertises
+// presence-per-use). These tests instead cover the CLI's real, unattended
+// input contract: `assert_cmd` pipes the child's stdin/stdout/stderr, so
+// `stderr` is genuinely not a terminal here — exactly the "unattended MCP
+// restart" shape the non-interactive fail-closed rule exists for.
+
+mod session_mint {
+    use super::*;
+    use std::path::{Path, PathBuf};
+    use std::sync::Arc;
+    use std::time::{Duration, Instant};
+    use vaultkeeper_core::backend::{
+        ExecOptions, ExecOutput, FileBackend, HostPlatform, Platform, SigningBackend,
+    };
+    use vaultkeeper_core::errors::VaultError;
+    use vaultkeeper_core::types::SigningAlgorithm;
+
+    /// A `HostPlatform` backed by the real filesystem, scoped to a single
+    /// config directory — just enough to enroll a signing key on disk
+    /// (`FileBackend::generate_signing_key`) *before* spawning the CLI
+    /// subprocess under test, so the subprocess's own `session mint` finds a
+    /// real enrolled key at the same `VAULTKEEPER_CONFIG_DIR`. There is no
+    /// CLI subcommand to enroll a signing key yet, so this is the only way
+    /// to set up the precondition without reaching into CLI internals (this
+    /// crate has no `[lib]` target, so `vaultkeeper-cli`'s own
+    /// `NativeHostPlatform` is not visible from an integration test).
+    struct RealFsHost {
+        config_dir: PathBuf,
+    }
+
+    #[async_trait::async_trait]
+    impl HostPlatform for RealFsHost {
+        async fn exec(
+            &self,
+            _cmd: &str,
+            _args: &[&str],
+            _options: ExecOptions<'_>,
+        ) -> Result<ExecOutput, VaultError> {
+            Ok(ExecOutput {
+                stdout: Vec::new(),
+                stderr: Vec::new(),
+                exit_code: 0,
+            })
+        }
+        async fn read_file(&self, path: &Path) -> Result<Vec<u8>, VaultError> {
+            std::fs::read(path).map_err(|e| VaultError::Filesystem {
+                message: format!("read {}: {e}", path.display()),
+                path: path.display().to_string(),
+                permission: "read".to_string(),
+                code: None,
+            })
+        }
+        async fn write_file(
+            &self,
+            path: &Path,
+            content: &[u8],
+            _mode: u32,
+        ) -> Result<(), VaultError> {
+            if let Some(parent) = path.parent() {
+                std::fs::create_dir_all(parent).map_err(|e| VaultError::Filesystem {
+                    message: format!("mkdir {}: {e}", parent.display()),
+                    path: parent.display().to_string(),
+                    permission: "write".to_string(),
+                    code: None,
+                })?;
+            }
+            std::fs::write(path, content).map_err(|e| VaultError::Filesystem {
+                message: format!("write {}: {e}", path.display()),
+                path: path.display().to_string(),
+                permission: "write".to_string(),
+                code: None,
+            })
+        }
+        async fn file_exists(&self, path: &Path) -> Result<bool, VaultError> {
+            Ok(path.exists())
+        }
+        async fn delete_file(&self, path: &Path) -> Result<(), VaultError> {
+            std::fs::remove_file(path).map_err(|e| VaultError::Filesystem {
+                message: format!("delete {}: {e}", path.display()),
+                path: path.display().to_string(),
+                permission: "write".to_string(),
+                code: None,
+            })
+        }
+        async fn rename_file(&self, from: &Path, to: &Path) -> Result<(), VaultError> {
+            std::fs::rename(from, to).map_err(|e| VaultError::Filesystem {
+                message: format!("rename {} -> {}: {e}", from.display(), to.display()),
+                path: to.display().to_string(),
+                permission: "write".to_string(),
+                code: None,
+            })
+        }
+        async fn list_dir(&self, path: &Path) -> Result<Vec<String>, VaultError> {
+            match std::fs::read_dir(path) {
+                Ok(entries) => Ok(entries
+                    .filter_map(|e| e.ok().and_then(|e| e.file_name().into_string().ok()))
+                    .collect()),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
+                Err(e) => Err(VaultError::Filesystem {
+                    message: format!("readdir {}: {e}", path.display()),
+                    path: path.display().to_string(),
+                    permission: "read".to_string(),
+                    code: None,
+                }),
+            }
+        }
+        fn platform(&self) -> Platform {
+            Platform::Linux
+        }
+        fn config_dir(&self) -> &Path {
+            &self.config_dir
+        }
+    }
+
+    /// Enroll a real Ed25519 signing key named `key_name` in the `file`
+    /// backend rooted at `config_dir`, so a subsequently spawned CLI
+    /// subprocess pointed at the same config dir can mint a lease against it.
+    async fn enroll_signing_key(config_dir: &Path, key_name: &str) {
+        let host = Arc::new(RealFsHost {
+            config_dir: config_dir.to_path_buf(),
+        });
+        let backend = FileBackend::new(host);
+        backend
+            .generate_signing_key(&format!("signing-key:{key_name}"), SigningAlgorithm::EdDsa)
+            .await
+            .expect("failed to enroll test signing key");
+    }
+
+    fn write_profile(dir: &TempDir, name: &str, json: &serde_json::Value) {
+        let profiles_dir = dir.path().join("profiles");
+        fs::create_dir_all(&profiles_dir).expect("failed to create profiles dir");
+        fs::write(
+            profiles_dir.join(format!("{name}.json")),
+            serde_json::to_string_pretty(json).unwrap(),
+        )
+        .expect("failed to write profile");
+    }
+
+    // --- AC4: non-interactive presence-requiring entry fails closed ---
+
+    #[tokio::test]
+    async fn presence_requiring_entry_fails_closed_when_non_interactive() {
+        let (mut cmd, dir) = cli_test_env();
+        enroll_signing_key(dir.path(), "release-signer").await;
+        write_profile(
+            &dir,
+            "github-mcp",
+            &serde_json::json!({
+                "version": 1,
+                "name": "github-mcp",
+                "entries": {
+                    "VK_SIGNING_LEASE": {
+                        "signingKey": "release-signer",
+                        "materialize": "lease",
+                        "ttlSeconds": 28800,
+                        "useLimit": 200,
+                        "requirePresenceAtMint": true
+                    }
+                }
+            }),
+        );
+
+        // assert_cmd pipes stdin/stdout/stderr for the child process, so
+        // stderr is genuinely not a terminal here — the exact "unattended
+        // restart" shape the non-interactive rule exists for. Bound the wait
+        // explicitly: a regression to an unbounded interactive hang must fail
+        // this test rather than hang the test suite itself.
+        let start = Instant::now();
+        let output = cmd
+            .args([
+                "session",
+                "mint",
+                "--profile",
+                "github-mcp",
+                "--entry",
+                "VK_SIGNING_LEASE",
+            ])
+            .timeout(Duration::from_secs(10))
+            .output()
+            .expect("command must return within the bounded timeout, not hang");
+        let elapsed = start.elapsed();
+
+        assert!(
+            elapsed < Duration::from_secs(5),
+            "must return promptly, not block waiting for input: took {elapsed:?}"
+        );
+        assert_eq!(output.status.code(), Some(1));
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(stderr.contains("Error: profile 'github-mcp' entry 'VK_SIGNING_LEASE'"));
+        assert!(stderr.contains("requires human presence at mint"));
+        assert!(stderr.contains("non-interactive"));
+        assert!(stderr.contains("stderr is not a terminal"));
+        assert!(stderr.contains("offers no approval mechanism"));
+        assert!(stderr.contains("unattended restart"));
+        assert!(stderr.contains("Remove requirePresenceAtMint"));
+        assert!(stderr.contains("vaultkeeper profile lint github-mcp"));
+        assert!(
+            output.stdout.is_empty(),
+            "must not print a lease on failure"
+        );
+    }
+
+    // --- AC5: a non-presence profile resolves unattended, no prompt ---
+
+    #[tokio::test]
+    async fn non_presence_entry_mints_unattended_with_no_prompt() {
+        let (mut cmd, dir) = cli_test_env();
+        enroll_signing_key(dir.path(), "release-signer").await;
+        write_profile(
+            &dir,
+            "github-mcp",
+            &serde_json::json!({
+                "version": 1,
+                "name": "github-mcp",
+                "entries": {
+                    "VK_SIGNING_LEASE": {
+                        "signingKey": "release-signer",
+                        "materialize": "lease",
+                        "ttlSeconds": 900
+                    }
+                }
+            }),
+        );
+
+        let output = cmd
+            .args([
+                "session",
+                "mint",
+                "--profile",
+                "github-mcp",
+                "--entry",
+                "VK_SIGNING_LEASE",
+            ])
+            .timeout(Duration::from_secs(10))
+            .output()
+            .expect("command must return within the bounded timeout");
+
+        assert!(
+            output.status.success(),
+            "expected success: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        // A JWE compact token is header.encrypted_key.iv.ciphertext.tag — 5
+        // dot-separated parts.
+        let jwe = stdout.trim();
+        assert_eq!(
+            jwe.split('.').count(),
+            5,
+            "expected a compact JWE on stdout: {jwe}"
+        );
+    }
+
+    #[test]
+    fn mint_exits_2_when_required_flags_are_missing() {
+        let (mut cmd, _dir) = cli_test_env();
+        cmd.args(["session", "mint"]).assert().code(2);
+    }
+
+    #[test]
+    fn mint_fails_when_the_profile_does_not_exist() {
+        let (mut cmd, _dir) = cli_test_env();
+        cmd.args([
+            "session",
+            "mint",
+            "--profile",
+            "does-not-exist",
+            "--entry",
+            "VK_SIGNING_LEASE",
+        ])
+        .assert()
+        .code(1)
+        .stderr(predicate::str::contains("No profile found"));
+    }
+
+    #[test]
+    fn mint_fails_when_the_entry_does_not_exist() {
+        let (mut cmd, dir) = cli_test_env();
+        write_profile(
+            &dir,
+            "github-mcp",
+            &serde_json::json!({ "version": 1, "name": "github-mcp", "entries": {} }),
+        );
+        cmd.args([
+            "session",
+            "mint",
+            "--profile",
+            "github-mcp",
+            "--entry",
+            "DOES_NOT_EXIST",
+        ])
+        .assert()
+        .code(1)
+        .stderr(predicate::str::contains("has no entry 'DOES_NOT_EXIST'"));
+    }
+
+    #[test]
+    fn mint_fails_for_a_secret_backed_entry() {
+        let (mut cmd, dir) = cli_test_env();
+        write_profile(
+            &dir,
+            "github-mcp",
+            &serde_json::json!({
+                "version": 1,
+                "name": "github-mcp",
+                "entries": {
+                    "GITHUB_TOKEN": {
+                        "secret": "github-pat",
+                        "materialize": "secret",
+                        "minTrust": "registry"
+                    }
+                }
+            }),
+        );
+        cmd.args([
+            "session",
+            "mint",
+            "--profile",
+            "github-mcp",
+            "--entry",
+            "GITHUB_TOKEN",
+        ])
+        .assert()
+        .code(1)
+        .stderr(predicate::str::contains("is secret-backed"));
+    }
+
+    #[test]
+    fn session_help_documents_mint_subcommand() {
+        let (mut cmd, _dir) = cli_test_env();
+        cmd.args(["session", "--help"])
+            .assert()
+            .success()
+            .stdout(predicate::str::contains("mint"));
+    }
+}
+
 // ─── Dev-mode command ───────────────────────────────────────────
 
 mod dev_mode {
