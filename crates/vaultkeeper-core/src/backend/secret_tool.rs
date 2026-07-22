@@ -337,6 +337,12 @@ mod tests {
                     })
                 }
                 Some("search") => {
+                    // ["search", "--", ATTRIBUTE_KEY, ""]
+                    assert_eq!(
+                        args.get(1).copied(),
+                        Some("--"),
+                        "search must pass -- before positional attribute args"
+                    );
                     let entries = self.entries.lock().unwrap();
                     let mut stdout = String::new();
                     for (id, (label, _)) in entries.iter() {

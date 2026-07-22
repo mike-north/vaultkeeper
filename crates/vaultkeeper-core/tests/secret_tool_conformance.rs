@@ -282,7 +282,12 @@ async fn secret_tool_backend_hardening_against_real_secret_tool() {
     // AC1: an id that looks exactly like a flag secret-tool itself defines
     // (`--label`) must not be misinterpreted by secret-tool's own argv
     // parser — the `--` separator forces it positional.
-    let hostile_id = format!("vk-297-hostile---label-{suffix}");
+    // The id must BEGIN with dashes: only a leading-dash argv token can be
+    // mistaken for a flag by secret-tool's GOption parser, so an id with a
+    // "vk-" prefix would pass with or without the `--` separator and prove
+    // nothing. This shape fails against the pre-#297 argv (unknown option)
+    // and round-trips only because of the separator.
+    let hostile_id = format!("--label-vk-297-hostile-{suffix}");
     backend
         .store(&hostile_id, "hostile-id-secret")
         .await
