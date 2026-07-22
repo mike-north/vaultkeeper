@@ -213,10 +213,21 @@ struct EphemeralKeychain {
     previous_default: Option<String>,
 }
 
+/// Distinguishes concurrently-running tests within the same test binary
+/// process: `cargo test` runs each `#[tokio::test]` in this file on its own
+/// thread of the same process by default, so `std::process::id()` alone is
+/// not unique enough to keep two tests' ephemeral keychain files from
+/// colliding on the same path.
+static EPHEMERAL_KEYCHAIN_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
 impl EphemeralKeychain {
     fn create() -> Self {
+        let seq = EPHEMERAL_KEYCHAIN_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let dir = std::env::temp_dir();
-        let path = dir.join(format!("vk-conformance-{}.keychain-db", std::process::id()));
+        let path = dir.join(format!(
+            "vk-conformance-{}-{seq}.keychain-db",
+            std::process::id()
+        ));
         // Best-effort: clear out a stale keychain from a previous crashed run.
         let _ = std::fs::remove_file(&path);
 
@@ -252,8 +263,10 @@ impl EphemeralKeychain {
         );
 
         // Disable auto-lock so a slow CI run can't relock the keychain
-        // mid-test: "no-timeout" args set no idle timeout and don't lock on
-        // sleep.
+        // mid-test: `set-keychain-settings` with no `-t`/`-l` flags at all
+        // sets no idle timeout and does not lock on sleep, which is exactly
+        // the "never auto-lock" behavior wanted here — no args are actually
+        // passed beyond the keychain path itself.
         let settings = run_security(&["set-keychain-settings", path_str]);
         assert!(
             settings.status.success(),
@@ -304,7 +317,15 @@ impl Drop for EphemeralKeychain {
     }
 }
 
+// `EphemeralKeychain::create`/`Drop` mutate *global*, session-wide state
+// (`security list-keychains -s` / `security default-keychain -s`), not
+// anything scoped to the ephemeral keychain file itself. Two tests in this
+// file running concurrently (the default for `#[tokio::test]`s in the same
+// binary) would race on that shared state and could restore the wrong
+// "previous" search list/default keychain on drop — serialize them onto one
+// real OS thread instead.
 #[tokio::test]
+#[serial_test::serial(keychain_session_state)]
 async fn keychain_backend_conformance_against_real_security_binary() {
     if !keychain_environment_available() {
         eprintln!(
@@ -390,6 +411,58 @@ async fn keychain_backend_conformance_against_real_security_binary() {
         matches!(delete_err, VaultError::SecretNotFound { .. }),
         "expected SecretNotFound deleting a missing entry, got {delete_err:?}"
     );
+
+    drop(ephemeral);
+}
+
+/// Conformance-level regression for the store/list asymmetry (issue #304
+/// review): `store()` supports an id with an embedded double quote (escaped
+/// for `security -i`'s tokenizer), but real `security dump-keychain`'s
+/// plain-quoted display form embeds the quote raw and unescaped, so `list()`
+/// must not truncate the id at the first embedded quote. Runs against the
+/// real `security` binary and a real (ephemeral) keychain, not just the
+/// in-memory `TestHost` in `keychain.rs`'s unit tests.
+#[tokio::test]
+#[serial_test::serial(keychain_session_state)]
+async fn keychain_backend_list_round_trips_a_quoted_id_against_real_security_binary() {
+    if !keychain_environment_available() {
+        eprintln!(
+            "skipping keychain_backend_list_round_trips_a_quoted_id_against_real_security_binary: \
+             requires target_os=macos and `security` on PATH."
+        );
+        return;
+    }
+
+    let ephemeral = EphemeralKeychain::create();
+
+    let host = std::sync::Arc::new(RealMacHost {
+        config_dir: std::env::temp_dir(),
+    });
+    let backend = KeychainBackend::new(host);
+    let id = format!("has \"quotes\" inside-{}", std::process::id());
+
+    backend
+        .store(&id, "quoted-id-secret")
+        .await
+        .expect("store must succeed for an id with an embedded double quote");
+
+    let listed = backend.list().await.expect("list must succeed");
+    assert_eq!(
+        listed,
+        vec![id.clone()],
+        "list() must recover the full id, not truncate at the first embedded quote: {listed:?}"
+    );
+
+    assert_eq!(
+        backend.retrieve(&id).await.unwrap(),
+        "quoted-id-secret",
+        "retrieve must still work for the same quoted id"
+    );
+
+    backend
+        .delete(&id)
+        .await
+        .expect("delete must succeed for the quoted-id entry");
 
     drop(ephemeral);
 }

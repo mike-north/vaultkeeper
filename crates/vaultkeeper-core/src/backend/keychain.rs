@@ -60,10 +60,14 @@
 //! `<id>` is caller-supplied) are embedded as double-quoted tokens with `\`
 //! and `"` backslash-escaped, verified empirically to round-trip service
 //! names containing spaces, embedded double quotes, and embedded backslashes
-//! correctly through `security -i`. An embedded newline in `<id>` is not
-//! escaped by this scheme (it would prematurely terminate the `-i` command
-//! line) — `id` values are expected to be single-line identifiers, as they
-//! are everywhere else in vaultkeeper.
+//! correctly through `security -i`. An embedded newline (`\n` or `\r`) in
+//! `<id>` cannot be escaped by this scheme — it would prematurely terminate
+//! the current `-i` command line and let an attacker-controlled `id` inject
+//! arbitrary follow-on `security -i` subcommands. `id` values (and a NUL
+//! byte, which no `security` command can represent at all) are therefore
+//! **enforced** to be single-line: every public method on this backend
+//! rejects such an `id` with a typed [`VaultError`] before issuing any
+//! subprocess call at all.
 //!
 //! ## Coordination with #270
 //!
@@ -71,6 +75,23 @@
 //! #270. This Rust-core port supersedes it with the `security -i` design
 //! described above; #270 is left open to apply the equivalent fix to the TS
 //! implementation, which this PR does not touch.
+//!
+//! ## Known edge cases
+//!
+//! - **Non-atomic overwrite window.** `store()`'s `-i` script is
+//!   `delete-generic-password` immediately followed by `add-generic-password`
+//!   *within the same `security -i` process*, but `security` still executes
+//!   them as two separate Keychain operations, not one transaction. If the
+//!   delete succeeds but the add then fails (e.g. the keychain is locked or
+//!   disk-full partway through), the old secret is already gone and the new
+//!   one was never written — the entry is left missing, not merely stale.
+//! - **Cross-process store/store race.** Two processes calling `store()` for
+//!   the same `id` at the same time can both pass their own delete before
+//!   either add runs, then both add succeed (each against an
+//!   already-cleared slot) or one add fails with "item already exists" if it
+//!   loses the race to the other's add — `security` provides no
+//!   compare-and-swap primitive this backend could use to serialize the two
+//!   Keychain writes.
 
 use crate::backend::types::{ExecOptions, HostPlatform, ListableBackend, Platform, SecretBackend};
 use crate::errors::VaultError;
@@ -105,6 +126,52 @@ impl KeychainBackend {
         format!("{SERVICE_PREFIX}{id}")
     }
 
+    /// The `SecCopyErrorMessageString` text Apple's Security framework emits
+    /// for `errSecInteractionNotAllowed` (-25308) — the standard OSStatus a
+    /// locked keychain returns when a command needs to decrypt/read item
+    /// data (or otherwise requires a keychain-unlock prompt) and no
+    /// interactive session is available to show one, e.g. a headless CI
+    /// runner with no login session. `security(1)` surfaces this verbatim on
+    /// stderr. Matched case-insensitively as a substring, not tied to a
+    /// specific exit code: on a real macOS login session *with* GUI access
+    /// (verified empirically on this development machine), a locked-
+    /// keychain `find-generic-password -w` instead blocks indefinitely on an
+    /// interactive Security Agent unlock prompt rather than failing fast, so
+    /// no single fast-failing exit code could be captured live here — the
+    /// documented Apple error text is the one part of this signature that's
+    /// stable regardless of which of those two behaviors a given runner
+    /// exhibits.
+    const LOCKED_KEYCHAIN_STDERR_SIGNATURE: &str = "user interaction is not allowed";
+
+    /// True if `stderr` carries the [`Self::LOCKED_KEYCHAIN_STDERR_SIGNATURE`]
+    /// for a locked keychain that can't be read non-interactively.
+    fn is_locked_keychain_error(stderr: &[u8]) -> bool {
+        String::from_utf8_lossy(stderr)
+            .to_lowercase()
+            .contains(Self::LOCKED_KEYCHAIN_STDERR_SIGNATURE)
+    }
+
+    /// Reject an `id` containing a newline (`\n`/`\r`) or NUL byte before
+    /// any `security` subprocess is issued.
+    ///
+    /// `store()` embeds `id` inside a `security -i` stdin command stream
+    /// that `security` itself tokenizes line-by-line; a newline in `id`
+    /// cannot be escaped there and would terminate the current command
+    /// line, letting the rest of `id` be interpreted as one or more
+    /// additional `security -i` subcommands (see module docs). `retrieve`,
+    /// `delete`, and `exists` don't use the `-i` stream, but reject the same
+    /// ids for consistency: an id with an embedded newline could never have
+    /// been produced by a successful `store()` on this backend, so refusing
+    /// it uniformly avoids surprising per-method behavior.
+    fn reject_multiline_id(id: &str) -> Result<(), VaultError> {
+        if id.contains('\n') || id.contains('\r') || id.contains('\0') {
+            return Err(VaultError::Other(format!(
+                "macOS Keychain secret id must not contain a newline, carriage return, or NUL byte: {id:?}"
+            )));
+        }
+        Ok(())
+    }
+
     /// Quote `value` as a single token for `security -i`'s stdin command
     /// tokenizer: wrap in double quotes, backslash-escaping any embedded `\`
     /// or `"` — verified empirically (see module docs) to round-trip
@@ -127,12 +194,24 @@ impl KeychainBackend {
     /// UTF-8 string value regardless of which of `security`'s two display
     /// forms was used:
     ///
-    /// - Plain quoted form (fully printable ASCII): `="<value>"`.
+    /// - Plain quoted form (fully printable ASCII, no backslash): `="<value>"`.
     /// - Hex + octal-escaped display form (any byte outside printable ASCII,
-    ///   including `\`): `=0x<HEX>  "<octal-escaped display>"` — the hex
-    ///   digits are the authoritative raw bytes; the quoted text afterwards
-    ///   is only a lossy human-readable rendering, so this parses the hex
-    ///   form when present rather than the ambiguous quoted display.
+    ///   or containing a backslash): `=0x<HEX>  "<octal-escaped display>"` —
+    ///   the hex digits are the authoritative raw bytes; the quoted text
+    ///   afterwards is only a lossy human-readable rendering, so this parses
+    ///   the hex form when present rather than the ambiguous quoted display.
+    ///
+    /// The plain quoted form does **not** escape a `"` embedded in the
+    /// value — verified empirically against the real `security` binary: an
+    /// id of `ends with quote"` dumps as `="vaultkeeper:ends with quote""`,
+    /// i.e. the line simply ends with two consecutive `"` (the embedded one,
+    /// then the true closing delimiter), with no distinguishing escape
+    /// between them. Locating the *first* embedded `"` (as if it always
+    /// closed the value) truncates the id at that point and silently drops
+    /// everything after it — this parses the *last* `"` on the line as the
+    /// closing delimiter instead, which is unambiguous because `security`
+    /// never emits anything after the closing quote on a `<blob>` line
+    /// (verified empirically: no trailing whitespace or content follows).
     fn parse_service_attribute_line(line: &str) -> Option<String> {
         let rest = line.trim_start().strip_prefix("0x00000007 <blob>=")?;
         if let Some(hex) = rest.strip_prefix("0x") {
@@ -149,7 +228,7 @@ impl KeychainBackend {
             String::from_utf8(bytes).ok()
         } else {
             let quoted = rest.strip_prefix('"')?;
-            let end = quoted.find('"')?;
+            let end = quoted.rfind('"')?;
             Some(quoted[..end].to_string())
         }
     }
@@ -199,6 +278,7 @@ impl SecretBackend for KeychainBackend {
     }
 
     async fn store(&self, id: &str, secret: &str) -> Result<(), VaultError> {
+        Self::reject_multiline_id(id)?;
         let service = Self::service_name(id);
         let account_token = Self::quote_for_interactive_stream(ACCOUNT);
         let service_token = Self::quote_for_interactive_stream(&service);
@@ -254,6 +334,7 @@ impl SecretBackend for KeychainBackend {
     }
 
     async fn retrieve(&self, id: &str) -> Result<String, VaultError> {
+        Self::reject_multiline_id(id)?;
         let service = Self::service_name(id);
         let output = self
             .host
@@ -271,6 +352,14 @@ impl SecretBackend for KeychainBackend {
             )
             .await?;
         if output.exit_code != 0 {
+            if Self::is_locked_keychain_error(&output.stderr) {
+                return Err(VaultError::BackendLocked {
+                    message: format!(
+                        "macOS Keychain is locked and cannot be read non-interactively for {id}"
+                    ),
+                    interactive: true,
+                });
+            }
             return Err(VaultError::SecretNotFound {
                 message: format!("Secret not found in macOS Keychain: {id}"),
             });
@@ -289,6 +378,7 @@ impl SecretBackend for KeychainBackend {
     }
 
     async fn delete(&self, id: &str) -> Result<(), VaultError> {
+        Self::reject_multiline_id(id)?;
         let service = Self::service_name(id);
         let output = self
             .host
@@ -305,6 +395,14 @@ impl SecretBackend for KeychainBackend {
             )
             .await?;
         if output.exit_code != 0 {
+            if Self::is_locked_keychain_error(&output.stderr) {
+                return Err(VaultError::BackendLocked {
+                    message: format!(
+                        "macOS Keychain is locked and cannot be modified non-interactively for {id}"
+                    ),
+                    interactive: true,
+                });
+            }
             return Err(VaultError::SecretNotFound {
                 message: format!("Secret not found in macOS Keychain: {id}"),
             });
@@ -313,6 +411,7 @@ impl SecretBackend for KeychainBackend {
     }
 
     async fn exists(&self, id: &str) -> Result<bool, VaultError> {
+        Self::reject_multiline_id(id)?;
         let service = Self::service_name(id);
         let output = self
             .host
@@ -328,6 +427,14 @@ impl SecretBackend for KeychainBackend {
                 ExecOptions::default(),
             )
             .await?;
+        if output.exit_code != 0 && Self::is_locked_keychain_error(&output.stderr) {
+            return Err(VaultError::BackendLocked {
+                message: format!(
+                    "macOS Keychain is locked and cannot be queried non-interactively for {id}"
+                ),
+                interactive: true,
+            });
+        }
         Ok(output.exit_code == 0)
     }
 }
@@ -752,6 +859,96 @@ mod tests {
         assert_eq!(backend.retrieve(id).await.unwrap(), "value");
     }
 
+    // ── Security regression: an id containing a newline must never reach
+    // `security -i`'s stdin command stream — it has no escape for `\n`/`\r`,
+    // so an unescaped newline in `id` would terminate the current command
+    // and let the remainder of `id` be interpreted as one or more injected
+    // `security -i` subcommands ────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn store_rejects_id_with_embedded_newline_before_any_exec() {
+        let host = TestHost::new();
+        let backend = KeychainBackend::new(host.clone());
+        let err = backend
+            .store("evil\nid", "value")
+            .await
+            .expect_err("an id with an embedded newline must be rejected");
+        assert!(matches!(err, VaultError::Other(_)), "got {err:?}");
+        assert!(
+            host.calls.lock().unwrap().is_empty(),
+            "no subprocess should be spawned when the id is rejected"
+        );
+    }
+
+    #[tokio::test]
+    async fn retrieve_rejects_id_with_embedded_carriage_return_before_any_exec() {
+        let host = TestHost::new();
+        let backend = KeychainBackend::new(host.clone());
+        let err = backend
+            .retrieve("evil\rid")
+            .await
+            .expect_err("an id with an embedded carriage return must be rejected");
+        assert!(matches!(err, VaultError::Other(_)), "got {err:?}");
+        assert!(host.calls.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn delete_rejects_id_with_embedded_newline_before_any_exec() {
+        let host = TestHost::new();
+        let backend = KeychainBackend::new(host.clone());
+        let err = backend
+            .delete("evil\nid")
+            .await
+            .expect_err("an id with an embedded newline must be rejected");
+        assert!(matches!(err, VaultError::Other(_)), "got {err:?}");
+        assert!(host.calls.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn exists_rejects_id_with_embedded_newline_before_any_exec() {
+        let host = TestHost::new();
+        let backend = KeychainBackend::new(host.clone());
+        let err = backend
+            .exists("evil\nid")
+            .await
+            .expect_err("an id with an embedded newline must be rejected");
+        assert!(matches!(err, VaultError::Other(_)), "got {err:?}");
+        assert!(host.calls.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn store_rejects_id_with_embedded_nul_before_any_exec() {
+        let host = TestHost::new();
+        let backend = KeychainBackend::new(host.clone());
+        let err = backend
+            .store("evil\0id", "value")
+            .await
+            .expect_err("an id with an embedded NUL byte must be rejected");
+        assert!(matches!(err, VaultError::Other(_)), "got {err:?}");
+        assert!(host.calls.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn store_rejects_an_injection_shaped_id_with_zero_exec_calls() {
+        // Shaped like a real attack: the newline-delimited "second command"
+        // would, if it ever reached `security -i`, delete an unrelated
+        // entry and then add an attacker-controlled one. Proves not just
+        // that the call is rejected, but that *no* exec of any kind runs —
+        // so the injected subcommand text never has a chance to execute.
+        let host = TestHost::new();
+        let backend = KeychainBackend::new(host.clone());
+        let injection_id = "a\"\ndelete-generic-password -s other -a x\nadd-generic-password -a x -s other -w evil";
+        let err = backend
+            .store(injection_id, "value")
+            .await
+            .expect_err("an injection-shaped id must be rejected");
+        assert!(matches!(err, VaultError::Other(_)), "got {err:?}");
+        assert!(
+            host.calls.lock().unwrap().is_empty(),
+            "zero exec calls must occur for a rejected injection-shaped id"
+        );
+    }
+
     // ── AC3: retrieve/delete/exists/list are plain exec calls ──────────────
 
     #[tokio::test]
@@ -798,6 +995,71 @@ mod tests {
         let mut expected = vec!["alpha", "awkward name: with spaces", "日本語-emoji-🔐"];
         expected.sort_unstable();
         assert_eq!(ids, expected);
+    }
+
+    #[tokio::test]
+    async fn list_round_trips_an_id_with_an_embedded_double_quote() {
+        // Regression for the store/list asymmetry: store() supports ids with
+        // embedded double quotes (escaped for `security -i`'s tokenizer),
+        // but real `security dump-keychain`'s plain-quoted display form
+        // embeds a `"` in the id raw and unescaped (verified empirically —
+        // see `parse_service_attribute_line` doc comment), so list()'s
+        // parser must not stop at the *first* embedded quote.
+        let host = TestHost::new();
+        let backend = KeychainBackend::new(host.clone());
+        let id = r#"has "quotes" inside"#;
+        backend.store(id, "value").await.unwrap();
+
+        let ids = backend.list().await.unwrap();
+        assert_eq!(
+            ids,
+            vec![id.to_string()],
+            "list() must recover the full id, not truncate at the first embedded quote"
+        );
+    }
+
+    #[tokio::test]
+    async fn list_round_trips_an_id_ending_in_a_double_quote() {
+        // Edge case of the same asymmetry: when the id itself ends in `"`,
+        // the dumped line ends with two consecutive `"` characters (the
+        // embedded one, then the true closing delimiter) — verified
+        // empirically against the real `security` binary. Parsing from the
+        // *last* quote correctly recovers the trailing embedded quote.
+        let host = TestHost::new();
+        let backend = KeychainBackend::new(host.clone());
+        let id = r#"ends with quote""#;
+        backend.store(id, "value").await.unwrap();
+
+        let ids = backend.list().await.unwrap();
+        assert_eq!(ids, vec![id.to_string()]);
+    }
+
+    #[test]
+    fn parse_service_attribute_line_recovers_id_with_embedded_quote_not_truncated() {
+        // Captured line shape verified empirically against the real
+        // `security` binary: storing an id of `has "quotes" inside` dumps
+        // as exactly this line, with the embedded quotes unescaped.
+        let line = r#"    0x00000007 <blob>="vaultkeeper:has "quotes" inside""#;
+        let parsed = KeychainBackend::parse_service_attribute_line(line);
+        assert_eq!(
+            parsed,
+            Some("vaultkeeper:has \"quotes\" inside".to_string()),
+            "must not truncate at the first embedded quote"
+        );
+    }
+
+    #[test]
+    fn parse_service_attribute_line_recovers_id_ending_in_a_quote() {
+        // Captured line shape verified empirically: storing an id of
+        // `ends with quote"` dumps with the line ending in two consecutive
+        // `"` characters.
+        let line = r#"    0x00000007 <blob>="vaultkeeper:ends with quote"""#;
+        let parsed = KeychainBackend::parse_service_attribute_line(line);
+        assert_eq!(
+            parsed,
+            Some("vaultkeeper:ends with quote\"".to_string()),
+            "must recover the trailing embedded quote, not treat it as the closing delimiter"
+        );
     }
 
     #[test]
@@ -910,6 +1172,142 @@ mod tests {
         assert!(!backend.exists("nonexistent").await.unwrap());
         backend.store("present-id", "value").await.unwrap();
         assert!(backend.exists("present-id").await.unwrap());
+    }
+
+    // ── Locked keychain: retrieve/delete/exists must report BackendLocked,
+    // not misreport a locked keychain as a missing secret. Signature is the
+    // documented Apple `SecCopyErrorMessageString` text for
+    // `errSecInteractionNotAllowed` (-25308); see
+    // `KeychainBackend::LOCKED_KEYCHAIN_STDERR_SIGNATURE`'s doc comment for
+    // why this couldn't be captured against a genuinely locked real keychain
+    // in this environment (it blocks on an interactive unlock prompt
+    // instead of failing fast) ───────────────────────────────────────────
+
+    /// Wraps [`TestHost`] and, for `find-generic-password` /
+    /// `delete-generic-password`, always answers with the documented
+    /// `errSecInteractionNotAllowed` stderr signature instead of delegating,
+    /// simulating a locked keychain that can't be read non-interactively.
+    struct LockedKeychainHost {
+        inner: Arc<TestHost>,
+    }
+
+    #[async_trait::async_trait]
+    impl HostPlatform for LockedKeychainHost {
+        async fn exec(
+            &self,
+            cmd: &str,
+            args: &[&str],
+            options: ExecOptions<'_>,
+        ) -> Result<ExecOutput, VaultError> {
+            match args.first().copied() {
+                Some("find-generic-password") | Some("delete-generic-password") => Ok(ExecOutput {
+                    stdout: Vec::new(),
+                    stderr: b"security: SecKeychainFindGenericPassword: User interaction is not allowed."
+                        .to_vec(),
+                    exit_code: 36,
+                }),
+                _ => self.inner.exec(cmd, args, options).await,
+            }
+        }
+        async fn read_file(&self, p: &Path) -> Result<Vec<u8>, VaultError> {
+            self.inner.read_file(p).await
+        }
+        async fn write_file(&self, p: &Path, c: &[u8], m: u32) -> Result<(), VaultError> {
+            self.inner.write_file(p, c, m).await
+        }
+        async fn file_exists(&self, p: &Path) -> Result<bool, VaultError> {
+            self.inner.file_exists(p).await
+        }
+        async fn delete_file(&self, p: &Path) -> Result<(), VaultError> {
+            self.inner.delete_file(p).await
+        }
+        async fn list_dir(&self, p: &Path) -> Result<Vec<String>, VaultError> {
+            self.inner.list_dir(p).await
+        }
+        fn platform(&self) -> Platform {
+            self.inner.platform()
+        }
+        fn config_dir(&self) -> &Path {
+            self.inner.config_dir()
+        }
+    }
+
+    #[tokio::test]
+    async fn retrieve_on_locked_keychain_returns_backend_locked_not_secret_not_found() {
+        let host = Arc::new(LockedKeychainHost {
+            inner: TestHost::new(),
+        });
+        let err = KeychainBackend::new(host)
+            .retrieve("some-id")
+            .await
+            .expect_err("a locked keychain must not report success");
+        assert!(
+            matches!(
+                err,
+                VaultError::BackendLocked {
+                    interactive: true,
+                    ..
+                }
+            ),
+            "expected BackendLocked, got {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn delete_on_locked_keychain_returns_backend_locked_not_secret_not_found() {
+        let host = Arc::new(LockedKeychainHost {
+            inner: TestHost::new(),
+        });
+        let err = KeychainBackend::new(host)
+            .delete("some-id")
+            .await
+            .expect_err("a locked keychain must not report success");
+        assert!(
+            matches!(
+                err,
+                VaultError::BackendLocked {
+                    interactive: true,
+                    ..
+                }
+            ),
+            "expected BackendLocked, got {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn exists_on_locked_keychain_returns_backend_locked_not_false() {
+        let host = Arc::new(LockedKeychainHost {
+            inner: TestHost::new(),
+        });
+        let err = KeychainBackend::new(host)
+            .exists("some-id")
+            .await
+            .expect_err("a locked keychain must not silently report 'does not exist'");
+        assert!(
+            matches!(
+                err,
+                VaultError::BackendLocked {
+                    interactive: true,
+                    ..
+                }
+            ),
+            "expected BackendLocked, got {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_unrecognized_non_zero_exit_still_reports_secret_not_found() {
+        // Parity guard: only the specific locked-keychain stderr signature
+        // is special-cased. Every other non-zero exit (e.g. a genuinely
+        // missing entry) must still map to SecretNotFound, matching the TS
+        // backend and this backend's pre-existing behavior.
+        let host = TestHost::new();
+        let backend = KeychainBackend::new(host);
+        let err = backend.retrieve("truly-missing").await.unwrap_err();
+        assert!(
+            matches!(err, VaultError::SecretNotFound { .. }),
+            "expected SecretNotFound for an ordinary missing entry, got {err:?}"
+        );
     }
 
     #[tokio::test]
