@@ -259,13 +259,15 @@ async function expectRejectsWithName(
   op: string,
   id: string,
 ): Promise<void> {
+  let didThrow = false
   let threw: unknown
   try {
     await promise
   } catch (err) {
+    didThrow = true
     threw = err
   }
-  if (threw === undefined) {
+  if (!didThrow) {
     throw new Error(`${op}(${id}) expected to reject with ${expectedName}, but it resolved`)
   }
   const actualName = threw instanceof Error ? threw.name : typeof threw
