@@ -14,3 +14,9 @@ export type {
   TestVaultSetupOptions,
   TestVaultSignCeremonyResult,
 } from './test-vault.js'
+export { PresenceSimulatorBackend } from './presence-simulator-backend.js'
+export type {
+  PresenceSimulatorOutcome,
+  PresenceSimulatorOperationOutcomes,
+  PresenceSimulatorBackendOptions,
+} from './presence-simulator-backend.js'

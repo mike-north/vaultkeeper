@@ -41,6 +41,27 @@ A fully in-memory `SecretBackend` for testing.
 </td></tr>
 <tr><td>
 
+[PresenceSimulatorBackend](./test-helpers.presencesimulatorbackend.md)
+
+
+</td><td>
+
+A presence forger for tests: a backend that lets a test script vaultkeeper's presence signal on demand, including its absence.
+
+This class exists to make one property provable in CI: that an automation signer attempting a presence-gated operation is refused. A backend that can fabricate "presence was granted" on request is, by construction, exactly the vulnerability presence-backed gates exist to prevent — a presence simulator is a presence forger. If it were reachable from any production code path, it would hand every consumer a presence bypass in exchange for test convenience. That is the worst possible outcome, so this class is unreachable from production through three independent, stacked guards, any one of which would have to fail alongside the other two for a real deployment to be affected:
+
+1. Structural. This class lives only in the devDependency-only `@vaultkeeper/test-helpers` package and is never registered with vaultkeeper's backend registry. No `config.json` on any machine can name it, so no production vault instance can ever load it. The only wiring path is direct construction in test code.
+
+2. Explicit acknowledgment. There is no default, public constructor. The only construction path is the named opt-in `PresenceSimulatorBackend.forTesting(...)`<!-- -->, so it can never be instantiated incidentally.
+
+3. Loud tripwire. Construction throws — never warns, never degrades — when `NODE_ENV` is `'production'`<!-- -->.
+
+Once constructed, its per-operation outcomes are scriptable across `'grant'`<!-- -->, `'refuse'`<!-- -->, and `'not-capable'` (see [PresenceSimulatorOutcome](./test-helpers.presencesimulatoroutcome.md)<!-- -->), expressed in the vault's own `BackendCapabilities` vocabulary. The negative case this class exists to prove — an automation signer refused with a typed `NotCapableError` before the backend is touched — falls out of vaultkeeper's own existing fail-closed presence enforcement; this class only makes both sides of that boundary drivable in CI, rather than simulating the refusal itself.
+
+
+</td></tr>
+<tr><td>
+
 [TestVault](./test-helpers.testvault.md)
 
 
@@ -73,6 +94,28 @@ Description
 </td><td>
 
 Options accepted by [FaultPlan.inject()](./test-helpers.faultplan.inject.md)<!-- -->.
+
+
+</td></tr>
+<tr><td>
+
+[PresenceSimulatorBackendOptions](./test-helpers.presencesimulatorbackendoptions.md)
+
+
+</td><td>
+
+Options accepted by [PresenceSimulatorBackend.forTesting()](./test-helpers.presencesimulatorbackend.fortesting.md)<!-- -->.
+
+
+</td></tr>
+<tr><td>
+
+[PresenceSimulatorOperationOutcomes](./test-helpers.presencesimulatoroperationoutcomes.md)
+
+
+</td><td>
+
+Per-operation outcome script for a [PresenceSimulatorBackend](./test-helpers.presencesimulatorbackend.md)<!-- -->. Any operation left unspecified defaults to `'not-capable'` — absence, not presence, is the safe default for a class whose entire point is making absence provable.
 
 
 </td></tr>
@@ -143,6 +186,17 @@ The deterministic fault modes a [FaultPlan](./test-helpers.faultplan.md) can scr
 </td><td>
 
 The operations [InMemoryBackend.injectFault()](./test-helpers.inmemorybackend.injectfault.md) can target. Matches the methods of `SecretBackend` and `SigningBackend` that perform real work (a fault is checked at the top of each, before any state is touched).
+
+
+</td></tr>
+<tr><td>
+
+[PresenceSimulatorOutcome](./test-helpers.presencesimulatoroutcome.md)
+
+
+</td><td>
+
+The scriptable outcome for a single `PresenceOperation` against a [PresenceSimulatorBackend](./test-helpers.presencesimulatorbackend.md)<!-- -->.
 
 
 </td></tr>
