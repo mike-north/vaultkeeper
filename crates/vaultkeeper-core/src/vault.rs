@@ -351,6 +351,11 @@ impl VaultKeeper {
     /// (fail closed — never defaulted to generation 0), the revocation store
     /// cannot be trusted (missing, tampered, or rolled back), the `jti` is on
     /// the revoked list, or `kgen` is below the current minimum for `sub`.
+    /// Environmental failures reading the store (e.g. a permissions error on
+    /// an existing `keys.enc`) propagate as their own typed variants (such as
+    /// [`VaultError::Filesystem`]) rather than being disguised as revocation —
+    /// every error path refuses validation, so callers must treat *any* `Err`
+    /// as fail-closed, not only `TokenRevoked`.
     /// Returns [`VaultError::Other`] if `claims.kty` is not `SigningKey`.
     pub async fn validate_lease_revocation(
         &mut self,
