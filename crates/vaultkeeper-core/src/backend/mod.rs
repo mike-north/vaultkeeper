@@ -10,6 +10,7 @@ mod registry;
 pub mod secret_tool;
 mod signing_store;
 mod types;
+pub mod yubikey;
 
 pub use dpapi::DpapiBackend;
 pub use file::FileBackend;
@@ -21,3 +22,4 @@ pub use types::{
     HttpResponse, ListableBackend, Platform, PresenceCapableBackend, PresenceOperation,
     SecretBackend, SigningBackend, get_backend_capabilities, is_presence_capable_backend,
 };
+pub use yubikey::YubikeyBackend;
