@@ -1,6 +1,7 @@
 //! Linux conformance test for [`vaultkeeper_core::backend::SecretToolBackend`]
 //! against the *real* `secret-tool(1)` binary and a live D-Bus Secret Service
-//! session (issue #291, AC5).
+//! session (issue #291, AC5; hostile-id/empty-value hardening added by
+//! issue #297).
 //!
 //! # Why this lives here, not in `vaultkeeper-conformance`
 //!
@@ -243,4 +244,90 @@ async fn secret_tool_backend_conformance_against_real_secret_tool() {
         matches!(delete_err, VaultError::SecretNotFound { .. }),
         "expected SecretNotFound deleting a missing entry, got {delete_err:?}"
     );
+}
+
+/// Real-binary coverage for issue #297 AC1 (hostile-id argv hardening) and
+/// AC2 (empty-value ambiguity), added on top of PR #294's happy-path
+/// conformance test above.
+///
+/// # Why these live here, not in `vaultkeeper-conformance`
+///
+/// Per this file's module doc, the native CLI has no `--backend` flag yet
+/// (issue #273), so there is no CLI invocation the `vaultkeeper-conformance`
+/// corpus could shell out to that would exercise `SecretToolBackend`
+/// specifically. These cases follow the same real-`secret-tool`,
+/// self-skipping convention PR #294 established for AC5 above, so issue
+/// #296's `dbus-run-session` CI job exercises both new behaviors — against
+/// the real binary, not just the in-memory `TestHost` mock in
+/// `secret_tool.rs` — as soon as it lands.
+#[tokio::test]
+async fn secret_tool_backend_hardening_against_real_secret_tool() {
+    if !secret_tool_environment_available() {
+        eprintln!(
+            "skipping secret_tool_backend_hardening_against_real_secret_tool: \
+             requires target_os=linux, `secret-tool` on PATH, and \
+             DBUS_SESSION_BUS_ADDRESS set (run under `dbus-run-session`). \
+             This is expected on non-Linux development machines and CI \
+             runners without a session bus (issue #297)."
+        );
+        return;
+    }
+
+    let host = std::sync::Arc::new(RealLinuxHost {
+        config_dir: std::env::temp_dir(),
+    });
+    let backend = SecretToolBackend::new(host);
+    let suffix = std::process::id();
+
+    // AC1: an id that looks exactly like a flag secret-tool itself defines
+    // (`--label`) must not be misinterpreted by secret-tool's own argv
+    // parser — the `--` separator forces it positional.
+    let hostile_id = format!("vk-297-hostile---label-{suffix}");
+    backend
+        .store(&hostile_id, "hostile-id-secret")
+        .await
+        .expect("store with a hostile id must succeed against the real secret-tool binary");
+    assert!(backend.exists(&hostile_id).await.unwrap());
+    let retrieved = backend
+        .retrieve(&hostile_id)
+        .await
+        .expect("retrieve of a hostile id must succeed");
+    assert_eq!(retrieved, "hostile-id-secret");
+    backend.delete(&hostile_id).await.unwrap();
+
+    // AC2: a legitimately empty stored value must be distinguishable from
+    // "not found" — both by `exists` and by `retrieve` not erroring.
+    let empty_id = format!("vk-297-empty-{suffix}");
+    backend
+        .store(&empty_id, "")
+        .await
+        .expect("store of an empty secret must succeed against the real secret-tool binary");
+    assert!(
+        backend.exists(&empty_id).await.unwrap(),
+        "exists must be true for a legitimately empty stored value"
+    );
+    let retrieved_empty = backend
+        .retrieve(&empty_id)
+        .await
+        .expect("retrieve of a legitimately empty stored value must not report SecretNotFound");
+    assert_eq!(retrieved_empty, "");
+    backend.delete(&empty_id).await.unwrap();
+
+    // AC2 (whitespace variant): a whitespace-only value must round-trip
+    // verbatim, not be trimmed away to "".
+    let whitespace_id = format!("vk-297-whitespace-{suffix}");
+    let whitespace_secret = "   \t  ";
+    backend
+        .store(&whitespace_id, whitespace_secret)
+        .await
+        .expect("store of a whitespace-only secret must succeed");
+    let retrieved_whitespace = backend
+        .retrieve(&whitespace_id)
+        .await
+        .expect("retrieve of a whitespace-only secret must not report SecretNotFound");
+    assert_eq!(
+        retrieved_whitespace, whitespace_secret,
+        "a whitespace-only secret must round-trip byte-for-byte against the real binary"
+    );
+    backend.delete(&whitespace_id).await.unwrap();
 }
