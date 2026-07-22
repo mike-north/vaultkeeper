@@ -1,0 +1,80 @@
+#!/usr/bin/env bash
+#
+# gh-review — narrow, read-only review helpers for this repo, as a noun-verb
+# command tree (`gh-review <noun> <verb> ...`) so related review helpers can
+# join this namespace later without minting new top-level tools.
+#
+# Subcommands:
+#   comment view <comment-id>   Print the FULL body of one PR review comment:
+#                               path:line, author, and complete text — the
+#                               piece `gh-reviews threads` truncates. There is
+#                               no `gh` porcelain verb for this.
+#
+# Scope is baked in: it only ever talks to the ALLOWED repo below, only issues
+# a read-only GET to the fixed pulls/comments/<id> endpoint, and accepts
+# nothing but a positive-integer comment id. There is no way to point it at
+# another repo, another endpoint, or an arbitrary API path.
+#
+# Usage:  gh-review comment view <comment-id>
+#         gh-review --help
+#
+# Exit codes: 0 ok · 2 usage error · 3 wrong repo · 4 gh/api failure
+
+set -euo pipefail
+
+ALLOWED_OWNER="mike-north"
+ALLOWED_REPO="vaultkeeper"
+
+# A broken GITHUB_TOKEN in the environment shadows keyring auth; the gh binary
+# is invoked directly (no override indirection) so the command cannot be
+# redirected via the environment.
+unset GITHUB_TOKEN GH_TOKEN || true
+
+die() { printf '%s\n' "gh-review: $*" >&2; exit "${2:-2}"; }
+
+usage() {
+  cat <<EOF
+gh-review — read-only review helpers, scoped to ${ALLOWED_OWNER}/${ALLOWED_REPO}.
+
+Usage:
+  gh-review comment view <comment-id>   Print path:line, author, and full body
+                                        of one PR review comment
+  gh-review --help                      Show this help
+
+<comment-id> must be a positive integer (the databaseId shown as
+thread_comment_id by 'gh-reviews threads').
+EOF
+}
+
+case "${1:-}" in
+  ""|-h|--help) usage; [ "${1:-}" = "" ] && exit 2 || exit 0 ;;
+esac
+
+noun="$1"
+verb="${2:-}"
+
+case "$noun" in
+  comment) ;;
+  *) die "unknown subcommand: $noun (expected: comment)" ;;
+esac
+
+case "$verb" in
+  view) ;;
+  "") die "missing verb for 'comment' (expected: view)" ;;
+  *) die "unknown verb for 'comment': $verb (expected: view)" ;;
+esac
+
+[ "$#" -eq 3 ] || die "usage: gh-review comment view <comment-id>"
+id="$3"
+[[ "$id" =~ ^[1-9][0-9]*$ ]] || die "comment id must be a positive integer, got: $id"
+
+# Refuse to run outside the allowed repo — scope is enforced, not assumed.
+origin="$(gh repo view --json nameWithOwner --jq .nameWithOwner 2>/dev/null)" \
+  || die "could not determine the current repo via gh" 4
+[ "$origin" = "${ALLOWED_OWNER}/${ALLOWED_REPO}" ] \
+  || die "refusing to run: current repo is '$origin', tool is scoped to ${ALLOWED_OWNER}/${ALLOWED_REPO}" 3
+
+# Single read-only GET to the fixed endpoint; owner/repo/id are all constrained above.
+gh api "repos/${ALLOWED_OWNER}/${ALLOWED_REPO}/pulls/comments/${id}" \
+  --jq '"\(.path):\(.line // .original_line)  [\(.user.login)]\n\n\(.body)"' \
+  || die "gh api read failed for comment ${id}" 4
