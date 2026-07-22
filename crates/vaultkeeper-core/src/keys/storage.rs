@@ -18,6 +18,7 @@
 //! All I/O goes through [`HostPlatform`] (never `std::fs` directly) so this
 //! module works identically under wasm.
 
+use std::collections::HashMap;
 use std::path::Path;
 
 use aes_gcm::aead::Aead;
@@ -28,7 +29,7 @@ use zeroize::Zeroize;
 
 use crate::backend::HostPlatform;
 use crate::errors::VaultError;
-use crate::keys::types::{KeyMaterial, KeyStateSnapshot};
+use crate::keys::types::{JtiEntry, KeyMaterial, KeyStateSnapshot, RevocationState};
 use crate::util::time;
 
 const KEY_STATE_FILE: &str = "keys.enc";
@@ -59,7 +60,7 @@ mod base64_key {
 
 /// On-disk JSON shape for a single key (raw bytes base64-encoded), matching
 /// the TS `RawKeyMaterial`.
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 struct RawKeyMaterial {
     id: String,
@@ -68,7 +69,42 @@ struct RawKeyMaterial {
     created_at: String,
 }
 
+/// On-disk JSON shape for a single revoked-jti entry, matching
+/// [`JtiEntry`](crate::keys::types::JtiEntry).
+#[derive(Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct RawJtiEntry {
+    jti: String,
+    exp: u64,
+}
+
+impl From<RawJtiEntry> for JtiEntry {
+    fn from(raw: RawJtiEntry) -> Self {
+        JtiEntry {
+            jti: raw.jti,
+            exp: raw.exp,
+        }
+    }
+}
+
+impl From<&JtiEntry> for RawJtiEntry {
+    fn from(entry: &JtiEntry) -> Self {
+        RawJtiEntry {
+            jti: entry.jti.clone(),
+            exp: entry.exp,
+        }
+    }
+}
+
 /// On-disk JSON shape for the whole key state, matching the TS `RawKeyState`.
+///
+/// `rev_state_gen`/`jti`/`key_generations` are the two-axis lease revocation
+/// store (issue #298) — co-located in this same encrypted envelope rather
+/// than a new file; see the module doc and
+/// [`RevocationState`](crate::keys::types::RevocationState) for the design.
+/// `#[serde(default)]` on all three keeps this format readable by a key
+/// state written before #298 (no revocation activity yet is exactly the
+/// default: generation 0, no revocations).
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct RawKeyState {
@@ -78,6 +114,12 @@ struct RawKeyState {
     previous: Option<RawKeyMaterial>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     grace_period_expires_at: Option<u64>,
+    #[serde(default)]
+    rev_state_gen: u64,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    jti: Vec<RawJtiEntry>,
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    key_generations: HashMap<String, u64>,
 }
 
 fn serialize_key(key: &KeyMaterial) -> RawKeyMaterial {
@@ -207,27 +249,46 @@ async fn generate_and_write_wrap_key(
     Ok(key)
 }
 
-/// Load persisted key state from the host's config directory, or `None` when
-/// no valid state exists yet (first run, or an unreadable/corrupt `keys.enc`).
-///
-/// Mirrors the TS `loadKeyState`: any failure to read or decode `keys.enc`
-/// degrades to "no state" rather than propagating — including permission
-/// failures on that file — so a corrupt or inaccessible store never wedges
-/// startup. A failure to read (or create) the wrapping key for a reason other
-/// than "does not exist yet" (e.g. permission denied) is the one exception:
-/// it propagates as the host's typed `VaultError`, matching the TS
-/// `getOrCreateWrapKey` contract.
-pub async fn load_key_state(
-    host: &dyn HostPlatform,
-) -> Result<Option<KeyStateSnapshot>, VaultError> {
+/// Outcome of attempting to decode the persisted `keys.enc` envelope.
+/// Distinguishes "nothing was ever persisted" ([`RawLoad::Absent`]) from
+/// "something is persisted but did not authenticate/parse"
+/// ([`RawLoad::Corrupt`]) — [`load_key_state`] collapses both into `None`
+/// (safe: a caller just regenerates key material), but the revocation-aware
+/// loaders below must not make that same collapse, since silently treating
+/// "corrupt" as "no revocations yet" would be a revocation bypass.
+enum RawLoad {
+    Absent,
+    Corrupt,
+    Present(Box<RawKeyState>),
+}
+
+/// Read and decode `keys.enc` into its raw on-disk shape, without validating
+/// individual key-material fields (that is [`deserialize_key`]'s job, used
+/// only by [`load_key_state`]). Shared by every loader in this module so the
+/// envelope-decode logic (read, base64/UTF-8, AES-GCM auth, JSON parse,
+/// version check) lives in exactly one place.
+async fn try_load_raw(host: &dyn HostPlatform) -> Result<RawLoad, VaultError> {
     let state_path = host.config_dir().join(KEY_STATE_FILE);
 
+    // Same classification `get_or_create_wrap_key` applies to the wrap file:
+    // a read failure only means "absent" when the file genuinely doesn't
+    // exist. A read failure on a file that does exist (permission denied, a
+    // transient I/O error) is not "nothing was ever persisted" — collapsing
+    // it into `Absent` would make every downstream caller treat an
+    // inaccessible-but-present store as if it were a fresh install (silently
+    // regenerating keys in `load_key_state`'s caller, or worse, treating a
+    // revocation store we simply couldn't read as "no revocations" if this
+    // were ever collapsed further). Propagate it as the host's typed error
+    // instead.
     let envelope_bytes = match host.read_file(&state_path).await {
         Ok(bytes) => bytes,
-        Err(_) => return Ok(None),
+        Err(read_err) => match host.file_exists(&state_path).await {
+            Ok(false) => return Ok(RawLoad::Absent),
+            Ok(true) | Err(_) => return Err(read_err),
+        },
     };
     let Ok(envelope) = String::from_utf8(envelope_bytes) else {
-        return Ok(None);
+        return Ok(RawLoad::Corrupt);
     };
 
     let wrap_path = host.config_dir().join(KEY_WRAP_FILE);
@@ -236,15 +297,54 @@ pub async fn load_key_state(
     let json = decrypt_gcm(&wrap_key, &envelope);
     wrap_key.zeroize();
     let Some(json) = json else {
-        return Ok(None);
+        return Ok(RawLoad::Corrupt);
     };
 
     let Ok(parsed) = serde_json::from_str::<RawKeyState>(&json) else {
-        return Ok(None);
+        return Ok(RawLoad::Corrupt);
     };
     if parsed.version != 1 {
-        return Ok(None);
+        return Ok(RawLoad::Corrupt);
     }
+
+    Ok(RawLoad::Present(Box::new(parsed)))
+}
+
+fn revocation_from_raw(parsed: &RawKeyState) -> RevocationState {
+    RevocationState {
+        rev_state_gen: parsed.rev_state_gen,
+        jti: parsed.jti.iter().cloned().map(Into::into).collect(),
+        key_generations: parsed.key_generations.clone(),
+    }
+}
+
+/// Load persisted key state from the host's config directory, or `None` when
+/// no valid state exists yet (first run, or an unreadable/corrupt `keys.enc`).
+///
+/// Mirrors the TS `loadKeyState` for a genuinely missing or corrupt/tampered
+/// `keys.enc`: both degrade to "no state" rather than propagating, so a
+/// fresh install or a damaged store never wedges startup. This intentionally
+/// diverges from the TS implementation (which collapses *every* read
+/// failure, including permission errors, into "absent") on one point: a read
+/// failure on a `keys.enc` that does exist (e.g. permission denied) is not
+/// "nothing was ever persisted", so it propagates as the host's typed
+/// `VaultError` instead of being swallowed — the same classification
+/// `get_or_create_wrap_key` already applies to the wrap file. A failure to
+/// read (or create) the wrapping key for a reason other than "does not exist
+/// yet" propagates the same way, matching the TS `getOrCreateWrapKey`
+/// contract.
+///
+/// This is a key-*material* loader only — it does not return the co-located
+/// revocation state (see [`load_revocation_for_validation`] and
+/// [`mutate_revocation_state`] for that, which have a deliberately different,
+/// fail-closed contract).
+pub async fn load_key_state(
+    host: &dyn HostPlatform,
+) -> Result<Option<KeyStateSnapshot>, VaultError> {
+    let parsed = match try_load_raw(host).await? {
+        RawLoad::Present(parsed) => parsed,
+        RawLoad::Absent | RawLoad::Corrupt => return Ok(None),
+    };
 
     let Some(current) = deserialize_key(parsed.current) else {
         return Ok(None);
@@ -269,6 +369,140 @@ pub async fn load_key_state(
     Ok(Some(snapshot))
 }
 
+/// Load the persisted revocation state for **lease validation** (issue #298).
+/// Deliberately a different contract from [`load_key_state`]'s "degrade
+/// silently to no state": silence there is safe (the caller just
+/// mints/regenerates a key), but silence here would be a revocation bypass —
+/// "absence is not empty". Every failure mode a lease validator must treat
+/// identically — a missing envelope, a broken GCM tag / corrupt payload
+/// (modification), or a `revStateGen` lower than `min_rev_state_gen`
+/// (rollback/replay) — is surfaced as a [`VaultError::TokenRevoked`] with a
+/// message naming which one, rather than collapsed into `None` the way
+/// [`load_key_state`] collapses it. Reusing `TokenRevoked` (instead of a new
+/// error-taxonomy variant) is deliberate: the safe answer to "can this
+/// revocation store be trusted?" being "no" *is* "treat the lease as
+/// revoked" — see this crate's error-taxonomy docs for why a new variant
+/// would also require WASM/TS parity plumbing this PR does not otherwise
+/// need.
+///
+/// `min_rev_state_gen` is the highest `revStateGen` the caller has itself
+/// observed so far in this process's lifetime (`0` on a fresh process/first
+/// call) — the caller is the anti-rollback anchor, not this function; see
+/// [`crate::vault::VaultKeeper::validate_lease_revocation`].
+///
+/// **Honest integrity limit** (see also the `keys.enc` module doc): an
+/// attacker who can read the vault key can forge a valid GCM tag and a
+/// self-consistent `revStateGen`, so this does not defend against full
+/// same-UID compromise. It does defend against modification by anything that
+/// cannot read the vault key, accidental corruption, partial writes, and
+/// off-box manipulation of a synced/backed-up config directory.
+pub async fn load_revocation_for_validation(
+    host: &dyn HostPlatform,
+    min_rev_state_gen: u64,
+) -> Result<RevocationState, VaultError> {
+    let parsed = match try_load_raw(host).await? {
+        RawLoad::Present(parsed) => parsed,
+        RawLoad::Absent => {
+            return Err(VaultError::TokenRevoked {
+                message: "Lease refused: no revocation store is persisted (keys.enc is \
+                          missing). A signing lease requires a persisted revocation store to \
+                          validate against; its absence fails closed rather than being treated \
+                          as \"nothing has ever been revoked\". Recovery: restore keys.enc and \
+                          .keys.wrap from backup."
+                    .to_string(),
+            });
+        }
+        RawLoad::Corrupt => {
+            return Err(VaultError::TokenRevoked {
+                message: "Lease refused: the revocation store (keys.enc) failed to \
+                          authenticate or parse — modified, corrupted, truncated, or wrapped \
+                          under a different key. Recovery: restore keys.enc and .keys.wrap \
+                          from backup."
+                    .to_string(),
+            });
+        }
+    };
+
+    if parsed.rev_state_gen < min_rev_state_gen {
+        return Err(VaultError::TokenRevoked {
+            message: format!(
+                "Lease refused: revocation store rollback detected (revStateGen {} is lower \
+                 than the {min_rev_state_gen} this process has already observed). Recovery: \
+                 restore the latest keys.enc, or re-apply every revocation issued since the \
+                 restored copy was taken.",
+                parsed.rev_state_gen
+            ),
+        });
+    }
+
+    Ok(revocation_from_raw(&parsed))
+}
+
+/// Read-modify-write a mutation into the persisted revocation state, without
+/// disturbing whatever key material (`current`/`previous`/grace period) is on
+/// disk at write time — the counterpart a `rotateKey`/`revokeKey` write must
+/// not clobber, and vice versa (issue #298 AC10). Reuses the same atomic
+/// write-temp-then-rename path [`save_key_state`] uses.
+///
+/// **Concurrency scope**: this is read-modify-write, not a lock — it
+/// guarantees that a `rotateKey`/`revokeKey` write and a revocation write
+/// that are *sequenced* one after the other (in either order) each carry the
+/// other's portion forward untouched, which is what issue #298 AC10 proves.
+/// It does **not** protect two writers whose read-modify-write windows
+/// genuinely overlap across processes: if both read the same on-disk state
+/// before either writes, the second write is last-writer-wins and can lose
+/// the first writer's update. There is currently no cross-process lock
+/// around this RMW (tracked as a follow-up).
+///
+/// Requires that key state has already been persisted at least once (i.e.
+/// [`crate::vault::VaultKeeper::init`] has run against this config dir) —
+/// there is nothing meaningful to revoke against before any key material
+/// exists. A genuinely corrupt store is also refused rather than silently
+/// reset to empty: unlike [`save_key_state`] (whose caller only ever supplies
+/// fresh key material and has nothing to lose from a reset), a reset here
+/// would silently discard real revocations rather than merely refuse to
+/// validate against them.
+pub async fn mutate_revocation_state(
+    host: &dyn HostPlatform,
+    mutate: impl FnOnce(&mut RevocationState),
+) -> Result<RevocationState, VaultError> {
+    let parsed = match try_load_raw(host).await? {
+        RawLoad::Present(parsed) => parsed,
+        RawLoad::Absent => {
+            return Err(VaultError::Other(
+                "Cannot revoke: no key state has been persisted yet. Initialize the vault \
+                 first (e.g. run `vaultkeeper doctor`)."
+                    .to_string(),
+            ));
+        }
+        RawLoad::Corrupt => {
+            let state_path = host.config_dir().join(KEY_STATE_FILE);
+            return Err(VaultError::Decryption {
+                message: "Cannot revoke: keys.enc failed to authenticate or parse. Restore \
+                          keys.enc and .keys.wrap from backup before retrying — this write \
+                          must not silently discard whatever revocation state it might \
+                          contain."
+                    .to_string(),
+                path: state_path.display().to_string(),
+            });
+        }
+    };
+
+    let mut revocation = revocation_from_raw(&parsed);
+    mutate(&mut revocation);
+
+    write_raw_state(
+        host,
+        parsed.current,
+        parsed.previous,
+        parsed.grace_period_expires_at,
+        &revocation,
+    )
+    .await?;
+
+    Ok(revocation)
+}
+
 /// Persist `snapshot` to the host's config directory. The state file and its
 /// wrapping key are both written owner-only (`0o600`).
 ///
@@ -277,21 +511,76 @@ pub async fn load_key_state(
 /// Every filesystem step (wrap-key read/write, temp write, rename) surfaces
 /// the host's typed `VaultError::Filesystem` on failure rather than a generic
 /// error, matching the `HostFilesystemError` contract at the wasm boundary.
+///
+/// Read-modify-write for the revocation portion of the file (issue #298
+/// AC9): this function's caller only ever supplies key material, so before
+/// writing it re-reads whatever revocation state is currently persisted and
+/// carries it through untouched. `rotateKey`/`revokeKey` must never reset
+/// revocation state to empty, or key rotation becomes a revocation bypass.
+///
+/// A currently-corrupt store refuses the write entirely, with the same
+/// typed fail-closed error [`mutate_revocation_state`] uses for exactly this
+/// case, rather than degrading to an empty revocation portion: writing a
+/// fresh, validly-sealed envelope over an unauthenticated one would silently
+/// discard whatever revocations it might contain, so a single flipped bit in
+/// `keys.enc` followed by a routine rotate/revoke would silently un-revoke
+/// every outstanding lease. Only a genuinely *absent* store — nothing has
+/// ever been persisted, so there is nothing to lose — defaults to an empty
+/// revocation portion.
 pub async fn save_key_state(
     host: &dyn HostPlatform,
     snapshot: &KeyStateSnapshot,
+) -> Result<(), VaultError> {
+    let revocation = match try_load_raw(host).await? {
+        RawLoad::Present(parsed) => revocation_from_raw(&parsed),
+        RawLoad::Absent => RevocationState::default(),
+        RawLoad::Corrupt => {
+            let state_path = host.config_dir().join(KEY_STATE_FILE);
+            return Err(VaultError::Decryption {
+                message: "Cannot persist key state: keys.enc failed to authenticate or \
+                          parse. Writing forward would silently discard whatever \
+                          revocation state it might contain and un-revoke every \
+                          outstanding lease. Restore keys.enc and .keys.wrap from backup \
+                          before retrying."
+                    .to_string(),
+                path: state_path.display().to_string(),
+            });
+        }
+    };
+
+    write_raw_state(
+        host,
+        serialize_key(&snapshot.current),
+        snapshot.previous.as_ref().map(serialize_key),
+        match (&snapshot.previous, snapshot.grace_period_expires_at_ms) {
+            (Some(_), Some(expiry)) => Some(expiry),
+            _ => None,
+        },
+        &revocation,
+    )
+    .await
+}
+
+/// Shared envelope-encrypt-and-atomically-write path for both
+/// [`save_key_state`] and [`mutate_revocation_state`].
+async fn write_raw_state(
+    host: &dyn HostPlatform,
+    current: RawKeyMaterial,
+    previous: Option<RawKeyMaterial>,
+    grace_period_expires_at: Option<u64>,
+    revocation: &RevocationState,
 ) -> Result<(), VaultError> {
     let wrap_path = host.config_dir().join(KEY_WRAP_FILE);
     let mut wrap_key = get_or_create_wrap_key(host, &wrap_path).await?;
 
     let raw = RawKeyState {
         version: 1,
-        current: serialize_key(&snapshot.current),
-        previous: snapshot.previous.as_ref().map(serialize_key),
-        grace_period_expires_at: match (&snapshot.previous, snapshot.grace_period_expires_at_ms) {
-            (Some(_), Some(expiry)) => Some(expiry),
-            _ => None,
-        },
+        current,
+        previous,
+        grace_period_expires_at,
+        rev_state_gen: revocation.rev_state_gen,
+        jti: revocation.jti.iter().map(Into::into).collect(),
+        key_generations: revocation.key_generations.clone(),
     };
 
     let json = serde_json::to_string(&raw)
@@ -604,6 +893,23 @@ mod tests {
         }
     }
 
+    /// Flip a byte in the persisted `keys.enc` ciphertext so AES-GCM
+    /// authentication fails on the next load — shared by every test that
+    /// needs a store which authenticates as [`RawLoad::Corrupt`].
+    async fn tamper_stored_envelope(host: &TestHost) {
+        let state_path = host.config_dir().join(KEY_STATE_FILE);
+        let envelope = String::from_utf8(host.read_file(&state_path).await.unwrap()).unwrap();
+        let parts: Vec<&str> = envelope.split(':').collect();
+        let mut ct = Base64::decode_vec(parts[2]).unwrap();
+        if !ct.is_empty() {
+            ct[0] ^= 0xff;
+        }
+        let tampered = format!("{}:{}:{}", parts[0], parts[1], Base64::encode_string(&ct));
+        host.write_file(&state_path, tampered.as_bytes(), 0o600)
+            .await
+            .unwrap();
+    }
+
     // -------------------------------------------------------------------
     // Round trip
     // -------------------------------------------------------------------
@@ -758,18 +1064,7 @@ mod tests {
         .await
         .unwrap();
 
-        // Tamper with the ciphertext so AES-GCM authentication fails.
-        let state_path = host.config_dir().join(KEY_STATE_FILE);
-        let envelope = String::from_utf8(host.read_file(&state_path).await.unwrap()).unwrap();
-        let parts: Vec<&str> = envelope.split(':').collect();
-        let mut ct = Base64::decode_vec(parts[2]).unwrap();
-        if !ct.is_empty() {
-            ct[0] ^= 0xff;
-        }
-        let tampered = format!("{}:{}:{}", parts[0], parts[1], Base64::encode_string(&ct));
-        host.write_file(&state_path, tampered.as_bytes(), 0o600)
-            .await
-            .unwrap();
+        tamper_stored_envelope(&host).await;
 
         assert!(load_key_state(&host).await.unwrap().is_none());
     }
@@ -786,7 +1081,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn missing_wrap_file_degrades_to_no_state_and_regenerates() {
+    async fn missing_wrap_file_degrades_to_no_state_but_refuses_to_write_forward() {
         let host = TestHost::new();
         save_key_state(
             &host,
@@ -805,11 +1100,34 @@ mod tests {
         host.delete_file(&wrap_path).await.unwrap();
 
         assert!(load_key_state(&host).await.unwrap().is_none());
-        // A fresh wrap key was generated in its place (not left missing), so
-        // a subsequent save works normally.
+        // A fresh wrap key was generated in its place (not left missing).
         assert!(host.file_exists(&wrap_path).await.unwrap());
 
+        // The now-undecryptable `keys.enc` is `RawLoad::Corrupt` under the
+        // fresh wrap key, so a save must refuse rather than silently
+        // overwrite it — the same fail-closed contract as a byte-flipped
+        // envelope, since this function cannot distinguish "wrap key lost"
+        // from "ciphertext tampered" at the `RawLoad` level, and both mean
+        // "whatever revocation state might be in there is about to be
+        // silently discarded".
         let fresh = make_key("k-new-bbbb", 0x22, 1_705_314_600);
+        let err = save_key_state(
+            &host,
+            &KeyStateSnapshot {
+                current: fresh.clone(),
+                previous: None,
+                grace_period_expires_at_ms: None,
+            },
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(err, VaultError::Decryption { .. }));
+
+        // Recovery requires explicit operator action: once the unrecoverable
+        // `keys.enc` is removed (matching the documented recovery guidance),
+        // the store is genuinely absent and a save proceeds normally.
+        let state_path = host.config_dir().join(KEY_STATE_FILE);
+        host.delete_file(&state_path).await.unwrap();
         save_key_state(
             &host,
             &KeyStateSnapshot {
@@ -825,7 +1143,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn wrong_length_wrap_key_is_regenerated_not_a_panic() {
+    async fn wrong_length_wrap_key_is_regenerated_but_save_still_refuses_on_corrupt_store() {
         let host = TestHost::new();
         save_key_state(
             &host,
@@ -844,9 +1162,17 @@ mod tests {
             .unwrap();
 
         assert!(load_key_state(&host).await.unwrap().is_none());
+        // A fresh, correctly-sized wrap key replaced the wrong-length one...
+        assert_eq!(
+            host.read_file(&wrap_path).await.unwrap().len(),
+            GCM_KEY_BYTES
+        );
 
+        // ...but `keys.enc` (sealed under the discarded wrong-length key) is
+        // still `RawLoad::Corrupt` under the new one, so save must refuse
+        // rather than panic or silently overwrite it.
         let fresh = make_key("k-new-bbbb", 0x22, 1_705_314_600);
-        save_key_state(
+        let err = save_key_state(
             &host,
             &KeyStateSnapshot {
                 current: fresh,
@@ -855,11 +1181,8 @@ mod tests {
             },
         )
         .await
-        .unwrap();
-        assert_eq!(
-            host.read_file(&wrap_path).await.unwrap().len(),
-            GCM_KEY_BYTES
-        );
+        .unwrap_err();
+        assert!(matches!(err, VaultError::Decryption { .. }));
     }
 
     /// AC4: a genuine read failure (not "missing") on an existing wrap key
@@ -952,5 +1275,365 @@ mod tests {
         assert_eq!(loaded.current.key, (0x10u8..=0x2f).collect::<Vec<u8>>());
         assert_eq!(loaded.current.created_at, 1_705_314_600);
         assert!(loaded.previous.is_none());
+    }
+
+    // -------------------------------------------------------------------
+    // Issue #298 — lease revocation store.
+    // -------------------------------------------------------------------
+
+    async fn seed_key_state(host: &TestHost) {
+        save_key_state(
+            host,
+            &KeyStateSnapshot {
+                current: make_key("k-1-aaaa", 0x11, 1_705_314_600),
+                previous: None,
+                grace_period_expires_at_ms: None,
+            },
+        )
+        .await
+        .unwrap();
+    }
+
+    /// AC4: jti entries past their own `exp` are swept on write, while
+    /// `key_generations` survives the sweep untouched.
+    #[tokio::test]
+    async fn ac4_sweep_drops_expired_jti_but_keeps_key_generations() {
+        let host = TestHost::new();
+        seed_key_state(&host).await;
+
+        mutate_revocation_state(&host, |state| {
+            state.revoke_jti("expired-jti", 1_000); // already in the past
+            state.revoke_jti("live-jti", 9_999_999_999);
+            state.revoke_key("release-signer");
+        })
+        .await
+        .unwrap();
+
+        mutate_revocation_state(&host, |state| {
+            let removed = state.sweep_expired(2_000);
+            assert_eq!(removed, 1, "only the expired entry should be swept");
+        })
+        .await
+        .unwrap();
+
+        let state = load_revocation_for_validation(&host, 0).await.unwrap();
+        assert!(!state.is_jti_revoked("expired-jti"));
+        assert!(state.is_jti_revoked("live-jti"));
+        assert_eq!(state.min_generation_for("release-signer"), 1);
+    }
+
+    /// AC6 (modification): a byte-edited `keys.enc` (broken GCM tag) fails
+    /// closed with a typed `TokenRevoked` error, not silently treated as "no
+    /// revocations".
+    #[tokio::test]
+    async fn ac6_tampered_envelope_fails_closed_for_lease_validation() {
+        let host = TestHost::new();
+        seed_key_state(&host).await;
+        mutate_revocation_state(&host, |state| {
+            state.revoke_jti("some-jti", 9_999_999_999);
+        })
+        .await
+        .unwrap();
+
+        tamper_stored_envelope(&host).await;
+
+        let err = load_revocation_for_validation(&host, 0).await.unwrap_err();
+        match err {
+            VaultError::TokenRevoked { message } => {
+                assert!(
+                    message.contains("authenticate") || message.contains("parse"),
+                    "expected a modification-specific message, got: {message}"
+                );
+            }
+            other => panic!("expected VaultError::TokenRevoked, got {other:?}"),
+        }
+    }
+
+    /// AC7 (rollback): restoring an earlier, validly-sealed copy of the store
+    /// (lower `revStateGen`) fails closed rather than silently un-revoking.
+    #[tokio::test]
+    async fn ac7_rollback_to_earlier_valid_envelope_fails_closed() {
+        let host = TestHost::new();
+        seed_key_state(&host).await;
+
+        mutate_revocation_state(&host, |state| {
+            state.revoke_jti("first-revocation", 9_999_999_999);
+        })
+        .await
+        .unwrap();
+        let state_path = host.config_dir().join(KEY_STATE_FILE);
+        let earlier_envelope = host.read_file(&state_path).await.unwrap();
+        let earlier_gen = load_revocation_for_validation(&host, 0)
+            .await
+            .unwrap()
+            .rev_state_gen;
+
+        mutate_revocation_state(&host, |state| {
+            state.revoke_jti("second-revocation", 9_999_999_999);
+        })
+        .await
+        .unwrap();
+        let later_gen = load_revocation_for_validation(&host, earlier_gen)
+            .await
+            .unwrap()
+            .rev_state_gen;
+        assert!(later_gen > earlier_gen);
+
+        // Attacker (or a stale backup restore) rolls the file back to the
+        // earlier, validly-sealed envelope.
+        host.write_file(&state_path, &earlier_envelope, 0o600)
+            .await
+            .unwrap();
+
+        let err = load_revocation_for_validation(&host, later_gen)
+            .await
+            .unwrap_err();
+        match err {
+            VaultError::TokenRevoked { message } => {
+                assert!(
+                    message.contains("rollback"),
+                    "expected a rollback-specific message, got: {message}"
+                );
+            }
+            other => panic!("expected VaultError::TokenRevoked, got {other:?}"),
+        }
+    }
+
+    /// AC8 (deletion): a missing `keys.enc` fails closed for lease
+    /// validation with a message naming the absence, distinct from a
+    /// tampered/rolled-back store.
+    #[tokio::test]
+    async fn ac8_missing_store_fails_closed_with_a_distinct_message() {
+        let host = TestHost::new();
+        // No `seed_key_state` call — the store was never persisted.
+        let err = load_revocation_for_validation(&host, 0).await.unwrap_err();
+        match err {
+            VaultError::TokenRevoked { message } => {
+                assert!(
+                    message.contains("missing"),
+                    "expected a missing-store-specific message, got: {message}"
+                );
+            }
+            other => panic!("expected VaultError::TokenRevoked, got {other:?}"),
+        }
+    }
+
+    /// Companion to [`ac6_tampered_envelope_fails_closed_for_lease_validation`]:
+    /// a truncated/malformed (not merely byte-flipped) `keys.enc` must fail
+    /// closed the same way — the same [`RawLoad::Corrupt`] path covers both
+    /// "authentication failed" and "didn't even parse as an envelope".
+    #[tokio::test]
+    async fn truncated_store_fails_closed_for_lease_validation() {
+        let host = TestHost::new();
+        seed_key_state(&host).await;
+        mutate_revocation_state(&host, |state| {
+            state.revoke_jti("some-jti", 9_999_999_999);
+        })
+        .await
+        .unwrap();
+
+        // Truncate mid-envelope: keep only the IV segment, dropping the
+        // authTag and ciphertext entirely.
+        let state_path = host.config_dir().join(KEY_STATE_FILE);
+        let envelope = String::from_utf8(host.read_file(&state_path).await.unwrap()).unwrap();
+        let iv_only = envelope.split(':').next().unwrap().to_string();
+        host.write_file(&state_path, iv_only.as_bytes(), 0o600)
+            .await
+            .unwrap();
+
+        let err = load_revocation_for_validation(&host, 0).await.unwrap_err();
+        match err {
+            VaultError::TokenRevoked { message } => {
+                assert!(
+                    message.contains("authenticate") || message.contains("parse"),
+                    "expected a modification/corruption-specific message, got: {message}"
+                );
+            }
+            other => panic!("expected VaultError::TokenRevoked, got {other:?}"),
+        }
+    }
+
+    /// AC9/AC10 groundwork: `save_key_state` (the path `rotateKey`/
+    /// `revokeKey` use) must never reset revocation state to empty, and
+    /// `mutate_revocation_state` must never disturb key material.
+    #[tokio::test]
+    async fn revocation_state_survives_a_key_material_only_save() {
+        let host = TestHost::new();
+        seed_key_state(&host).await;
+        mutate_revocation_state(&host, |state| {
+            state.revoke_jti("survives-rotation", 9_999_999_999);
+            state.revoke_key("release-signer");
+        })
+        .await
+        .unwrap();
+
+        // Simulates `rotateKey`'s `persist_key_state`: a fresh snapshot built
+        // purely from key material, with no knowledge of revocation state.
+        save_key_state(
+            &host,
+            &KeyStateSnapshot {
+                current: make_key("k-2-bbbb", 0x22, 1_705_314_600),
+                previous: Some(make_key("k-1-aaaa", 0x11, 1_705_300_000)),
+                grace_period_expires_at_ms: Some((time::now_millis() + 60_000) as u64),
+            },
+        )
+        .await
+        .unwrap();
+
+        let state = load_revocation_for_validation(&host, 0).await.unwrap();
+        assert!(state.is_jti_revoked("survives-rotation"));
+        assert_eq!(state.min_generation_for("release-signer"), 1);
+
+        // And the reverse: a revocation mutation must not disturb the
+        // rotated key material.
+        mutate_revocation_state(&host, |state| {
+            state.revoke_jti("another-jti", 9_999_999_999);
+        })
+        .await
+        .unwrap();
+        let loaded = load_key_state(&host).await.unwrap().unwrap();
+        assert_eq!(loaded.current.id, "k-2-bbbb");
+        assert_eq!(
+            loaded.previous.as_ref().map(|k| k.id.as_str()),
+            Some("k-1-aaaa")
+        );
+    }
+
+    #[tokio::test]
+    async fn mutate_revocation_state_refuses_when_no_key_state_persisted_yet() {
+        let host = TestHost::new();
+        let err = mutate_revocation_state(&host, |state| {
+            state.revoke_jti("jti", 9_999_999_999);
+        })
+        .await
+        .unwrap_err();
+        assert!(matches!(err, VaultError::Other(_)));
+    }
+
+    // -------------------------------------------------------------------
+    // Regression: `save_key_state` must refuse to write over a corrupt
+    // store rather than silently defaulting the revocation portion to
+    // empty (a single flipped bit in `keys.enc` followed by a routine
+    // rotate/revoke would otherwise silently un-revoke every outstanding
+    // lease).
+    // -------------------------------------------------------------------
+
+    /// Simulates `rotate_key`'s `persist_key_state` call against a corrupt
+    /// store: it must refuse with a typed error, and must not touch the
+    /// on-disk file at all.
+    #[tokio::test]
+    async fn save_key_state_refuses_on_corrupt_store_simulating_rotate() {
+        let host = TestHost::new();
+        seed_key_state(&host).await;
+        mutate_revocation_state(&host, |state| {
+            state.revoke_jti("pre-corruption-jti", 9_999_999_999);
+        })
+        .await
+        .unwrap();
+
+        tamper_stored_envelope(&host).await;
+        let state_path = host.config_dir().join(KEY_STATE_FILE);
+        let before = host.read_file(&state_path).await.unwrap();
+
+        // A rotation would supply fresh current/previous key material, with
+        // no knowledge of (and no intent to touch) revocation state.
+        let err = save_key_state(
+            &host,
+            &KeyStateSnapshot {
+                current: make_key("k-2-bbbb", 0x22, 1_705_314_600),
+                previous: Some(make_key("k-1-aaaa", 0x11, 1_705_300_000)),
+                grace_period_expires_at_ms: Some((time::now_millis() + 60_000) as u64),
+            },
+        )
+        .await
+        .unwrap_err();
+
+        assert!(
+            matches!(err, VaultError::Decryption { .. }),
+            "expected VaultError::Decryption, got {err:?}"
+        );
+        let after = host.read_file(&state_path).await.unwrap();
+        assert_eq!(before, after, "corrupt store must be left byte-identical");
+    }
+
+    /// Same as above but simulating `revoke_key`'s `persist_key_state` call
+    /// (only `current` supplied, no `previous`/grace period).
+    #[tokio::test]
+    async fn save_key_state_refuses_on_corrupt_store_simulating_revoke() {
+        let host = TestHost::new();
+        seed_key_state(&host).await;
+        mutate_revocation_state(&host, |state| {
+            state.revoke_jti("pre-corruption-jti-2", 9_999_999_999);
+        })
+        .await
+        .unwrap();
+
+        tamper_stored_envelope(&host).await;
+        let state_path = host.config_dir().join(KEY_STATE_FILE);
+        let before = host.read_file(&state_path).await.unwrap();
+
+        let err = save_key_state(
+            &host,
+            &KeyStateSnapshot {
+                current: make_key("k-revoked-cccc", 0x33, 1_705_314_600),
+                previous: None,
+                grace_period_expires_at_ms: None,
+            },
+        )
+        .await
+        .unwrap_err();
+
+        assert!(
+            matches!(err, VaultError::Decryption { .. }),
+            "expected VaultError::Decryption, got {err:?}"
+        );
+        let after = host.read_file(&state_path).await.unwrap();
+        assert_eq!(before, after, "corrupt store must be left byte-identical");
+    }
+
+    // -------------------------------------------------------------------
+    // Regression: a read failure on a `keys.enc` that exists (permission
+    // denied, transient I/O error) must not be classified the same as
+    // "the file was never created" — `try_load_raw` now propagates it as a
+    // typed error instead of collapsing to `RawLoad::Absent`.
+    // -------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn unreadable_existing_state_file_surfaces_as_typed_error_not_absent() {
+        let host = TestHost::new();
+        seed_key_state(&host).await;
+
+        let state_path = host.config_dir().join(KEY_STATE_FILE);
+        host.deny_read.lock().unwrap().insert(state_path.clone());
+
+        let err = load_key_state(&host).await.unwrap_err();
+        match err {
+            VaultError::Filesystem {
+                path, permission, ..
+            } => {
+                assert_eq!(path, state_path.display().to_string());
+                assert_eq!(permission, "read");
+            }
+            other => panic!("expected VaultError::Filesystem, got {other:?}"),
+        }
+    }
+
+    /// Same classification bug, exercised through the lease-revocation
+    /// loader: an unreadable-but-present store must not resolve to "no
+    /// revocations" (which `RawLoad::Absent` would trigger via a distinct,
+    /// misleading "keys.enc is missing" message).
+    #[tokio::test]
+    async fn unreadable_existing_state_file_surfaces_as_typed_error_for_lease_validation() {
+        let host = TestHost::new();
+        seed_key_state(&host).await;
+
+        let state_path = host.config_dir().join(KEY_STATE_FILE);
+        host.deny_read.lock().unwrap().insert(state_path.clone());
+
+        let err = load_revocation_for_validation(&host, 0).await.unwrap_err();
+        assert!(
+            matches!(err, VaultError::Filesystem { .. }),
+            "expected VaultError::Filesystem (not a TokenRevoked \"missing\" collapse), got {err:?}"
+        );
     }
 }

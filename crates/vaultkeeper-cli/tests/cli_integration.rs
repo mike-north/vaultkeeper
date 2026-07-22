@@ -86,7 +86,8 @@ mod help {
                 .and(predicate::str::contains("config"))
                 .and(predicate::str::contains("backend"))
                 .and(predicate::str::contains("rotate-key"))
-                .and(predicate::str::contains("revoke-key")),
+                .and(predicate::str::contains("revoke-key"))
+                .and(predicate::str::contains("session")),
         );
     }
 
@@ -1056,6 +1057,121 @@ mod profile {
         let path = dir.path().join("profiles").join("my-profile.json");
         let mode = fs::metadata(&path).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode, 0o600, "profile file must be owner-only (0o600)");
+    }
+}
+
+// ─── Session revoke command (issue #298) ─────────────────────────
+//
+// Deep enforcement semantics (jti/kgen checks, tamper/rollback/deletion
+// fail-closed, read-modify-write vs. rotateKey/revokeKey, cross-process
+// persistence) are proven at the `vaultkeeper-core` layer in
+// `crates/vaultkeeper-core/tests/lease_revocation_integration.rs`, using the
+// same "independent instances sharing only a backing store" technique this
+// codebase already uses for process-boundary testing (see
+// `crates/vaultkeeper-core/src/keys/storage.rs`'s own cross-process doc and
+// its `save_then_load_round_trips_*` tests) — there is no `vaultkeeper
+// session check`/`sign` command yet to drive that enforcement through a real
+// subprocess. These tests instead cover the CLI surface itself: argument
+// parsing, exit codes, and that the command actually persists state to
+// `keys.enc` rather than crashing or silently no-op'ing.
+
+mod session {
+    use super::*;
+
+    #[test]
+    fn revoke_by_jti_succeeds() {
+        let (mut cmd, _dir) = cli_test_env();
+        cmd.args(["session", "revoke", "--jti", "some-jti-001"])
+            .assert()
+            .success()
+            .stdout(predicate::str::contains("Lease some-jti-001 revoked"));
+    }
+
+    #[test]
+    fn revoke_by_key_succeeds() {
+        let (mut cmd, _dir) = cli_test_env();
+        cmd.args(["session", "revoke", "--key", "release-signer"])
+            .assert()
+            .success()
+            .stdout(predicate::str::contains(
+                "Every outstanding lease for key \"release-signer\" revoked",
+            ));
+    }
+
+    #[test]
+    fn revoke_with_neither_jti_nor_key_is_a_usage_error() {
+        let (mut cmd, _dir) = cli_test_env();
+        cmd.args(["session", "revoke"])
+            .assert()
+            .code(1)
+            .stderr(predicate::str::contains("exactly one of --jti or --key"));
+    }
+
+    #[test]
+    fn revoke_with_both_jti_and_key_is_a_clap_usage_error() {
+        let (mut cmd, _dir) = cli_test_env();
+        cmd.args([
+            "session",
+            "revoke",
+            "--jti",
+            "some-jti",
+            "--key",
+            "release-signer",
+        ])
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("cannot be used with"));
+    }
+
+    #[test]
+    fn session_with_no_subcommand_exits_2() {
+        let (mut cmd, _dir) = cli_test_env();
+        cmd.arg("session").assert().code(2);
+    }
+
+    /// A `session revoke` actually persists `keys.enc` to the config dir —
+    /// not a silent in-memory-only no-op — and a second, independent
+    /// subprocess invocation against the same config dir (the cross-process
+    /// case) succeeds too, i.e. it reads back whatever the first process
+    /// wrote via the same read-modify-write path rather than erroring on it.
+    #[test]
+    fn revoke_persists_and_a_second_process_can_revoke_again() {
+        let (mut first, dir) = cli_test_env();
+        first
+            .args(["session", "revoke", "--jti", "cross-process-jti"])
+            .assert()
+            .success();
+
+        assert!(
+            dir.path().join("keys.enc").exists(),
+            "session revoke must persist keys.enc"
+        );
+
+        let mut second = Command::cargo_bin("vaultkeeper").expect("binary not found");
+        second.env("VAULTKEEPER_CONFIG_DIR", dir.path());
+        second
+            .args(["session", "revoke", "--key", "release-signer"])
+            .assert()
+            .success();
+
+        // rotate-key afterwards must still succeed — a corrupt read-modify-write
+        // merge in either revoke call would otherwise leave keys.enc unreadable.
+        let mut third = Command::cargo_bin("vaultkeeper").expect("binary not found");
+        third.env("VAULTKEEPER_CONFIG_DIR", dir.path());
+        third
+            .arg("rotate-key")
+            .assert()
+            .success()
+            .stdout(predicate::str::contains("Key rotated successfully"));
+    }
+
+    #[test]
+    fn session_help_documents_revoke_subcommand() {
+        let (mut cmd, _dir) = cli_test_env();
+        cmd.args(["session", "--help"])
+            .assert()
+            .success()
+            .stdout(predicate::str::contains("revoke"));
     }
 }
 

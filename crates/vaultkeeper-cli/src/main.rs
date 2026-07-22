@@ -97,6 +97,25 @@ enum Commands {
         #[command(subcommand)]
         action: ProfileAction,
     },
+    /// Manage signing-key leases (revocation)
+    Session {
+        #[command(subcommand)]
+        action: SessionAction,
+    },
+}
+
+#[derive(Subcommand)]
+enum SessionAction {
+    /// Revoke a signing-key lease, by JTI (a single lease) or by key name
+    /// (every outstanding lease for that key, at once)
+    Revoke {
+        /// Revoke the single lease with this JTI
+        #[arg(long, conflicts_with = "key")]
+        jti: Option<String>,
+        /// Revoke every outstanding lease for this signing key name
+        #[arg(long, conflicts_with = "jti")]
+        key: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -186,6 +205,7 @@ async fn main() {
             Commands::RotateKey => cmd_rotate_key().await,
             Commands::RevokeKey => cmd_revoke_key().await,
             Commands::Profile { action } => cmd_profile(action).await,
+            Commands::Session { action } => cmd_session(action).await,
         },
     };
 
@@ -710,6 +730,85 @@ async fn cmd_revoke_key() -> i32 {
     }
 
     println!("Key revoked successfully.");
+    0
+}
+
+/// `session revoke` — dispatches on the mutually exclusive `--jti`/`--key`
+/// axes (issue #298). Clap's `conflicts_with` guarantees at most one is
+/// `Some`; neither being set is still possible (both flags are optional), so
+/// that case is rejected here rather than silently doing nothing.
+async fn cmd_session(action: SessionAction) -> i32 {
+    match action {
+        SessionAction::Revoke { jti, key } => match (jti, key) {
+            (Some(jti), None) => cmd_session_revoke_jti(&jti).await,
+            (None, Some(key)) => cmd_session_revoke_key(&key).await,
+            (None, None) => {
+                eprintln!("Error: `session revoke` requires exactly one of --jti or --key");
+                1
+            }
+            (Some(_), Some(_)) => {
+                unreachable!("clap's conflicts_with rejects --jti and --key together")
+            }
+        },
+    }
+}
+
+async fn init_vault(host: &NativeHostPlatform) -> Result<vaultkeeper_core::VaultKeeper, i32> {
+    vaultkeeper_core::VaultKeeper::init(
+        host,
+        Some(vaultkeeper_core::vault::VaultKeeperOptions {
+            skip_doctor: true,
+            ..Default::default()
+        }),
+    )
+    .await
+    .map_err(|e| {
+        eprintln!("Error: {e}");
+        1
+    })
+}
+
+/// Revoke a single lease by `jti`. The CLI has no access to the real lease's
+/// own `exp` (it is only given the `jti`, not the token) — the revocation
+/// entry is instead given the most conservative possible expiry, the
+/// session-signing-lease hard TTL cap
+/// ([`vaultkeeper_core::profile::SIGNING_LEASE_MAX_TTL_SECONDS`], 24h) from
+/// now, so it can never be swept before any lease that could legitimately
+/// carry this `jti` has itself expired.
+async fn cmd_session_revoke_jti(jti: &str) -> i32 {
+    let host = make_host();
+    let mut vault = match init_vault(&host).await {
+        Ok(v) => v,
+        Err(code) => return code,
+    };
+
+    let now_secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let exp = now_secs + vaultkeeper_core::profile::SIGNING_LEASE_MAX_TTL_SECONDS;
+    if let Err(e) = vault.revoke_lease_jti(host.as_ref(), jti, exp).await {
+        eprintln!("Error: {e}");
+        return 1;
+    }
+
+    println!("Lease {jti} revoked.");
+    0
+}
+
+async fn cmd_session_revoke_key(key: &str) -> i32 {
+    let host = make_host();
+    let mut vault = match init_vault(&host).await {
+        Ok(v) => v,
+        Err(code) => return code,
+    };
+
+    if let Err(e) = vault.revoke_lease_key(host.as_ref(), key).await {
+        eprintln!("Error: {e}");
+        return 1;
+    }
+
+    println!("Every outstanding lease for key \"{key}\" revoked.");
     0
 }
 

@@ -20,7 +20,8 @@ use crate::errors::VaultError;
 
 pub use lint::{LintBaseline, LintResult, LoosenWarning, UnattendedRestartWarning, lint_profile};
 pub use loader::{
-    EntrySource, LoadedProfile, ProfileDefaults, ProfileEntry, load_profile_from_str,
+    EntrySource, LoadedProfile, ProfileDefaults, ProfileEntry, SIGNING_LEASE_MAX_TTL_SECONDS,
+    load_profile_from_str,
 };
 pub use render::{render_lint, render_list, render_show, scaffold_profile};
 pub use types::{
