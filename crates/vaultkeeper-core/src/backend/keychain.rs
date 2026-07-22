@@ -291,9 +291,18 @@ impl SecretBackend for KeychainBackend {
         // in the stream, so a failing pre-delete (no prior entry) followed
         // by a successful add still yields exit code 0 — verified
         // empirically (see module docs).
+        // `encoded` is quoted so an empty secret still yields a value token
+        // (`-w ""`): a bare trailing `-w` would flip `security` into its
+        // interactive getpass prompt and hang a non-interactive caller.
+        // Base64 output never contains `"`/`\`/newline, so plain quoting is
+        // exact (no escaping needed) — enforced by the debug_assert below.
+        debug_assert!(
+            !encoded.contains(['"', '\\', '\n', '\r']),
+            "base64 output must be quote-safe"
+        );
         let script = format!(
             "delete-generic-password -a {account_token} -s {service_token}\n\
-             add-generic-password -a {account_token} -s {service_token} -w {encoded}\n"
+             add-generic-password -a {account_token} -s {service_token} -w \"{encoded}\"\n"
         );
 
         let output = self
@@ -322,6 +331,17 @@ impl SecretBackend for KeychainBackend {
             // entirely removes any path for a future `security` version (or
             // an unanticipated error mode) to leak the secret or its base64
             // encoding into a `VaultError` message that might be logged.
+            // Locked-keychain detection mirrors retrieve/delete/exists —
+            // still without embedding stderr (the signature check reads it,
+            // the error message never includes it).
+            if Self::is_locked_keychain_error(&output.stderr) {
+                return Err(VaultError::BackendLocked {
+                    message: format!(
+                        "macOS Keychain is locked and cannot be written non-interactively for {id}"
+                    ),
+                    interactive: true,
+                });
+            }
             return Err(VaultError::Exec {
                 message: format!(
                     "security add-generic-password failed with exit code {}",
@@ -859,6 +879,54 @@ mod tests {
         assert_eq!(backend.retrieve(id).await.unwrap(), "value");
     }
 
+    #[tokio::test]
+    async fn store_quotes_the_secret_token_so_an_empty_secret_cannot_hang() {
+        // A bare trailing `-w` flips `security` into its interactive getpass
+        // prompt; quoting guarantees a value token even for "".
+        let host = TestHost::new();
+        let backend = KeychainBackend::new(host.clone());
+        backend.store("empty-id", "").await.unwrap();
+
+        {
+            // Scoped: exists() below records into the same calls mutex, so
+            // the guard must drop before that call.
+            let calls = host.calls.lock().expect("calls lock");
+            let stdin = calls
+                .iter()
+                .find_map(|c| c.stdin.as_ref())
+                .expect("store must pass a stdin script");
+            let script = String::from_utf8(stdin.clone()).expect("script is UTF-8");
+            assert!(
+                script.contains("-w \"\""),
+                "empty secret must still produce a quoted value token, got: {script}"
+            );
+        }
+        assert!(backend.exists("empty-id").await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn store_locked_keychain_reports_backend_locked() {
+        // Same locked-signature mapping retrieve/delete/exists already have;
+        // stderr is read for detection but never embedded in the message.
+        let host = Arc::new(LockedKeychainHost {
+            inner: TestHost::new(),
+        });
+        let err = KeychainBackend::new(host)
+            .store("id", "secret")
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(
+                err,
+                VaultError::BackendLocked {
+                    interactive: true,
+                    ..
+                }
+            ),
+            "expected BackendLocked, got {err:?}"
+        );
+    }
+
     // ── Security regression: an id containing a newline must never reach
     // `security -i`'s stdin command stream — it has no escape for `\n`/`\r`,
     // so an unescaped newline in `id` would terminate the current command
@@ -1200,7 +1268,7 @@ mod tests {
             options: ExecOptions<'_>,
         ) -> Result<ExecOutput, VaultError> {
             match args.first().copied() {
-                Some("find-generic-password") | Some("delete-generic-password") => Ok(ExecOutput {
+                Some("find-generic-password") | Some("delete-generic-password") | Some("-i") => Ok(ExecOutput {
                     stdout: Vec::new(),
                     stderr: b"security: SecKeychainFindGenericPassword: User interaction is not allowed."
                         .to_vec(),

@@ -182,14 +182,31 @@ fn shared_store_fixture() -> (String, String) {
     (name, secret)
 }
 
-/// Runs a `security` command with a fixed argv (no stdin), panicking with
-/// stderr on failure. Used only for ephemeral-keychain setup/teardown, never
-/// for anything touching the secret under test.
+/// Runs a `security` command with a fixed argv (no stdin). Panics only if
+/// the process cannot be spawned; a non-zero exit is returned to the caller,
+/// who decides whether it is fatal (setup asserts success; teardown is
+/// best-effort). Used only for ephemeral-keychain setup/teardown, never for
+/// anything touching the secret under test.
 fn run_security(args: &[&str]) -> std::process::Output {
     Command::new("security")
         .args(args)
         .output()
         .unwrap_or_else(|e| panic!("failed to spawn `security {args:?}`: {e}"))
+}
+
+/// Like [`run_security`], but panics (with stderr) unless the command exits
+/// zero — for setup reads whose output the harness depends on: proceeding
+/// with an empty capture would silently skip session-state restoration in
+/// `Drop`, leaving the runner's keychain configuration mutated.
+fn run_security_ok(args: &[&str]) -> std::process::Output {
+    let out = run_security(args);
+    assert!(
+        out.status.success(),
+        "security {args:?} failed with exit {:?}: {}",
+        out.status.code(),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    out
 }
 
 /// Parse `security list-keychains`/`security default-keychain` output —
@@ -232,9 +249,14 @@ impl EphemeralKeychain {
         let _ = std::fs::remove_file(&path);
 
         let previous_search_list =
-            parse_quoted_keychain_paths(&run_security(&["list-keychains"]).stdout);
+            parse_quoted_keychain_paths(&run_security_ok(&["list-keychains"]).stdout);
+        assert!(
+            !previous_search_list.is_empty(),
+            "list-keychains returned no paths — refusing to proceed, since Drop \
+             could not restore the session's search list afterwards"
+        );
         let previous_default =
-            parse_quoted_keychain_paths(&run_security(&["default-keychain"]).stdout)
+            parse_quoted_keychain_paths(&run_security_ok(&["default-keychain"]).stdout)
                 .into_iter()
                 .next();
 
