@@ -97,11 +97,14 @@ impl DpapiBackend {
 
     /// Encode `path` as a PowerShell double-quoted string literal.
     ///
-    /// Starts from JSON string escaping (backslash/quote escaping is a
-    /// superset compatible with what a PowerShell double-quoted string needs
-    /// for a filesystem path), matching the TS backend's
+    /// Starts from JSON string escaping, matching the TS backend's
     /// `JSON.stringify(entryPath)` byte-for-byte for the characters JSON
-    /// itself escapes.
+    /// itself escapes. Note this is not PowerShell-native escaping —
+    /// PowerShell's escape character is the backtick, not the backslash; the
+    /// doubled `\\` separators JSON produces work only because Windows path
+    /// APIs tolerate them. (A single-quoted PowerShell literal would need no
+    /// backslash handling at all, but the double-quoted form is kept for
+    /// byte-parity with the TS backend's output.)
     ///
     /// `serde_json::to_string` does not escape PowerShell's own
     /// double-quoted-string metacharacters, though: a bare backtick starts an
