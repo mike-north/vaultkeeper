@@ -206,9 +206,15 @@ async fn resolve_entry(
             )
             .await?;
 
-            let value = opts.backend.retrieve(secret_name).await?;
+            // The retrieved plaintext is held in a Zeroizing wrapper so it is
+            // scrubbed when this branch exits — success or error — matching
+            // the module's stated zeroization discipline. The `Secret` arm
+            // must hand ownership out (the resolved env IS the value), so it
+            // unwraps the protection at the last moment; the `Lease` arm's
+            // plaintext never leaves this scope.
+            let mut value = Zeroizing::new(opts.backend.retrieve(secret_name).await?);
             match entry.materialize {
-                MaterializeMode::Secret => Ok(value),
+                MaterializeMode::Secret => Ok(std::mem::take(&mut *value)),
                 MaterializeMode::Lease => mint_secret_lease(name, secret_name, &value, entry, opts),
             }
         }
