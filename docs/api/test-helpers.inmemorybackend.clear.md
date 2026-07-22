@@ -4,7 +4,7 @@
 
 ## InMemoryBackend.clear() method
 
-Remove all stored secrets. Useful for test teardown.
+Remove all stored secrets and signing keys. Useful for test teardown.
 
 **Signature:**
 

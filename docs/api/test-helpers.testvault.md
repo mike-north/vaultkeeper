@@ -171,6 +171,20 @@ Mint a JWE for a stored secret via the wrapped keeper.
 </td></tr>
 <tr><td>
 
+[signCeremony(name, payload, algorithm)](./test-helpers.testvault.signceremony.md)
+
+
+</td><td>
+
+
+</td><td>
+
+Run the full production signing ceremony — `createSigningKey` → `authorizeSigningKey` → `sign` — through the wrapped keeper in one call.
+
+
+</td></tr>
+<tr><td>
+
 [store(name, value)](./test-helpers.testvault.store.md)
 
 

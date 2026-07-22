@@ -2,9 +2,24 @@
  * Pre-configured VaultKeeper for consumer tests.
  */
 
-import type { VaultConfig, SetupOptionsBase } from 'vaultkeeper'
+import type { Buffer } from 'node:buffer'
+import type { VaultConfig, SetupOptionsBase, SigningAlgorithm, SigningPublicKey } from 'vaultkeeper'
 import { VaultKeeper, BackendRegistry } from 'vaultkeeper'
 import { InMemoryBackend } from './in-memory-backend.js'
+
+/**
+ * Result of {@link TestVault.signCeremony}: the detached-payload compact JWS
+ * produced by the ceremony's final `sign()` step, alongside the public key
+ * exported from its `createSigningKey()` step (for offline verification via
+ * `VaultKeeper.verify`).
+ * @public
+ */
+export interface TestVaultSignCeremonyResult {
+  /** The detached-payload compact JWS (`<protected>..<signature>`). */
+  jws: string
+  /** The public half of the signing key the ceremony enrolled. */
+  publicKey: SigningPublicKey
+}
 
 /**
  * Options accepted by {@link TestVault.setup}. Deliberately looser than the
@@ -171,5 +186,37 @@ export class TestVault {
    */
   reset(): void {
     this.backend.clear()
+  }
+
+  /**
+   * Run the full production signing ceremony — `createSigningKey` →
+   * `authorizeSigningKey` → `sign` — through the wrapped keeper in one call.
+   *
+   * @remarks
+   * This exercises the exact same call path a real consumer uses to sign with
+   * a vaultkeeper-managed key, so a test asserting on the returned `jws` is
+   * exercising production wiring, not an approximation of it. The private key
+   * never leaves the backend at any point in the ceremony (see
+   * `VaultKeeper.createSigningKey` in the `vaultkeeper` package).
+   *
+   * @param name - Signing key name to enroll. Must not already exist and must
+   *   not contain `':'`.
+   * @param payload - The payload to sign. Strings are treated as UTF-8.
+   * @param algorithm - The JOSE signing algorithm. Defaults to `'EdDSA'`, the
+   *   only algorithm `InMemoryBackend` currently supports.
+   * @returns The detached compact JWS and the enrolled public key.
+   * @throws {SigningKeyAlreadyExistsError} If a signing key already exists
+   *   under `name`.
+   * @public
+   */
+  async signCeremony(
+    name: string,
+    payload: string | Buffer,
+    algorithm: SigningAlgorithm = 'EdDSA',
+  ): Promise<TestVaultSignCeremonyResult> {
+    const publicKey = await this.keeper.createSigningKey(name, algorithm)
+    const token = await this.keeper.authorizeSigningKey(name)
+    const { result } = await this.keeper.sign(token, { payload })
+    return { jws: result.jws, publicKey }
   }
 }

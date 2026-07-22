@@ -56,6 +56,17 @@ Description
 </th></tr></thead>
 <tbody><tr><td>
 
+[InMemoryBackendFaultOptions](./test-helpers.inmemorybackendfaultoptions.md)
+
+
+</td><td>
+
+Options accepted by [InMemoryBackend.injectFault()](./test-helpers.inmemorybackend.injectfault.md)<!-- -->.
+
+
+</td></tr>
+<tr><td>
+
 [TestVaultOptions](./test-helpers.testvaultoptions.md)
 
 
@@ -73,6 +84,54 @@ Options for creating a [TestVault](./test-helpers.testvault.md)<!-- -->.
 </td><td>
 
 Options accepted by [TestVault.setup()](./test-helpers.testvault.setup.md)<!-- -->. Deliberately looser than the library's discriminated `SetupOptions` union: the trust choice is optional here because `TestVault.setup` defaults it to `skipTrust: true` when omitted, so tests can call `setup('NAME')` with no trust choice at all.
+
+
+</td></tr>
+<tr><td>
+
+[TestVaultSignCeremonyResult](./test-helpers.testvaultsignceremonyresult.md)
+
+
+</td><td>
+
+Result of [TestVault.signCeremony()](./test-helpers.testvault.signceremony.md)<!-- -->: the detached-payload compact JWS produced by the ceremony's final `sign()` step, alongside the public key exported from its `createSigningKey()` step (for offline verification via `VaultKeeper.verify`<!-- -->).
+
+
+</td></tr>
+</tbody></table>
+
+## Type Aliases
+
+<table><thead><tr><th>
+
+Type Alias
+
+
+</th><th>
+
+Description
+
+
+</th></tr></thead>
+<tbody><tr><td>
+
+[InMemoryBackendFaultMode](./test-helpers.inmemorybackendfaultmode.md)
+
+
+</td><td>
+
+The four deterministic fault modes [InMemoryBackend.injectFault()](./test-helpers.inmemorybackend.injectfault.md) can script. Each maps to a real typed error class from `vaultkeeper`<!-- -->'s error hierarchy (see [InMemoryBackend.injectFault()](./test-helpers.inmemorybackend.injectfault.md) for the mapping and the rationale for each choice) so a consumer's `catch` block sees in tests exactly what it would see against a real backend.
+
+
+</td></tr>
+<tr><td>
+
+[InMemoryBackendFaultOperation](./test-helpers.inmemorybackendfaultoperation.md)
+
+
+</td><td>
+
+The operations [InMemoryBackend.injectFault()](./test-helpers.inmemorybackend.injectfault.md) can target. Matches the methods of `SecretBackend` and `SigningBackend` that perform real work (a fault is checked at the top of each, before any state is touched).
 
 
 </td></tr>

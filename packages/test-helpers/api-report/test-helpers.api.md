@@ -4,13 +4,21 @@
 
 ```ts
 
+import { BackendCapabilities } from 'vaultkeeper';
+import { Buffer as Buffer_2 } from 'node:buffer';
 import { ListableBackend } from 'vaultkeeper';
+import { PresenceCapableBackend } from 'vaultkeeper';
 import { SetupOptionsBase } from 'vaultkeeper';
+import { SigningAlgorithm } from 'vaultkeeper';
+import { SigningBackend } from 'vaultkeeper';
+import { SigningPublicKey } from 'vaultkeeper';
 import { VaultKeeper } from 'vaultkeeper';
 
 // @public
-export class InMemoryBackend implements ListableBackend {
+export class InMemoryBackend implements ListableBackend, SigningBackend, PresenceCapableBackend {
     clear(): void;
+    clearAllFaults(): void;
+    clearFault(operation: InMemoryBackendFaultOperation): void;
     // (undocumented)
     delete(id: string): Promise<void>;
     // (undocumented)
@@ -18,16 +26,35 @@ export class InMemoryBackend implements ListableBackend {
     // (undocumented)
     exists(id: string): Promise<boolean>;
     // (undocumented)
+    generateSigningKey(id: string, algorithm: SigningAlgorithm): Promise<void>;
+    getCapabilities(): Promise<BackendCapabilities>;
+    // (undocumented)
+    getPublicKey(id: string): Promise<SigningPublicKey>;
+    injectFault(operation: InMemoryBackendFaultOperation, mode: InMemoryBackendFaultMode, options?: InMemoryBackendFaultOptions): void;
+    // (undocumented)
     isAvailable(): Promise<boolean>;
     // (undocumented)
     list(): Promise<string[]>;
     // (undocumented)
     retrieve(id: string): Promise<string>;
+    // (undocumented)
+    signWithKey(id: string, data: Buffer_2): Promise<Buffer_2>;
     get size(): number;
     // (undocumented)
     store(id: string, secret: string): Promise<void>;
     // (undocumented)
     readonly type = "memory";
+}
+
+// @public
+export type InMemoryBackendFaultMode = 'backend-unavailable' | 'key-absent' | 'permission-denied' | 'session-expired';
+
+// @public
+export type InMemoryBackendFaultOperation = 'store' | 'retrieve' | 'delete' | 'exists' | 'list' | 'generateSigningKey' | 'getPublicKey' | 'signWithKey';
+
+// @public
+export interface InMemoryBackendFaultOptions {
+    persistent?: boolean;
 }
 
 // @public
@@ -38,6 +65,7 @@ export class TestVault {
     readonly keeper: VaultKeeper;
     reset(): void;
     setup(name: string, options?: TestVaultSetupOptions): Promise<string>;
+    signCeremony(name: string, payload: string | Buffer_2, algorithm?: SigningAlgorithm): Promise<TestVaultSignCeremonyResult>;
     store(name: string, value: string): Promise<void>;
 }
 
@@ -51,6 +79,12 @@ export interface TestVaultOptions {
 export interface TestVaultSetupOptions extends SetupOptionsBase {
     executablePath?: string | undefined;
     skipTrust?: boolean | undefined;
+}
+
+// @public
+export interface TestVaultSignCeremonyResult {
+    jws: string;
+    publicKey: SigningPublicKey;
 }
 
 // (No @packageDocumentation comment for this package)
