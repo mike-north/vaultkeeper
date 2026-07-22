@@ -27,6 +27,7 @@ import {
   BackendUnavailableError,
   PresenceDeclinedError,
   PresenceTimeoutError,
+  SecretNotFoundError,
   TestDoubleMisuseError,
 } from 'vaultkeeper'
 
@@ -68,8 +69,11 @@ describe('PresenceSimulatorBackend — capability vocabulary (AC1)', () => {
       operations: { store: 'refuse', delete: 'grant' },
     })
     await expect(backend.store('id', 'secret')).rejects.toBeInstanceOf(PresenceDeclinedError)
-    // delete is scripted 'grant' and unaffected by store's refusal.
-    await expect(backend.delete('never-stored')).resolves.toBeUndefined()
+    // delete is scripted 'grant' and unaffected by store's refusal: the call
+    // passes the presence gate and reaches the delegate, whose contract-
+    // faithful delete reports the missing id — a backend-level error, not a
+    // presence one, proving the grant.
+    await expect(backend.delete('never-stored')).rejects.toBeInstanceOf(SecretNotFoundError)
   })
 
   it("'sign' outcome is scriptable independently of secret operations", async () => {
@@ -174,6 +178,8 @@ describe('PresenceSimulatorBackend — arm-per-call queue mode', () => {
     const backend = PresenceSimulatorBackend.forTesting({ operations: { delete: 'grant' } })
     backend.armPresence('store', 'refuse')
     await expect(backend.store('id', 'secret')).rejects.toBeInstanceOf(PresenceDeclinedError)
-    await expect(backend.delete('never-stored')).resolves.toBeUndefined()
+    // Same grant-proof shape as above: a backend-level not-found (not a
+    // presence error) shows delete's static grant script is unaffected.
+    await expect(backend.delete('never-stored')).rejects.toBeInstanceOf(SecretNotFoundError)
   })
 })

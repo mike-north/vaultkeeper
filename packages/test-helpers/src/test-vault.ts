@@ -4,7 +4,7 @@
 
 import type { Buffer } from 'node:buffer'
 import type { VaultConfig, SetupOptionsBase, SigningAlgorithm, SigningPublicKey } from 'vaultkeeper'
-import { VaultKeeper, BackendRegistry } from 'vaultkeeper'
+import { VaultKeeper, BackendRegistry, SecretNotFoundError } from 'vaultkeeper'
 import { InMemoryBackend } from './in-memory-backend.js'
 
 /**
@@ -169,15 +169,24 @@ export class TestVault {
    * Delete a secret from the test backend.
    *
    * @remarks
-   * Convenience shorthand for `vault.backend.delete(name)`. Resolves without
-   * error if the secret does not exist.
+   * Convenience shorthand for `vault.backend.delete(name)`, made idempotent
+   * for test ergonomics: it resolves without error if the secret does not
+   * exist, absorbing the `SecretNotFoundError` the backend itself throws
+   * (the backend mirrors the production `SecretBackend` contract, which
+   * requires the throw).
    *
    * @param name - The secret identifier.
    * @returns A promise that resolves when the secret has been removed.
    * @public
    */
-  delete(name: string): Promise<void> {
-    return this.backend.delete(name)
+  async delete(name: string): Promise<void> {
+    try {
+      await this.backend.delete(name)
+    } catch (err) {
+      if (!(err instanceof SecretNotFoundError)) {
+        throw err
+      }
+    }
   }
 
   /**

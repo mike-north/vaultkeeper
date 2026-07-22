@@ -119,6 +119,13 @@ export class InMemoryBackend implements ListableBackend, SigningBackend, Presenc
     } catch (err) {
       return Promise.reject(err instanceof Error ? err : new Error(String(err)))
     }
+    // Contract fidelity: SecretBackend.delete() throws SecretNotFoundError
+    // for a missing id (see backend/types.ts and FileBackend) — a lenient
+    // no-op here would let downstream tests pass against behavior no real
+    // backend exhibits.
+    if (!this.#store.has(id)) {
+      return Promise.reject(new SecretNotFoundError(`Secret not found: ${id}`))
+    }
     this.#store.delete(id)
     return Promise.resolve()
   }
@@ -349,7 +356,7 @@ export class InMemoryBackend implements ListableBackend, SigningBackend, Presenc
       case 'key-absent':
         if (SIGNING_OPERATIONS.has(operation)) {
           return new SigningKeyNotFoundError(
-            `Injected fault: signing key not found during '${operation}'`,
+            `Injected fault: signing key not found during '${operation}': ${id ?? '(unknown)'}`,
             id ?? '(unknown)',
           )
         }
