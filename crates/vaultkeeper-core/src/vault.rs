@@ -11,7 +11,7 @@ use crate::jwe::{
 };
 use crate::keys::KeyManager;
 use crate::types::{
-    KeyStatus, PreflightResult, SigningClaims, VaultClaims, VaultConfig, VaultResponse,
+    ClaimsKind, KeyStatus, PreflightResult, SigningClaims, VaultClaims, VaultConfig, VaultResponse,
 };
 
 /// A qualifying description of backends that can satisfy a presence-per-use
@@ -172,6 +172,12 @@ pub struct VaultKeeper {
     /// stay in memory only and never touch the config dir — mirroring the TS
     /// `VaultKeeper.init`'s `persistKeys` flag.
     persist_keys: bool,
+    /// The highest lease-revocation-store `revStateGen` this instance has
+    /// itself observed (issue #298). The anti-rollback anchor for
+    /// [`VaultKeeper::validate_lease_revocation`]: `0` on a fresh instance
+    /// (any persisted generation satisfies it), and only ever increases —
+    /// see [`crate::keys::storage::load_revocation_for_validation`].
+    revocation_high_water_mark: u64,
 }
 
 impl VaultKeeper {
@@ -224,6 +230,7 @@ impl VaultKeeper {
             _backend: None,
             handle_table: HandleTable::new(),
             persist_keys,
+            revocation_high_water_mark: 0,
         })
     }
 
@@ -275,6 +282,123 @@ impl VaultKeeper {
         }
         let snapshot = self.key_manager.snapshot()?;
         crate::keys::save_key_state(host, &snapshot).await
+    }
+
+    // --- Lease revocation store (issue #298) -------------------------------
+
+    /// `session revoke --jti <JTI>` — revoke a single outstanding lease.
+    /// Read-modify-write (see [`crate::keys::mutate_revocation_state`]): a
+    /// concurrent `rotateKey`/`revokeKey` racing this call loses neither
+    /// writer's own portion of `keys.enc`. Also sweeps every `jti` entry
+    /// already past its own `exp` before persisting (AC4) — bounded growth by
+    /// construction. `exp` is the revoked token's own expiry, so the entry
+    /// can never outlive the token it revokes.
+    pub async fn revoke_lease_jti(
+        &mut self,
+        host: &dyn HostPlatform,
+        jti: &str,
+        exp: u64,
+    ) -> Result<(), VaultError> {
+        let jti = jti.to_string();
+        let now = crate::util::time::now_secs();
+        crate::keys::mutate_revocation_state(host, move |state| {
+            state.revoke_jti(jti, exp);
+            state.sweep_expired(now);
+        })
+        .await?;
+        Ok(())
+    }
+
+    /// `session revoke --key <NAME>` — revoke every outstanding lease for a
+    /// named signing key (matches [`VaultClaims::sub`]) in one operation, by
+    /// incrementing its generation. See [`VaultKeeper::revoke_lease_jti`] for
+    /// the read-modify-write/concurrency contract.
+    pub async fn revoke_lease_key(
+        &mut self,
+        host: &dyn HostPlatform,
+        key_name: &str,
+    ) -> Result<(), VaultError> {
+        let key_name = key_name.to_string();
+        crate::keys::mutate_revocation_state(host, move |state| {
+            state.revoke_key(key_name);
+        })
+        .await?;
+        Ok(())
+    }
+
+    /// Validate a signing-key lease's revocation status against the
+    /// persisted revocation store (issue #298).
+    ///
+    /// Distinct from [`VaultKeeper::authorize`] by design: only the
+    /// signing-key-lease (`kty: SigningKey`) path calls this. Ordinary secret
+    /// authorization (`authorize`/rung-2 resolution) is entirely unaffected
+    /// by revocation-store health — a corrupted or missing revocation store
+    /// must not brick secret resolution (AC8).
+    ///
+    /// `claims` is expected to have already passed
+    /// [`crate::jwe::validate_claims`] (so `jti`/`sub` are non-empty and
+    /// `kty`/`kgen` obey the signing-lease shape) — this function re-checks
+    /// `kty`/`kgen` defensively rather than trusting the caller, but does not
+    /// repeat expiry/usage-limit/shape validation.
+    ///
+    /// Tracks the highest `revStateGen` this instance has itself observed
+    /// (`self.revocation_high_water_mark`) as the anti-rollback anchor: see
+    /// [`crate::keys::storage::load_revocation_for_validation`].
+    ///
+    /// # Errors
+    /// Returns [`VaultError::TokenRevoked`] if `claims` carries no `kgen`
+    /// (fail closed — never defaulted to generation 0), the revocation store
+    /// cannot be trusted (missing, tampered, or rolled back), the `jti` is on
+    /// the revoked list, or `kgen` is below the current minimum for `sub`.
+    /// Returns [`VaultError::Other`] if `claims.kty` is not `SigningKey`.
+    pub async fn validate_lease_revocation(
+        &mut self,
+        host: &dyn HostPlatform,
+        claims: &VaultClaims,
+    ) -> Result<(), VaultError> {
+        if claims.kty != Some(ClaimsKind::SigningKey) {
+            return Err(VaultError::Other(
+                "validate_lease_revocation() called on claims that are not a signing-key lease"
+                    .to_string(),
+            ));
+        }
+        // Fail closed: an unversioned lease is rejected outright, never
+        // treated as generation 0 — see `crate::jwe::validate_claims`, which
+        // already enforces this on the mint/authorize path. Re-checked here
+        // defensively since this function does not assume its caller ran
+        // that validation first.
+        let Some(kgen) = claims.kgen else {
+            return Err(VaultError::TokenRevoked {
+                message: format!(
+                    "Lease {} refused: claims carry no kgen (unversioned lease)",
+                    claims.jti
+                ),
+            });
+        };
+
+        let state =
+            crate::keys::load_revocation_for_validation(host, self.revocation_high_water_mark)
+                .await?;
+        self.revocation_high_water_mark = self.revocation_high_water_mark.max(state.rev_state_gen);
+
+        if state.is_jti_revoked(&claims.jti) {
+            return Err(VaultError::TokenRevoked {
+                message: format!("Lease {} has been revoked (jti)", claims.jti),
+            });
+        }
+
+        let min_gen = state.min_generation_for(&claims.sub);
+        if kgen < min_gen {
+            return Err(VaultError::TokenRevoked {
+                message: format!(
+                    "Lease {} for key '{}' has been revoked: kgen {kgen} is below the current \
+                     minimum generation {min_gen}",
+                    claims.jti, claims.sub
+                ),
+            });
+        }
+
+        Ok(())
     }
 
     /// Store a secret value and produce a JWE token encapsulating it.
@@ -696,6 +820,7 @@ mod register_signing_handle_tests {
             _backend: None,
             handle_table: HandleTable::new(),
             persist_keys: false,
+            revocation_high_water_mark: 0,
         }
     }
 
