@@ -61,8 +61,10 @@ is a named future epic, triggered by an installed base worth integrating against
 ## 5. Core concepts
 
 - **Backend** — where secrets live. Pluggable: file (encrypted), macOS Keychain, 1Password,
-  YubiKey, DPAPI, libsecret. Backends self-report **capabilities**; policy fails closed when a
-  capability is absent rather than silently downgrading.
+  YubiKey, DPAPI, `secret-tool` (Linux Secret Service via libsecret); additional stores are
+  small adapters over the same interface, added where demand appears. Backends self-report
+  **capabilities**; policy fails closed when a capability is absent rather than silently
+  downgrading.
 - **Capability token / lease** — an encrypted JWE granting scoped access: expiry, usage limit,
   executable-identity binding at mint, revocation. The serialized, cross-process form is the
   **lease**; "lease" is the house term for any serialized, expiring, revocable capability.
@@ -71,8 +73,8 @@ is a named future epic, triggered by an installed base worth integrating against
   minimum (`minTrust`), or-stronger.
 - **Presence** — a backend's ability to force a *fresh physical human action* for a specific
   operation, right now (YubiKey touch, Touch ID, per-use biometric approval). Enforced
-  fail-closed; never simulated in production (the test simulator is structurally unreachable
-  there).
+  fail-closed; and any test aid capable of simulating presence is required to be structurally
+  unreachable from production code paths.
 - **Profile** — a named, committable, per-project set of env-var bindings, each entry carrying
   its secret source, its rung (`materialize: "secret" | "lease"`), and its policy. Profiles
   contain names and policy, never secrets; committing one makes policy loosening a reviewable
@@ -108,9 +110,10 @@ appears to deliver a property is treated as a defect.** Standing consequences:
 - Fail-closed is the default posture: unknown backends report no capabilities; corrupt or
   missing revocation state refuses lease validation; config naming an unavailable backend is an
   error, never a silent fallback.
-- Test aids that could forge a security signal (the presence simulator) ship structurally
-  unreachable from production: separate dev-only package, no registry entry, opt-in-only
-  construction, loud refusal under production environments.
+- Test aids that could forge a security signal (e.g. a presence simulator) must be
+  structurally unreachable from production: separate dev-only package, no registry entry,
+  opt-in-only construction, loud refusal under production environments. This is a standing
+  requirement on any such aid, enforced by negative tests wherever one exists.
 
 ## 8. Non-goals
 
@@ -137,9 +140,9 @@ packaging test suites.
 
 **In flight**: the `run` wrapper verb (stdio/signal-transparent); session signing leases with
 tamper-evident two-axis revocation; native backend parity (keychain via `security -i`, DPAPI,
-YubiKey ports); consumer test doubles (fault-injecting in-memory backend, presence simulator);
-the paired-double test strategy (stub framework, golden transcripts, flavored doubles, the
-manual-residue register).
+YubiKey ports); consumer test doubles (signing and fault-injection capabilities being added to
+the existing in-memory backend, plus a new presence simulator); the paired-double test
+strategy (stub framework, golden transcripts, flavored doubles, the manual-residue register).
 
 **Deliberately future**: the local redemption endpoint (opens rung 3 to any language);
 external key import with custody provenance modeled; verifier-visible assurance (a signature
