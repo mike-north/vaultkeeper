@@ -39,8 +39,8 @@
 //! stays a plain [`HostPlatform::exec`] call (which already carries stdin) —
 //! no Security.framework FFI, no host split, no wasm-portability loss.
 //!
-//! base64-encoding the secret before it enters the stdin script is *load
-//! -bearing* and is kept unchanged from the TS backend: the base64 alphabet
+//! base64-encoding the secret before it enters the stdin script is
+//! *load-bearing* and is kept unchanged from the TS backend: the base64 alphabet
 //! (`A-Za-z0-9+/=`) contains no character `security -i`'s command tokenizer
 //! treats specially, so `-w <base64>` is always exactly one clean token
 //! regardless of what bytes the underlying secret contains.
