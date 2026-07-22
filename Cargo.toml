@@ -34,6 +34,13 @@ uuid = { version = "1", features = ["v4"] }
 # raw DER). Deliberately not `ring` — RustCrypto keeps the whole crypto stack
 # in one ecosystem and wasm32-compatible.
 ed25519-dalek = { version = "2", features = ["pkcs8", "pem", "zeroize"] }
+# HKDF-SHA256 (issue #289): derives the file backend's signing-key seal key
+# from the shared `.keys.wrap` material in a namespace distinct from any
+# secret-encryption path. Same RustCrypto ecosystem as `sha2`/`aes-gcm`
+# already in this workspace (built on the same `digest` trait already in the
+# dependency graph), pure-Rust, wasm32-compatible, and small (no transitive
+# deps beyond `hmac`, itself part of the same family).
+hkdf = "0.12"
 
 # WASM
 wasm-bindgen = "0.2"

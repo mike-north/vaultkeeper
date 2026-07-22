@@ -32,7 +32,11 @@ use crate::keys::types::{KeyMaterial, KeyStateSnapshot};
 use crate::util::time;
 
 const KEY_STATE_FILE: &str = "keys.enc";
-const KEY_WRAP_FILE: &str = ".keys.wrap";
+/// Filename of the shared wrap key. `pub(crate)` so the `backend::signing_store`
+/// module (backing [`crate::backend::FileBackend`]'s `SigningBackend` impl) can
+/// HKDF-derive its own seal key from the same material (see that module's
+/// docs) without duplicating the filename literal.
+pub(crate) const KEY_WRAP_FILE: &str = ".keys.wrap";
 const GCM_IV_BYTES: usize = 12;
 const GCM_KEY_BYTES: usize = 32;
 const GCM_TAG_BYTES: usize = 16;
@@ -172,7 +176,7 @@ fn decrypt_gcm(key: &[u8], encoded: &str) -> Option<String> {
 /// file (e.g. permission denied) propagates unchanged as the typed
 /// `VaultError` the host produced — only a confirmed-missing file triggers
 /// regeneration, mirroring `FileBackend::get_or_create_key`.
-async fn get_or_create_wrap_key(
+pub(crate) async fn get_or_create_wrap_key(
     host: &dyn HostPlatform,
     wrap_path: &Path,
 ) -> Result<Vec<u8>, VaultError> {

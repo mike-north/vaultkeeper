@@ -7,8 +7,10 @@
 //! Encrypted file format (all parts base64-encoded, colon-separated):
 //!   `<iv>:<authTag>:<ciphertext>`
 
-use crate::backend::types::{HostPlatform, ListableBackend, SecretBackend};
+use crate::backend::signing_store;
+use crate::backend::types::{HostPlatform, ListableBackend, SecretBackend, SigningBackend};
 use crate::errors::VaultError;
+use crate::types::{SigningAlgorithm, SigningPublicKey};
 use aes_gcm::aead::Aead;
 use aes_gcm::{Aes256Gcm, KeyInit, Nonce};
 use base64ct::{Base64, Encoding};
@@ -155,8 +157,9 @@ fn decrypt_gcm(key: &[u8], encoded: &str) -> Result<String, VaultError> {
         .map_err(|e| VaultError::Other(format!("Decrypted data is not valid UTF-8: {e}")))
 }
 
-/// Hex-encode bytes (used for safe filenames).
-fn hex_encode(data: &[u8]) -> String {
+/// Hex-encode bytes (used for safe filenames). `pub(crate)` so the
+/// `signing_store` module can reuse it for its own filenames.
+pub(crate) fn hex_encode(data: &[u8]) -> String {
     let mut hex = String::with_capacity(data.len() * 2);
     for byte in data {
         let _ = write!(hex, "{byte:02x}");
@@ -258,6 +261,43 @@ impl SecretBackend for FileBackend {
     async fn exists(&self, id: &str) -> Result<bool, VaultError> {
         let entry_path = self.entry_path(id);
         self.host.file_exists(&entry_path).await
+    }
+}
+
+/// Signing keys are a distinct resource from secrets (see [`SigningBackend`]'s
+/// docs): each Ed25519 private key is sealed as its own AES-256-GCM envelope
+/// under `<config_dir>/signing/`, never under this backend's `file/` secret
+/// storage or `keys.enc`, and never returned from `sign_with_key` — only
+/// signature bytes leave this backend. See the private
+/// `crate::backend::signing_store` module for the storage implementation and
+/// its HKDF key-derivation rationale.
+///
+/// [`FileBackend`] deliberately does *not* implement
+/// [`PresenceCapableBackend`](super::PresenceCapableBackend)
+/// (issue #289 AC6): it is not a touch device, so it must never claim
+/// `presence_per_use`. Leaving `as_presence_capable` at its
+/// [`SecretBackend`] default (`None`) is what makes
+/// [`get_backend_capabilities`](super::get_backend_capabilities) honestly
+/// report `presence_per_use: false` for this backend's signing path — a
+/// grant minted against it can only ever reflect host-approval, never a
+/// backend-enforced fresh touch.
+#[cfg_attr(target_arch = "wasm32", async_trait::async_trait(?Send))]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait::async_trait)]
+impl SigningBackend for FileBackend {
+    async fn generate_signing_key(
+        &self,
+        id: &str,
+        algorithm: SigningAlgorithm,
+    ) -> Result<(), VaultError> {
+        signing_store::generate_signing_key(self.host.as_ref(), id, algorithm).await
+    }
+
+    async fn get_public_key(&self, id: &str) -> Result<SigningPublicKey, VaultError> {
+        signing_store::get_public_key(self.host.as_ref(), id).await
+    }
+
+    async fn sign_with_key(&self, id: &str, data: &[u8]) -> Result<Vec<u8>, VaultError> {
+        signing_store::sign_with_key(self.host.as_ref(), id, data).await
     }
 }
 
@@ -700,5 +740,77 @@ mod tests {
         let mut names = backend.list().await.unwrap();
         names.sort();
         assert_eq!(names, vec!["alpha", "beta"]);
+    }
+
+    // -----------------------------------------------------------------
+    // SigningBackend (issue #289)
+    // -----------------------------------------------------------------
+
+    /// AC1/AC2: `sign_with_key` on `FileBackend` produces a signature
+    /// verifiable against the enrolled key's public half, and the private
+    /// key never surfaces through `SecretBackend::retrieve` for the same id
+    /// — the signing namespace is entirely separate from the secret store.
+    #[tokio::test]
+    async fn file_backend_sign_with_key_verifies_and_never_leaks_through_retrieve() {
+        let host = make_test_host();
+        let backend = FileBackend::new(host);
+
+        backend
+            .generate_signing_key("release-key", crate::types::SigningAlgorithm::EdDsa)
+            .await
+            .unwrap();
+
+        let public_key = backend.get_public_key("release-key").await.unwrap();
+        let message = b"vaultkeeper release artifact";
+        let signature = backend.sign_with_key("release-key", message).await.unwrap();
+
+        let verifying_key =
+            crate::signing::ed25519::parse_public_key_pem(&public_key.public_key_pem).unwrap();
+        assert!(crate::signing::ed25519::verify(
+            &verifying_key,
+            message,
+            &signature
+        ));
+
+        // No secret was ever `store()`d under this id — the private key
+        // must not be reachable through the ordinary secret-retrieval path.
+        let err = backend.retrieve("release-key").await.unwrap_err();
+        assert!(matches!(err, VaultError::SecretNotFound { .. }));
+    }
+
+    /// AC1 negative case: a wrong/absent signing-key id is a typed error, not
+    /// a panic. (The backend is keyed by id; JWS-header `kid` is a separate,
+    /// public-key-derived concept.)
+    #[tokio::test]
+    async fn file_backend_sign_with_key_unknown_id_is_typed_error() {
+        let host = make_test_host();
+        let backend = FileBackend::new(host);
+        let err = backend
+            .sign_with_key("does-not-exist", b"data")
+            .await
+            .unwrap_err();
+        assert!(matches!(err, VaultError::SigningKeyNotFound { .. }));
+    }
+
+    /// AC6: `FileBackend` is not a touch device — it must never advertise
+    /// `presence_per_use`, including for the signing path. Since it does not
+    /// implement `PresenceCapableBackend`, `get_backend_capabilities` falls
+    /// back to `BackendCapabilities::none()`, and a `Sign`-operation grant
+    /// minted against it can only ever reflect host-approval, never a
+    /// backend-enforced fresh touch.
+    #[tokio::test]
+    async fn file_backend_signing_path_never_claims_presence_per_use() {
+        use crate::backend::{
+            PresenceOperation, get_backend_capabilities, is_presence_capable_backend,
+        };
+
+        let host = make_test_host();
+        let backend = FileBackend::new(host);
+
+        assert!(!is_presence_capable_backend(&backend));
+
+        let capabilities = get_backend_capabilities(&backend).await.unwrap();
+        assert!(!capabilities.presence_per_use);
+        assert!(!capabilities.enforces(PresenceOperation::Sign));
     }
 }

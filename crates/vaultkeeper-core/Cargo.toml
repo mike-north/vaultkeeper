@@ -19,6 +19,7 @@ rand = { workspace = true }
 uuid = { workspace = true }
 zeroize = { workspace = true }
 ed25519-dalek = { workspace = true }
+hkdf = { workspace = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 js-sys = { workspace = true }
