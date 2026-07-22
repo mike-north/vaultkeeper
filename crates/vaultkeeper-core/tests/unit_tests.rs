@@ -497,6 +497,79 @@ mod backend_registry {
         let registry = BackendRegistry::new();
         assert!(!registry.has("missing"));
     }
+
+    #[test]
+    fn register_and_create_dpapi_honoring_config_path() {
+        // Issue #292: DpapiBackend registers the same way its sibling
+        // subprocess-orchestration ports do (SecretToolBackend, #294), and
+        // honors `BackendConfig.path` when present.
+        use std::path::{Path, PathBuf};
+        use std::sync::Arc;
+        use vaultkeeper_core::backend::DpapiBackend;
+
+        struct MinimalHost {
+            config_dir: PathBuf,
+        }
+
+        #[async_trait::async_trait]
+        impl HostPlatform for MinimalHost {
+            async fn exec(
+                &self,
+                _cmd: &str,
+                _args: &[&str],
+                _options: ExecOptions<'_>,
+            ) -> Result<ExecOutput, VaultError> {
+                Ok(ExecOutput {
+                    stdout: Vec::new(),
+                    stderr: Vec::new(),
+                    exit_code: 0,
+                })
+            }
+            async fn read_file(&self, _path: &Path) -> Result<Vec<u8>, VaultError> {
+                Err(VaultError::Other("not implemented".to_string()))
+            }
+            async fn write_file(
+                &self,
+                _path: &Path,
+                _content: &[u8],
+                _mode: u32,
+            ) -> Result<(), VaultError> {
+                Ok(())
+            }
+            async fn file_exists(&self, _path: &Path) -> Result<bool, VaultError> {
+                Ok(false)
+            }
+            async fn delete_file(&self, _path: &Path) -> Result<(), VaultError> {
+                Ok(())
+            }
+            async fn list_dir(&self, _path: &Path) -> Result<Vec<String>, VaultError> {
+                Ok(Vec::new())
+            }
+            fn platform(&self) -> Platform {
+                Platform::Windows
+            }
+            fn config_dir(&self) -> &Path {
+                &self.config_dir
+            }
+        }
+
+        let host: Arc<dyn HostPlatform> = Arc::new(MinimalHost {
+            config_dir: PathBuf::from("/test/config"),
+        });
+
+        let registry = BackendRegistry::new();
+        registry.register("dpapi", move |config| {
+            let storage_dir = config
+                .and_then(|c| c.path.clone())
+                .map(std::path::PathBuf::from);
+            Box::new(DpapiBackend::new(host.clone(), storage_dir))
+        });
+
+        assert!(registry.has("dpapi"));
+        let backend = registry.create("dpapi", None).unwrap();
+        assert_eq!(backend.backend_type(), "dpapi");
+        assert_eq!(backend.display_name(), "Windows DPAPI");
+    }
 }
 
 // ---------------------------------------------------------------------------
