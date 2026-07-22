@@ -41,6 +41,25 @@ jobs:
           path: target/release/vaultkeeper
           retention-days: 1
 
+  keychain-conformance:
+    name: macOS Keychain Backend Conformance
+    # Runs `KeychainBackend` against the real `security(1)` binary and a real
+    # Keychain, via an ephemeral `create-keychain` (issue #290 AC5). The
+    # `rust` job above only runs on ubuntu-latest, where this test detects
+    # the missing macOS prerequisite and skips itself (see
+    # crates/vaultkeeper-core/tests/keychain_conformance.rs), so it needs its
+    # own macOS runner to actually execute.
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Run keychain conformance test
+        run: cargo test -p vaultkeeper-core --test keychain_conformance -- --nocapture
+
   wasm-guards:
     name: WASM Build Guards (drift + size)
     runs-on: ubuntu-latest

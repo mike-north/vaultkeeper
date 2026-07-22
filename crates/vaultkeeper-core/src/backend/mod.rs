@@ -6,6 +6,7 @@
 pub mod dpapi;
 pub mod file;
 pub mod in_memory;
+pub mod keychain;
 mod registry;
 pub mod secret_tool;
 mod signing_store;
@@ -15,6 +16,7 @@ pub mod yubikey;
 pub use dpapi::DpapiBackend;
 pub use file::FileBackend;
 pub use in_memory::InMemoryBackend;
+pub use keychain::KeychainBackend;
 pub use registry::BackendRegistry;
 pub use secret_tool::SecretToolBackend;
 pub use types::{
