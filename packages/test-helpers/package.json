@@ -1,6 +1,6 @@
 {
   "name": "@vaultkeeper/test-helpers",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Test utilities for vaultkeeper consumers",
   "homepage": "https://github.com/mike-north/vaultkeeper#readme",
   "repository": {
