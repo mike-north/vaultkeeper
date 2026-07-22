@@ -361,6 +361,17 @@ Thrown when a signing operation (`key create`<!-- -->, `key export`<!-- -->, `si
 </td></tr>
 <tr><td>
 
+[TestDoubleMisuseError](./vaultkeeper.testdoublemisuseerror.md)
+
+
+</td><td>
+
+Thrown when a test-only double — a class built purely to fabricate a vaultkeeper-internal signal (e.g. a granted presence check, an unlocked backend) for driving negative test cases — refuses to construct because it detected it is running outside a test environment.
+
+
+</td></tr>
+<tr><td>
+
 [TokenExpiredError](./vaultkeeper.tokenexpirederror.md)
 
 

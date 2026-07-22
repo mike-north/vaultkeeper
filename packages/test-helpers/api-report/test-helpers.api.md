@@ -8,6 +8,7 @@ import { BackendCapabilities } from 'vaultkeeper';
 import { Buffer as Buffer_2 } from 'node:buffer';
 import { ListableBackend } from 'vaultkeeper';
 import { PresenceCapableBackend } from 'vaultkeeper';
+import { PresenceOperation } from 'vaultkeeper';
 import { SetupOptionsBase } from 'vaultkeeper';
 import { SigningAlgorithm } from 'vaultkeeper';
 import { SigningBackend } from 'vaultkeeper';
@@ -64,6 +65,54 @@ export class InMemoryBackend implements ListableBackend, SigningBackend, Presenc
 
 // @public
 export type InMemoryBackendFaultOperation = 'store' | 'retrieve' | 'delete' | 'exists' | 'list' | 'generateSigningKey' | 'getPublicKey' | 'signWithKey';
+
+// @public
+export type PresenceSimulatorArmedOutcome = Exclude<PresenceSimulatorOutcome, 'not-capable'>;
+
+// @public
+export class PresenceSimulatorBackend implements ListableBackend, SigningBackend, PresenceCapableBackend {
+    armPresence(operation: PresenceOperation, outcome: PresenceSimulatorArmedOutcome): void;
+    // (undocumented)
+    delete(id: string): Promise<void>;
+    // (undocumented)
+    readonly displayName = "Presence Simulator Backend (test-only)";
+    // (undocumented)
+    exists(id: string): Promise<boolean>;
+    static forTesting(options?: PresenceSimulatorBackendOptions): PresenceSimulatorBackend;
+    // (undocumented)
+    generateSigningKey(id: string, algorithm: SigningAlgorithm): Promise<void>;
+    getCapabilities(): Promise<BackendCapabilities>;
+    // (undocumented)
+    getPublicKey(id: string): Promise<SigningPublicKey>;
+    // (undocumented)
+    isAvailable(): Promise<boolean>;
+    // (undocumented)
+    list(): Promise<string[]>;
+    // (undocumented)
+    retrieve(id: string): Promise<string>;
+    // (undocumented)
+    signWithKey(id: string, data: Buffer_2): Promise<Buffer_2>;
+    // (undocumented)
+    store(id: string, secret: string): Promise<void>;
+    // (undocumented)
+    readonly type = "presence-simulator";
+}
+
+// @public
+export interface PresenceSimulatorBackendOptions {
+    operations?: PresenceSimulatorOperationOutcomes;
+}
+
+// @public
+export interface PresenceSimulatorOperationOutcomes {
+    delete?: PresenceSimulatorOutcome;
+    read?: PresenceSimulatorOutcome;
+    sign?: PresenceSimulatorOutcome;
+    store?: PresenceSimulatorOutcome;
+}
+
+// @public
+export type PresenceSimulatorOutcome = 'grant' | 'refuse' | 'timeout' | 'not-capable';
 
 // @public
 export class TestVault {
