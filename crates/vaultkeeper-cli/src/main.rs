@@ -98,7 +98,7 @@ enum Commands {
         #[command(subcommand)]
         action: ProfileAction,
     },
-    /// Manage signing-key leases (revocation)
+    /// Manage signing-key leases (mint, revoke)
     Session {
         #[command(subcommand)]
         action: SessionAction,
@@ -120,8 +120,8 @@ enum SessionAction {
     /// Mint a session signing-key lease for a `signingKey` +
     /// `materialize: "lease"` profile entry, printing the JWE to stdout
     Mint {
-        /// The profile to resolve the entry from
-        #[arg(long)]
+        /// The profile to resolve the entry from — positional, matching
+        /// every other profile-scoped command (`profile show`/`profile lint`)
         profile: String,
         /// The env-var entry name within the profile
         #[arg(long)]
@@ -824,7 +824,7 @@ async fn cmd_session_revoke_key(key: &str) -> i32 {
     0
 }
 
-/// `session mint --profile <NAME> --entry <VAR>` (issue #299): resolve a
+/// `session mint <PROFILE> --entry <VAR>` (issue #299): resolve a
 /// `signingKey` + `materialize: "lease"` profile entry and mint a session
 /// signing-key lease, printing the JWE to stdout.
 ///
@@ -859,20 +859,23 @@ async fn cmd_session_mint(profile: &str, entry: &str) -> i32 {
         .iter()
         .find(|(name, _)| name == entry)
     else {
-        eprintln!("Error: profile '{profile}' has no entry '{entry}'");
+        eprintln!(
+            "Error: profile '{profile}' has no entry '{entry}' \
+             (run `vaultkeeper profile show {profile}` to see its entries)"
+        );
         return 1;
     };
 
-    let key_name = match &profile_entry.source {
-        EntrySource::SigningKey(name) => name.clone(),
-        EntrySource::Secret(_) => {
-            eprintln!(
-                "Error: entry '{entry}' in profile '{profile}' is secret-backed; \
-                 `session mint` only mints signing-key leases"
-            );
-            return 1;
-        }
-    };
+    // Friendlier, earlier rejection than core's own — `mint_signing_lease`
+    // re-checks `source`/`materialize` itself and fails closed regardless,
+    // so this is UX only, not the enforcement point (issue #299).
+    if matches!(profile_entry.source, EntrySource::Secret(_)) {
+        eprintln!(
+            "Error: entry '{entry}' in profile '{profile}' is secret-backed; \
+             `session mint` only mints signing-key leases"
+        );
+        return 1;
+    }
 
     if profile_entry.materialize != MaterializeMode::Lease {
         eprintln!(
@@ -886,7 +889,7 @@ async fn cmd_session_mint(profile: &str, entry: &str) -> i32 {
         .ttl_seconds
         .unwrap_or(vaultkeeper_core::profile::SIGNING_LEASE_DEFAULT_TTL_SECONDS);
 
-    let vault = match init_vault(&host).await {
+    let mut vault = match init_vault(&host).await {
         Ok(v) => v,
         Err(code) => return code,
     };
@@ -897,7 +900,8 @@ async fn cmd_session_mint(profile: &str, entry: &str) -> i32 {
     let options = MintLeaseOptions {
         profile_name: profile,
         entry_name: entry,
-        key_name: &key_name,
+        source: &profile_entry.source,
+        materialize: profile_entry.materialize,
         ttl_seconds,
         trust_tier: profile_entry.min_trust.to_trust_tier(),
         use_limit: profile_entry.use_limit,

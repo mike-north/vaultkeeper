@@ -1353,7 +1353,6 @@ mod session_mint {
             .args([
                 "session",
                 "mint",
-                "--profile",
                 "github-mcp",
                 "--entry",
                 "VK_SIGNING_LEASE",
@@ -1409,7 +1408,6 @@ mod session_mint {
             .args([
                 "session",
                 "mint",
-                "--profile",
                 "github-mcp",
                 "--entry",
                 "VK_SIGNING_LEASE",
@@ -1432,6 +1430,44 @@ mod session_mint {
             5,
             "expected a compact JWE on stdout: {jwe}"
         );
+
+        // Decrypt it for real rather than trusting the dot count alone: the
+        // test env owns the same config dir the subprocess just persisted
+        // its key state into, so a second, in-process `VaultKeeper::init`
+        // against that same dir hydrates the identical key and can decrypt
+        // exactly like `mint_signing_lease_tests` does at the core layer.
+        let host = Arc::new(RealFsHost {
+            config_dir: dir.path().to_path_buf(),
+        });
+        let vault = vaultkeeper_core::VaultKeeper::init(
+            host.as_ref(),
+            Some(vaultkeeper_core::vault::VaultKeeperOptions {
+                skip_doctor: true,
+                ..Default::default()
+            }),
+        )
+        .await
+        .expect("failed to hydrate the vault the subprocess just persisted keys into");
+        let key = vault
+            .key_manager()
+            .get_current_key()
+            .expect("current key must exist after the subprocess's own init");
+        let claims = vaultkeeper_core::jwe::decrypt_token(&key.key, jwe)
+            .expect("must decrypt with the vault's own current key");
+
+        assert_eq!(
+            claims.kty,
+            Some(vaultkeeper_core::types::ClaimsKind::SigningKey)
+        );
+        assert!(
+            !claims.kid.unwrap_or_default().is_empty(),
+            "kid must be non-empty"
+        );
+        assert!(claims.kgen.is_some(), "kgen must be present");
+        assert!(
+            claims.val.is_none(),
+            "val must never be present on a signing-key lease"
+        );
     }
 
     #[test]
@@ -1446,7 +1482,6 @@ mod session_mint {
         cmd.args([
             "session",
             "mint",
-            "--profile",
             "does-not-exist",
             "--entry",
             "VK_SIGNING_LEASE",
@@ -1464,17 +1499,13 @@ mod session_mint {
             "github-mcp",
             &serde_json::json!({ "version": 1, "name": "github-mcp", "entries": {} }),
         );
-        cmd.args([
-            "session",
-            "mint",
-            "--profile",
-            "github-mcp",
-            "--entry",
-            "DOES_NOT_EXIST",
-        ])
-        .assert()
-        .code(1)
-        .stderr(predicate::str::contains("has no entry 'DOES_NOT_EXIST'"));
+        cmd.args(["session", "mint", "github-mcp", "--entry", "DOES_NOT_EXIST"])
+            .assert()
+            .code(1)
+            .stderr(predicate::str::contains("has no entry 'DOES_NOT_EXIST'"))
+            .stderr(predicate::str::contains(
+                "vaultkeeper profile show github-mcp",
+            ));
     }
 
     #[test]
@@ -1495,17 +1526,10 @@ mod session_mint {
                 }
             }),
         );
-        cmd.args([
-            "session",
-            "mint",
-            "--profile",
-            "github-mcp",
-            "--entry",
-            "GITHUB_TOKEN",
-        ])
-        .assert()
-        .code(1)
-        .stderr(predicate::str::contains("is secret-backed"));
+        cmd.args(["session", "mint", "github-mcp", "--entry", "GITHUB_TOKEN"])
+            .assert()
+            .code(1)
+            .stderr(predicate::str::contains("is secret-backed"));
     }
 
     #[test]

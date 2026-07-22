@@ -174,10 +174,20 @@ pub struct MintLeaseOptions<'a> {
     /// The profile entry (env var) name — same surfacing-only role as
     /// [`MintLeaseOptions::profile_name`].
     pub entry_name: &'a str,
-    /// The signing key's name (matches [`VaultClaims::sub`] and the
-    /// revocation store's `key_generations` axis — see
-    /// [`crate::keys::RevocationState`]).
-    pub key_name: &'a str,
+    /// The profile entry's resolved source. `mint_signing_lease` only ever
+    /// mints a signing-key lease — this is checked (not trusted) against the
+    /// caller's own pre-filtering: a [`crate::profile::EntrySource::Secret`]
+    /// is refused with a typed error before any backend or key-manager call,
+    /// so a future caller that skips the CLI's friendlier early check (e.g.
+    /// a WASM/embedder entry point) still fails closed rather than minting a
+    /// lease against the wrong kind of source. The signing key's name (used
+    /// for [`VaultClaims::sub`] and the revocation store's `key_generations`
+    /// axis — see [`crate::keys::RevocationState`]) is extracted from here.
+    pub source: &'a crate::profile::EntrySource,
+    /// The profile entry's resolved `materialize` mode. Same guardrail
+    /// rationale as [`MintLeaseOptions::source`]: only
+    /// [`crate::profile::MaterializeMode::Lease`] is mintable.
+    pub materialize: crate::profile::MaterializeMode,
     /// Requested TTL in seconds. Capped to
     /// [`crate::profile::SIGNING_LEASE_MAX_TTL_SECONDS`] defensively — the
     /// profile loader already rejects an over-cap `ttlSeconds` before this
@@ -211,7 +221,7 @@ fn signing_key_id(name: &str) -> String {
 
 /// The non-interactive fail-closed error message (issue #299's documented
 /// wording — reproduced verbatim, not paraphrased, since it is part of the
-/// design). `profile_lint_hint` is the profile name to embed in the
+/// design). `profile_name` is also the profile name embedded in the
 /// suggested `vaultkeeper profile lint <NAME>` recovery command.
 fn non_interactive_presence_error_message(profile_name: &str, entry_name: &str) -> String {
     format!(
@@ -706,19 +716,51 @@ impl VaultKeeper {
     /// fabricated `kgen`.
     ///
     /// # Errors
-    /// Returns [`VaultError::SigningKeyNotFound`] if `options.key_name` has no
+    /// Returns a [`VaultError::ConfigValidation`] mintable-policy guardrail
+    /// error if `options.source` is not a
+    /// [`crate::profile::EntrySource::SigningKey`], or `options.materialize`
+    /// is not [`crate::profile::MaterializeMode::Lease`] — this core-level
+    /// check is not merely a mirror of the CLI's own friendlier early
+    /// rejection; it is what makes fail-closed behavior guaranteed for every
+    /// caller, not only ones that happen to pre-filter identically. Returns
+    /// [`VaultError::SigningKeyNotFound`] if the resolved key name has no
     /// enrolled signing key. Returns [`VaultError::NotCapable`] if presence is
     /// required but unprovable (see above). Returns [`VaultError::TokenRevoked`]
     /// if the persisted revocation store cannot be read (see
     /// [`crate::keys::load_revocation_for_validation`]'s fail-closed
     /// contract).
     pub async fn mint_signing_lease(
-        &self,
+        &mut self,
         host: &dyn HostPlatform,
         backend: &dyn SigningBackend,
         options: &MintLeaseOptions<'_>,
     ) -> Result<String, VaultError> {
-        let backend_ref = signing_key_id(options.key_name);
+        if options.materialize != crate::profile::MaterializeMode::Lease {
+            return Err(VaultError::ConfigValidation {
+                message: format!(
+                    "profile '{}' entry '{}' does not use materialize: \"lease\" — nothing to mint",
+                    options.profile_name, options.entry_name
+                ),
+                field: format!("entries[{}].materialize", options.entry_name),
+                config_file_path: None,
+            });
+        }
+        let key_name = match options.source {
+            crate::profile::EntrySource::SigningKey(name) => name.as_str(),
+            crate::profile::EntrySource::Secret(_) => {
+                return Err(VaultError::ConfigValidation {
+                    message: format!(
+                        "profile '{}' entry '{}' is secret-backed; mint_signing_lease only \
+                         mints signing-key leases",
+                        options.profile_name, options.entry_name
+                    ),
+                    field: format!("entries[{}].source", options.entry_name),
+                    config_file_path: None,
+                });
+            }
+        };
+
+        let backend_ref = signing_key_id(key_name);
         let public_key = backend.get_public_key(&backend_ref).await?;
 
         let pres = if options.require_presence_at_mint {
@@ -728,9 +770,18 @@ impl VaultKeeper {
         };
 
         // Fresh on every mint (issue #298): never cached, so a revocation
-        // recorded after the last mint is always reflected here.
-        let revocation = crate::keys::load_revocation_for_validation(host, 0).await?;
-        let kgen = revocation.min_generation_for(options.key_name);
+        // recorded after the last mint is always reflected here. Anchored to
+        // this instance's own high-water mark (never a hardcoded `0`) so a
+        // rolled-back revocation store is refused exactly as
+        // `validate_lease_revocation` refuses one — see
+        // `crate::keys::storage::load_revocation_for_validation`.
+        let revocation =
+            crate::keys::load_revocation_for_validation(host, self.revocation_high_water_mark)
+                .await?;
+        self.revocation_high_water_mark = self
+            .revocation_high_water_mark
+            .max(revocation.rev_state_gen);
+        let kgen = revocation.min_generation_for(key_name);
 
         let now = crate::util::time::now_secs();
         let ttl_seconds = options
@@ -741,7 +792,7 @@ impl VaultKeeper {
             jti: uuid::Uuid::new_v4().to_string(),
             exp: now + ttl_seconds,
             iat: now,
-            sub: options.key_name.to_string(),
+            sub: key_name.to_string(),
             exe: "dev".to_string(),
             use_limit: options.use_limit,
             tid: options.trust_tier,
@@ -764,9 +815,32 @@ impl VaultKeeper {
         )
     }
 
+    /// Build the `pres` claim for a proven presence-at-mint, given which
+    /// mechanism actually satisfied it — the single constructor both
+    /// [`VaultKeeper::prove_presence_at_mint`] arms share, rather than two
+    /// near-identical literal builds.
+    fn lease_presence(method: &str, backend_type: &str, at: u64) -> LeasePresence {
+        LeasePresence {
+            op: "sign".to_string(),
+            at,
+            method: method.to_string(),
+            backend: backend_type.to_string(),
+        }
+    }
+
     /// Prove presence for a [`VaultKeeper::mint_signing_lease`] call — see
     /// that method's doc comment for the two mechanisms and the
     /// non-interactive fail-closed rule.
+    ///
+    /// Only a [`VaultError::NotCapable`] backend-touch failure (the backend
+    /// genuinely does not advertise/enforce presence-per-use for `sign`) ever
+    /// falls through to the host-approval mechanism below. Any other
+    /// backend-touch error — a capability *probe* that itself failed (e.g. a
+    /// filesystem fault, a hardware I/O error) — propagates immediately,
+    /// interactive or not: a probe failure is not "this backend can't do it",
+    /// it is "we don't actually know," and silently downgrading that to a
+    /// soft host-approval prompt would mask a real fault behind what looks
+    /// like a hardware-touch guarantee.
     async fn prove_presence_at_mint(
         host: &dyn HostPlatform,
         backend: &dyn SecretBackend,
@@ -775,13 +849,12 @@ impl VaultKeeper {
         let now = crate::util::time::now_secs();
 
         match enforce_presence_requirement(backend, PresenceOperation::Sign, Some(true)).await {
-            Ok(()) => Ok(LeasePresence {
-                op: "sign".to_string(),
-                at: now,
-                method: "backend-touch".to_string(),
-                backend: backend.backend_type().to_string(),
-            }),
-            Err(backend_touch_err) => {
+            Ok(()) => Ok(Self::lease_presence(
+                "backend-touch",
+                backend.backend_type(),
+                now,
+            )),
+            Err(VaultError::NotCapable { .. }) => {
                 if !options.interactive {
                     // Never call prompt_approval at all here — the guard that
                     // guarantees this path can never hang waiting on an
@@ -803,16 +876,25 @@ impl VaultKeeper {
                     })
                     .await
                 {
-                    Ok(true) => Ok(LeasePresence {
-                        op: "sign".to_string(),
-                        at: now,
-                        method: "host-approval".to_string(),
-                        backend: backend.backend_type().to_string(),
+                    Ok(true) => Ok(Self::lease_presence(
+                        "host-approval",
+                        backend.backend_type(),
+                        now,
+                    )),
+                    Ok(false) => Err(VaultError::PresenceDeclined {
+                        message: format!(
+                            "Host declined the presence-at-mint approval prompt for entry '{}'",
+                            options.entry_name
+                        ),
+                        backend_type: backend.backend_type().to_string(),
                     }),
-                    Ok(false) => Err(backend_touch_err),
                     Err(e) => Err(e),
                 }
             }
+            // A backend-touch failure that is not "incapable" (e.g. a
+            // capability probe that itself errored) must propagate, not
+            // silently fall through to the soft host-approval prompt.
+            Err(other) => Err(other),
         }
     }
 
@@ -1201,11 +1283,23 @@ mod mint_signing_lease_tests {
         }
     }
 
+    /// The canned answer [`MockSigningBackend::get_capabilities`] gives —
+    /// either a capability report, or a probe failure (a hardware/filesystem
+    /// fault while *checking* capabilities, distinct from "checked
+    /// successfully and this backend just isn't capable").
+    enum MockCapabilitiesResponse {
+        Report(BackendCapabilities),
+        /// Simulates a capability probe that itself fails (e.g. a YubiKey
+        /// mid-probe I/O fault) — never "incapable", so callers must not
+        /// treat it as [`VaultError::NotCapable`].
+        ProbeError,
+    }
+
     /// A `SigningBackend` test double whose presence capabilities are
     /// configurable per test — `get_public_key`/`sign_with_key` are stubs
     /// that never touch real key material.
     struct MockSigningBackend {
-        capabilities: BackendCapabilities,
+        capabilities: MockCapabilitiesResponse,
     }
 
     #[async_trait::async_trait]
@@ -1239,7 +1333,15 @@ mod mint_signing_lease_tests {
     #[async_trait::async_trait]
     impl PresenceCapableBackend for MockSigningBackend {
         async fn get_capabilities(&self) -> Result<BackendCapabilities, VaultError> {
-            Ok(self.capabilities.clone())
+            match &self.capabilities {
+                MockCapabilitiesResponse::Report(caps) => Ok(caps.clone()),
+                MockCapabilitiesResponse::ProbeError => Err(VaultError::Filesystem {
+                    message: "simulated capability probe failure".to_string(),
+                    path: "/dev/mock-hardware".to_string(),
+                    permission: "read".to_string(),
+                    code: None,
+                }),
+            }
         }
     }
 
@@ -1279,14 +1381,26 @@ mod mint_signing_lease_tests {
         .expect("vault init")
     }
 
+    /// The signing-key name every [`base_options`] call resolves to.
+    const RELEASE_SIGNER_KEY_NAME: &str = "release-signer";
+
     fn base_options(
         interactive: bool,
         require_presence_at_mint: bool,
     ) -> MintLeaseOptions<'static> {
+        // Leaked deliberately: a single, tiny, process-lifetime allocation
+        // per call is an acceptable cost in test code to get a genuine
+        // `&'static EntrySource` (the real caller, `session mint`, borrows
+        // one from its own already-loaded `ProfileEntry`, which these mock
+        // options have no equivalent long-lived owner for).
+        let source: &'static crate::profile::EntrySource = Box::leak(Box::new(
+            crate::profile::EntrySource::SigningKey(RELEASE_SIGNER_KEY_NAME.to_string()),
+        ));
         MintLeaseOptions {
             profile_name: "github-mcp",
             entry_name: "VK_SIGNING_LEASE",
-            key_name: "release-signer",
+            source,
+            materialize: crate::profile::MaterializeMode::Lease,
             ttl_seconds: crate::profile::SIGNING_LEASE_DEFAULT_TTL_SECONDS,
             trust_tier: TrustTier::Dev,
             use_limit: None,
@@ -1296,15 +1410,21 @@ mod mint_signing_lease_tests {
     }
 
     // --- AC1: no Sign presence -> NotCapable, never a fabricated pres ---
+    //
+    // Both AC1 tests use `interactive: false` deliberately: a capability-
+    // absent backend still has an interactive host-approval fallback (see
+    // the presence-mechanism tests below and the decline test), so isolating
+    // "the backend itself cannot prove Sign presence" from "and the host
+    // declined/approved when asked" requires ruling out that fallback here.
 
     #[tokio::test]
     async fn backend_with_no_sign_presence_fails_with_not_capable() {
         let host = TestHost::new(false);
-        let vault = init_vault(&host).await;
+        let mut vault = init_vault(&host).await;
         let backend = MockSigningBackend {
-            capabilities: BackendCapabilities::none(),
+            capabilities: MockCapabilitiesResponse::Report(BackendCapabilities::none()),
         };
-        let options = base_options(true, true);
+        let options = base_options(false, true);
 
         let err = vault
             .mint_signing_lease(&host, &backend, &options)
@@ -1320,14 +1440,14 @@ mod mint_signing_lease_tests {
     #[tokio::test]
     async fn backend_that_enforces_only_other_operations_fails_with_not_capable() {
         let host = TestHost::new(false);
-        let vault = init_vault(&host).await;
+        let mut vault = init_vault(&host).await;
         let backend = MockSigningBackend {
-            capabilities: BackendCapabilities {
+            capabilities: MockCapabilitiesResponse::Report(BackendCapabilities {
                 presence_per_use: true,
                 presence_enforced_operations: Some(vec![PresenceOperation::Read]),
-            },
+            }),
         };
-        let options = base_options(true, true);
+        let options = base_options(false, true);
 
         let err = vault
             .mint_signing_lease(&host, &backend, &options)
@@ -1342,12 +1462,12 @@ mod mint_signing_lease_tests {
     #[tokio::test]
     async fn pres_method_is_backend_touch_when_the_backend_enforces_sign() {
         let host = TestHost::new(false);
-        let vault = init_vault(&host).await;
+        let mut vault = init_vault(&host).await;
         let backend = MockSigningBackend {
-            capabilities: BackendCapabilities {
+            capabilities: MockCapabilitiesResponse::Report(BackendCapabilities {
                 presence_per_use: true,
                 presence_enforced_operations: None,
-            },
+            }),
         };
         let options = base_options(true, true);
 
@@ -1370,9 +1490,9 @@ mod mint_signing_lease_tests {
     #[tokio::test]
     async fn pres_method_is_host_approval_when_the_backend_is_incapable_but_host_approves() {
         let host = TestHost::new(true);
-        let vault = init_vault(&host).await;
+        let mut vault = init_vault(&host).await;
         let backend = MockSigningBackend {
-            capabilities: BackendCapabilities::none(),
+            capabilities: MockCapabilitiesResponse::Report(BackendCapabilities::none()),
         };
         let options = base_options(true, true);
 
@@ -1393,9 +1513,9 @@ mod mint_signing_lease_tests {
     #[tokio::test]
     async fn no_presence_required_mints_with_no_pres_and_no_prompt() {
         let host = TestHost::new(false);
-        let vault = init_vault(&host).await;
+        let mut vault = init_vault(&host).await;
         let backend = MockSigningBackend {
-            capabilities: BackendCapabilities::none(),
+            capabilities: MockCapabilitiesResponse::Report(BackendCapabilities::none()),
         };
         let options = base_options(true, false);
 
@@ -1415,9 +1535,9 @@ mod mint_signing_lease_tests {
     #[tokio::test]
     async fn non_interactive_invocation_fails_closed_without_ever_calling_prompt_approval() {
         let host = TestHost::new(true); // would approve if ever asked
-        let vault = init_vault(&host).await;
+        let mut vault = init_vault(&host).await;
         let backend = MockSigningBackend {
-            capabilities: BackendCapabilities::none(),
+            capabilities: MockCapabilitiesResponse::Report(BackendCapabilities::none()),
         };
         let options = base_options(false, true);
 
@@ -1442,15 +1562,97 @@ mod mint_signing_lease_tests {
         );
     }
 
+    // --- Only a NotCapable backend-touch failure falls through to the
+    // --- host-approval prompt; any other error (a probe/hardware fault)
+    // --- must propagate, interactive or not ---
+
+    #[tokio::test]
+    async fn a_capability_probe_failure_propagates_without_ever_prompting() {
+        let host = TestHost::new(true); // would approve if ever asked
+        let mut vault = init_vault(&host).await;
+        let backend = MockSigningBackend {
+            capabilities: MockCapabilitiesResponse::ProbeError,
+        };
+        let options = base_options(true, true);
+
+        let err = vault
+            .mint_signing_lease(&host, &backend, &options)
+            .await
+            .expect_err("a probe failure must propagate, not silently downgrade to a prompt");
+
+        assert!(
+            matches!(err, VaultError::Filesystem { .. }),
+            "expected the probe's own Filesystem error to propagate, got {err:?}"
+        );
+        assert_eq!(
+            host.prompt_calls.load(Ordering::SeqCst),
+            0,
+            "a probe failure must never fall through to the host-approval prompt"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_capability_probe_failure_propagates_even_when_non_interactive() {
+        let host = TestHost::new(true);
+        let mut vault = init_vault(&host).await;
+        let backend = MockSigningBackend {
+            capabilities: MockCapabilitiesResponse::ProbeError,
+        };
+        let options = base_options(false, true);
+
+        let err = vault
+            .mint_signing_lease(&host, &backend, &options)
+            .await
+            .expect_err(
+                "a probe failure must propagate rather than being swallowed into the fixed \
+                 non-interactive message",
+            );
+
+        assert!(
+            matches!(err, VaultError::Filesystem { .. }),
+            "expected the probe's own Filesystem error, not the fixed non-interactive \
+             NotCapable message, got {err:?}"
+        );
+        assert_eq!(host.prompt_calls.load(Ordering::SeqCst), 0);
+    }
+
+    // --- An explicit host decline surfaces PresenceDeclined, distinct from
+    // --- the NotCapable that got us to the prompt in the first place ---
+
+    #[tokio::test]
+    async fn host_decline_surfaces_presence_declined_not_not_capable() {
+        let host = TestHost::new(false); // canned prompt_approval answer: decline
+        let mut vault = init_vault(&host).await;
+        let backend = MockSigningBackend {
+            capabilities: MockCapabilitiesResponse::Report(BackendCapabilities::none()),
+        };
+        let options = base_options(true, true);
+
+        let err = vault
+            .mint_signing_lease(&host, &backend, &options)
+            .await
+            .expect_err("an explicit decline must refuse the mint");
+
+        assert!(
+            matches!(err, VaultError::PresenceDeclined { .. }),
+            "expected PresenceDeclined, got {err:?}"
+        );
+        assert_eq!(
+            host.prompt_calls.load(Ordering::SeqCst),
+            1,
+            "prompt_approval must have been asked exactly once"
+        );
+    }
+
     // --- AC3: exp derived from ttlSeconds (default + hard cap), kgen matches
     // --- the current key generation ---
 
     #[tokio::test]
     async fn exp_defaults_to_the_eight_hour_ttl() {
         let host = TestHost::new(false);
-        let vault = init_vault(&host).await;
+        let mut vault = init_vault(&host).await;
         let backend = MockSigningBackend {
-            capabilities: BackendCapabilities::none(),
+            capabilities: MockCapabilitiesResponse::Report(BackendCapabilities::none()),
         };
         let options = base_options(true, false);
 
@@ -1470,9 +1672,9 @@ mod mint_signing_lease_tests {
     #[tokio::test]
     async fn a_requested_ttl_above_the_hard_cap_is_capped_not_rejected() {
         let host = TestHost::new(false);
-        let vault = init_vault(&host).await;
+        let mut vault = init_vault(&host).await;
         let backend = MockSigningBackend {
-            capabilities: BackendCapabilities::none(),
+            capabilities: MockCapabilitiesResponse::Report(BackendCapabilities::none()),
         };
         let mut options = base_options(true, false);
         options.ttl_seconds = crate::profile::SIGNING_LEASE_MAX_TTL_SECONDS + 1_000_000;
@@ -1495,7 +1697,7 @@ mod mint_signing_lease_tests {
         let host = TestHost::new(false);
         let mut vault = init_vault(&host).await;
         let backend = MockSigningBackend {
-            capabilities: BackendCapabilities::none(),
+            capabilities: MockCapabilitiesResponse::Report(BackendCapabilities::none()),
         };
         let options = base_options(true, false);
 
@@ -1508,7 +1710,7 @@ mod mint_signing_lease_tests {
         assert_eq!(first_claims.kgen, Some(0));
 
         vault
-            .revoke_lease_key(&host, options.key_name)
+            .revoke_lease_key(&host, RELEASE_SIGNER_KEY_NAME)
             .await
             .expect("revoke_lease_key must persist");
 
@@ -1531,9 +1733,9 @@ mod mint_signing_lease_tests {
     #[tokio::test]
     async fn minted_lease_carries_no_val_and_is_kty_signing_key() {
         let host = TestHost::new(false);
-        let vault = init_vault(&host).await;
+        let mut vault = init_vault(&host).await;
         let backend = MockSigningBackend {
-            capabilities: BackendCapabilities::none(),
+            capabilities: MockCapabilitiesResponse::Report(BackendCapabilities::none()),
         };
         let options = base_options(true, false);
 
@@ -1551,6 +1753,53 @@ mod mint_signing_lease_tests {
         assert_eq!(
             claims.kid,
             Some("kid-for-signing-key:release-signer".to_string())
+        );
+    }
+
+    // --- Mintable-policy guardrail: core refuses a non-SigningKey source or
+    // --- non-lease materialization itself, rather than trusting a caller's
+    // --- own pre-filtering (issue #299) ---
+
+    #[tokio::test]
+    async fn refuses_a_secret_backed_source_even_if_the_caller_failed_to_pre_filter() {
+        let host = TestHost::new(false);
+        let mut vault = init_vault(&host).await;
+        let backend = MockSigningBackend {
+            capabilities: MockCapabilitiesResponse::Report(BackendCapabilities::none()),
+        };
+        let source = crate::profile::EntrySource::Secret("github-pat".to_string());
+        let mut options = base_options(true, false);
+        options.source = &source;
+
+        let err = vault
+            .mint_signing_lease(&host, &backend, &options)
+            .await
+            .expect_err("a secret-backed source must never mint a signing-key lease");
+
+        assert!(
+            matches!(err, VaultError::ConfigValidation { .. }),
+            "expected a typed ConfigValidation refusal, got {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn refuses_a_non_lease_materialization_even_if_the_caller_failed_to_pre_filter() {
+        let host = TestHost::new(false);
+        let mut vault = init_vault(&host).await;
+        let backend = MockSigningBackend {
+            capabilities: MockCapabilitiesResponse::Report(BackendCapabilities::none()),
+        };
+        let mut options = base_options(true, false);
+        options.materialize = crate::profile::MaterializeMode::Secret;
+
+        let err = vault
+            .mint_signing_lease(&host, &backend, &options)
+            .await
+            .expect_err("a non-lease materialize mode must never mint a signing-key lease");
+
+        assert!(
+            matches!(err, VaultError::ConfigValidation { .. }),
+            "expected a typed ConfigValidation refusal, got {err:?}"
         );
     }
 }
