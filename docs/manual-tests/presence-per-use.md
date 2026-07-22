@@ -1,5 +1,9 @@
 # Manual verification: presence-per-use
 
+> For the separate, cadence/cost-tracked "run the shared conformance corpus against the real
+> adapter" residue (as opposed to this doc's real-hardware _behavior_ verification), see
+> [`manual-residue-register.md`](./manual-residue-register.md).
+
 These checks confirm the **real-hardware** behavior of `--require-presence-per-use`
 (issue #122) that cannot run in CI, because they need a physical device and a
 human to perform (or withhold) a touch/biometric action.

@@ -185,6 +185,48 @@ impl PresenceCapableBackend for MockPresenceBackend {
     }
 }
 
+/// A minimal `SecretBackend` that deliberately does not implement
+/// `PresenceCapableBackend` at all — used to prove `get_backend_capabilities`
+/// and `is_presence_capable_backend` fail safe for a backend that never opts
+/// in, distinct from `InMemoryBackend` (issue #312), which now implements
+/// `PresenceCapableBackend` and honestly reports no presence capability
+/// rather than omitting the interface.
+struct PlainBackend;
+
+#[cfg_attr(target_arch = "wasm32", async_trait::async_trait(?Send))]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait::async_trait)]
+impl SecretBackend for PlainBackend {
+    fn backend_type(&self) -> &str {
+        "plain"
+    }
+
+    fn display_name(&self) -> &str {
+        "Plain Backend"
+    }
+
+    async fn is_available(&self) -> bool {
+        true
+    }
+
+    async fn store(&self, _id: &str, _secret: &str) -> Result<(), VaultError> {
+        Ok(())
+    }
+
+    async fn retrieve(&self, id: &str) -> Result<String, VaultError> {
+        Err(VaultError::SecretNotFound {
+            message: format!("Secret not found: {id}"),
+        })
+    }
+
+    async fn delete(&self, _id: &str) -> Result<(), VaultError> {
+        Ok(())
+    }
+
+    async fn exists(&self, _id: &str) -> Result<bool, VaultError> {
+        Ok(false)
+    }
+}
+
 // ---------------------------------------------------------------------------
 // AC1: backend capability contract
 // ---------------------------------------------------------------------------
@@ -193,15 +235,27 @@ impl PresenceCapableBackend for MockPresenceBackend {
 async fn plain_backend_reports_no_capability_via_helper() {
     // A backend that never implements PresenceCapableBackend never silently
     // claims presence.
-    let backend = InMemoryBackend::new();
+    let backend = PlainBackend;
     let caps = get_backend_capabilities(&backend).await.unwrap();
     assert_eq!(caps, BackendCapabilities::none());
 }
 
 #[tokio::test]
 async fn is_presence_capable_backend_false_for_plain_backend() {
-    let backend = InMemoryBackend::new();
+    let backend = PlainBackend;
     assert!(!is_presence_capable_backend(&backend));
+}
+
+#[tokio::test]
+async fn in_memory_backend_implements_presence_capable_backend_and_reports_no_capability() {
+    // Issue #312: `InMemoryBackend` now implements `PresenceCapableBackend`
+    // explicitly (mirroring the TS double), rather than silently omitting the
+    // interface — so it must both report `is_presence_capable_backend() ==
+    // true` and honestly answer `presence_per_use: false`.
+    let backend = InMemoryBackend::new();
+    assert!(is_presence_capable_backend(&backend));
+    let caps = get_backend_capabilities(&backend).await.unwrap();
+    assert_eq!(caps, BackendCapabilities::none());
 }
 
 #[tokio::test]

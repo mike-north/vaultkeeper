@@ -1,3 +1,9 @@
+# Before a release that bumps a backend's underlying tool/OS/SDK dependency
+# (`security`, the 1Password desktop app/`op`, `ykman`, `secret-tool`/
+# `gnome-keyring`, `powershell`/Windows), run the shared conformance corpus
+# against that backend's real adapter and record the result in the release
+# notes — see docs/manual-tests/manual-residue-register.md for the full
+# per-backend register (issue #312).
 name: Release
 
 on:
