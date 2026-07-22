@@ -445,7 +445,7 @@ mod tests {
 
     // -----------------------------------------------------------------
     // AC1 — sign_with_key round-trips through the public key; wrong/absent
-    // kid returns a typed error, not a panic.
+    // signing-key id returns a typed error, not a panic.
     // -----------------------------------------------------------------
 
     #[tokio::test]
@@ -470,7 +470,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn sign_with_key_absent_kid_returns_typed_error_not_panic() {
+    async fn sign_with_key_absent_id_returns_typed_error_not_panic() {
         let host = TestHost::new();
         let err = sign_with_key(&host, "no-such-key", b"data")
             .await
@@ -479,7 +479,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn get_public_key_absent_kid_returns_typed_error() {
+    async fn get_public_key_absent_id_returns_typed_error() {
         let host = TestHost::new();
         let err = get_public_key(&host, "ghost").await.unwrap_err();
         assert!(matches!(err, VaultError::SigningKeyNotFound { .. }));
@@ -753,7 +753,7 @@ mod tests {
             .unwrap();
 
         let public_key = backend.get_public_key("real-backend-key").await.unwrap();
-        let payload = b"vaultkeeper issue #251 real-backend golden-vector coverage";
+        let payload = b"vaultkeeper issue #289 real-backend round-trip coverage";
 
         let jws = create_detached_jws(&backend, &public_key.kid, "real-backend-key", payload)
             .await

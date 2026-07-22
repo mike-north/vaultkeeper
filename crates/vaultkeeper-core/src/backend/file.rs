@@ -267,11 +267,12 @@ impl SecretBackend for FileBackend {
 /// docs): each Ed25519 private key is sealed as its own AES-256-GCM envelope
 /// under `<config_dir>/signing/`, never under this backend's `file/` secret
 /// storage or `keys.enc`, and never returned from `sign_with_key` — only
-/// signature bytes leave this backend. See
-/// [`crate::backend::signing_store`] for the storage implementation and its
-/// HKDF key-derivation rationale.
+/// signature bytes leave this backend. See the private
+/// `crate::backend::signing_store` module for the storage implementation and
+/// its HKDF key-derivation rationale.
 ///
-/// [`FileBackend`] deliberately does *not* implement [`PresenceCapableBackend`]
+/// [`FileBackend`] deliberately does *not* implement
+/// [`PresenceCapableBackend`](super::PresenceCapableBackend)
 /// (issue #289 AC6): it is not a touch device, so it must never claim
 /// `presence_per_use`. Leaving `as_presence_capable` at its
 /// [`SecretBackend`] default (`None`) is what makes
@@ -776,9 +777,11 @@ mod tests {
         assert!(matches!(err, VaultError::SecretNotFound { .. }));
     }
 
-    /// AC1 negative case: a wrong/absent `kid` is a typed error, not a panic.
+    /// AC1 negative case: a wrong/absent signing-key id is a typed error, not
+    /// a panic. (The backend is keyed by id; JWS-header `kid` is a separate,
+    /// public-key-derived concept.)
     #[tokio::test]
-    async fn file_backend_sign_with_key_unknown_kid_is_typed_error() {
+    async fn file_backend_sign_with_key_unknown_id_is_typed_error() {
         let host = make_test_host();
         let backend = FileBackend::new(host);
         let err = backend

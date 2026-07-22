@@ -32,9 +32,10 @@ use crate::keys::types::{KeyMaterial, KeyStateSnapshot};
 use crate::util::time;
 
 const KEY_STATE_FILE: &str = "keys.enc";
-/// Filename of the shared wrap key. `pub(crate)` so [`crate::backend::file`]'s
-/// signing-key store can HKDF-derive its own seal key from the same material
-/// (see that module's docs) without duplicating the filename literal.
+/// Filename of the shared wrap key. `pub(crate)` so the `backend::signing_store`
+/// module (backing [`crate::backend::FileBackend`]'s `SigningBackend` impl) can
+/// HKDF-derive its own seal key from the same material (see that module's
+/// docs) without duplicating the filename literal.
 pub(crate) const KEY_WRAP_FILE: &str = ".keys.wrap";
 const GCM_IV_BYTES: usize = 12;
 const GCM_KEY_BYTES: usize = 32;
