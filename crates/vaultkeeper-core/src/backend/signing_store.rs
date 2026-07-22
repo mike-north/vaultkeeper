@@ -38,6 +38,7 @@ use hkdf::Hkdf;
 use sha2::Sha256;
 use zeroize::{Zeroize, Zeroizing};
 
+use super::file::hex_encode;
 use crate::backend::HostPlatform;
 use crate::errors::VaultError;
 use crate::keys::storage::{KEY_WRAP_FILE, get_or_create_wrap_key};
@@ -62,11 +63,6 @@ const HKDF_INFO: &[u8] = b"vaultkeeper-core/backend/file/signing-key/v1";
 
 fn signing_dir(host: &dyn HostPlatform) -> PathBuf {
     host.config_dir().join(SIGNING_DIR)
-}
-
-/// Hex-encode bytes for a safe filename (mirrors `file.rs`'s `hex_encode`).
-fn hex_encode(data: &[u8]) -> String {
-    data.iter().map(|b| format!("{b:02x}")).collect()
 }
 
 fn signing_key_path(host: &dyn HostPlatform, id: &str) -> PathBuf {

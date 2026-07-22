@@ -157,8 +157,9 @@ fn decrypt_gcm(key: &[u8], encoded: &str) -> Result<String, VaultError> {
         .map_err(|e| VaultError::Other(format!("Decrypted data is not valid UTF-8: {e}")))
 }
 
-/// Hex-encode bytes (used for safe filenames).
-fn hex_encode(data: &[u8]) -> String {
+/// Hex-encode bytes (used for safe filenames). `pub(crate)` so the
+/// `signing_store` module can reuse it for its own filenames.
+pub(crate) fn hex_encode(data: &[u8]) -> String {
     let mut hex = String::with_capacity(data.len() * 2);
     for byte in data {
         let _ = write!(hex, "{byte:02x}");
