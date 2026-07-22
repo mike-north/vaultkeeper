@@ -16,6 +16,8 @@ This class exists to make one property provable in CI: that an automation signer
 
 Once constructed, its per-operation outcomes are scriptable across `'grant'`<!-- -->, `'refuse'`<!-- -->, and `'not-capable'` (see [PresenceSimulatorOutcome](./test-helpers.presencesimulatoroutcome.md)<!-- -->), expressed in the vault's own `BackendCapabilities` vocabulary. The negative case this class exists to prove — an automation signer refused with a typed `NotCapableError` before the backend is touched — falls out of vaultkeeper's own existing fail-closed presence enforcement; this class only makes both sides of that boundary drivable in CI, rather than simulating the refusal itself.
 
+The outcome vocabulary (`'grant'` / `'refuse'` / `'not-capable'`<!-- -->, resolved into `presencePerUse`<!-- -->/`presenceEnforcedOperations`<!-- -->) is exactly the existing `BackendCapabilities` vocabulary every real backend already reports through — not a parallel concept invented for this class — so a future backend-flavored double (e.g. a 1Password mock with per-process-grant behavior) can reuse the same vocabulary rather than inventing its own.
+
 **Signature:**
 
 ```typescript

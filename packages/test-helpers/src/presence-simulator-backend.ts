@@ -127,6 +127,13 @@ function resolveOutcomes(
  * fail-closed presence enforcement; this class only makes both sides of that
  * boundary drivable in CI, rather than simulating the refusal itself.
  *
+ * The outcome vocabulary (`'grant'` / `'refuse'` / `'not-capable'`, resolved
+ * into `presencePerUse`/`presenceEnforcedOperations`) is exactly the existing
+ * `BackendCapabilities` vocabulary every real backend already reports through
+ * — not a parallel concept invented for this class — so a future
+ * backend-flavored double (e.g. a 1Password mock with per-process-grant
+ * behavior) can reuse the same vocabulary rather than inventing its own.
+ *
  * @public
  */
 export class PresenceSimulatorBackend
