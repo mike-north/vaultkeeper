@@ -8,6 +8,7 @@ import { BackendCapabilities } from 'vaultkeeper';
 import { Buffer as Buffer_2 } from 'node:buffer';
 import { ListableBackend } from 'vaultkeeper';
 import { PresenceCapableBackend } from 'vaultkeeper';
+import { PresenceOperation } from 'vaultkeeper';
 import { SetupOptionsBase } from 'vaultkeeper';
 import { SigningAlgorithm } from 'vaultkeeper';
 import { SigningBackend } from 'vaultkeeper';
@@ -66,7 +67,11 @@ export class InMemoryBackend implements ListableBackend, SigningBackend, Presenc
 export type InMemoryBackendFaultOperation = 'store' | 'retrieve' | 'delete' | 'exists' | 'list' | 'generateSigningKey' | 'getPublicKey' | 'signWithKey';
 
 // @public
+export type PresenceSimulatorArmedOutcome = Exclude<PresenceSimulatorOutcome, 'not-capable'>;
+
+// @public
 export class PresenceSimulatorBackend implements ListableBackend, SigningBackend, PresenceCapableBackend {
+    armPresence(operation: PresenceOperation, outcome: PresenceSimulatorArmedOutcome): void;
     // (undocumented)
     delete(id: string): Promise<void>;
     // (undocumented)
@@ -107,7 +112,7 @@ export interface PresenceSimulatorOperationOutcomes {
 }
 
 // @public
-export type PresenceSimulatorOutcome = 'grant' | 'refuse' | 'not-capable';
+export type PresenceSimulatorOutcome = 'grant' | 'refuse' | 'timeout' | 'not-capable';
 
 // @public
 export class TestVault {

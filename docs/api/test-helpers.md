@@ -58,7 +58,9 @@ This class exists to make one property provable in CI: that an automation signer
 
 Once constructed, its per-operation outcomes are scriptable across `'grant'`<!-- -->, `'refuse'`<!-- -->, and `'not-capable'` (see [PresenceSimulatorOutcome](./test-helpers.presencesimulatoroutcome.md)<!-- -->), expressed in the vault's own `BackendCapabilities` vocabulary. The negative case this class exists to prove — an automation signer refused with a typed `NotCapableError` before the backend is touched — falls out of vaultkeeper's own existing fail-closed presence enforcement; this class only makes both sides of that boundary drivable in CI, rather than simulating the refusal itself.
 
-The outcome vocabulary (`'grant'` / `'refuse'` / `'not-capable'`<!-- -->, resolved into `presencePerUse`<!-- -->/`presenceEnforcedOperations`<!-- -->) is exactly the existing `BackendCapabilities` vocabulary every real backend already reports through — not a parallel concept invented for this class — so a future backend-flavored double (e.g. a 1Password mock with per-process-grant behavior) can reuse the same vocabulary rather than inventing its own.
+The outcome vocabulary (`'grant'` / `'refuse'` / `'timeout'` / `'not-capable'`<!-- -->, resolved into `presencePerUse`<!-- -->/`presenceEnforcedOperations`<!-- -->) is exactly the existing `BackendCapabilities` vocabulary every real backend already reports through — not a parallel concept invented for this class — so a future backend-flavored double (e.g. a 1Password mock with per-process-grant behavior) can reuse the same vocabulary rather than inventing its own.
+
+Static per-operation scripting (via `forTesting({ operations })`<!-- -->) replays the same outcome for every call, which cannot prove that presence is a fresh, non-cacheable action demanded on \*every\* call rather than a capability checked once and then assumed. For that, arm one-shot outcomes with [PresenceSimulatorBackend.armPresence()](./test-helpers.presencesimulatorbackend.armpresence.md)<!-- -->: each call consumes exactly one armed outcome, and a call against an operation with no armed outcome left throws `PresenceTimeoutError` — mirroring the arm-per-call/`PresenceTimeout` semantics of the Rust core's own `MockPresenceBackend` (`crates/vaultkeeper-core/tests/presence_capability.rs`<!-- -->). Arming an operation activates it for `getCapabilities()` regardless of its static script.
 
 
 </td></tr>
@@ -188,6 +190,17 @@ The deterministic fault modes a [FaultPlan](./test-helpers.faultplan.md) can scr
 </td><td>
 
 The operations [InMemoryBackend.injectFault()](./test-helpers.inmemorybackend.injectfault.md) can target. Matches the methods of `SecretBackend` and `SigningBackend` that perform real work (a fault is checked at the top of each, before any state is touched).
+
+
+</td></tr>
+<tr><td>
+
+[PresenceSimulatorArmedOutcome](./test-helpers.presencesimulatorarmedoutcome.md)
+
+
+</td><td>
+
+The one-shot outcome a test can arm for a single upcoming call to a [PresenceSimulatorBackend](./test-helpers.presencesimulatorbackend.md) operation via [PresenceSimulatorBackend.armPresence()](./test-helpers.presencesimulatorbackend.armpresence.md)<!-- -->.
 
 
 </td></tr>

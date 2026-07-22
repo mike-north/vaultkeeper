@@ -442,6 +442,13 @@ export interface SignResult {
 }
 
 // @public
+export class TestDoubleMisuseError extends VaultError {
+    constructor(message: string, doubleName: string, detectedEnvironment: string);
+    readonly detectedEnvironment: string;
+    readonly doubleName: string;
+}
+
+// @public
 export class TokenExpiredError extends VaultError {
     constructor(message: string, canRefresh: boolean);
     readonly canRefresh: boolean;

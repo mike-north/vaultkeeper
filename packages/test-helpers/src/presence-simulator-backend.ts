@@ -14,7 +14,7 @@ import type {
   SigningAlgorithm,
   SigningPublicKey,
 } from 'vaultkeeper'
-import { PresenceDeclinedError } from 'vaultkeeper'
+import { PresenceDeclinedError, PresenceTimeoutError, TestDoubleMisuseError } from 'vaultkeeper'
 import { InMemoryBackend } from './in-memory-backend.js'
 
 /**
@@ -32,6 +32,10 @@ import { InMemoryBackend } from './in-memory-backend.js'
  * - `'refuse'` — this instance still advertises presence for the operation
  *   (the pre-check passes and the backend *is* touched), but the operation
  *   throws a `PresenceDeclinedError` — the human was asked and said no.
+ * - `'timeout'` — this instance still advertises presence for the operation
+ *   (the pre-check passes and the backend *is* touched), but the operation
+ *   throws a `PresenceTimeoutError` — the device was present but no fresh
+ *   action happened before the simulated wait elapsed.
  * - `'not-capable'` — this instance does not advertise presence for the
  *   operation at all. A `requirePresencePerUse` request is refused by the
  *   vault's own enforcement with a typed `NotCapableError`, **before** this
@@ -40,7 +44,21 @@ import { InMemoryBackend } from './in-memory-backend.js'
  *
  * @public
  */
-export type PresenceSimulatorOutcome = 'grant' | 'refuse' | 'not-capable'
+export type PresenceSimulatorOutcome = 'grant' | 'refuse' | 'timeout' | 'not-capable'
+
+/**
+ * The one-shot outcome a test can arm for a single upcoming call to a
+ * {@link PresenceSimulatorBackend} operation via {@link PresenceSimulatorBackend.armPresence}.
+ *
+ * @remarks
+ * Excludes `'not-capable'`: arming an operation is itself the signal that the
+ * operation is presence-covered for that call. To model an operation the
+ * vault's own pre-check should refuse before the backend is touched, leave it
+ * unarmed and unscripted (the default) instead.
+ *
+ * @public
+ */
+export type PresenceSimulatorArmedOutcome = Exclude<PresenceSimulatorOutcome, 'not-capable'>
 
 /**
  * Per-operation outcome script for a {@link PresenceSimulatorBackend}. Any
@@ -127,12 +145,25 @@ function resolveOutcomes(
  * fail-closed presence enforcement; this class only makes both sides of that
  * boundary drivable in CI, rather than simulating the refusal itself.
  *
- * The outcome vocabulary (`'grant'` / `'refuse'` / `'not-capable'`, resolved
- * into `presencePerUse`/`presenceEnforcedOperations`) is exactly the existing
- * `BackendCapabilities` vocabulary every real backend already reports through
- * — not a parallel concept invented for this class — so a future
- * backend-flavored double (e.g. a 1Password mock with per-process-grant
- * behavior) can reuse the same vocabulary rather than inventing its own.
+ * The outcome vocabulary (`'grant'` / `'refuse'` / `'timeout'` / `'not-capable'`,
+ * resolved into `presencePerUse`/`presenceEnforcedOperations`) is exactly the
+ * existing `BackendCapabilities` vocabulary every real backend already
+ * reports through — not a parallel concept invented for this class — so a
+ * future backend-flavored double (e.g. a 1Password mock with
+ * per-process-grant behavior) can reuse the same vocabulary rather than
+ * inventing its own.
+ *
+ * Static per-operation scripting (via `forTesting({ operations })`) replays
+ * the same outcome for every call, which cannot prove that presence is a
+ * fresh, non-cacheable action demanded on *every* call rather than a
+ * capability checked once and then assumed. For that, arm one-shot outcomes
+ * with {@link PresenceSimulatorBackend.armPresence}: each call consumes
+ * exactly one armed outcome, and a call against an operation with no armed
+ * outcome left throws `PresenceTimeoutError` — mirroring the
+ * arm-per-call/`PresenceTimeout` semantics of the Rust core's own
+ * `MockPresenceBackend` (`crates/vaultkeeper-core/tests/presence_capability.rs`).
+ * Arming an operation activates it for `getCapabilities()` regardless of its
+ * static script.
  *
  * @public
  */
@@ -143,6 +174,7 @@ export class PresenceSimulatorBackend
   readonly displayName = 'Presence Simulator Backend (test-only)'
   readonly #delegate = new InMemoryBackend()
   readonly #outcomes: Record<PresenceOperation, PresenceSimulatorOutcome>
+  readonly #queues: Partial<Record<PresenceOperation, PresenceSimulatorArmedOutcome[]>> = {}
 
   private constructor(outcomes: Record<PresenceOperation, PresenceSimulatorOutcome>) {
     this.#outcomes = outcomes
@@ -157,18 +189,46 @@ export class PresenceSimulatorBackend
    * @param options - Optional per-operation outcome script. Any operation not
    *   listed defaults to `'not-capable'`.
    * @returns A configured `PresenceSimulatorBackend` instance.
-   * @throws An `Error` if `process.env.NODE_ENV === 'production'`.
+   * @throws A `TestDoubleMisuseError` if `process.env.NODE_ENV === 'production'`.
    * @public
    */
   static forTesting(options?: PresenceSimulatorBackendOptions): PresenceSimulatorBackend {
-    if (process.env.NODE_ENV === 'production') {
-      throw new Error(
+    const nodeEnv = process.env.NODE_ENV
+    if (nodeEnv === 'production') {
+      throw new TestDoubleMisuseError(
         'PresenceSimulatorBackend.forTesting() refused to construct: NODE_ENV is "production". ' +
           'This class fabricates vaultkeeper presence signals for tests and must never run in a ' +
           'production environment.',
+        'PresenceSimulatorBackend',
+        nodeEnv,
       )
     }
     return new PresenceSimulatorBackend(resolveOutcomes(options?.operations))
+  }
+
+  /**
+   * Arm one one-shot outcome for the next call to `operation`. Each armed
+   * outcome is consumed by exactly one call; a call against an operation
+   * with no armed outcome remaining throws `PresenceTimeoutError`, modeling
+   * an unprimed fresh-presence demand.
+   *
+   * @remarks
+   * Arming an operation (even with an empty queue left after outcomes are
+   * consumed) makes it presence-covered for {@link PresenceSimulatorBackend.getCapabilities},
+   * independently of that operation's static `forTesting({ operations })`
+   * script.
+   *
+   * @param operation - The operation to arm an outcome for.
+   * @param outcome - The one-shot outcome the next call consumes.
+   * @public
+   */
+  armPresence(operation: PresenceOperation, outcome: PresenceSimulatorArmedOutcome): void {
+    const queue = this.#queues[operation]
+    if (queue === undefined) {
+      this.#queues[operation] = [outcome]
+    } else {
+      queue.push(outcome)
+    }
   }
 
   /** @public */
@@ -178,19 +238,19 @@ export class PresenceSimulatorBackend
 
   /** @public */
   async store(id: string, secret: string): Promise<void> {
-    this.#maybeDeclinePresence('store')
+    this.#resolvePresence('store')
     return this.#delegate.store(id, secret)
   }
 
   /** @public */
   async retrieve(id: string): Promise<string> {
-    this.#maybeDeclinePresence('read')
+    this.#resolvePresence('read')
     return this.#delegate.retrieve(id)
   }
 
   /** @public */
   async delete(id: string): Promise<void> {
-    this.#maybeDeclinePresence('delete')
+    this.#resolvePresence('delete')
     return this.#delegate.delete(id)
   }
 
@@ -211,19 +271,22 @@ export class PresenceSimulatorBackend
    *
    * @remarks
    * An operation reports as presence-covered (included in
-   * `presenceEnforcedOperations`) when its scripted outcome is `'grant'` or
-   * `'refuse'` — both mean this instance *does* force a fresh per-use action
-   * for that operation, one that succeeds and one that gets declined. An
-   * operation scripted `'not-capable'` is omitted, so vaultkeeper's own
-   * fail-closed enforcement refuses a `requirePresencePerUse` request for it
-   * with `NotCapableError` before this backend is ever touched. When every
-   * operation is `'not-capable'` (the default), this reports
-   * `presencePerUse: false` outright.
+   * `presenceEnforcedOperations`) when its static outcome is `'grant'`,
+   * `'refuse'`, or `'timeout'`, or when it has ever been armed via
+   * {@link PresenceSimulatorBackend.armPresence} — all mean this instance
+   * *does* force a fresh per-use action for that operation. An operation
+   * that is unarmed and scripted `'not-capable'` (the default) is omitted,
+   * so vaultkeeper's own fail-closed enforcement refuses a
+   * `requirePresencePerUse` request for it with `NotCapableError` before this
+   * backend is ever touched. When every operation is unarmed and
+   * `'not-capable'`, this reports `presencePerUse: false` outright.
    *
    * @public
    */
   getCapabilities(): Promise<BackendCapabilities> {
-    const enforced = ALL_OPERATIONS.filter((op) => this.#outcomes[op] !== 'not-capable')
+    const enforced = ALL_OPERATIONS.filter(
+      (op) => this.#outcomes[op] !== 'not-capable' || this.#queues[op] !== undefined,
+    )
     if (enforced.length === 0) {
       return Promise.resolve({ presencePerUse: false })
     }
@@ -244,23 +307,40 @@ export class PresenceSimulatorBackend
 
   /** @public */
   async signWithKey(id: string, data: Buffer): Promise<Buffer> {
-    this.#maybeDeclinePresence('sign')
+    this.#resolvePresence('sign')
     return this.#delegate.signWithKey(id, data)
   }
 
   /**
-   * Throw a real `PresenceDeclinedError` when `operation` is scripted
-   * `'refuse'`. A no-op for `'grant'` (the operation proceeds normally) and
-   * for `'not-capable'` (vaultkeeper's own enforcement never lets a
-   * `requirePresencePerUse` request reach this backend for that operation in
-   * the first place; called directly without that flag, the operation just
-   * behaves normally).
+   * Resolve the presence outcome for one call to `operation` and throw the
+   * matching typed error, if any.
+   *
+   * @remarks
+   * When `operation` has an armed queue (via
+   * {@link PresenceSimulatorBackend.armPresence}), this consumes exactly one
+   * queued outcome; an empty queue (an unprimed demand) resolves to
+   * `'timeout'`. Otherwise it falls back to the static `forTesting({
+   * operations })` script. `'refuse'` throws `PresenceDeclinedError`,
+   * `'timeout'` throws `PresenceTimeoutError`. `'grant'` (the operation
+   * proceeds normally) and `'not-capable'` (vaultkeeper's own enforcement
+   * never lets a `requirePresencePerUse` request reach this backend for that
+   * operation in the first place; called directly without that flag, the
+   * operation just behaves normally) are no-ops.
    */
-  #maybeDeclinePresence(operation: PresenceOperation): void {
-    if (this.#outcomes[operation] === 'refuse') {
+  #resolvePresence(operation: PresenceOperation): void {
+    const queue = this.#queues[operation]
+    const outcome = queue === undefined ? this.#outcomes[operation] : (queue.shift() ?? 'timeout')
+    if (outcome === 'refuse') {
       throw new PresenceDeclinedError(
         `Simulated presence declined for '${operation}' on '${this.type}'.`,
         this.type,
+      )
+    }
+    if (outcome === 'timeout') {
+      throw new PresenceTimeoutError(
+        `Simulated presence timed out for '${operation}' on '${this.type}'.`,
+        this.type,
+        0,
       )
     }
   }

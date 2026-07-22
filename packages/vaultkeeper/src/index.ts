@@ -41,6 +41,7 @@ export {
   ConfigValidationError,
   UnknownBackendTypeError,
   ConfigParseError,
+  TestDoubleMisuseError,
 } from './errors.js'
 
 export type {

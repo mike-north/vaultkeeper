@@ -17,6 +17,7 @@ export type {
 export { PresenceSimulatorBackend } from './presence-simulator-backend.js'
 export type {
   PresenceSimulatorOutcome,
+  PresenceSimulatorArmedOutcome,
   PresenceSimulatorOperationOutcomes,
   PresenceSimulatorBackendOptions,
 } from './presence-simulator-backend.js'

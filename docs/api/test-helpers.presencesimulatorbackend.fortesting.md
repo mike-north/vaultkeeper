@@ -56,5 +56,5 @@ A configured `PresenceSimulatorBackend` instance.
 
 ## Exceptions
 
-An `Error` if `process.env.NODE_ENV === 'production'`<!-- -->.
+A `TestDoubleMisuseError` if `process.env.NODE_ENV === 'production'`<!-- -->.
 
