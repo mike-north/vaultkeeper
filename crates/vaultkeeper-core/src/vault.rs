@@ -124,7 +124,7 @@ pub async fn enforce_presence_requirement(
 ///
 /// The single, shared claims-building + minting primitive for every call
 /// site that mints a `VaultClaims`-shaped token from a plaintext secret
-/// value: [`VaultKeeper::setup`] and [`crate::resolve::mint_secret_lease`]
+/// value: [`VaultKeeper::setup`] and `resolve.rs`'s private lease-mint path (reached via [`crate::resolve::resolve_profile`])
 /// both call this rather than each constructing `VaultClaims` and calling
 /// [`create_token`] independently, so the two claims shapes cannot silently
 /// drift apart. Crate-internal only — not part of the public API.

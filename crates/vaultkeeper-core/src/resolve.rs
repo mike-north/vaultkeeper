@@ -153,7 +153,10 @@ pub async fn resolve_profile(
 
     Ok(resolved
         .into_iter()
-        .map(|(name, value)| (name, value.to_string()))
+        .map(|mut name_value| {
+            let value = std::mem::take(&mut *name_value.1);
+            (name_value.0, value)
+        })
         .collect())
 }
 
@@ -232,6 +235,11 @@ async fn resolve_entry(
 /// without the `saturating_add` — the `saturating_add` is defense in depth,
 /// not a substitute for this cap. 30 days.
 const LEASE_TTL_MAX_SECONDS: u64 = 30 * 24 * 60 * 60;
+
+// NOTE: the loader now rejects a secret-backed lease requesting more than
+// LEASE_TTL_MAX_SECONDS with a typed ConfigValidation error, so the `.min`
+// cap below is defense in depth for a ProfileEntry constructed by some other
+// path, never a silent rewrite of a loader-accepted profile.
 
 /// Defensive fallback applied only if a `materialize: "lease"` entry somehow
 /// reaches this function with no resolved `ttlSeconds` at all. The #277
@@ -580,21 +588,28 @@ mod tests {
 
     #[tokio::test]
     async fn a_huge_ttl_seconds_neither_panics_nor_produces_an_already_expired_lease() {
-        // The #277 loader does not cap a secret-backed lease's ttlSeconds
-        // (unlike a signingKey-backed one), so this huge value reaches
-        // resolve_profile unmodified — regression coverage for an unchecked
-        // `now + ttl_seconds` add, which panics in debug and wraps to a past
-        // `exp` in release.
-        let json = format!(
-            r#"{{
-                "version": 1, "name": "overflow",
-                "entries": {{
-                    "HUGE": {{ "secret": "s", "materialize": "lease", "ttlSeconds": {} }}
-                }}
-            }}"#,
-            u64::MAX
-        );
-        let profile = load_profile_from_str(&json, &defaults()).unwrap();
+        // The loader now refuses a secret-backed lease whose ttlSeconds
+        // exceeds the 30-day hard cap (typed ConfigValidation — asserted by
+        // the loader's own tests), so a huge value can only reach the
+        // resolver through a directly-constructed ProfileEntry. This keeps
+        // regression coverage for an unchecked `now + ttl_seconds` add,
+        // which panics in debug and wraps to a past `exp` in release.
+        let profile = LoadedProfile {
+            version: 1,
+            name: "overflow".to_string(),
+            entries: vec![(
+                "HUGE".to_string(),
+                ProfileEntry {
+                    source: EntrySource::Secret("s".to_string()),
+                    materialize: MaterializeMode::Lease,
+                    min_trust: MinTrust::Unverified,
+                    ttl_seconds: Some(u64::MAX),
+                    use_limit: None,
+                    require_presence_per_use: false,
+                    require_presence_at_mint: false,
+                },
+            )],
+        };
         let backend = seeded_backend(&[("s", "the-secret-value")]).await;
         let km = key_manager();
         let opts = ResolveOptions {
