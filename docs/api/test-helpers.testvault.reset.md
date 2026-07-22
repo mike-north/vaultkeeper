@@ -4,7 +4,7 @@
 
 ## TestVault.reset() method
 
-Reset the test vault by clearing all stored secrets.
+Reset the test vault by clearing all stored secrets, signing keys, and any armed faults on the underlying backend.
 
 **Signature:**
 
@@ -14,4 +14,8 @@ reset(): void;
 **Returns:**
 
 void
+
+## Remarks
+
+Delegates to `InMemoryBackend.clear()`<!-- -->, so a fault left armed (especially a persistent one) from a prior test case cannot leak into the next.
 

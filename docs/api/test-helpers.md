@@ -19,12 +19,48 @@ Description
 </th></tr></thead>
 <tbody><tr><td>
 
+[FaultPlan](./test-helpers.faultplan.md)
+
+
+</td><td>
+
+A small, backend-agnostic scripting surface for deterministic, per-operation fault injection: arm a [FaultMode](./test-helpers.faultmode.md) against an operation key (one-shot or persistent), then consult it before doing real work.
+
+
+</td></tr>
+<tr><td>
+
 [InMemoryBackend](./test-helpers.inmemorybackend.md)
 
 
 </td><td>
 
 A fully in-memory `SecretBackend` for testing.
+
+
+</td></tr>
+<tr><td>
+
+[PresenceSimulatorBackend](./test-helpers.presencesimulatorbackend.md)
+
+
+</td><td>
+
+A presence forger for tests: a backend that lets a test script vaultkeeper's presence signal on demand, including its absence.
+
+This class exists to make one property provable in CI: that an automation signer attempting a presence-gated operation is refused. A backend that can fabricate "presence was granted" on request is, by construction, exactly the vulnerability presence-backed gates exist to prevent — a presence simulator is a presence forger. If it were reachable from any production code path, it would hand every consumer a presence bypass in exchange for test convenience. That is the worst possible outcome, so this class is unreachable from production through three independent, stacked guards, any one of which would have to fail alongside the other two for a real deployment to be affected:
+
+1. Structural. This class lives only in the devDependency-only `@vaultkeeper/test-helpers` package and is never registered with vaultkeeper's backend registry. No `config.json` on any machine can name it, so no production vault instance can ever load it. The only wiring path is direct construction in test code.
+
+2. Explicit acknowledgment. There is no default, public constructor. The only construction path is the named opt-in `PresenceSimulatorBackend.forTesting(...)`<!-- -->, so it can never be instantiated incidentally.
+
+3. Loud tripwire. Construction throws — never warns, never degrades — when `NODE_ENV` is `'production'`<!-- -->.
+
+Once constructed, its per-operation outcomes are scriptable across `'grant'`<!-- -->, `'refuse'`<!-- -->, and `'not-capable'` (see [PresenceSimulatorOutcome](./test-helpers.presencesimulatoroutcome.md)<!-- -->), expressed in the vault's own `BackendCapabilities` vocabulary. The negative case this class exists to prove — an automation signer refused with a typed `NotCapableError` before the backend is touched — falls out of vaultkeeper's own existing fail-closed presence enforcement; this class only makes both sides of that boundary drivable in CI, rather than simulating the refusal itself.
+
+The outcome vocabulary (`'grant'` / `'refuse'` / `'timeout'` / `'not-capable'`<!-- -->, resolved into `presencePerUse`<!-- -->/`presenceEnforcedOperations`<!-- -->) is exactly the existing `BackendCapabilities` vocabulary every real backend already reports through — not a parallel concept invented for this class — so a future backend-flavored double (e.g. a 1Password mock with per-process-grant behavior) can reuse the same vocabulary rather than inventing its own.
+
+Static per-operation scripting (via `forTesting({ operations })`<!-- -->) replays the same outcome for every call, which cannot prove that presence is a fresh, non-cacheable action demanded on \*every\* call rather than a capability checked once and then assumed. For that, arm one-shot outcomes with [PresenceSimulatorBackend.armPresence()](./test-helpers.presencesimulatorbackend.armpresence.md)<!-- -->: each call consumes exactly one armed outcome, and a call against an operation with no armed outcome left throws `PresenceTimeoutError` — mirroring the arm-per-call/`PresenceTimeout` semantics of the Rust core's own `MockPresenceBackend` (`crates/vaultkeeper-core/tests/presence_capability.rs`<!-- -->). Arming an operation activates it for `getCapabilities()` regardless of its static script.
 
 
 </td></tr>
@@ -56,6 +92,39 @@ Description
 </th></tr></thead>
 <tbody><tr><td>
 
+[FaultOptions](./test-helpers.faultoptions.md)
+
+
+</td><td>
+
+Options accepted by [FaultPlan.inject()](./test-helpers.faultplan.inject.md)<!-- -->.
+
+
+</td></tr>
+<tr><td>
+
+[PresenceSimulatorBackendOptions](./test-helpers.presencesimulatorbackendoptions.md)
+
+
+</td><td>
+
+Options accepted by [PresenceSimulatorBackend.forTesting()](./test-helpers.presencesimulatorbackend.fortesting.md)<!-- -->.
+
+
+</td></tr>
+<tr><td>
+
+[PresenceSimulatorOperationOutcomes](./test-helpers.presencesimulatoroperationoutcomes.md)
+
+
+</td><td>
+
+Per-operation outcome script for a [PresenceSimulatorBackend](./test-helpers.presencesimulatorbackend.md)<!-- -->. Any operation left unspecified defaults to `'not-capable'` — absence, not presence, is the safe default for a class whose entire point is making absence provable.
+
+
+</td></tr>
+<tr><td>
+
 [TestVaultOptions](./test-helpers.testvaultoptions.md)
 
 
@@ -73,6 +142,76 @@ Options for creating a [TestVault](./test-helpers.testvault.md)<!-- -->.
 </td><td>
 
 Options accepted by [TestVault.setup()](./test-helpers.testvault.setup.md)<!-- -->. Deliberately looser than the library's discriminated `SetupOptions` union: the trust choice is optional here because `TestVault.setup` defaults it to `skipTrust: true` when omitted, so tests can call `setup('NAME')` with no trust choice at all.
+
+
+</td></tr>
+<tr><td>
+
+[TestVaultSignCeremonyResult](./test-helpers.testvaultsignceremonyresult.md)
+
+
+</td><td>
+
+Result of [TestVault.signCeremony()](./test-helpers.testvault.signceremony.md)<!-- -->: the detached-payload compact JWS produced by the ceremony's final `sign()` step, alongside the public key exported from its `createSigningKey()` step (for offline verification via `VaultKeeper.verify`<!-- -->).
+
+
+</td></tr>
+</tbody></table>
+
+## Type Aliases
+
+<table><thead><tr><th>
+
+Type Alias
+
+
+</th><th>
+
+Description
+
+
+</th></tr></thead>
+<tbody><tr><td>
+
+[FaultMode](./test-helpers.faultmode.md)
+
+
+</td><td>
+
+The deterministic fault modes a [FaultPlan](./test-helpers.faultplan.md) can script. Each is a backend-agnostic scenario name — mapping a mode to a concrete typed error class is the consulting double's responsibility (see e.g. `InMemoryBackend.injectFault`<!-- -->), since the right class can depend on backend-specific context (which operation, which resource namespace).
+
+
+</td></tr>
+<tr><td>
+
+[InMemoryBackendFaultOperation](./test-helpers.inmemorybackendfaultoperation.md)
+
+
+</td><td>
+
+The operations [InMemoryBackend.injectFault()](./test-helpers.inmemorybackend.injectfault.md) can target. Matches the methods of `SecretBackend` and `SigningBackend` that perform real work (a fault is checked at the top of each, before any state is touched).
+
+
+</td></tr>
+<tr><td>
+
+[PresenceSimulatorArmedOutcome](./test-helpers.presencesimulatorarmedoutcome.md)
+
+
+</td><td>
+
+The one-shot outcome a test can arm for a single upcoming call to a [PresenceSimulatorBackend](./test-helpers.presencesimulatorbackend.md) operation via [PresenceSimulatorBackend.armPresence()](./test-helpers.presencesimulatorbackend.armpresence.md)<!-- -->.
+
+
+</td></tr>
+<tr><td>
+
+[PresenceSimulatorOutcome](./test-helpers.presencesimulatoroutcome.md)
+
+
+</td><td>
+
+The scriptable outcome for a single `PresenceOperation` against a [PresenceSimulatorBackend](./test-helpers.presencesimulatorbackend.md)<!-- -->.
 
 
 </td></tr>

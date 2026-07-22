@@ -56,5 +56,5 @@ A promise that resolves when the secret has been removed.
 
 ## Remarks
 
-Convenience shorthand for `vault.backend.delete(name)`<!-- -->. Resolves without error if the secret does not exist.
+Convenience shorthand for `vault.backend.delete(name)`<!-- -->, made idempotent for test ergonomics: it resolves without error if the secret does not exist, absorbing the `SecretNotFoundError` the backend itself throws (the backend mirrors the production `SecretBackend` contract, which requires the throw).
 

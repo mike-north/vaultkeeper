@@ -799,3 +799,39 @@ export class RotationInProgressError extends VaultError {
     this.name = 'RotationInProgressError'
   }
 }
+
+/**
+ * Thrown when a test-only double — a class built purely to fabricate a
+ * vaultkeeper-internal signal (e.g. a granted presence check, an unlocked
+ * backend) for driving negative test cases — refuses to construct because it
+ * detected it is running outside a test environment.
+ *
+ * @remarks
+ * A fabricated signal is, by construction, exactly the thing a real
+ * deployment must never be able to forge. A loud, typed refusal at
+ * construction time is the last of several stacked guards keeping such a
+ * double unreachable from production — see, for example,
+ * `PresenceSimulatorBackend` in `@vaultkeeper/test-helpers`. Inspect
+ * {@link TestDoubleMisuseError.doubleName} for which class refused to
+ * construct and {@link TestDoubleMisuseError.detectedEnvironment} for the
+ * environment value that triggered the refusal.
+ *
+ * @public
+ */
+export class TestDoubleMisuseError extends VaultError {
+  /** The name of the test double class that refused to construct. */
+  readonly doubleName: string
+
+  /**
+   * The environment value (e.g. `process.env.NODE_ENV`) that triggered the
+   * refusal.
+   */
+  readonly detectedEnvironment: string
+
+  constructor(message: string, doubleName: string, detectedEnvironment: string) {
+    super(message)
+    this.name = 'TestDoubleMisuseError'
+    this.doubleName = doubleName
+    this.detectedEnvironment = detectedEnvironment
+  }
+}

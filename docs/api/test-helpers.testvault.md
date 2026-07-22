@@ -151,7 +151,7 @@ Delete a secret from the test backend.
 
 </td><td>
 
-Reset the test vault by clearing all stored secrets.
+Reset the test vault by clearing all stored secrets, signing keys, and any armed faults on the underlying backend.
 
 
 </td></tr>
@@ -166,6 +166,20 @@ Reset the test vault by clearing all stored secrets.
 </td><td>
 
 Mint a JWE for a stored secret via the wrapped keeper.
+
+
+</td></tr>
+<tr><td>
+
+[signCeremony(name, payload, algorithm)](./test-helpers.testvault.signceremony.md)
+
+
+</td><td>
+
+
+</td><td>
+
+Run the full production signing ceremony — `createSigningKey` → `authorizeSigningKey` → `sign` — through the wrapped keeper in one call.
 
 
 </td></tr>
