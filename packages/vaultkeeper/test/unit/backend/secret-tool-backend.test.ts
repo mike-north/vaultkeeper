@@ -67,7 +67,7 @@ describe('SecretToolBackend', () => {
 
       expect(mockExecCommand).toHaveBeenCalledWith(
         'secret-tool',
-        ['store', '--label', 'vaultkeeper: my-secret', 'vaultkeeper-id', 'my-secret'],
+        ['store', '--label', 'vaultkeeper: my-secret', '--', 'vaultkeeper-id', 'my-secret'],
         { stdin: 'secret-value' },
       )
     })
@@ -83,7 +83,7 @@ describe('SecretToolBackend', () => {
   })
 
   describe('retrieve', () => {
-    it('should return trimmed stdout on success', async () => {
+    it('should strip exactly one trailing newline on success', async () => {
       mockExecCommandFull.mockResolvedValue(makeResult(0, 'secret-value\n'))
 
       const result = await backend.retrieve('my-secret')
@@ -96,10 +96,40 @@ describe('SecretToolBackend', () => {
       await expect(backend.retrieve('missing')).rejects.toBeInstanceOf(SecretNotFoundError)
     })
 
-    it('should throw SecretNotFoundError when stdout is empty', async () => {
-      mockExecCommandFull.mockResolvedValue(makeResult(0, '  \n'))
+    // issue #297 AC2: not-found must be determined solely by exit code, not
+    // by whether the (post-newline-strip) stdout is empty — a stored secret
+    // may legitimately be empty or whitespace-only.
+    it('should return the empty string, not throw, for a legitimately empty stored value', async () => {
+      mockExecCommandFull.mockResolvedValue(makeResult(0, '\n'))
 
-      await expect(backend.retrieve('empty-secret')).rejects.toBeInstanceOf(SecretNotFoundError)
+      await expect(backend.retrieve('empty-secret')).resolves.toBe('')
+    })
+
+    it('should preserve a whitespace-only stored value verbatim, not throw', async () => {
+      mockExecCommandFull.mockResolvedValue(makeResult(0, '   \n'))
+
+      await expect(backend.retrieve('whitespace-secret')).resolves.toBe('   ')
+    })
+
+    it('should preserve leading/trailing spaces that are not the trailing newline', async () => {
+      mockExecCommandFull.mockResolvedValue(makeResult(0, '  padded value  \n'))
+
+      await expect(backend.retrieve('padded-secret')).resolves.toBe('  padded value  ')
+    })
+
+    // issue #297 AC1: a hostile id (looks like a secret-tool flag) must be
+    // passed with a `--` separator so it can never be parsed as an option.
+    it('should pass a `--` separator before the attribute key and id', async () => {
+      mockExecCommandFull.mockResolvedValue(makeResult(0, 'value\n'))
+
+      await backend.retrieve('--label')
+
+      expect(mockExecCommandFull).toHaveBeenCalledWith('secret-tool', [
+        'lookup',
+        '--',
+        'vaultkeeper-id',
+        '--label',
+      ])
     })
   })
 
@@ -111,6 +141,7 @@ describe('SecretToolBackend', () => {
 
       expect(mockExecCommandFull).toHaveBeenCalledWith('secret-tool', [
         'clear',
+        '--',
         'vaultkeeper-id',
         'my-secret',
       ])
@@ -131,11 +162,13 @@ describe('SecretToolBackend', () => {
       expect(result).toBe(true)
     })
 
-    it('should return false when lookup returns empty', async () => {
+    // issue #297 AC2: exit code 0 alone means "found", regardless of an
+    // empty/whitespace-only value — mirrors the retrieve() fix above.
+    it('should return true when lookup succeeds with an empty value', async () => {
       mockExecCommandFull.mockResolvedValue(makeResult(0, ''))
 
-      const result = await backend.exists('no-secret')
-      expect(result).toBe(false)
+      const result = await backend.exists('empty-value-secret')
+      expect(result).toBe(true)
     })
 
     it('should return false when lookup fails', async () => {
@@ -143,6 +176,19 @@ describe('SecretToolBackend', () => {
 
       const result = await backend.exists('missing')
       expect(result).toBe(false)
+    })
+
+    it('should pass a `--` separator before the attribute key and id', async () => {
+      mockExecCommandFull.mockResolvedValue(makeResult(0, 'value'))
+
+      await backend.exists('--foo')
+
+      expect(mockExecCommandFull).toHaveBeenCalledWith('secret-tool', [
+        'lookup',
+        '--',
+        'vaultkeeper-id',
+        '--foo',
+      ])
     })
   })
 
@@ -181,6 +227,19 @@ describe('SecretToolBackend', () => {
 
       const result = await backend.list()
       expect(result).toEqual([])
+    })
+
+    it('should pass a `--` separator before the attribute key', async () => {
+      mockExecCommandFull.mockResolvedValue(makeResult(0, ''))
+
+      await backend.list()
+
+      expect(mockExecCommandFull).toHaveBeenCalledWith('secret-tool', [
+        'search',
+        '--',
+        'vaultkeeper-id',
+        '',
+      ])
     })
   })
 })

@@ -51,6 +51,23 @@ impl SecretToolBackend {
             .map(|id| id.to_string())
             .collect()
     }
+
+    /// Strip exactly one trailing `\n` from `secret-tool lookup` output, if
+    /// present — not a full `.trim()`.
+    ///
+    /// `secret-tool lookup` prints the stored secret followed by a single
+    /// trailing newline that it adds itself; that newline is not part of the
+    /// secret and must be removed. A full trim would also strip legitimate
+    /// leading/trailing whitespace that is part of the secret value itself (a
+    /// secret may intentionally be or contain whitespace), so only the one
+    /// newline `secret-tool` appends is removed here. Must match the TS
+    /// backend's `stripSecretToolTrailingNewline` exactly.
+    fn strip_trailing_newline(stdout: String) -> String {
+        stdout
+            .strip_suffix('\n')
+            .map(str::to_string)
+            .unwrap_or(stdout)
+    }
 }
 
 #[cfg_attr(target_arch = "wasm32", async_trait::async_trait(?Send))]
@@ -80,7 +97,14 @@ impl SecretBackend for SecretToolBackend {
 
     async fn store(&self, id: &str, secret: &str) -> Result<(), VaultError> {
         let label = format!("{LABEL_PREFIX}{id}");
-        let args = ["store", "--label", label.as_str(), ATTRIBUTE_KEY, id];
+        // The `--` separator stops secret-tool's own GOption argv parser
+        // from treating a hostile id (e.g. `--label`, `--foo`, or any
+        // leading-dash value) as a flag — everything after `--` is forced
+        // positional. Only ATTRIBUTE_KEY and id are positional here;
+        // `--label`'s value is safe regardless of content because GOption
+        // binds it to the option itself. Must match the TS backend's
+        // `store` argv shape exactly.
+        let args = ["store", "--label", label.as_str(), "--", ATTRIBUTE_KEY, id];
         let output = self
             .host
             .exec(
@@ -110,19 +134,25 @@ impl SecretBackend for SecretToolBackend {
             .host
             .exec(
                 "secret-tool",
-                &["lookup", ATTRIBUTE_KEY, id],
+                &["lookup", "--", ATTRIBUTE_KEY, id],
                 ExecOptions::default(),
             )
             .await?;
-        let stdout = String::from_utf8(output.stdout).map_err(|e| {
-            VaultError::Other(format!("secret-tool lookup returned non-UTF-8 output: {e}"))
-        })?;
-        if output.exit_code != 0 || stdout.trim().is_empty() {
+        // Not-found is determined solely by exit code — never by whether
+        // stdout is empty (after stripping secret-tool's own trailing
+        // newline). A stored secret may legitimately be an empty string or
+        // whitespace-only; both would otherwise be indistinguishable from
+        // "no such entry" (see issue #297). Must match the TS backend's
+        // `retrieve` exactly.
+        if output.exit_code != 0 {
             return Err(VaultError::SecretNotFound {
                 message: format!("Secret not found in Secret Service: {id}"),
             });
         }
-        Ok(stdout.trim().to_string())
+        let stdout = String::from_utf8(output.stdout).map_err(|e| {
+            VaultError::Other(format!("secret-tool lookup returned non-UTF-8 output: {e}"))
+        })?;
+        Ok(Self::strip_trailing_newline(stdout))
     }
 
     async fn delete(&self, id: &str) -> Result<(), VaultError> {
@@ -130,7 +160,7 @@ impl SecretBackend for SecretToolBackend {
             .host
             .exec(
                 "secret-tool",
-                &["clear", ATTRIBUTE_KEY, id],
+                &["clear", "--", ATTRIBUTE_KEY, id],
                 ExecOptions::default(),
             )
             .await?;
@@ -147,12 +177,11 @@ impl SecretBackend for SecretToolBackend {
             .host
             .exec(
                 "secret-tool",
-                &["lookup", ATTRIBUTE_KEY, id],
+                &["lookup", "--", ATTRIBUTE_KEY, id],
                 ExecOptions::default(),
             )
             .await?;
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        Ok(output.exit_code == 0 && !stdout.trim().is_empty())
+        Ok(output.exit_code == 0)
     }
 }
 
@@ -164,7 +193,7 @@ impl ListableBackend for SecretToolBackend {
             .host
             .exec(
                 "secret-tool",
-                &["search", ATTRIBUTE_KEY, ""],
+                &["search", "--", ATTRIBUTE_KEY, ""],
                 ExecOptions::default(),
             )
             .await?;
@@ -248,9 +277,14 @@ mod tests {
                     })
                 }
                 Some("store") => {
-                    // ["store", "--label", label, ATTRIBUTE_KEY, id]
+                    // ["store", "--label", label, "--", ATTRIBUTE_KEY, id]
+                    assert_eq!(
+                        args.get(3).copied(),
+                        Some("--"),
+                        "store must pass -- before positional attribute/id args"
+                    );
                     let label = args.get(2).expect("label arg").to_string();
-                    let id = args.get(4).expect("id arg").to_string();
+                    let id = args.get(5).expect("id arg").to_string();
                     let secret = options
                         .stdin
                         .map(|b| String::from_utf8_lossy(b).to_string())
@@ -263,8 +297,13 @@ mod tests {
                     })
                 }
                 Some("lookup") => {
-                    // ["lookup", ATTRIBUTE_KEY, id]
-                    let id = args.get(2).expect("id arg").to_string();
+                    // ["lookup", "--", ATTRIBUTE_KEY, id]
+                    assert_eq!(
+                        args.get(1).copied(),
+                        Some("--"),
+                        "lookup must pass -- before positional attribute/id args"
+                    );
+                    let id = args.get(3).expect("id arg").to_string();
                     match self.entries.lock().unwrap().get(&id) {
                         Some((_, secret)) => Ok(ExecOutput {
                             stdout: format!("{secret}\n").into_bytes(),
@@ -279,8 +318,13 @@ mod tests {
                     }
                 }
                 Some("clear") => {
-                    // ["clear", ATTRIBUTE_KEY, id]
-                    let id = args.get(2).expect("id arg").to_string();
+                    // ["clear", "--", ATTRIBUTE_KEY, id]
+                    assert_eq!(
+                        args.get(1).copied(),
+                        Some("--"),
+                        "clear must pass -- before positional attribute/id args"
+                    );
+                    let id = args.get(3).expect("id arg").to_string();
                     let removed = self.entries.lock().unwrap().remove(&id).is_some();
                     Ok(ExecOutput {
                         stdout: Vec::new(),
@@ -293,6 +337,12 @@ mod tests {
                     })
                 }
                 Some("search") => {
+                    // ["search", "--", ATTRIBUTE_KEY, ""]
+                    assert_eq!(
+                        args.get(1).copied(),
+                        Some("--"),
+                        "search must pass -- before positional attribute args"
+                    );
                     let entries = self.entries.lock().unwrap();
                     let mut stdout = String::new();
                     for (id, (label, _)) in entries.iter() {
@@ -370,6 +420,7 @@ mod tests {
                 "store",
                 "--label",
                 "vaultkeeper: my-secret",
+                "--",
                 "vaultkeeper-id",
                 "my-secret",
             ]
@@ -429,10 +480,10 @@ mod tests {
     async fn round_trips_secret_with_spaces_quotes_and_embedded_newlines() {
         let host = TestHost::new();
         let backend = SecretToolBackend::new(host.clone());
-        // Newline is embedded (not leading/trailing) since `secret-tool
-        // lookup` output is trimmed on both ends, matching the TS backend's
-        // `.trim()` — a leading/trailing newline is not preserved by design,
-        // matching the TS semantics this port must replicate faithfully.
+        // secret-tool appends exactly one trailing newline of its own to
+        // `lookup` output, which is stripped (see `strip_trailing_newline`);
+        // an *embedded* newline (not the final character) is part of the
+        // secret and is preserved byte-for-byte, matching the TS backend.
         let secret = "hello \"world\" 'quoted'\nmiddle line\nend";
         backend.store("spaces-quotes-id", secret).await.unwrap();
         let retrieved = backend.retrieve("spaces-quotes-id").await.unwrap();
@@ -447,6 +498,115 @@ mod tests {
         backend.store("non-ascii-id", secret).await.unwrap();
         let retrieved = backend.retrieve("non-ascii-id").await.unwrap();
         assert_eq!(retrieved, secret);
+    }
+
+    // ── issue #297 AC1: hostile ids cannot be interpreted as flags ────────
+    //
+    // A `--` argv separator is inserted before every positional
+    // attribute/id argument (enforced by the TestHost's own `assert_eq!` on
+    // argv shape above), so an id like `--label` or `--foo` is forced
+    // positional and can never be parsed as a secret-tool option, no matter
+    // what secret-tool's own argv parser would otherwise do with it.
+
+    #[tokio::test]
+    async fn hostile_id_that_looks_like_an_existing_flag_round_trips_safely() {
+        let host = TestHost::new();
+        let backend = SecretToolBackend::new(host.clone());
+        const HOSTILE_ID: &str = "--label";
+
+        backend
+            .store(HOSTILE_ID, "hostile-id-secret")
+            .await
+            .unwrap();
+        assert!(backend.exists(HOSTILE_ID).await.unwrap());
+        let retrieved = backend.retrieve(HOSTILE_ID).await.unwrap();
+        assert_eq!(retrieved, "hostile-id-secret");
+        backend.delete(HOSTILE_ID).await.unwrap();
+        assert!(!backend.exists(HOSTILE_ID).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn hostile_id_with_unknown_flag_shape_round_trips_safely() {
+        let host = TestHost::new();
+        let backend = SecretToolBackend::new(host.clone());
+        const HOSTILE_ID: &str = "--foo";
+
+        backend.store(HOSTILE_ID, "value").await.unwrap();
+        let retrieved = backend.retrieve(HOSTILE_ID).await.unwrap();
+        assert_eq!(retrieved, "value");
+    }
+
+    #[tokio::test]
+    async fn hostile_id_with_leading_dash_round_trips_safely() {
+        let host = TestHost::new();
+        let backend = SecretToolBackend::new(host.clone());
+        const HOSTILE_ID: &str = "-x";
+
+        backend.store(HOSTILE_ID, "value").await.unwrap();
+        let retrieved = backend.retrieve(HOSTILE_ID).await.unwrap();
+        assert_eq!(retrieved, "value");
+    }
+
+    #[tokio::test]
+    async fn store_argv_always_contains_separator_before_positional_args() {
+        // Direct assertion on argv shape (independent of the TestHost's own
+        // internal assert): `--` must appear immediately before
+        // ATTRIBUTE_KEY/id in every verb that takes positional arguments.
+        let host = TestHost::new();
+        let backend = SecretToolBackend::new(host.clone());
+        backend.store("--label", "v").await.unwrap();
+        backend.retrieve("--label").await.unwrap();
+        backend.delete("--label").await.unwrap();
+
+        let calls = host.calls.lock().unwrap();
+        for call in calls.iter() {
+            assert!(
+                call.args.contains(&"--".to_string()),
+                "expected a `--` separator in argv for {:?}",
+                call.args
+            );
+        }
+    }
+
+    // ── issue #297 AC2: empty/whitespace-only values are not "not found" ──
+
+    #[tokio::test]
+    async fn retrieve_returns_empty_string_for_a_legitimately_empty_stored_value() {
+        let host = TestHost::new();
+        let backend = SecretToolBackend::new(host.clone());
+        backend.store("empty-secret-id", "").await.unwrap();
+
+        // Found (not SecretNotFound), and the value is the empty string —
+        // distinct from "no such entry" even though both trim to "".
+        let retrieved = backend.retrieve("empty-secret-id").await.unwrap();
+        assert_eq!(retrieved, "");
+        assert!(backend.exists("empty-secret-id").await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn retrieve_preserves_whitespace_only_stored_value_verbatim() {
+        let host = TestHost::new();
+        let backend = SecretToolBackend::new(host.clone());
+        let secret = "   \t  ";
+        backend.store("whitespace-secret-id", secret).await.unwrap();
+
+        let retrieved = backend.retrieve("whitespace-secret-id").await.unwrap();
+        assert_eq!(
+            retrieved, secret,
+            "a whitespace-only secret must round-trip byte-for-byte, not be trimmed to ''"
+        );
+        assert!(backend.exists("whitespace-secret-id").await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn retrieve_still_reports_not_found_for_a_truly_missing_id() {
+        // Regression guard for the fix above: dropping the emptiness check
+        // must not turn every genuinely-missing id into a false "found".
+        let host = TestHost::new();
+        let backend = SecretToolBackend::new(host);
+        let err = backend.retrieve("never-stored").await.unwrap_err();
+        assert!(matches!(err, VaultError::SecretNotFound { .. }));
+        assert!(!backend.exists("never-stored").await.unwrap());
     }
 
     // ── AC3: not-found semantics for retrieve/delete never panic ──────────
