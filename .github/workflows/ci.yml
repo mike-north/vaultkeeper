@@ -31,6 +31,23 @@ jobs:
       - name: Test
         run: cargo test
 
+      - name: Verify committed backend conformance corpus matches a fresh export (drift check)
+        # The Rust corpus in crates/vaultkeeper-conformance/src/backend_cases.rs
+        # is the single source of truth; the JS conformance runner in
+        # packages/test-helpers/test/conformance/backend-cases.test.ts loads a
+        # committed export of it rather than regenerating it at test time (so
+        # the TS package has no Cargo dependency at test time). If someone
+        # edits the corpus without re-running the exporter, the committed JSON
+        # silently goes stale and the TS suite stops exercising the real
+        # cases. Mirrors the check:api-report regeneration-diff pattern.
+        run: |
+          cargo run -q -p vaultkeeper-conformance --bin export-backend-conformance \
+            > /tmp/backend-cases-fresh.json
+          if ! diff -u packages/test-helpers/test/conformance/backend-cases.json /tmp/backend-cases-fresh.json; then
+            echo "::error::packages/test-helpers/test/conformance/backend-cases.json is stale. Regenerate it: cargo run -p vaultkeeper-conformance --bin export-backend-conformance > packages/test-helpers/test/conformance/backend-cases.json"
+            exit 1
+          fi
+
       - name: Build release binary
         run: cargo build --release
 

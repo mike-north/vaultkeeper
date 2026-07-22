@@ -3,6 +3,13 @@
 //! Defines data-driven test cases that both the native Rust CLI and the npm
 //! WASM CLI must pass identically. Cases are serializable to JSON so the JS
 //! conformance runner can load them.
+//!
+//! See [`backend_cases`] for a second, narrower corpus scoped to
+//! backend-level (not CLI-level) behavior, applicable to any `SecretBackend`
+//! implementation — including the TS `InMemoryBackend` test double and the
+//! Rust core `InMemoryBackend` (issue #312).
+
+pub mod backend_cases;
 
 use serde::{Deserialize, Serialize};
 

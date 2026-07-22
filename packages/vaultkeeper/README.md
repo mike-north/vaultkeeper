@@ -480,7 +480,11 @@ consecutive required-presence operations each demand their own distinct fresh ac
 > intrinsic to the cryptographic operation.
 
 Real-hardware confirmation for each backend is documented as a manual verification test in
-[`docs/manual-tests/presence-per-use.md`](../../docs/manual-tests/presence-per-use.md).
+[`docs/manual-tests/presence-per-use.md`](../../docs/manual-tests/presence-per-use.md). The
+release-process-referenced register of what manual residue remains per backend once its paired
+in-memory double runs the shared conformance corpus in CI — and the cadence/cost of running that
+corpus against the real adapter — lives in
+[`docs/manual-tests/manual-residue-register.md`](../../docs/manual-tests/manual-residue-register.md).
 
 ## Doctor / preflight checks
 
