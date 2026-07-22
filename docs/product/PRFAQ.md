@@ -1,7 +1,8 @@
 # vaultkeeper PRFAQ
 
-> Internal working document. The press release is aspirational-at-launch framing; the FAQ is
-> honest about what exists today versus what is in flight. Kept current by the maintainers.
+> Product reference document, written from the launch perspective: the press release and FAQ
+> describe vaultkeeper as it lands at launch. The "What exists today" question anchors current
+> implementation status against that. Kept current by the maintainers.
 
 ---
 
@@ -9,9 +10,10 @@
 
 ### vaultkeeper brings policy-enforced secret custody to every developer — using the credential store you already own
 
-**Developers can now get the secret-handling posture that previously required a business-tier
-subscription — scoped tokens, expiring grants, per-use approval — locally, offline, and free,
-on top of macOS Keychain, 1Password, a YubiKey, or an encrypted file.**
+**Developers can now get — and go beyond — the secret-handling posture that previously
+required a business-tier subscription: scoped tokens, expiring grants, per-use approval, and
+per-invocation policy that no subscription tier offers at any price. Locally, offline, and
+free, on top of macOS Keychain, 1Password, a YubiKey, or an encrypted file.**
 
 Today, the standard way to give a tool a secret is still an environment variable holding a
 plaintext credential, sourced from a dotfile or pasted into a config. Every MCP server config
@@ -19,7 +21,9 @@ with a `GITHUB_TOKEN` in it, every `.env` in a backup, every API key in shell hi
 same story: a long-lived, unscoped credential at rest in plaintext, readable by anything and
 revocable only by rotating it everywhere at once. The tools that fix this properly — scoped
 service tokens, dedicated vaults, per-use biometric approval — largely gate those capabilities
-behind paid business tiers or cloud subscriptions.
+behind paid business tiers or cloud subscriptions. And even the paid tiers only offer stronger
+*mechanisms* for who may access which secrets; none of them let you define policy over the
+conditions of each individual use.
 
 vaultkeeper unbundles **storage** from **policy**. Your secrets live in whatever backend you
 already trust — today: macOS Keychain, 1Password, a YubiKey, Windows DPAPI, the Linux Secret
@@ -48,10 +52,11 @@ signing identities whose keys are born inside vaultkeeper and cannot be extracte
 processes they govern — with human presence proven once at session establishment rather than
 demanded per signature.
 
-vaultkeeper is a single Rust core reachable from a native CLI and from TypeScript via
-WebAssembly, with a data-driven conformance suite holding every implementation to the same
-behavior. It is open source, local-first, and has no cloud component: nothing about your
-secrets ever leaves your machine.
+vaultkeeper is open source and fully auditable, local-first, with no cloud component: nothing
+about your secrets ever leaves your machine. It runs wherever your environment already permits
+— as a library inside Node.js where Node is the approved runtime (compatible with binary
+authorization tooling such as Santa), or as a single native binary where you can run one — and
+a data-driven conformance suite holds every implementation to the same behavior.
 
 ---
 
@@ -83,12 +88,17 @@ and hope). Because vaultkeeper's resolution step evaluates *policy* — who is a
 what trust, for how long — it can offer both at once: strong defaults with low-friction
 day-to-day use. The concrete differences:
 
-1. **Policy at resolution** — trust tiers on the calling executable, TTLs, usage limits,
-   per-use presence — not just decryption.
-2. **Storage-agnostic** — the same policy over Keychain, 1Password, YubiKey, DPAPI, the
-   Linux Secret Service, or a file, rather than one blessed store.
-3. **The lease rung** — consumers can hold a capability instead of the secret, which nothing
-   env-injection-shaped offers.
+1. **Policy at resolution, per invocation** — trust tiers on the calling executable, time
+   windows, use counts, per-use presence — evaluated for each use, not just each grant, with
+   custom rule expressions as the roadmap direction (policy as expressive as your rules, not
+   as coarse as a permission checkbox).
+2. **Works with the store you already use, with no lock-in** — the same policy over Keychain,
+   1Password, YubiKey, DPAPI, the Linux Secret Service, or a file. Script against vaultkeeper
+   once and mix stores freely — Keychain for some secrets, 1Password for others, a YubiKey at
+   work — one unified facade, and changing stores never changes your tooling.
+3. **The lease rung** — consumers can hold a capability (a token that permits specific
+   operations to be performed on the holder's behalf — not the secret itself) instead of the
+   secret, which nothing env-injection-shaped offers.
 4. **No subscription** — the scoped-token/dedicated-vault posture that 1Password gates behind
    Business tiers, locally and free.
 
@@ -97,20 +107,26 @@ distribution (see non-goals).
 
 ### What is a VaultKeeper lease?
 
-An encrypted, serializable capability token that occupies the env-var slot *instead of* a
-secret. It carries expiry, a usage limit, and revocation state; redeeming it requires the
-local vault key (the encryption key vaultkeeper generates at setup and keeps in your
-configured backend — only the vaultkeeper process on this machine can use it, enforced by the
-backend's own access control plus owner-only file permissions on the encrypted key state), so
-a lease captured into a log aggregator or bug report is dead on arrival anywhere else. Signing
-leases are the same idea for signing keys: holding one lets a process *ask vaultkeeper to
-produce signatures* with a key it never sees — minted with human presence at launch, usable
+It starts at setup: when vaultkeeper is set up on a machine, it creates an encryption key that
+only it can use — the **minting key** — held in your configured backend behind that backend's
+own access control, with the encrypted key state further protected by owner-only file
+permissions. Every lease begins and ends with this key.
+
+A lease is an encrypted token, **minted** with the minting key, that occupies the env-var slot
+*instead of* a secret. It carries expiry, a usage limit, and revocation state, and it can only
+be **redeemed** — decrypted and honored — by the vaultkeeper that holds the minting key. That
+is why you should care: a lease captured into a log aggregator, a telemetry payload, or a bug
+report is dead on arrival anywhere else, because no other machine's vaultkeeper can redeem it.
+That is the leak class that actually happens, and it simply stops mattering.
+
+Signing leases are the same idea for signing keys: holding one lets a process *ask vaultkeeper
+to produce signatures* with a key it never sees — minted with human presence at launch, usable
 non-interactively until expiry, revocable individually or per-key.
 
 ### How do I adopt this without rewriting my tools?
 
-You don't adopt vaultkeeper wholesale — you upgrade **one secret at a time**, and each secret
-sits at whichever of three levels fits it. Nothing forces a migration: a single profile can
+You don't have to adopt vaultkeeper wholesale — you may upgrade **one secret at a time**, and
+each secret sits at whichever of three levels fits it. Nothing forces a migration: a single profile can
 hold secrets at different levels side by side, indefinitely, so there is no cliff where
 everything must convert at once and no penalty for upgrading one credential while its
 neighbors stay put.
@@ -123,10 +139,11 @@ neighbors stay put.
    `vaultkeeper run`, and the secret is fetched from your backend and handed *only to that
    one process, for that one run*. If you have ever thought "I just need to pass this key to
    this one command without leaving it lying around in a file" — this is that, made routine.
-   The tool is unmodified; the difference from level 1 is that the secret is no longer
-   floating around on disk for every other process, backup, and sync client to see.
-3. **The process gets a lease, not the secret.** At level 2 the chosen process still holds
-   the real GitHub key. At level 3 it holds a vaultkeeper lease instead: a token that — under
+   The tool is unmodified; the difference from using `.env` files with secrets in plaintext is
+   that the secret is no longer floating around on disk for every other process, backup, and
+   sync client to see.
+3. **The process gets a lease, not the secret.** When raw secrets (e.g. API keys) are made
+   available to a process at launch, the chosen process still holds the real key. With a lease it holds a vaultkeeper token instead: one that — under
    the right conditions — lets operations be performed *with* a key the process never has any
    direct access to. Those "right conditions" are yours to define: a time window, a usage
    count, and — because vaultkeeper sits in the middle of every call — policy **more granular
@@ -136,6 +153,27 @@ neighbors stay put.
    This level requires the consuming tool to speak vaultkeeper; today that means first-party
    tooling, by choice (a language-agnostic local redemption endpoint is a named future epic,
    gated on an installed base worth integrating against).
+
+### What is a profile?
+
+A profile is a named, per-project file that describes the environment a command should
+receive: which env vars exist, which secret in your backend each one draws from, whether each
+materializes as the real value or as a lease, and the policy for that entry (expiry, trust
+requirement, presence). Profiles contain names and policy — never secret values — so they are
+safe to commit next to your code, which turns any weakening of policy into a reviewable diff.
+`vaultkeeper run --profile <name> -- <command>` resolves the profile and launches the command
+with that environment.
+
+### I build tools or libraries — why would I integrate vaultkeeper directly?
+
+Because it makes someone else's secret store your feature instead of your problem. Integrate
+against vaultkeeper once and your tool supports whatever secret-keeping backend each user
+already has — Keychain, 1Password, a YubiKey, an encrypted file — without you writing a line
+of keychain code, handling a biometric flow, or maintaining the notoriously annoying manual
+test rigs those integrations demand. vaultkeeper carries those tests (and ships test doubles
+so *your* integration tests run hermetically in CI, no hardware, no accounts). Your users
+choose how their secrets are protected; your tool doesn't have to know or care — it can even
+use vaultkeeper entirely under the hood, unbeknownst to the user.
 
 ### Does this work for AI-agent fleets?
 
@@ -147,20 +185,28 @@ leases minted at harness launch with presence proven once; and honest documentat
 *non-invocability* additionally requires OS-level isolation between the privileged harness and
 the processes it governs — custody cannot substitute for process isolation, and we say so.
 
+There is a companion need in agent-heavy development: some acts must remain *deterministically
+human* — provably performed by a person, not by an agent that discovered a workaround.
+vaultkeeper powers a solution there too, through its sibling project
+[`attest-it`](https://github.com/mike-north/attest-it): cryptographic proof that a designated
+identity performed a gated act, with vaultkeeper holding the signing keys.
+
 ### Can a signature prove a human was present?
 
-Not in what ships today, but the path exists and is on the roadmap. Presence is enforced at
-signing time by capable backends and is visible to the local caller; the resulting signature,
-however, does not yet carry that fact to a verifier. Two mechanisms can close the gap. The
-strongest is **presence-bound keys**: when a key lives in hardware whose signing policy
-requires a physical touch (a YubiKey with touch-required, a Secure-Enclave key gated on
-biometrics) and that policy is attested at enrollment, then *every* valid signature from that
-key is proof of presence by construction — nothing extra to encode, nothing to forge. The
-complementary mechanism is a **vaultkeeper-signed assurance assertion** bound into the signed
-payload, covering backends where the property is enforced by vaultkeeper rather than by the
-hardware itself (with the honest caveat that its trust root is the vault, not the physical
-token). Sequencing verifier-visible assurance is a design question shared with downstream
-attestation tooling, which currently treats the distinction as consumer-side convention.
+Yes — at two strengths. The strongest is **presence-bound keys**: when a key lives in hardware
+whose signing policy demands a human action at the moment of signing (a YubiKey with
+touch-required, a Secure-Enclave key gated on biometrics) and that policy is attested at
+enrollment, then *every* valid signature from that key is proof of presence by construction —
+nothing extra to encode, nothing to forge. The complementary mechanism is a
+**vaultkeeper-signed assurance assertion** bound into the signed payload, covering backends
+where the property is enforced by vaultkeeper rather than by the hardware (with the honest
+caveat that its trust root is the vault, not the physical token).
+
+"Presence" here is deliberately broader than a fingerprint or a touch: the aim is integration
+with the full range of human-in-the-loop approval mechanisms — a passkey ceremony, an
+authenticated web approval behind a CAPTCHA, anything that yields a trustworthy indication of
+a human's involvement at the moment of approval. This is a solved pattern in the e-signature
+world; vaultkeeper's job is to bind it to key use.
 
 ### How do humans and automation coexist as signers?
 
@@ -170,7 +216,11 @@ strengthen over time (file-backed today, presence-gated hardware tomorrow) witho
 becoming a different actor. Role semantics (who may author, who may approve) belong to the
 verifying system's policy, not to vaultkeeper.
 
-### What about testing? Secrets tooling is notoriously untestable.
+### What about testing?
+
+Secret-store integrations aren't untestable — they're *annoying and difficult* to test:
+hardware to touch, sessions to authenticate, prompts that hang CI. The idea is that
+vaultkeeper owns those annoying tests so you don't have to write them.
 
 vaultkeeper treats its test doubles as products. Shipped today: an in-memory backend and a
 test-vault harness for hermetic consumer tests. In review as of this writing: that backend
@@ -195,11 +245,14 @@ policy-enforced: that is the product.
 Shipped: the Rust core (backends, JWE capability tokens, key management and rotation, trust
 tiers/TOFU, presence model, detached-JWS signing with backend-held keys, the opaque handle
 table), the TypeScript SDK and CLI, the WASM bridge, encrypted key-state persistence, the
-environment-profile primitive, and the conformance suite. In flight: the `run` wrapper verb,
-session signing leases with tamper-evident revocation, native-CLI backend parity (keychain,
-secret-tool, DPAPI, YubiKey ports to the shared core), and the paired-double test strategy.
-Future: the local redemption endpoint, external key import with custody provenance, and
-verifier-visible assurance.
+environment-profile primitive, and the conformance suite. Policy-resolved injection ships
+today as the single-secret `vaultkeeper exec`; the profile-based `run` wrapper described
+above is its in-flight, multi-secret generalization. Also in flight: session signing leases
+with tamper-evident revocation, native-CLI backend parity (keychain, secret-tool, DPAPI,
+YubiKey ports to the shared core), and the paired-double test strategy. Committed roadmap:
+verifier-visible assurance (presence-bound keys and the signed assurance assertion — see "Can
+a signature prove a human was present?"). Future: the local redemption endpoint, external key
+import with custody provenance.
 
 ### What does it cost?
 

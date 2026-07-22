@@ -42,7 +42,9 @@ audiences.
 
 The rung is chosen **per entry** in a profile, and mixing is the permanent steady state, not a
 migration phase. Rung 2's delivery mechanism is the `vaultkeeper run` wrapper — most visibly as
-the `command` in an MCP server config. Rung 3 is first-party-only today *by choice*; the
+the `command` in an MCP server config. (`run` is in flight; today's shipped mechanism is the
+single-secret `vaultkeeper exec`, which `run` generalizes to profile-driven, multi-secret
+resolution.) Rung 3 is first-party-only today *by choice*; the
 language-agnostic local redemption endpoint that would open it to any consumer in any language
 is a named future epic, triggered by an installed base worth integrating against.
 
@@ -144,10 +146,15 @@ YubiKey ports); consumer test doubles (signing and fault-injection capabilities 
 the existing in-memory backend, plus a new presence simulator); the paired-double test
 strategy (stub framework, golden transcripts, flavored doubles, the manual-residue register).
 
+**Committed roadmap**: verifier-visible assurance — a signature provably presence-backed, via
+presence-bound hardware keys (signing policy attested at enrollment) and a vault-signed
+assurance assertion for software-enforced backends. Owner-decided 2026-07; presence here spans
+human-in-the-loop approval broadly (hardware touch, biometrics, passkey ceremonies,
+authenticated web approval), not only physical tokens.
+
 **Deliberately future**: the local redemption endpoint (opens rung 3 to any language);
-external key import with custody provenance modeled; verifier-visible assurance (a signature
-provably presence-backed); issuance-side principal checks binding capabilities to the invoking
-context.
+external key import with custody provenance modeled; issuance-side principal checks binding
+capabilities to the invoking context.
 
 ## 10. How we measure success
 
