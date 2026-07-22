@@ -1,8 +1,10 @@
-# vaultkeeper Product Brief
+# vaultkeeper 1.0 Product Brief
 
-> The durable statement of what vaultkeeper is, who it serves, what it will not do, and how we
-> reason about its security claims. Companion to [PRFAQ.md](./PRFAQ.md); where the PRFAQ
-> persuades, this document decides. Kept current by the maintainers.
+> The durable statement of what **vaultkeeper 1.0** is, who it serves, what it will not do,
+> and how we reason about its security claims. Like its companion [PRFAQ.md](./PRFAQ.md),
+> this describes the 1.0 target — not the current state of the code — without distinguishing
+> landed from planned; the repository's releases, epics, and tracker own current status.
+> Where the PRFAQ persuades, this document decides.
 
 ## 1. The single value proposition
 
@@ -42,9 +44,7 @@ audiences.
 
 The rung is chosen **per entry** in a profile, and mixing is the permanent steady state, not a
 migration phase. Rung 2's delivery mechanism is the `vaultkeeper run` wrapper — most visibly as
-the `command` in an MCP server config. (`run` is in flight; today's shipped mechanism is the
-single-secret `vaultkeeper exec`, which `run` generalizes to profile-driven, multi-secret
-resolution.) Rung 3 is first-party-only today *by choice*; the
+the `command` in an MCP server config. Rung 3 is first-party-only today *by choice*; the
 language-agnostic local redemption endpoint that would open it to any consumer in any language
 is a named future epic, triggered by an installed base worth integrating against.
 
@@ -88,14 +88,11 @@ is a named future epic, triggered by an installed base worth integrating against
 ## 6. Architecture in one paragraph
 
 One semantic core in Rust (`vaultkeeper-core`), reached two ways: a native CLI, and TypeScript
-via a WASM bridge — with the TypeScript library's parallel logic being progressively retired as
-the core reaches parity (single-core consolidation). Backends are subprocess orchestration over
-a host-platform abstraction wherever the underlying store has a CLI (keychain, secret-tool,
-DPAPI, YubiKey); 1Password remains host-provided because its per-process desktop-app grant is
-reachable only through a mechanism the WASM sandbox cannot load. A data-driven conformance
-corpus runs against every implementation — and, by design, against every test double — so
-"the Rust and TypeScript flavors of the same experience" is enforced mechanically, not by
-promise.
+via a WASM bridge. The TypeScript library's parallel logic **will be retired** as the core
+reaches parity — single-core consolidation is the settled direction, not an open question.
+Backends are small adapters over a host-platform abstraction. A data-driven conformance corpus
+runs against every implementation — and, by design, against every test double — so "the Rust
+and TypeScript flavors of the same experience" is enforced mechanically, not by promise.
 
 ## 7. How we make security claims
 
@@ -105,10 +102,15 @@ appears to deliver a property is treated as a defect.** Standing consequences:
 - Per-rung threat honesty. Rung 2 provides essentially zero confidentiality against same-UID
   code execution; its real adversaries are exfiltration-at-rest and accidental disclosure. We
   say this everywhere the value proposition is stated.
-- A lease's decisive property is off-box worthlessness — the leak class that actually happens
-  (log aggregators, telemetry, bug reports).
-- Non-invocability of a privileged identity requires OS-level isolation; custody cannot
-  substitute for it, and every custody recommendation states the precondition.
+- A lease's decisive property is **worthlessness outside its intended holder**: off-box it
+  cannot even be decrypted, and on the same machine redemption verifies *who* presents it —
+  a lease lifted by a different process is refused. The leak classes that actually happen
+  (log aggregators, telemetry, bug reports) and the lateral-theft case are both covered.
+- Holding the only copy of a key does not help if any process on the machine can simply ask
+  vaultkeeper to use it. So when a privileged identity (like an adjudicating agent's signing
+  key) must be unusable by the processes it governs, those processes have to run under a
+  different OS user — vaultkeeper's custody cannot substitute for that separation, and every
+  custody recommendation says so up front.
 - Fail-closed is the default posture: unknown backends report no capabilities; corrupt or
   missing revocation state refuses lease validation; config naming an unavailable backend is an
   error, never a silent fallback.
@@ -116,53 +118,64 @@ appears to deliver a property is treated as a defect.** Standing consequences:
   structurally unreachable from production: separate dev-only package, no registry entry,
   opt-in-only construction, loud refusal under production environments. This is a standing
   requirement on any such aid, enforced by negative tests wherever one exists.
+- Test artifacts must be **self-announcing, and production must refuse them**: anything a test
+  aid emits that resembles a real security artifact (a lease, a token, an assertion) carries
+  an unmistakable test marking, and non-test code paths explicitly reject marked artifacts
+  rather than honoring them. Unreachability guards protect against test *code* leaking into
+  production; this guards against test *data* doing the same.
 
 ## 8. Non-goals
 
 - **Team sync, cloud storage, cross-device distribution.** Subscription products earn their fee
   there; competing would require becoming a cloud service and forfeiting "nothing leaves your
   machine." Single-machine, single-developer parity is the scope.
-- **Locked-down corporate MCP environments** (proxy, cert auth, curated servers) — users there
-  cannot edit configs and do not have this problem.
-- **Matching 1Password's UX breadth.** Biometric ergonomics, browser integration, and sharing
-  are not the competition; custody policy is.
-- **Modeling signature *semantics*** (authorship vs approval). What a signature means belongs to
-  the verifying system's per-gate policy; vaultkeeper makes identities distinguishable and
-  their keys non-transferable, and stops there.
+- **Governing auth that isn't secret-material.** Where access rests on client certificates,
+  platform-attested identity, or other non-secret mechanisms, there is no key for vaultkeeper
+  to custody and no policy for it to enforce. Wherever an API-key-shaped secret exists —
+  including in otherwise locked-down corporate environments — vaultkeeper aims to be usable.
+- **Competing with 1Password — vaultkeeper is complementary to it.** 1Password is one of
+  vaultkeeper's best backends, and vaultkeeper is a power tool *for* 1Password users: policy,
+  leases, and delegated use layered over the vault they already trust. (The same goes for
+  every store vaultkeeper fronts.)
+- **Modeling signature *semantics*** (authorship vs approval). Such things can absolutely be
+  built *on top of* vaultkeeper — and are: that layer of meaning belongs, Unix-style, to tools
+  that leverage it (attest-it being the first). vaultkeeper aims to be excellent at its own
+  job — making identities distinguishable and their keys non-transferable — and stops there.
 
-## 9. State of the world
+## 9. What 1.0 means
 
-**Shipped** (through `vaultkeeper@0.7.x`): the Rust core — backends (file, in-memory,
-secret-tool), JWE capability tokens, key management and rotation, trust tiers/TOFU, the
-presence model, detached-JWS signing with backend-held Ed25519 keys, the opaque handle table
-with bearer-safe redaction, encrypted key-state persistence, the environment-profile
-primitive, the lease-aware claims validator; the TypeScript SDK/CLI with the full backend
-suite; the WASM bridge with host-callback contracts; OIDC trusted publishing; conformance and
-packaging test suites.
+1.0's scope is defined by this document and the PRFAQ, not by a feature checklist — but these
+pillars are its load-bearing walls. Each is a commitment a reader may hold us to:
 
-**In flight**: the `run` wrapper verb (stdio/signal-transparent); session signing leases with
-tamper-evident two-axis revocation; native backend parity (keychain via `security -i`, DPAPI,
-YubiKey ports); consumer test doubles (signing and fault-injection capabilities being added to
-the existing in-memory backend, plus a new presence simulator); the paired-double test
-strategy (stub framework, golden transcripts, flavored doubles, the manual-residue register).
-
-**Committed roadmap**: verifier-visible assurance — a signature provably presence-backed, via
-presence-bound hardware keys (signing policy attested at enrollment) and a vault-signed
-assurance assertion for software-enforced backends. Owner-decided 2026-07; presence here spans
-human-in-the-loop approval broadly (hardware touch, biometrics, passkey ceremonies,
-authenticated web approval), not only physical tokens.
-
-**Deliberately future**: the local redemption endpoint (opens rung 3 to any language);
-external key import with custody provenance modeled; issuance-side principal checks binding
-capabilities to the invoking context.
+- **Single-core consolidation** — one Rust semantic core behind every surface; the parallel
+  TypeScript logic will be retired.
+- **The profile-driven `run` wrapper** — the universal on-ramp for unmodified tools, MCP
+  servers first among them.
+- **Session signing leases** — presence-anchored at mint, non-interactive for the session,
+  with tamper-evident two-axis revocation.
+- **Per-process lease boundaries** — redemption verifies the presenter; a lease is worthless
+  outside its intended holder, not merely off-box.
+- **Backend parity in the native CLI** for every store the library fronts.
+- **The paired-double test strategy** — every production adapter has a double held to the
+  same conformance corpus; manual testing is a minutes-scale fidelity audit; test artifacts
+  are self-announcing and refused by production.
+- **Verifier-visible assurance** — signatures provably presence-backed, via presence-bound
+  hardware keys (signing policy attested at enrollment) and vault-signed assurance
+  assertions, with "presence" spanning human-in-the-loop approval broadly (hardware touch,
+  biometrics, passkey ceremonies, authenticated web approval).
+- **The local redemption endpoint** — leases redeemable by any tool in any language in one
+  call, opening the lease rung beyond first-party tooling.
 
 ## 10. How we measure success
 
+- Dramatically more secure secrets handling is brought to bear across an extremely wide range
+  of CLI and MCP tools — breadth of tools running under vaultkeeper is the headline measure.
 - A new user gets a secret out of plaintext and behind policy in under five minutes, without
   modifying the consuming tool.
+- Library and tool builders who need a secrets-backend integration achieve a high degree of
+  release confidence without building or maintaining their own manual test suites (for
+  1Password integration and the like) — they test against vaultkeeper's doubles instead.
 - The manual-testing residue stays a minutes-scale, tool-upgrade-triggered checklist — never a
   suite that can rot unrun.
-- Consumers (starting with attestation tooling) cover their vaultkeeper integration on every
-  PR using shipped doubles, with zero hardware.
 - Every security property claimed in this document has a test that fails when the property
   regresses.

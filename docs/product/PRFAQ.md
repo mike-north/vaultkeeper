@@ -1,8 +1,11 @@
-# vaultkeeper PRFAQ
+# vaultkeeper 1.0 PRFAQ
 
-> Product reference document, written from the launch perspective: the press release and FAQ
-> describe vaultkeeper as it lands at launch. The "What exists today" question anchors current
-> implementation status against that. Kept current by the maintainers.
+> This is the PRFAQ for **vaultkeeper 1.0 — a release that has not shipped yet.** It is
+> written from 1.0's launch perspective, deliberately without hedging: everything described
+> here is in scope for 1.0 whether or not it has landed today. This document is the working
+> definition of what 1.0 means, and the artifact against which product feedback is given.
+> Current implementation status lives where it stays current — the repository's releases,
+> epics, and issue tracker — never here.
 
 ---
 
@@ -114,10 +117,11 @@ permissions. Every lease begins and ends with this key.
 
 A lease is an encrypted token, **minted** with the minting key, that occupies the env-var slot
 *instead of* a secret. It carries expiry, a usage limit, and revocation state, and it can only
-be **redeemed** — decrypted and honored — by the vaultkeeper that holds the minting key. That
-is why you should care: a lease captured into a log aggregator, a telemetry payload, or a bug
-report is dead on arrival anywhere else, because no other machine's vaultkeeper can redeem it.
-That is the leak class that actually happens, and it simply stops mattering.
+be **redeemed** — decrypted and honored — by the vaultkeeper that holds the minting key, *and
+only when presented by the process it was issued to*. That is why you should care: a lease
+captured into a log aggregator, a telemetry payload, or a bug report is dead on arrival —
+no other machine's vaultkeeper can decrypt it, and even another process on the same machine
+is refused at redemption. The leak classes that actually happen simply stop mattering.
 
 Signing leases are the same idea for signing keys: holding one lets a process *ask vaultkeeper
 to produce signatures* with a key it never sees — minted with human presence at launch, usable
@@ -150,9 +154,9 @@ neighbors stay put.
    than the target system itself can express**. GitHub's permission model cannot say "may
    update issues, but only ones carrying this label"; a delegated fetch through vaultkeeper
    can, because each invocation is evaluated against your policy before the key is ever used.
-   This level requires the consuming tool to speak vaultkeeper; today that means first-party
-   tooling, by choice (a language-agnostic local redemption endpoint is a named future epic,
-   gated on an installed base worth integrating against).
+   This level requires the consuming tool to speak vaultkeeper — natively, through its SDKs,
+   or through the local redemption endpoint that lets any tool in any language trade a lease
+   for what it needs in one call.
 
 ### What is a profile?
 
@@ -222,14 +226,14 @@ Secret-store integrations aren't untestable — they're *annoying and difficult*
 hardware to touch, sessions to authenticate, prompts that hang CI. The idea is that
 vaultkeeper owns those annoying tests so you don't have to write them.
 
-vaultkeeper treats its test doubles as products. Shipped today: an in-memory backend and a
-test-vault harness for hermetic consumer tests. In review as of this writing: that backend
-gaining real Ed25519 signing and scriptable fault injection (throwing the same typed errors
-production throws), plus a presence simulator built to be structurally unreachable from
-production code. Planned behind those: backend-flavored doubles carrying real data shapes and
-choreography, held to the *same conformance corpus* as the real adapters — at which point
-manual testing reduces to a minutes-scale, tool-upgrade-triggered audit: "does the real
-adapter still match its double?"
+vaultkeeper treats its test doubles as products: an in-memory backend with real Ed25519
+signing and scriptable fault injection (throwing the same typed errors production throws), a
+presence simulator that is structurally unreachable from production code, and backend-flavored
+doubles carrying real data shapes and choreography — every double held to the *same
+conformance corpus* as the real adapter it stands in for. Test artifacts are self-announcing
+(a test-minted lease is unmistakably marked, and production refuses marked artifacts), so test
+data can never pass as real. Manual testing reduces to a minutes-scale, tool-upgrade-triggered
+audit: "does the real adapter still match its double?"
 
 ### What are the non-goals?
 
@@ -240,19 +244,14 @@ cert-based auth are also out of scope: users there cannot add servers or edit co
 not have the secret-handling problem vaultkeeper solves. Single machine, single developer,
 policy-enforced: that is the product.
 
-### What exists today, and what is in flight?
+### Is everything here real today?
 
-Shipped: the Rust core (backends, JWE capability tokens, key management and rotation, trust
-tiers/TOFU, presence model, detached-JWS signing with backend-held keys, the opaque handle
-table), the TypeScript SDK and CLI, the WASM bridge, encrypted key-state persistence, the
-environment-profile primitive, and the conformance suite. Policy-resolved injection ships
-today as the single-secret `vaultkeeper exec`; the profile-based `run` wrapper described
-above is its in-flight, multi-secret generalization. Also in flight: session signing leases
-with tamper-evident revocation, native-CLI backend parity (keychain, secret-tool, DPAPI,
-YubiKey ports to the shared core), and the paired-double test strategy. Committed roadmap:
-verifier-visible assurance (presence-bound keys and the signed assurance assertion — see "Can
-a signature prove a human was present?"). Future: the local redemption endpoint, external key
-import with custody provenance.
+No — and that is the point of this document. This PRFAQ describes **vaultkeeper 1.0** and is
+written from its launch perspective: it is the target the project builds toward, and the
+artifact its owner gives product feedback against. Some of what it describes has shipped;
+some is in flight; some is not yet started. The one place to learn which is which is the
+repository itself — releases, epics, and the issue tracker — which stays current the way a
+durable document cannot.
 
 ### What does it cost?
 
