@@ -12,6 +12,7 @@ pub mod identity;
 pub mod jwe;
 pub mod keys;
 pub mod profile;
+pub mod resolve;
 pub mod signing;
 pub mod types;
 pub(crate) mod util;
@@ -24,6 +25,7 @@ pub use backend::{
 };
 pub use errors::{ExecutableTrustRequiredReason, VaultError};
 pub use identity::{HANDLE_TABLE_MAX_SIZE, HandleId, HandleTable, StoredClaims};
+pub use resolve::{ResolveOptions, ResolvedEnv, resolve_profile};
 pub use types::{
     BackendConfig, ClaimsKind, ExecRequest, ExecResult, FetchRequest, KeyStatus, LeasePresence,
     PreflightCheck, PreflightCheckStatus, PreflightResult, ScopedPreflightCheck, SecretAccessor,
