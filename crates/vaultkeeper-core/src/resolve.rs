@@ -56,8 +56,8 @@
 //!
 //! A `materialize: "secret"` (or `"lease"`) entry's `requirePresencePerUse`
 //! is enforced via the shared [`crate::vault::enforce_presence_requirement`]
-//! primitive — the same one [`crate::vault::VaultKeeper::setup`] and other
-//! backend-touching operations use — called with
+//! primitive — the same one the native CLI's backend-touching commands
+//! (`store`/`delete`) use — called with
 //! [`crate::backend::PresenceOperation::Read`] immediately before
 //! [`SecretBackend::retrieve`]. A flagged entry against a non-qualifying
 //! backend is refused before the backend is ever touched.
