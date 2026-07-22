@@ -45,6 +45,7 @@ use base64ct::{Base64, Encoding};
 use hkdf::Hkdf;
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
+use zeroize::{Zeroize, Zeroizing};
 
 use crate::backend::file::hex_encode;
 use crate::backend::types::{
@@ -150,7 +151,12 @@ impl YubikeyBackend {
     /// the raw hex response string. The challenge is `hex("vaultkeeper:{id}")`
     /// — only this id-derived hex value ever reaches `ykman`'s argv, never
     /// the secret itself.
-    async fn challenge_response(&self, id: &str) -> Result<String, VaultError> {
+    ///
+    /// The response is key material (it is the sole input to [`derive_key`])
+    /// and is returned wrapped in [`Zeroizing`] so it is scrubbed from memory
+    /// as soon as its last owner (the caller) drops it, mirroring
+    /// `signing_store`'s handling of derived key material end-to-end.
+    async fn challenge_response(&self, id: &str) -> Result<Zeroizing<String>, VaultError> {
         let challenge = hex_encode(format!("vaultkeeper:{id}").as_bytes());
         let output = self
             .host
@@ -169,7 +175,9 @@ impl YubikeyBackend {
                 command: "ykman".to_string(),
             });
         }
-        Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+        Ok(Zeroizing::new(
+            String::from_utf8_lossy(&output.stdout).trim().to_string(),
+        ))
     }
 
     async fn require_device(&self) -> Result<(), VaultError> {
@@ -234,7 +242,13 @@ impl YubikeyBackend {
 /// the TS backend's typed `SetupError`) if `hmac_response` is not exactly
 /// [`HMAC_RESPONSE_HEX_LENGTH`] hex characters — a malformed or truncated
 /// `ykman` response.
-fn derive_key(hmac_response: &str, id: &str) -> Result<Vec<u8>, VaultError> {
+///
+/// Both the raw IKM (the hex-decoded HMAC response) and the returned AES key
+/// are key material and are scrubbed accordingly: the IKM is held in a
+/// [`Zeroizing`] buffer for its whole lifetime, and the returned key is
+/// [`Zeroizing`] so it is scrubbed as soon as its last owner drops it —
+/// mirroring `signing_store`'s handling of derived key material.
+fn derive_key(hmac_response: &str, id: &str) -> Result<Zeroizing<Vec<u8>>, VaultError> {
     let trimmed = hmac_response.trim();
     let is_valid_hex =
         trimmed.len() == HMAC_RESPONSE_HEX_LENGTH && trimmed.bytes().all(|b| b.is_ascii_hexdigit());
@@ -249,10 +263,10 @@ fn derive_key(hmac_response: &str, id: &str) -> Result<Vec<u8>, VaultError> {
         });
     }
 
-    let ikm = hex_decode(trimmed)?;
+    let ikm = Zeroizing::new(hex_decode(trimmed)?);
     let info = format!("vaultkeeper-yubikey:{id}");
     let hk = Hkdf::<Sha256>::new(None, &ikm);
-    let mut key = vec![0u8; GCM_KEY_BYTES];
+    let mut key = Zeroizing::new(vec![0u8; GCM_KEY_BYTES]);
     // A fixed 32-byte request can never exceed HKDF's 255*HashLen output
     // limit, so this is unreachable in practice but still surfaced as a
     // typed error rather than unwrapped.
@@ -318,7 +332,18 @@ fn encrypt_gcm_versioned(key: &[u8], plaintext: &str) -> Result<String, VaultErr
 ///
 /// All failure branches return [`VaultError::Decryption`] carrying `path`,
 /// mirroring the TS backend's typed `DecryptionError`.
-fn decrypt_gcm_versioned(key: &[u8], encoded: &str, path: &str) -> Result<String, VaultError> {
+///
+/// The decrypted plaintext is the secret itself, so it is returned wrapped in
+/// [`Zeroizing`] — mirroring `signing_store::decrypt_gcm`'s handling of its
+/// own decrypted private-key material, including the same treatment of the
+/// non-UTF-8 failure path: `String::from_utf8`'s error owns the raw decrypted
+/// bytes, so they are recovered from it and explicitly zeroized before the
+/// error is returned, rather than left to a plain `Vec<u8>` drop.
+fn decrypt_gcm_versioned(
+    key: &[u8],
+    encoded: &str,
+    path: &str,
+) -> Result<Zeroizing<String>, VaultError> {
     let legacy_err = || VaultError::Decryption {
         message: "Encrypted file uses a legacy format (AES-256-CBC). Delete the secret and \
                   re-store it to migrate to AES-256-GCM."
@@ -410,10 +435,24 @@ fn decrypt_gcm_versioned(key: &[u8], encoded: &str, path: &str) -> Result<String
                 path: path.to_string(),
             })?;
 
-    String::from_utf8(plaintext).map_err(|e| VaultError::Decryption {
-        message: format!("Decrypted data is not valid UTF-8: {e}"),
-        path: path.to_string(),
-    })
+    match String::from_utf8(plaintext) {
+        Ok(s) => Ok(Zeroizing::new(s)),
+        Err(e) => {
+            // The decrypted bytes are the secret (or, on a corrupt/tampered
+            // envelope, whatever GCM happened to decrypt to — still
+            // sensitive enough to treat the same way) even though they
+            // failed UTF-8 validation. `FromUtf8Error` owns those bytes;
+            // recover and zeroize them before the error is dropped rather
+            // than leaving them to a plain `Vec<u8>` drop.
+            let message = format!("Decrypted data is not valid UTF-8: {}", e.utf8_error());
+            let mut plaintext = e.into_bytes();
+            plaintext.zeroize();
+            Err(VaultError::Decryption {
+                message,
+                path: path.to_string(),
+            })
+        }
+    }
 }
 
 #[cfg_attr(target_arch = "wasm32", async_trait::async_trait(?Send))]
@@ -458,17 +497,28 @@ impl SecretBackend for YubikeyBackend {
         self.require_device().await?;
 
         let entry_path = self.entry_path(id);
-        match self.host.file_exists(&entry_path).await {
-            Ok(true) => {}
-            Ok(false) => {
-                return Err(VaultError::SecretNotFound {
-                    message: format!("Secret not found in YubiKey store: {id}"),
-                });
-            }
-            Err(e) => return Err(e),
-        }
 
-        let data = self.host.read_file(&entry_path).await?;
+        // Act first, then disambiguate on failure — never probe existence
+        // before acting. A `file_exists` check followed by a separate
+        // `read_file` call is a TOCTOU race: the entry can be deleted (or
+        // fail to exist for unrelated reasons) between the two calls, and a
+        // caller relying on the up-front probe would misreport a genuine
+        // filesystem error as `SecretNotFound` or vice versa. Only a
+        // definitive read failure is disambiguated afterward, mirroring
+        // `FileBackend::retrieve` and `signing_store::load_signing_key`
+        // exactly: a confirmed-missing entry becomes `SecretNotFound`; any
+        // other read failure (e.g. EACCES/EPERM) propagates unchanged.
+        let data = match self.host.read_file(&entry_path).await {
+            Ok(data) => data,
+            Err(read_err) => {
+                return match self.host.file_exists(&entry_path).await {
+                    Ok(false) => Err(VaultError::SecretNotFound {
+                        message: format!("Secret not found in YubiKey store: {id}"),
+                    }),
+                    Ok(true) | Err(_) => Err(read_err),
+                };
+            }
+        };
         // The stored entry is UTF-8 text by design for the current versioned
         // format, but a legacy pre-GCM entry is raw OpenSSL binary output —
         // lossily decode (never hard-fail here) so a legacy/corrupt blob
@@ -480,21 +530,35 @@ impl SecretBackend for YubikeyBackend {
         let hmac_response = self.challenge_response(id).await?;
         let key = derive_key(&hmac_response, id)?;
 
-        decrypt_gcm_versioned(&key, &encoded, &entry_path.display().to_string())
+        let plaintext = decrypt_gcm_versioned(&key, &encoded, &entry_path.display().to_string())?;
+        // The `SecretBackend` trait returns a plain `String` — this is the
+        // one point where the secret must leave `Zeroizing` custody and be
+        // handed to the caller, who becomes responsible for it from here.
+        // `Zeroizing<String>` exposes no `into_inner` (it would let a caller
+        // silently opt out of the zero-on-drop guarantee), so the contained
+        // value is cloned out; the original `Zeroizing` copy is still
+        // scrubbed when it drops at the end of this scope.
+        Ok((*plaintext).clone())
     }
 
     async fn delete(&self, id: &str) -> Result<(), VaultError> {
         self.require_device().await?;
 
         let entry_path = self.entry_path(id);
-        match self.host.file_exists(&entry_path).await {
-            Ok(true) => self.host.delete_file(&entry_path).await?,
-            Ok(false) => {
-                return Err(VaultError::SecretNotFound {
-                    message: format!("Secret not found in YubiKey store: {id}"),
-                });
+
+        // Same act-first-then-disambiguate shape as `retrieve` above: never
+        // probe existence before acting, only afterward to distinguish a
+        // genuine "already gone" from a real filesystem error.
+        match self.host.delete_file(&entry_path).await {
+            Ok(()) => {}
+            Err(delete_err) => {
+                return match self.host.file_exists(&entry_path).await {
+                    Ok(false) => Err(VaultError::SecretNotFound {
+                        message: format!("Secret not found in YubiKey store: {id}"),
+                    }),
+                    Ok(true) | Err(_) => Err(delete_err),
+                };
             }
-            Err(e) => return Err(e),
         }
 
         let mut metadata = self.load_metadata().await;
@@ -540,7 +604,7 @@ impl PresenceCapableBackend for YubikeyBackend {
 mod tests {
     use super::*;
     use crate::backend::{ExecOutput, Platform};
-    use std::collections::HashMap;
+    use std::collections::{HashMap, HashSet};
     use std::path::Path;
     use std::sync::Mutex;
 
@@ -565,6 +629,12 @@ mod tests {
         hmac_response: Mutex<String>,
         device_available: bool,
         ykman_installed: bool,
+        /// Paths that must fail `read_file`/`delete_file` with a
+        /// `VaultError::Filesystem` (simulating e.g. EACCES/EPERM) even
+        /// though the entry exists — lets tests distinguish the act-first
+        /// disambiguation path from the "genuinely missing" path.
+        deny_read: Mutex<HashSet<PathBuf>>,
+        deny_delete: Mutex<HashSet<PathBuf>>,
     }
 
     const FAKE_HMAC_RESPONSE: &str = "deadbeefcafe01234567deadbeefcafe01234567";
@@ -578,6 +648,8 @@ mod tests {
                 hmac_response: Mutex::new(FAKE_HMAC_RESPONSE.to_string()),
                 device_available: true,
                 ykman_installed: true,
+                deny_read: Mutex::new(HashSet::new()),
+                deny_delete: Mutex::new(HashSet::new()),
             })
         }
 
@@ -589,6 +661,8 @@ mod tests {
                 hmac_response: Mutex::new(FAKE_HMAC_RESPONSE.to_string()),
                 device_available: false,
                 ykman_installed: true,
+                deny_read: Mutex::new(HashSet::new()),
+                deny_delete: Mutex::new(HashSet::new()),
             })
         }
 
@@ -600,6 +674,8 @@ mod tests {
                 hmac_response: Mutex::new(FAKE_HMAC_RESPONSE.to_string()),
                 device_available: false,
                 ykman_installed: false,
+                deny_read: Mutex::new(HashSet::new()),
+                deny_delete: Mutex::new(HashSet::new()),
             })
         }
     }
@@ -662,6 +738,14 @@ mod tests {
             }
         }
         async fn read_file(&self, path: &Path) -> Result<Vec<u8>, VaultError> {
+            if self.deny_read.lock().unwrap().contains(path) {
+                return Err(VaultError::Filesystem {
+                    message: format!("Permission denied reading {}", path.display()),
+                    path: path.display().to_string(),
+                    permission: "read".to_string(),
+                    code: None,
+                });
+            }
             self.files
                 .lock()
                 .unwrap()
@@ -687,6 +771,14 @@ mod tests {
             Ok(self.files.lock().unwrap().contains_key(path))
         }
         async fn delete_file(&self, path: &Path) -> Result<(), VaultError> {
+            if self.deny_delete.lock().unwrap().contains(path) {
+                return Err(VaultError::Filesystem {
+                    message: format!("Permission denied deleting {}", path.display()),
+                    path: path.display().to_string(),
+                    permission: "write".to_string(),
+                    code: None,
+                });
+            }
             self.files
                 .lock()
                 .unwrap()
@@ -795,7 +887,7 @@ mod tests {
         assert_eq!(parts.len(), 4);
         assert_eq!(parts[0], "1");
         let decoded = decrypt_gcm_versioned(&key, &encoded, "/fake/path").unwrap();
-        assert_eq!(decoded, "hello yubikey");
+        assert_eq!(*decoded, "hello yubikey");
     }
 
     #[tokio::test]
@@ -1118,6 +1210,53 @@ mod tests {
         let backend = YubikeyBackend::new(host, false);
         let err = backend.delete("nonexistent").await.unwrap_err();
         assert!(matches!(err, VaultError::SecretNotFound { .. }));
+    }
+
+    // ── Act-first TOCTOU: a read/delete failure on an entry that *does*
+    // exist (e.g. EACCES/EPERM, surfaced by the host as
+    // `VaultError::Filesystem`) must propagate unchanged rather than being
+    // misreported as `SecretNotFound` — mirrors
+    // `FileBackend::retrieve_permission_denied_returns_filesystem_not_secret_not_found`
+    // and `FileBackend::delete_permission_denied_returns_filesystem`. ──────
+
+    #[tokio::test]
+    async fn retrieve_permission_denied_returns_filesystem_not_secret_not_found() {
+        let host = TestHost::new();
+        let backend = YubikeyBackend::new(host.clone(), false);
+        backend.store("locked-secret", "value").await.unwrap();
+        let entry_path = backend.entry_path("locked-secret");
+        host.deny_read.lock().unwrap().insert(entry_path.clone());
+
+        let err = backend.retrieve("locked-secret").await.unwrap_err();
+        match err {
+            VaultError::Filesystem {
+                path, permission, ..
+            } => {
+                assert_eq!(path, entry_path.display().to_string());
+                assert_eq!(permission, "read");
+            }
+            other => panic!("expected VaultError::Filesystem, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn delete_permission_denied_returns_filesystem_not_secret_not_found() {
+        let host = TestHost::new();
+        let backend = YubikeyBackend::new(host.clone(), false);
+        backend.store("locked-delete", "value").await.unwrap();
+        let entry_path = backend.entry_path("locked-delete");
+        host.deny_delete.lock().unwrap().insert(entry_path.clone());
+
+        let err = backend.delete("locked-delete").await.unwrap_err();
+        match err {
+            VaultError::Filesystem {
+                path, permission, ..
+            } => {
+                assert_eq!(path, entry_path.display().to_string());
+                assert_eq!(permission, "write");
+            }
+            other => panic!("expected VaultError::Filesystem, got {other:?}"),
+        }
     }
 
     #[tokio::test]

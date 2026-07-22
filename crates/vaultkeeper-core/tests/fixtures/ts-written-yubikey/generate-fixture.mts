@@ -8,9 +8,10 @@
  * public `store()` method, so the committed fixture is not a hand-rolled
  * re-implementation of the on-disk format — it is genuine `YubikeyBackend`
  * output. No real YubiKey is involved: a tiny stub `ykman` shell script is
- * placed on `PATH` for the duration of the run, matching the same
- * stub-binary approach the Rust integration test
- * (`crates/vaultkeeper-cli/tests/yubikey_stub_ykman.rs`) uses for CI. The
+ * placed on `PATH` for the duration of the run — this offline fixture
+ * generator is the only place in the repo that uses a stub `ykman` binary;
+ * the Rust tests in `crates/vaultkeeper-core/src/backend/yubikey.rs` instead
+ * exercise a mocked `HostPlatform`, never a real or stubbed subprocess. The
  * stub always answers the slot-2 challenge-response with
  * `FAKE_HMAC_RESPONSE` below, regardless of the challenge — mirroring
  * `packages/vaultkeeper/test/unit/backend/yubikey-backend.test.ts`'s
