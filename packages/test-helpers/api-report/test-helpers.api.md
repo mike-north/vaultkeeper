@@ -15,6 +15,22 @@ import { SigningPublicKey } from 'vaultkeeper';
 import { VaultKeeper } from 'vaultkeeper';
 
 // @public
+export type FaultMode = 'backend-unavailable' | 'key-absent' | 'permission-denied' | 'session-expired';
+
+// @public
+export interface FaultOptions {
+    persistent?: boolean;
+}
+
+// @public
+export class FaultPlan<Operation extends string = string> {
+    clear(operation: Operation): void;
+    clearAll(): void;
+    consume(operation: Operation): FaultMode | undefined;
+    inject(operation: Operation, mode: FaultMode, options?: FaultOptions): void;
+}
+
+// @public
 export class InMemoryBackend implements ListableBackend, SigningBackend, PresenceCapableBackend {
     clear(): void;
     clearAllFaults(): void;
@@ -30,7 +46,7 @@ export class InMemoryBackend implements ListableBackend, SigningBackend, Presenc
     getCapabilities(): Promise<BackendCapabilities>;
     // (undocumented)
     getPublicKey(id: string): Promise<SigningPublicKey>;
-    injectFault(operation: InMemoryBackendFaultOperation, mode: InMemoryBackendFaultMode, options?: InMemoryBackendFaultOptions): void;
+    injectFault(operation: InMemoryBackendFaultOperation, mode: FaultMode, options?: FaultOptions): void;
     // (undocumented)
     isAvailable(): Promise<boolean>;
     // (undocumented)
@@ -47,15 +63,7 @@ export class InMemoryBackend implements ListableBackend, SigningBackend, Presenc
 }
 
 // @public
-export type InMemoryBackendFaultMode = 'backend-unavailable' | 'key-absent' | 'permission-denied' | 'session-expired';
-
-// @public
 export type InMemoryBackendFaultOperation = 'store' | 'retrieve' | 'delete' | 'exists' | 'list' | 'generateSigningKey' | 'getPublicKey' | 'signWithKey';
-
-// @public
-export interface InMemoryBackendFaultOptions {
-    persistent?: boolean;
-}
 
 // @public
 export class TestVault {

@@ -21,6 +21,8 @@ import {
   AuthorizationDeniedError,
   BackendLockedError,
 } from 'vaultkeeper'
+import { FaultPlan } from './fault-plan.js'
+import type { FaultMode, FaultOptions } from './fault-plan.js'
 
 /** Signing algorithms this backend can generate keys for. */
 const SUPPORTED_SIGNING_ALGORITHMS: readonly SigningAlgorithm[] = ['EdDSA']
@@ -35,21 +37,6 @@ interface SigningKeyRecord {
 function computeKid(spkiDer: Buffer): string {
   return crypto.createHash('sha256').update(spkiDer).digest('base64url')
 }
-
-/**
- * The four deterministic fault modes {@link InMemoryBackend.injectFault} can
- * script. Each maps to a real typed error class from `vaultkeeper`'s error
- * hierarchy (see {@link InMemoryBackend.injectFault} for the mapping and the
- * rationale for each choice) so a consumer's `catch` block sees in tests
- * exactly what it would see against a real backend.
- *
- * @public
- */
-export type InMemoryBackendFaultMode =
-  | 'backend-unavailable'
-  | 'key-absent'
-  | 'permission-denied'
-  | 'session-expired'
 
 /**
  * The operations {@link InMemoryBackend.injectFault} can target. Matches the
@@ -67,22 +54,6 @@ export type InMemoryBackendFaultOperation =
   | 'generateSigningKey'
   | 'getPublicKey'
   | 'signWithKey'
-
-/** Options accepted by {@link InMemoryBackend.injectFault}. */
-export interface InMemoryBackendFaultOptions {
-  /**
-   * When `true`, the fault keeps firing on every matching call until removed
-   * with {@link InMemoryBackend.clearFault}. When `false` (the default), the
-   * fault fires exactly once and then clears itself, so the next identical
-   * call succeeds normally.
-   */
-  persistent?: boolean
-}
-
-interface ArmedFault {
-  mode: InMemoryBackendFaultMode
-  persistent: boolean
-}
 
 const SIGNING_OPERATIONS: ReadonlySet<InMemoryBackendFaultOperation> = new Set([
   'generateSigningKey',
@@ -109,7 +80,7 @@ export class InMemoryBackend implements ListableBackend, SigningBackend, Presenc
   readonly displayName = 'In-Memory Backend'
   readonly #store = new Map<string, string>()
   readonly #signingKeys = new Map<string, SigningKeyRecord>()
-  readonly #faults = new Map<InMemoryBackendFaultOperation, ArmedFault>()
+  readonly #faultPlan = new FaultPlan<InMemoryBackendFaultOperation>()
 
   /** @public */
   isAvailable(): Promise<boolean> {
@@ -301,6 +272,11 @@ export class InMemoryBackend implements ListableBackend, SigningBackend, Presenc
    *   used here: it signals a JWE token past its `exp` claim, an orthogonal
    *   JWE-lifecycle concept unrelated to backend session state.
    *
+   * The scripting mechanics (arm/consume/clear) live in the reusable
+   * {@link FaultPlan} helper this backend holds internally — it knows nothing
+   * about `InMemoryBackend`'s storage, so a future backend-flavored double
+   * (e.g. one faking a CLI-backed store) can consult the same mechanism.
+   *
    * @param operation - The backend method to fault.
    * @param mode - Which typed error to throw when `operation` is next called.
    * @param options - `{ persistent: true }` to keep firing until
@@ -310,10 +286,10 @@ export class InMemoryBackend implements ListableBackend, SigningBackend, Presenc
    */
   injectFault(
     operation: InMemoryBackendFaultOperation,
-    mode: InMemoryBackendFaultMode,
-    options?: InMemoryBackendFaultOptions,
+    mode: FaultMode,
+    options?: FaultOptions,
   ): void {
-    this.#faults.set(operation, { mode, persistent: options?.persistent ?? false })
+    this.#faultPlan.inject(operation, mode, options)
   }
 
   /**
@@ -322,7 +298,7 @@ export class InMemoryBackend implements ListableBackend, SigningBackend, Presenc
    * @public
    */
   clearFault(operation: InMemoryBackendFaultOperation): void {
-    this.#faults.delete(operation)
+    this.#faultPlan.clear(operation)
   }
 
   /**
@@ -331,23 +307,20 @@ export class InMemoryBackend implements ListableBackend, SigningBackend, Presenc
    * @public
    */
   clearAllFaults(): void {
-    this.#faults.clear()
+    this.#faultPlan.clearAll()
   }
 
   #maybeThrowFault(operation: InMemoryBackendFaultOperation, id?: string): void {
-    const fault = this.#faults.get(operation)
-    if (fault === undefined) {
+    const mode = this.#faultPlan.consume(operation)
+    if (mode === undefined) {
       return
     }
-    if (!fault.persistent) {
-      this.#faults.delete(operation)
-    }
-    throw this.#buildFaultError(operation, fault.mode, id)
+    throw this.#buildFaultError(operation, mode, id)
   }
 
   #buildFaultError(
     operation: InMemoryBackendFaultOperation,
-    mode: InMemoryBackendFaultMode,
+    mode: FaultMode,
     id: string | undefined,
   ): Error {
     switch (mode) {

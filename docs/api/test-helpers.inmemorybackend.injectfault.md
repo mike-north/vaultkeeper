@@ -9,7 +9,7 @@ Arm a deterministic fault for the next matching call to `operation`<!-- -->.
 **Signature:**
 
 ```typescript
-injectFault(operation: InMemoryBackendFaultOperation, mode: InMemoryBackendFaultMode, options?: InMemoryBackendFaultOptions): void;
+injectFault(operation: InMemoryBackendFaultOperation, mode: FaultMode, options?: FaultOptions): void;
 ```
 
 ## Parameters
@@ -53,7 +53,7 @@ mode
 
 </td><td>
 
-[InMemoryBackendFaultMode](./test-helpers.inmemorybackendfaultmode.md)
+[FaultMode](./test-helpers.faultmode.md)
 
 
 </td><td>
@@ -69,7 +69,7 @@ options
 
 </td><td>
 
-[InMemoryBackendFaultOptions](./test-helpers.inmemorybackendfaultoptions.md)
+[FaultOptions](./test-helpers.faultoptions.md)
 
 
 </td><td>
@@ -89,4 +89,6 @@ void
 Faults are checked at the top of each backend method, before any real state is read or written, and throw the \*\*real typed error class\*\* from `vaultkeeper`<!-- -->'s hierarchy — never a stringly-typed lookalike — so a consumer's `catch` block sees in tests exactly what it sees in production. The mode-to-class mapping is fixed and deliberately narrow (kept conservative rather than configurable, per stakeholder feedback on an earlier prototype's fault-injection ergonomics):
 
 - `'backend-unavailable'` → `BackendUnavailableError` — the backend itself cannot be reached for this call. - `'key-absent'` → `SigningKeyNotFoundError` for a signing operation (`generateSigningKey`<!-- -->, `getPublicKey`<!-- -->, `signWithKey`<!-- -->), or `SecretNotFoundError` for a plain secret operation (`retrieve`<!-- -->, `delete`<!-- -->, `exists`<!-- -->) — signing keys and secrets are distinct namespaces with distinct "not found" types in the real hierarchy, so which one fires depends on which operation the fault targets. - `'permission-denied'` → `AuthorizationDeniedError` — the caller was denied authorization for this operation. - `'session-expired'` → `BackendLockedError` (`interactive: true`<!-- -->) — models a real backend construct (a session that has gone stale and needs a fresh interactive unlock), which is what an "expired session" means at the backend boundary. `TokenExpiredError` was deliberately not used here: it signals a JWE token past its `exp` claim, an orthogonal JWE-lifecycle concept unrelated to backend session state.
+
+The scripting mechanics (arm/consume/clear) live in the reusable [FaultPlan](./test-helpers.faultplan.md) helper this backend holds internally — it knows nothing about `InMemoryBackend`<!-- -->'s storage, so a future backend-flavored double (e.g. one faking a CLI-backed store) can consult the same mechanism.
 

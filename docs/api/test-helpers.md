@@ -19,6 +19,17 @@ Description
 </th></tr></thead>
 <tbody><tr><td>
 
+[FaultPlan](./test-helpers.faultplan.md)
+
+
+</td><td>
+
+A small, backend-agnostic scripting surface for deterministic, per-operation fault injection: arm a [FaultMode](./test-helpers.faultmode.md) against an operation key (one-shot or persistent), then consult it before doing real work.
+
+
+</td></tr>
+<tr><td>
+
 [InMemoryBackend](./test-helpers.inmemorybackend.md)
 
 
@@ -56,12 +67,12 @@ Description
 </th></tr></thead>
 <tbody><tr><td>
 
-[InMemoryBackendFaultOptions](./test-helpers.inmemorybackendfaultoptions.md)
+[FaultOptions](./test-helpers.faultoptions.md)
 
 
 </td><td>
 
-Options accepted by [InMemoryBackend.injectFault()](./test-helpers.inmemorybackend.injectfault.md)<!-- -->.
+Options accepted by [FaultPlan.inject()](./test-helpers.faultplan.inject.md)<!-- -->.
 
 
 </td></tr>
@@ -115,12 +126,12 @@ Description
 </th></tr></thead>
 <tbody><tr><td>
 
-[InMemoryBackendFaultMode](./test-helpers.inmemorybackendfaultmode.md)
+[FaultMode](./test-helpers.faultmode.md)
 
 
 </td><td>
 
-The four deterministic fault modes [InMemoryBackend.injectFault()](./test-helpers.inmemorybackend.injectfault.md) can script. Each maps to a real typed error class from `vaultkeeper`<!-- -->'s error hierarchy (see [InMemoryBackend.injectFault()](./test-helpers.inmemorybackend.injectfault.md) for the mapping and the rationale for each choice) so a consumer's `catch` block sees in tests exactly what it would see against a real backend.
+The deterministic fault modes a [FaultPlan](./test-helpers.faultplan.md) can script. Each is a backend-agnostic scenario name — mapping a mode to a concrete typed error class is the consulting double's responsibility (see e.g. `InMemoryBackend.injectFault`<!-- -->), since the right class can depend on backend-specific context (which operation, which resource namespace).
 
 
 </td></tr>
