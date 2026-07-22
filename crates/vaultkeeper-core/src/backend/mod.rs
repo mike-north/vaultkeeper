@@ -3,6 +3,7 @@
 //! All backends implement [`SecretBackend`]. OS-specific backends delegate
 //! system calls through [`HostPlatform`].
 
+pub mod dpapi;
 pub mod file;
 pub mod in_memory;
 mod registry;
@@ -10,6 +11,7 @@ pub mod secret_tool;
 mod signing_store;
 mod types;
 
+pub use dpapi::DpapiBackend;
 pub use file::FileBackend;
 pub use in_memory::InMemoryBackend;
 pub use registry::BackendRegistry;

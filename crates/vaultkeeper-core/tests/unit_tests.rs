@@ -497,6 +497,121 @@ mod backend_registry {
         let registry = BackendRegistry::new();
         assert!(!registry.has("missing"));
     }
+
+    #[tokio::test]
+    async fn register_and_create_dpapi_honoring_config_path() {
+        // Issue #292: DpapiBackend registers the same way its sibling
+        // subprocess-orchestration ports do (SecretToolBackend, #294), and
+        // honors `BackendConfig.path` when present.
+        //
+        // This exercises the override end-to-end through the registry (not
+        // just via `DpapiBackend::new` directly, as
+        // `dpapi::tests::honors_backend_config_path_override` already does):
+        // build the backend via `registry.create("dpapi", Some(&config))`
+        // with a custom `BackendConfig.path`, then drive `store()` and assert
+        // the storage directory actually used (recorded via `write_file`,
+        // which `ensure_storage_dir` calls to create the `.keep` sentinel)
+        // is the configured path, not the `<config_dir>/dpapi` default.
+        use std::path::{Path, PathBuf};
+        use std::sync::{Arc, Mutex};
+        use vaultkeeper_core::backend::DpapiBackend;
+        use vaultkeeper_core::types::BackendConfig;
+
+        struct MinimalHost {
+            config_dir: PathBuf,
+            write_file_calls: Mutex<Vec<PathBuf>>,
+        }
+
+        #[async_trait::async_trait]
+        impl HostPlatform for MinimalHost {
+            async fn exec(
+                &self,
+                _cmd: &str,
+                _args: &[&str],
+                _options: ExecOptions<'_>,
+            ) -> Result<ExecOutput, VaultError> {
+                Ok(ExecOutput {
+                    stdout: Vec::new(),
+                    stderr: Vec::new(),
+                    exit_code: 0,
+                })
+            }
+            async fn read_file(&self, _path: &Path) -> Result<Vec<u8>, VaultError> {
+                Err(VaultError::Other("not implemented".to_string()))
+            }
+            async fn write_file(
+                &self,
+                path: &Path,
+                _content: &[u8],
+                _mode: u32,
+            ) -> Result<(), VaultError> {
+                self.write_file_calls
+                    .lock()
+                    .unwrap()
+                    .push(path.to_path_buf());
+                Ok(())
+            }
+            async fn file_exists(&self, _path: &Path) -> Result<bool, VaultError> {
+                Ok(false)
+            }
+            async fn delete_file(&self, _path: &Path) -> Result<(), VaultError> {
+                Ok(())
+            }
+            async fn list_dir(&self, _path: &Path) -> Result<Vec<String>, VaultError> {
+                Ok(Vec::new())
+            }
+            fn platform(&self) -> Platform {
+                Platform::Windows
+            }
+            fn config_dir(&self) -> &Path {
+                &self.config_dir
+            }
+        }
+
+        let host = Arc::new(MinimalHost {
+            config_dir: PathBuf::from("/test/config"),
+            write_file_calls: Mutex::new(Vec::new()),
+        });
+        let host_for_factory: Arc<dyn HostPlatform> = host.clone();
+
+        let registry = BackendRegistry::new();
+        registry.register("dpapi", move |config| {
+            let storage_dir = config
+                .and_then(|c| c.path.clone())
+                .map(std::path::PathBuf::from);
+            Box::new(DpapiBackend::new(host_for_factory.clone(), storage_dir))
+        });
+
+        let custom_dir = PathBuf::from("/custom/dpapi/dir");
+        let config = BackendConfig {
+            backend_type: "dpapi".to_string(),
+            enabled: true,
+            plugin: None,
+            path: Some(custom_dir.to_string_lossy().into_owned()),
+            options: None,
+        };
+
+        assert!(registry.has("dpapi"));
+        let backend = registry.create("dpapi", Some(&config)).unwrap();
+        assert_eq!(backend.backend_type(), "dpapi");
+        assert_eq!(backend.display_name(), "Windows DPAPI");
+
+        backend.store("id", "secret").await.unwrap();
+
+        let write_calls = host.write_file_calls.lock().unwrap();
+        assert!(
+            write_calls
+                .iter()
+                .any(|p| p.parent() == Some(custom_dir.as_path())),
+            "expected the configured path override to be used as the storage \
+             directory, got write_file calls: {write_calls:?}"
+        );
+        assert!(
+            write_calls.iter().all(|p| !p.starts_with(&host.config_dir)),
+            "the default `<config_dir>/dpapi` path must not be used when an \
+             override is configured: {write_calls:?}"
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------
