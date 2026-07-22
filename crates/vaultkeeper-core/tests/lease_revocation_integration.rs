@@ -364,12 +364,21 @@ async fn ac9_encryption_key_revoke_does_not_reset_lease_revocation_state() {
     assert_revoked(vault.validate_lease_revocation(&host, &claims).await);
 }
 
-/// AC10: a `session revoke` sequenced closely with a `rotateKey` clobbers
-/// neither — each writer reads the current on-disk state for the portion it
-/// does not own immediately before its own write (read-modify-write, not a
-/// blind overwrite), so this holds regardless of which happens first.
+/// AC10: this proves **sequential ordering-independence**, not concurrent
+/// safety — a `session revoke` and a `rotateKey` issued back-to-back (one
+/// fully completes before the other starts) clobber neither, in either
+/// order, because each writer reads the current on-disk state for the
+/// portion it does not own immediately before its own write
+/// (read-modify-write, not a blind overwrite).
+///
+/// This does **not** cover genuinely concurrent/overlapping writers: there
+/// is no cross-process lock around the read-modify-write in
+/// `mutate_revocation_state`/`save_key_state` (see that function's
+/// concurrency-scope doc note), so two writers whose read-modify-write
+/// windows actually overlap can still race last-writer-wins. Tracked as a
+/// follow-up rather than covered here.
 #[tokio::test]
-async fn ac10_concurrent_revoke_and_rotate_clobber_neither_order() {
+async fn ac10_sequential_revoke_and_rotate_clobber_neither_order() {
     // Order 1: revoke, then rotate.
     {
         let host = TestHost::new();

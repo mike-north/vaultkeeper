@@ -288,11 +288,12 @@ impl VaultKeeper {
 
     /// `session revoke --jti <JTI>` — revoke a single outstanding lease.
     /// Read-modify-write (see [`crate::keys::mutate_revocation_state`]): a
-    /// concurrent `rotateKey`/`revokeKey` racing this call loses neither
-    /// writer's own portion of `keys.enc`. Also sweeps every `jti` entry
-    /// already past its own `exp` before persisting (AC4) — bounded growth by
-    /// construction. `exp` is the revoked token's own expiry, so the entry
-    /// can never outlive the token it revokes.
+    /// `rotateKey`/`revokeKey` call *sequenced* before or after this one (not
+    /// genuinely overlapping — see that function's concurrency-scope note)
+    /// loses neither writer's own portion of `keys.enc`. Also sweeps every
+    /// `jti` entry already past its own `exp` before persisting (AC4) —
+    /// bounded growth by construction. `exp` is the revoked token's own
+    /// expiry, so the entry can never outlive the token it revokes.
     pub async fn revoke_lease_jti(
         &mut self,
         host: &dyn HostPlatform,
