@@ -6,10 +6,10 @@
 //!
 //! - `materialize: "secret"` retrieves the real value via
 //!   [`SecretBackend::retrieve`].
-//! - `materialize: "lease"` mints a VaultKeeper lease (JWE) by building the
-//!   same [`crate::types::VaultClaims`] shape and calling
-//!   [`crate::jwe::create_token`] — the exact mint primitive
-//!   [`crate::vault::VaultKeeper::setup`] itself calls internally. This
+//! - `materialize: "lease"` mints a VaultKeeper lease (JWE) through the
+//!   shared crate-internal `build_and_mint_claims` helper in `vault.rs` —
+//!   the same primitive [`crate::vault::VaultKeeper::setup`] uses, so the
+//!   two mint paths cannot drift. This
 //!   module deliberately does not go through the full `setup()` method: that
 //!   method's executable-trust binding (Sigstore/TOFU verification of the
 //!   *calling* executable, requiring a [`crate::backend::HostPlatform`]) is
