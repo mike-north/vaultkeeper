@@ -1,6 +1,6 @@
 {
   "name": "@vaultkeeper/wasm",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "WASM-backed vaultkeeper SDK for Node.js — Rust core with JS host bridge",
   "homepage": "https://github.com/mike-north/vaultkeeper#readme",
   "repository": {

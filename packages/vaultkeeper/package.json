@@ -1,6 +1,6 @@
 {
   "name": "vaultkeeper",
-  "version": "0.7.0",
+  "version": "0.7.1",
   "description": "Unified, policy-enforced secret storage across OS backends",
   "homepage": "https://github.com/mike-north/vaultkeeper#readme",
   "repository": {

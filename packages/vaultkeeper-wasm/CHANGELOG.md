@@ -1,5 +1,61 @@
 # @vaultkeeper/wasm
 
+## 0.4.0
+
+### Minor Changes
+
+- [#259](https://github.com/mike-north/vaultkeeper/pull/259) [`3163724`](https://github.com/mike-north/vaultkeeper/commit/31637244d94d7e4271045dd14cf56c7eb80327a3) Thanks [@mike-north](https://github.com/mike-north)! - Phase 0 bridge contracts for the consolidation effort (issue #239): the Rust `HostPlatform` trait and its WASM/JS bridge gain the primitives a host-implemented backend and delegated network access will need in later phases.
+
+  `HostPlatform::exec` now accepts an `ExecOptions` bundle (`stdin`, `env`, `cwd`) instead of a bare `stdin` argument — `@vaultkeeper/wasm`'s `WasmHostPlatform.exec` mirrors this with an optional third `options` argument, and `createNodeHost()` implements `env` as `{ ...process.env, ...options.env }` and `cwd` via `child_process.execFile`'s own `cwd` option. Omitting `options` (or any of its fields) reproduces the exact pre-#239 behavior — no existing caller's behavior changes.
+
+  A new `HostPlatform::http_fetch` primitive lands with its `@vaultkeeper/wasm` counterpart `WasmHostPlatform.httpFetch`, implemented in `createNodeHost()` over the global `fetch`. No core consumer calls it yet — the delegated-access port in a later issue is the first real caller — but the primitive is fully wired end-to-end and covered by direct tests today.
+
+  A new optional `HostPlatform::prompt_approval` capability lets a host offer interactive human approval for a sensitive action; an absent implementation (the default on every existing host) fails closed (`false`) rather than auto-approving. `@vaultkeeper/wasm` exposes this as the optional `WasmHostPlatform.promptApproval` method.
+
+  `@vaultkeeper/wasm` also publishes a new `HostSecretBackend` contract type — the shape a JS/TS-implemented secret backend must satisfy to be driven by the Rust core — backed by a new `JsSecretBackend` scaffold in `crates/vaultkeeper-wasm` that dispatches `store`/`retrieve`/`delete`/`exists`/`list` over JS callbacks (all-async, `Uint8Array` at the boundary, never `Buffer`). Registry dispatch and the capability/signing methods on the contract (`getCapabilities`, `generateSigningKey`, `getPublicKey`, `signWithKey`) are forward-looking — not yet wired to Rust — pending the capability trait (issue #242) and signing trait (issue #237).
+
+- [#284](https://github.com/mike-north/vaultkeeper/pull/284) [`d88a17f`](https://github.com/mike-north/vaultkeeper/commit/d88a17f98508888ee9654994039705ea666bd9ea) Thanks [@mike-north](https://github.com/mike-north)! - Additive handle-based capability surface for the `authorize()` result (issue #241): `WasmAuthorization` gains a `handleId` getter exposing the underlying core capability handle id, and `WasmVaultKeeper` gains `resolveSecretClaims(handleId)` and `releaseHandle(handleId)`.
+
+  `authorize()`'s existing public shape (`claims`, `response`, `secretAvailable`, `readSecret()`) is unchanged and continues to work exactly as before — internally it now mints a core-side `HandleTable` entry, performs the one-time `read_secret` against it immediately, and caches the result on the returned `WasmAuthorization`, so `claims` no longer carries the raw secret (`val`) across the WASM boundary at all; the secret was already redacted from the observable `claims` shape before this change, and still is.
+
+  `resolveSecretClaims(handleId)` lets a caller re-fetch the same non-secret claims later from the retained handle (refusing a signing-key handle with `AuthorizationDenied`), and `releaseHandle(handleId)` lets a caller evict the handle explicitly once done with it rather than waiting on expiry or the table's FIFO size cap. These are the primitives a future handle-based engine swap builds on directly instead of the eager `authorize()` wrapper; no existing caller needs to change.
+
+- [#286](https://github.com/mike-north/vaultkeeper/pull/286) [`653f4af`](https://github.com/mike-north/vaultkeeper/commit/653f4af3febb6fc86cc1a1c6537c2401895e9c6d) Thanks [@mike-north](https://github.com/mike-north)! - Introduce the environment profile primitive in `vaultkeeper-core` (issue #277): serde schema, a fail-closed loader, and `profile init/show/list/lint` in the Rust CLI. Profiles are named, declarative binding sets (env-var name → secret source → materialization mode → policy) stored at `$CONFIG_DIR/profiles/<name>.json`, never inside `config.json`.
+
+  `@vaultkeeper/wasm` gains the `MaterializeModeUnsupportedError` typed error class (and its `materialize-mode-unsupported` error code), thrown when a profile's `materialize` field uses the reserved-but-not-yet-implemented object form (`{ "mode": "reference", ... }`).
+
+- [#252](https://github.com/mike-north/vaultkeeper/pull/252) [`3cf4d25`](https://github.com/mike-north/vaultkeeper/commit/3cf4d25adc5d82befc1a1def21a631defbe0a993) Thanks [@mike-north](https://github.com/mike-north)! - Port encrypted key-state persistence (`keys.enc` + `.keys.wrap`) to the Rust core, closing the parity gap where the WASM SDK's `KeyManager` was memory-only. A JWE minted by one process (or `VaultKeeper` instance) is now authorized by a later one sharing the same config directory, and the rotation grace-period guard (`RotationInProgressError`) now survives a restart instead of resetting.
+
+  The on-disk format is byte-for-byte compatible with the pure-TypeScript `vaultkeeper` library's existing `keys/storage.ts`: a store written by either implementation loads correctly in the other.
+
+  Breaking (0.x): `rotateKey()` and `revokeKey()` are now async (`Promise<void>` instead of `void`), since persisting the new key state requires an I/O call. Versioned as a minor bump under 0.x semver (breaking changes ship as minor bumps while the SDK is pre-1.0).
+
+  ```ts
+  // Before — synchronous:
+  vault.rotateKey()
+
+  // After — await the persisted rotation:
+  await vault.rotateKey()
+  ```
+
+  The `WasmHostPlatform` interface consumed by `createNodeHost()` also gains a `renameFile(from, to)` method, used for atomic write-then-rename persistence.
+
+### Patch Changes
+
+- [#251](https://github.com/mike-north/vaultkeeper/pull/251) [`5f1f370`](https://github.com/mike-north/vaultkeeper/commit/5f1f37000963fe24fab8b9d0264384897de2e4fb) Thanks [@mike-north](https://github.com/mike-north)! - Complete the `VaultError` taxonomy so it can bridge losslessly to `@vaultkeeper/wasm`. The Rust core gains 14 new `VaultError` variants (`NotCapable`, `PresenceDeclined`, `PresenceTimeout`, `InvalidKeyMaterial`, `SigningKeyNotFound`, `SigningKeyAlreadyExists`, `SigningNotSupported`, `Exec`, `Fetch`, `InvalidToken`, `AccessorConsumed`, `ConfigValidation`, `UnknownBackendType`, `ConfigParse`) with machine-readable context fields matching the pure-TypeScript `vaultkeeper` library's error classes.
+
+  `@vaultkeeper/wasm` now exports the matching typed error classes — `NotCapableError`, `PresenceDeclinedError`, `PresenceTimeoutError`, `InvalidKeyMaterialError`, `SigningKeyNotFoundError`, `SigningKeyAlreadyExistsError`, `SigningNotSupportedError`, `ExecError`, `FetchError`, `ConfigValidationError`, `UnknownBackendTypeError`, `ConfigParseError` — plus `BackendLockedError`, `DeviceNotPresentError`, `AuthorizationDeniedError`, `BackendUnavailableError`, `PluginNotFoundError`, `InvalidAlgorithmError`, and `SetupError`, which had Rust-side variants already but were never reconstructed at the WASM boundary and previously collapsed to the generic `VaultError` base class.
+
+  The error-code table that drives the boundary (`vaultErrorCode`) is now a single source of truth shared by the Rust match (`vault_error_code`/`vault_error_fields` in `vaultkeeper-core`) and the TypeScript reconstruction map (`ALL_VAULT_ERROR_CODES` in `@vaultkeeper/wasm`'s `errors.ts`), with a parity test asserting both sides list exactly the same codes and that every code round-trips to the correct typed subclass with the correct field values. No existing error path changed behavior.
+
+- [#287](https://github.com/mike-north/vaultkeeper/pull/287) [`df3ed7b`](https://github.com/mike-north/vaultkeeper/commit/df3ed7bee48c576db0ba266b7a842eb67cd8b6c6) Thanks [@mike-north](https://github.com/mike-north)! - Internal: `validateClaims`/`validate_claims` — the single validation chokepoint every token passes through, in both the TypeScript library and the Rust core — now discriminate on a claims payload's kind. An ordinary secret claim still requires a non-empty `val` and `bkd` exactly as before; a session signing-key lease (no secret value) instead requires a non-empty `kid` and a present `kgen` (never defaulted to generation 0). No public API changed — `VaultClaims` remains an internal type, and every existing secret-token code path is unchanged.
+
+- [#253](https://github.com/mike-north/vaultkeeper/pull/253) [`c230593`](https://github.com/mike-north/vaultkeeper/commit/c230593880f1385e0bedc7e5973761d91cfa7cfb) Thanks [@mike-north](https://github.com/mike-north)! - Rebuild the committed WASM binary with explicit `wasm-opt -Oz` optimization (previously relying on wasm-pack's implicit default). No runtime API changes — the artifact is smaller, not different in behavior.
+
+- [#250](https://github.com/mike-north/vaultkeeper/pull/250) [`4fdbe31`](https://github.com/mike-north/vaultkeeper/commit/4fdbe31b3bba7e7ef738a6f7ae0b78783a8036ac) Thanks [@mike-north](https://github.com/mike-north)! - Fix the Rust core's zero-config default backend to be `file` on every platform, matching the `vaultkeeper` (TS) package's #98 fix.
+
+  Previously, when no `config.json` existed, the Rust core (and therefore `@vaultkeeper/wasm`, which wraps it) fell back to a platform-native backend — `keychain` on macOS, `dpapi` on Windows — instead of the portable, self-contained AES-256-GCM encrypted `file` backend. This silently wrote secrets into the real OS keychain/credential store for any consumer that never wrote an explicit config, reintroducing the exact regression #98 fixed on the TypeScript side. Explicit configuration that selects `keychain`/`dpapi` is unaffected; only the zero-config fallback changed.
+
 ## 0.3.0
 
 ### Minor Changes
