@@ -41,6 +41,8 @@ pub enum BackendStep {
     ExpectExists { id: String, exists: bool },
     /// `list()` must include every id in `ids`.
     ExpectListContains { ids: Vec<String> },
+    /// `list()` must NOT include any id in `ids`.
+    ExpectListDoesNotContain { ids: Vec<String> },
     /// `generateSigningKey(id, 'EdDSA')` must succeed.
     GenerateSigningKey { id: String },
     /// `generateSigningKey(id, 'EdDSA')` must fail because `id` already has
@@ -156,6 +158,24 @@ pub fn all_backend_cases() -> Vec<BackendConformanceCase> {
                 },
                 BackendStep::ExpectListContains {
                     ids: vec!["list-a".into(), "list-b".into()],
+                },
+            ],
+        },
+        BackendConformanceCase {
+            name: "list omits an id after it is deleted".into(),
+            steps: vec![
+                BackendStep::Store {
+                    id: "list-delete-me".into(),
+                    secret: "v".into(),
+                },
+                BackendStep::ExpectListContains {
+                    ids: vec!["list-delete-me".into()],
+                },
+                BackendStep::Delete {
+                    id: "list-delete-me".into(),
+                },
+                BackendStep::ExpectListDoesNotContain {
+                    ids: vec!["list-delete-me".into()],
                 },
             ],
         },

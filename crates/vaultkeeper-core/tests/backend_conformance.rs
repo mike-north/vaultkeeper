@@ -92,6 +92,17 @@ async fn run_case(case: &BackendConformanceCase) -> Result<(), String> {
                     }
                 }
             }
+            BackendStep::ExpectListDoesNotContain { ids } => {
+                let listed = backend
+                    .list()
+                    .await
+                    .map_err(|e| format!("list() failed: {e}"))?;
+                for id in ids {
+                    if listed.contains(id) {
+                        return Err(format!("list() {listed:?} unexpectedly contains {id:?}"));
+                    }
+                }
+            }
             BackendStep::GenerateSigningKey { id } => backend
                 .generate_signing_key(id, SigningAlgorithm::EdDsa)
                 .await
@@ -207,4 +218,34 @@ async fn all_backend_conformance_cases_pass_against_core_in_memory_backend() {
             failures.join("\n\n")
         );
     }
+}
+
+/// Drift-detection proof (AC2), mirroring the TS-side test of the same name
+/// in `packages/test-helpers/test/conformance/backend-cases.test.ts`: a
+/// deliberately mutated case (wrong expected secret value) must cause
+/// `run_case` to return `Err`, proving the gate can actually detect drift
+/// rather than passing vacuously. The mutated case only exists inside this
+/// test and is never added to the corpus the suite above runs.
+#[tokio::test]
+async fn run_case_fails_when_a_case_expectation_the_backend_does_not_meet_is_introduced() {
+    let cases = all_backend_cases();
+    let original = cases
+        .iter()
+        .find(|c| c.name == "store then retrieve returns the same secret")
+        .expect("fixture case 'store then retrieve returns the same secret' must exist");
+
+    // Deliberately diverge the case from what InMemoryBackend actually does:
+    // claim the stored secret is a different value than what was stored.
+    let mut mutated = original.clone();
+    for step in &mut mutated.steps {
+        if let BackendStep::ExpectRetrieve { secret, .. } = step {
+            secret.push_str("-drifted");
+        }
+    }
+
+    let result = run_case(&mutated).await;
+    assert!(
+        result.is_err(),
+        "run_case should fail against a case mutated to expect a value the backend does not return"
+    );
 }

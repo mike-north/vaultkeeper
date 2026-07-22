@@ -37,6 +37,7 @@ type BackendStep =
   | { op: 'expectDeleteNotFound'; id: string }
   | { op: 'expectExists'; id: string; exists: boolean }
   | { op: 'expectListContains'; ids: string[] }
+  | { op: 'expectListDoesNotContain'; ids: string[] }
   | { op: 'generateSigningKey'; id: string }
   | { op: 'expectGenerateSigningKeyAlreadyExists'; id: string }
   | { op: 'expectSignRoundTrips'; id: string; message: string }
@@ -51,10 +52,70 @@ interface BackendConformanceCase {
 
 // ─── Load cases ─────────────────────────────────────────────────────────
 
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    !Array.isArray(value) &&
+    Object.getPrototypeOf(value) === Object.prototype &&
+    Object.getOwnPropertySymbols(value).length === 0
+  )
+}
+
+function isStringArray(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every((item) => typeof item === 'string')
+}
+
+function isBackendStep(value: unknown): value is BackendStep {
+  if (!isPlainObject(value) || typeof value.op !== 'string') {
+    return false
+  }
+  switch (value.op) {
+    case 'store':
+    case 'expectRetrieve':
+      return typeof value.id === 'string' && typeof value.secret === 'string'
+    case 'expectRetrieveNotFound':
+    case 'delete':
+    case 'expectDeleteNotFound':
+    case 'generateSigningKey':
+    case 'expectGenerateSigningKeyAlreadyExists':
+    case 'expectGetPublicKeyNotFound':
+    case 'expectSignNotFound':
+      return typeof value.id === 'string'
+    case 'expectExists':
+      return typeof value.id === 'string' && typeof value.exists === 'boolean'
+    case 'expectListContains':
+    case 'expectListDoesNotContain':
+      return isStringArray(value.ids)
+    case 'expectSignRoundTrips':
+      return typeof value.id === 'string' && typeof value.message === 'string'
+    case 'expectPresencePerUse':
+      return typeof value.value === 'boolean'
+    default:
+      return false
+  }
+}
+
+function isBackendConformanceCase(value: unknown): value is BackendConformanceCase {
+  return (
+    isPlainObject(value) &&
+    typeof value.name === 'string' &&
+    Array.isArray(value.steps) &&
+    value.steps.every(isBackendStep)
+  )
+}
+
+function isBackendConformanceCaseArray(value: unknown): value is BackendConformanceCase[] {
+  return Array.isArray(value) && value.every(isBackendConformanceCase)
+}
+
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const casesPath = path.join(__dirname, 'backend-cases.json')
-// eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- JSON.parse returns any; validated by the conformance crate
-const cases: BackendConformanceCase[] = JSON.parse(await fs.readFile(casesPath, 'utf8'))
+const parsedCases: unknown = JSON.parse(await fs.readFile(casesPath, 'utf8'))
+if (!isBackendConformanceCaseArray(parsedCases)) {
+  throw new Error(`${casesPath} does not contain a valid BackendConformanceCase[] shape`)
+}
+const cases: BackendConformanceCase[] = parsedCases
 
 // ─── Runner ─────────────────────────────────────────────────────────────
 
@@ -119,6 +180,15 @@ async function runCase(backend: InMemoryBackend, testCase: BackendConformanceCas
         }
         break
       }
+      case 'expectListDoesNotContain': {
+        const listed = await backend.list()
+        for (const id of step.ids) {
+          if (listed.includes(id)) {
+            throw new Error(`list() ${JSON.stringify(listed)} unexpectedly contains ${id}`)
+          }
+        }
+        break
+      }
       case 'generateSigningKey':
         await backend.generateSigningKey(step.id, 'EdDSA')
         break
@@ -174,11 +244,15 @@ async function runCase(backend: InMemoryBackend, testCase: BackendConformanceCas
         }
         break
       }
+      default: {
+        const unhandled: never = step
+        throw new Error(`unhandled BackendStep kind: ${JSON.stringify(unhandled)}`)
+      }
     }
   }
 }
 
-/** Assert `promise` rejects with an error whose constructor name is `expectedName`. */
+/** Assert `promise` rejects with an error whose `name` (the project's stable discriminator) is `expectedName`. */
 async function expectRejectsWithName(
   promise: Promise<unknown>,
   expectedName: string,
@@ -194,7 +268,7 @@ async function expectRejectsWithName(
   if (threw === undefined) {
     throw new Error(`${op}(${id}) expected to reject with ${expectedName}, but it resolved`)
   }
-  const actualName = threw instanceof Error ? threw.constructor.name : typeof threw
+  const actualName = threw instanceof Error ? threw.name : typeof threw
   const actualMessage = threw instanceof Error ? threw.message : JSON.stringify(threw)
   if (actualName !== expectedName) {
     throw new Error(

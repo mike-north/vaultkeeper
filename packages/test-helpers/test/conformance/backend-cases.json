@@ -102,6 +102,32 @@
     ]
   },
   {
+    "name": "list omits an id after it is deleted",
+    "steps": [
+      {
+        "op": "store",
+        "id": "list-delete-me",
+        "secret": "v"
+      },
+      {
+        "op": "expectListContains",
+        "ids": [
+          "list-delete-me"
+        ]
+      },
+      {
+        "op": "delete",
+        "id": "list-delete-me"
+      },
+      {
+        "op": "expectListDoesNotContain",
+        "ids": [
+          "list-delete-me"
+        ]
+      }
+    ]
+  },
+  {
     "name": "a generated signing key signs and verifies against its own public key",
     "steps": [
       {

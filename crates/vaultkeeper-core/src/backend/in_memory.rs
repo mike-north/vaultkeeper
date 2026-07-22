@@ -24,6 +24,7 @@ use ed25519_dalek::pkcs8::EncodePublicKey;
 use ed25519_dalek::pkcs8::spki::der::pem::LineEnding;
 use std::collections::HashMap;
 use std::sync::Mutex;
+use zeroize::Zeroize;
 
 /// A fully in-memory `SecretBackend` for testing.
 ///
@@ -192,6 +193,7 @@ impl SigningBackend for InMemoryBackend {
         getrandom::fill(&mut seed)
             .map_err(|e| VaultError::Other(format!("Failed to generate signing key: {e}")))?;
         let signing_key = SigningKey::from_bytes(&seed);
+        seed.zeroize();
         signing_keys.insert(id.to_string(), signing_key);
         Ok(())
     }
