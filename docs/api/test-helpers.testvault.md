@@ -151,7 +151,7 @@ Delete a secret from the test backend.
 
 </td><td>
 
-Reset the test vault by clearing all stored secrets.
+Reset the test vault by clearing all stored secrets, signing keys, and any armed faults on the underlying backend.
 
 
 </td></tr>

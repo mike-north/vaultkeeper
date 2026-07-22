@@ -36,9 +36,16 @@ describe('InMemoryBackend — SigningBackend', () => {
   it('never exposes the private key through the public surface', async () => {
     await backend.generateSigningKey('secret-signer', 'EdDSA')
     const publicKey = await backend.getPublicKey('secret-signer')
-    // The only public-key-shaped fields are publicKeyPem/algorithm/kid — none
-    // of them, nor any other backend method, can produce private key material.
-    expect(Object.keys(publicKey).sort()).toEqual(['algorithm', 'kid', 'publicKeyPem'])
+    // Assert the required public-key-shaped fields are present, and that no
+    // field is private-key-shaped — not an exact key-set match, so this test
+    // does not regress if SigningPublicKey ever gains a new non-sensitive
+    // field (e.g. metadata).
+    expect(publicKey.algorithm).toEqual(expect.any(String))
+    expect(publicKey.kid).toEqual(expect.any(String))
+    expect(publicKey.publicKeyPem).toEqual(expect.any(String))
+    for (const value of Object.values(publicKey)) {
+      expect(typeof value === 'string' ? value : '').not.toContain('PRIVATE KEY')
+    }
     expect(publicKey.publicKeyPem).not.toContain('PRIVATE KEY')
     // No enumerable own property on the backend instance holds a raw KeyObject
     // or PEM string reachable without going through signWithKey().

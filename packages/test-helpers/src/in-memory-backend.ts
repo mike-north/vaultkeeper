@@ -144,12 +144,14 @@ export class InMemoryBackend implements ListableBackend, SigningBackend, Presenc
   }
 
   /**
-   * Remove all stored secrets and signing keys. Useful for test teardown.
+   * Remove all stored secrets and signing keys, and disarm any armed faults.
+   * Useful for full test teardown/reset between cases.
    * @public
    */
   clear(): void {
     this.#store.clear()
     this.#signingKeys.clear()
+    this.#faultPlan.clearAll()
   }
 
   /**
@@ -257,12 +259,15 @@ export class InMemoryBackend implements ListableBackend, SigningBackend, Presenc
    *
    * - `'backend-unavailable'` → `BackendUnavailableError` — the backend
    *   itself cannot be reached for this call.
-   * - `'key-absent'` → `SigningKeyNotFoundError` for a signing operation
-   *   (`generateSigningKey`, `getPublicKey`, `signWithKey`), or
+   * - `'key-absent'` → `SigningKeyNotFoundError` for a signing operation that
+   *   reads an existing key (`getPublicKey`, `signWithKey`), or
    *   `SecretNotFoundError` for a plain secret operation (`retrieve`,
    *   `delete`, `exists`) — signing keys and secrets are distinct namespaces
    *   with distinct "not found" types in the real hierarchy, so which one
-   *   fires depends on which operation the fault targets.
+   *   fires depends on which operation the fault targets. Both include the
+   *   operation's `id` in their message. Arming `'key-absent'` against
+   *   `'generateSigningKey'` is rejected at arm time (see `@throws` below):
+   *   enrollment has no existing key to be "absent".
    * - `'permission-denied'` → `AuthorizationDeniedError` — the caller was
    *   denied authorization for this operation.
    * - `'session-expired'` → `BackendLockedError` (`interactive: true`) —
@@ -282,6 +287,10 @@ export class InMemoryBackend implements ListableBackend, SigningBackend, Presenc
    * @param options - `{ persistent: true }` to keep firing until
    *   {@link InMemoryBackend.clearFault} is called; omitted or
    *   `{ persistent: false }` (the default) fires once and then clears itself.
+   * @throws {Error} If `mode` is `'key-absent'` and `operation` is
+   *   `'generateSigningKey'` — enrollment has no existing key to be "absent",
+   *   so this combination is a test-authoring mistake and is rejected at arm
+   *   time rather than silently accepted and misreported later.
    * @public
    */
   injectFault(
@@ -289,6 +298,13 @@ export class InMemoryBackend implements ListableBackend, SigningBackend, Presenc
     mode: FaultMode,
     options?: FaultOptions,
   ): void {
+    if (mode === 'key-absent' && operation === 'generateSigningKey') {
+      throw new Error(
+        "Cannot inject 'key-absent' against 'generateSigningKey': enrollment has no existing " +
+          "key to be absent. Use a different fault mode (e.g. 'backend-unavailable'), or target " +
+          "an operation that reads an existing key ('getPublicKey', 'signWithKey').",
+      )
+    }
     this.#faultPlan.inject(operation, mode, options)
   }
 
@@ -337,7 +353,9 @@ export class InMemoryBackend implements ListableBackend, SigningBackend, Presenc
             id ?? '(unknown)',
           )
         }
-        return new SecretNotFoundError(`Injected fault: secret not found during '${operation}'`)
+        return new SecretNotFoundError(
+          `Injected fault: secret not found during '${operation}': ${id ?? '(unknown)'}`,
+        )
       case 'permission-denied':
         return new AuthorizationDeniedError(
           `Injected fault: permission denied during '${operation}'`,

@@ -129,7 +129,7 @@ Description
 
 </td><td>
 
-Remove all stored secrets and signing keys. Useful for test teardown.
+Remove all stored secrets and signing keys, and disarm any armed faults. Useful for full test teardown/reset between cases.
 
 
 </td></tr>
