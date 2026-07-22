@@ -46,6 +46,13 @@
 //! (issue #276)'s "session mint, presence-at-mint... (to be filed)" work
 //! item — and returns [`VaultError::Other`] naming the entry rather than
 //! silently no-oping or minting an incomplete claims shape.
+//!
+//! A `materialize: "lease"` entry's `exp` computation ([`mint_secret_lease`])
+//! is deliberately overflow-safe: `ttl_seconds` is capped at
+//! [`LEASE_TTL_MAX_SECONDS`] and `now + ttl_seconds` uses `saturating_add`,
+//! so neither an adversarial/malformed profile's huge `ttlSeconds` nor the
+//! (never-`0`) defensive fallback ([`DEFENSIVE_DEFAULT_TTL_SECONDS`]) can
+//! panic or mint an already-expired lease.
 
 use std::collections::HashMap;
 
@@ -144,6 +151,33 @@ async fn resolve_entry(
     }
 }
 
+/// Hard cap (seconds) on the effective TTL a `materialize: "lease"` entry can
+/// mint with here, regardless of what `ttlSeconds` requests. The #277 loader
+/// does not itself cap a *secret*-backed lease's `ttlSeconds` (unlike a
+/// `signingKey`-backed lease — see
+/// `crate::profile::loader::SIGNING_LEASE_MAX_TTL_SECONDS`), so a malformed
+/// or adversarial profile could otherwise request an astronomically large
+/// (even `u64::MAX`) TTL. Capping here, before the `exp` computation, keeps
+/// `now + ttl_seconds` (below) comfortably clear of `u64` overflow even
+/// without the `saturating_add` — the `saturating_add` is defense in depth,
+/// not a substitute for this cap. 30 days.
+const LEASE_TTL_MAX_SECONDS: u64 = 30 * 24 * 60 * 60;
+
+/// Defensive fallback applied only if a `materialize: "lease"` entry somehow
+/// reaches this function with no resolved `ttlSeconds` at all. The #277
+/// loader always resolves a `Secret` + `Lease` entry's `ttlSeconds` to `Some`
+/// (either the profile's explicit value or the config `defaults.ttlMinutes`
+/// fallback — see `ProfileEntry::ttl_seconds` and
+/// `loader::resolve_ttl_seconds`), so this path should never actually
+/// execute against a loader-produced profile. It must never be `0`: a
+/// `0`-second TTL would silently mint an already-expired lease. Mirrors the
+/// loader's session-signing-lease default TTL
+/// (`crate::profile::loader::SIGNING_LEASE_DEFAULT_TTL_SECONDS`, 8h) as a
+/// reasonable systemwide default in the absence of any config to fall back
+/// to at this call site.
+const DEFENSIVE_DEFAULT_TTL_SECONDS: u64 =
+    crate::profile::loader::SIGNING_LEASE_DEFAULT_TTL_SECONDS;
+
 /// Mint a `materialize: "lease"` entry's JWE, reusing the same claims shape
 /// and [`create_token`] primitive [`crate::vault::VaultKeeper::setup`] uses
 /// internally — see the module docs for why the full `setup()` method (and
@@ -154,17 +188,20 @@ fn mint_secret_lease(
     entry: &ProfileEntry,
     opts: &ResolveOptions<'_>,
 ) -> Result<String, VaultError> {
-    // The loader always resolves a `Secret` + `Lease` entry's `ttlSeconds`
-    // to `Some` (either the profile's explicit value or a config/defaults
-    // fallback) — see `ProfileEntry::ttl_seconds` and
-    // `loader::resolve_ttl_seconds`. `unwrap_or(0)` is a defensive fallback
-    // only; it should never be exercised in practice.
-    let ttl_seconds = entry.ttl_seconds.unwrap_or(0);
+    let ttl_seconds = entry
+        .ttl_seconds
+        .unwrap_or(DEFENSIVE_DEFAULT_TTL_SECONDS)
+        .min(LEASE_TTL_MAX_SECONDS);
     let now = crate::util::time::now_secs();
 
     let claims = VaultClaims {
         jti: uuid::Uuid::new_v4().to_string(),
-        exp: now + ttl_seconds,
+        // `saturating_add` rather than `+`: `now` plus an (already capped,
+        // but defense-in-depth) `ttl_seconds` must never panic on overflow
+        // (debug builds) or silently wrap into a past `exp` (release
+        // builds) — both would mint a lease that is either broken or,
+        // worse, already expired the instant it's minted.
+        exp: now.saturating_add(ttl_seconds),
         iat: now,
         sub: secret_name.to_string(),
         // Unverified sentinel — profile resolution does not perform
@@ -197,8 +234,10 @@ mod tests {
     use crate::backend::InMemoryBackend;
     use crate::jwe::decrypt_token;
     use crate::profile::loader::{ProfileDefaults, load_profile_from_str};
+    use crate::profile::types::MinTrust;
     use crate::types::TrustTier;
     use assert_matches::assert_matches;
+    use std::sync::Mutex;
 
     fn defaults() -> ProfileDefaults {
         ProfileDefaults {
@@ -272,6 +311,67 @@ mod tests {
 
     // --- AC2: all-or-nothing failure on a mid-profile resolution error ---
 
+    /// A `SecretBackend` that wraps an [`InMemoryBackend`] and records every
+    /// id passed to `retrieve()`, in call order. Used to prove
+    /// `resolve_profile` genuinely short-circuits on a failing entry — i.e.
+    /// it never even *attempts* to resolve a later entry — rather than
+    /// merely relying on the `Result` signature to withhold a partial map
+    /// (which would be true even of a resolver that kept resolving every
+    /// entry and only discarded the results at the end).
+    struct SpyBackend {
+        inner: InMemoryBackend,
+        retrieve_calls: Mutex<Vec<String>>,
+    }
+
+    impl SpyBackend {
+        fn new() -> Self {
+            Self {
+                inner: InMemoryBackend::new(),
+                retrieve_calls: Mutex::new(Vec::new()),
+            }
+        }
+
+        fn retrieve_calls(&self) -> Vec<String> {
+            self.retrieve_calls.lock().expect("lock poisoned").clone()
+        }
+    }
+
+    #[cfg_attr(target_arch = "wasm32", async_trait::async_trait(?Send))]
+    #[cfg_attr(not(target_arch = "wasm32"), async_trait::async_trait)]
+    impl SecretBackend for SpyBackend {
+        fn backend_type(&self) -> &str {
+            self.inner.backend_type()
+        }
+
+        fn display_name(&self) -> &str {
+            self.inner.display_name()
+        }
+
+        async fn is_available(&self) -> bool {
+            self.inner.is_available().await
+        }
+
+        async fn store(&self, id: &str, secret: &str) -> Result<(), VaultError> {
+            self.inner.store(id, secret).await
+        }
+
+        async fn retrieve(&self, id: &str) -> Result<String, VaultError> {
+            self.retrieve_calls
+                .lock()
+                .expect("lock poisoned")
+                .push(id.to_string());
+            self.inner.retrieve(id).await
+        }
+
+        async fn delete(&self, id: &str) -> Result<(), VaultError> {
+            self.inner.delete(id).await
+        }
+
+        async fn exists(&self, id: &str) -> Result<bool, VaultError> {
+            self.inner.exists(id).await
+        }
+    }
+
     #[tokio::test]
     async fn a_failing_entry_aborts_the_whole_call_with_no_partial_env_map_observable() {
         let json = r#"{
@@ -285,13 +385,11 @@ mod tests {
         }"#;
         let profile = load_profile_from_str(json, &defaults()).unwrap();
         // "missing" is deliberately never stored, so entry THREE fails to
-        // resolve while ONE, TWO, and FOUR would all succeed.
-        let backend = seeded_backend(&[
-            ("one", "value-one"),
-            ("two", "value-two"),
-            ("four", "value-four"),
-        ])
-        .await;
+        // resolve while ONE, TWO, and FOUR would all succeed if attempted.
+        let backend = SpyBackend::new();
+        backend.store("one", "value-one").await.unwrap();
+        backend.store("two", "value-two").await.unwrap();
+        backend.store("four", "value-four").await.unwrap();
         let km = key_manager();
         let opts = ResolveOptions {
             backend: &backend,
@@ -300,12 +398,17 @@ mod tests {
 
         let err = resolve_profile(&profile, &opts).await.unwrap_err();
         assert_matches!(err, VaultError::SecretNotFound { .. });
-        // The all-or-nothing contract is that `resolve_profile` never
-        // returns anything but `Err` here — there is no partial `Ok(map)`
-        // value to inspect, so the absence of a returned map (enforced by
-        // the function's `Result<ResolvedEnv, VaultError>` signature and
-        // this `unwrap_err()`) is itself the assertion that none of ONE,
-        // TWO, or FOUR's resolved values are observable on this error path.
+
+        // Genuine short-circuit, not merely "no `Ok` value returned": the
+        // resolver must never even have attempted FOUR (the entry after the
+        // failing THREE) — proving resolution stops at the first failure
+        // rather than resolving everything and discarding the results.
+        assert_eq!(
+            backend.retrieve_calls(),
+            vec!["one", "two", "missing"],
+            "resolution must short-circuit at the failing entry and never \
+             attempt a later entry"
+        );
     }
 
     // --- AC3: exercised against InMemoryBackend, no process/launcher
@@ -332,6 +435,91 @@ mod tests {
 
         let resolved = resolve_profile(&profile, &opts).await.unwrap();
         assert_eq!(resolved.get("TOKEN").unwrap(), "the-secret-value");
+    }
+
+    // --- Overflow-safe lease expiry: a huge ttlSeconds must not panic and
+    // --- must not produce an already-expired lease ---
+
+    #[tokio::test]
+    async fn a_huge_ttl_seconds_neither_panics_nor_produces_an_already_expired_lease() {
+        // The #277 loader does not cap a secret-backed lease's ttlSeconds
+        // (unlike a signingKey-backed one), so this huge value reaches
+        // resolve_profile unmodified — regression coverage for an unchecked
+        // `now + ttl_seconds` add, which panics in debug and wraps to a past
+        // `exp` in release.
+        let json = format!(
+            r#"{{
+                "version": 1, "name": "overflow",
+                "entries": {{
+                    "HUGE": {{ "secret": "s", "materialize": "lease", "ttlSeconds": {} }}
+                }}
+            }}"#,
+            u64::MAX
+        );
+        let profile = load_profile_from_str(&json, &defaults()).unwrap();
+        let backend = seeded_backend(&[("s", "the-secret-value")]).await;
+        let km = key_manager();
+        let opts = ResolveOptions {
+            backend: &backend,
+            key_manager: &km,
+        };
+
+        // Must not panic (this call alone is the overflow regression check).
+        let resolved = resolve_profile(&profile, &opts).await.unwrap();
+
+        let lease = resolved.get("HUGE").unwrap();
+        let current_key = km.get_current_key().unwrap();
+        let claims = decrypt_token(&current_key.key, lease).unwrap();
+        assert!(
+            claims.exp > claims.iat,
+            "an astronomically large requested ttlSeconds must still mint a \
+             lease with exp strictly after iat, never an already-expired one"
+        );
+    }
+
+    // --- Default TTL fallback must never be 0 ---
+
+    #[tokio::test]
+    async fn a_lease_entry_with_no_resolved_ttl_seconds_falls_back_to_a_nonzero_default() {
+        // Bypasses the loader (which always resolves ttlSeconds to Some for
+        // a Secret + Lease entry) to exercise mint_secret_lease's own
+        // defensive fallback directly, proving it is a sane non-zero default
+        // rather than the previous `unwrap_or(0)` — a 0-second TTL would
+        // silently mint an already-expired lease.
+        let profile = LoadedProfile {
+            version: 1,
+            name: "no-ttl".to_string(),
+            entries: vec![(
+                "NO_TTL".to_string(),
+                ProfileEntry {
+                    source: EntrySource::Secret("s".to_string()),
+                    materialize: MaterializeMode::Lease,
+                    min_trust: MinTrust::Unverified,
+                    ttl_seconds: None,
+                    use_limit: None,
+                    require_presence_per_use: false,
+                    require_presence_at_mint: false,
+                },
+            )],
+        };
+        let backend = seeded_backend(&[("s", "the-secret-value")]).await;
+        let km = key_manager();
+        let opts = ResolveOptions {
+            backend: &backend,
+            key_manager: &km,
+        };
+
+        let resolved = resolve_profile(&profile, &opts).await.unwrap();
+        let lease = resolved.get("NO_TTL").unwrap();
+        let current_key = km.get_current_key().unwrap();
+        let claims = decrypt_token(&current_key.key, lease).unwrap();
+        assert_eq!(
+            claims.exp - claims.iat,
+            DEFENSIVE_DEFAULT_TTL_SECONDS,
+            "an entry reaching mint_secret_lease with no ttlSeconds must fall \
+             back to a sane non-zero default, never 0"
+        );
+        assert_ne!(DEFENSIVE_DEFAULT_TTL_SECONDS, 0);
     }
 
     // --- Not-yet-supported signingKey + lease path is refused, not
