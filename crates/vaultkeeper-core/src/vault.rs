@@ -145,7 +145,7 @@ pub(crate) fn build_and_mint_claims(
     tid: crate::types::TrustTier,
     backend_type: String,
 ) -> Result<String, VaultError> {
-    let claims = VaultClaims {
+    let mut claims = VaultClaims {
         jti: uuid::Uuid::new_v4().to_string(),
         exp,
         iat: now,
@@ -163,13 +163,21 @@ pub(crate) fn build_and_mint_claims(
     };
 
     let current_key = key_manager.get_current_key()?;
-    create_token(
+    let token = create_token(
         &current_key.key,
         &claims,
         &CreateTokenOptions {
             kid: Some(current_key.id.clone()),
         },
-    )
+    );
+    // The claims copy of the plaintext is scrubbed once the JWE is minted —
+    // success or error — so this helper never leaves a second unzeroized
+    // heap copy behind (the caller owns the lifetime of its own copy).
+    if let Some(val) = claims.val.as_mut() {
+        use zeroize::Zeroize;
+        val.zeroize();
+    }
+    token
 }
 
 /// Options for initializing VaultKeeper.
