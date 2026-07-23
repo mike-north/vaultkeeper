@@ -38,10 +38,10 @@ surface change.
 | `profile show` | Display a profile's entries and their policy — never secret values. |
 | `profile list` | List the available profiles. |
 | `profile lint` | Validate a profile and warn where its policy is looser than this machine's defaults (advisory). |
-| `session mint` | Mint a session signing lease for a profile entry, proving human presence at mint. |
-| `session revoke` | Revoke an outstanding lease by id, or every outstanding lease for a signing key. |
+| `lease issue` | Issue a signing lease for a profile entry, proving human presence at issuance. *(was `session mint`, deprecated alias until 1.0)* |
+| `lease revoke` | Revoke an outstanding lease by id, or every outstanding lease for a signing key. *(was `session revoke`)* |
 | `run` *(in review)* | Launch a command with one or more secrets available in its subshell — stdio- and signal-transparent. The source options (`--profile`, `--token`, `--set`) describe only *how many secrets and by what means they are populated*; the operation is one. (Owner-adjudicated: `run` is the single launcher verb.) |
-| `session redeem` *(designed)* | Redeem a signing lease into an in-process signing handle for non-interactive signing. |
+| `lease redeem` *(designed; library/core operation — CLI shape deliberately TBD)* | Redeem a signing lease into an in-process signing handle for non-interactive signing. *(né `session redeem`)* |
 
 ### 1.1 Command tree (normative inventory)
 
@@ -73,15 +73,15 @@ grammar review covers them before they land:
 
 | Command | Positional | Flags | Notes |
 |---|---|---|---|
-| `run` | `COMMAND…` (trailing) | `--profile <n>`, `--profile-file <p>`, `--set <VAR=SECRET>`, `--dry-run`, `--require-presence` | stdio/signal transparent; stdout is the child's alone; **in review** |
-| `session redeem` (shape TBD) | — | lease presenter | lease redemption over the #268 handle table; **designed, unscheduled** |
+| `run` | `COMMAND…` (trailing) | `--profile <n>`, `--profile-file <p>`, `--set <VAR=SECRET>`, `--dry-run`, `--require-presence-at-issuance` (per §3.3.1 r.5) | stdio/signal transparent; stdout is the child's alone; **in review** |
+| `lease redeem` (shape TBD) | — | lease presenter | lease redemption over the #268 handle table; **designed — library/core first, CLI surface TBD** |
 
 ### 1.2 Design grammar (SHOULD BE)
 
 **G1 — Noun-verb for resource families; bare verb for whole-vault process actions.** A command earns a
 **noun namespace** (`<noun> <verb>`) when it manages a *category of addressable resources* with more than one
-operation: `config`, `backend`, `profile`, `session`, and (post-B2/B3/B4 adjudication) `secret`, `key`,
-`trust`. A command is a **bare top-level verb** only when it is a single process action against the vault as
+operation: `config`, `backend`, `profile`, `lease` (né `session`, ruling §3.3.1), and (post-B2/B3/B4 adjudication)
+`secret`, `key`, `trust`. A command is a **bare top-level verb** only when it is a single process action against the vault as
 a whole with no sibling operations on a shared resource — after adjudication, exactly two qualify: `run`
 (the launcher) and `doctor` (the whole-machine check).
 
@@ -340,6 +340,32 @@ edits and ratifies each line.** Tensions are flagged **⚠ OWNER-DECIDES**, not 
 | **entry** | One binding within a profile. | `--entry` (CLI); profile `entries` map | Stable. |
 | **materialize / materialization mode** | How an entry resolves: to a secret value or to a lease. | `materialize: "secret" \| "lease"` | Stable (env-epic rev 5). |
 | **rung** | A level of the adoption gradient (plaintext → resolved env → lease). | docs/product only | Internal framing term; ⚠ OWNER-DECIDES whether it appears in any user surface or stays product-doc-only. |
+
+#### 3.3.1 Adjudicated rulings (owner, 2026-07-23) — supersede the ⚠ markers above where they overlap
+
+1. **`lease` — RATIFIED** as the artifact's name. Definition: *an encrypted, self-expiring,
+   issuer-revocable authorization that confers scoped use without possession, and has effect
+   only when redeemed back to the vault that issued it.* Rationale of record: self-expiry as
+   the inherent, default-safe property (CS lease prior art — DHCP, distributed-systems
+   leases), which no alternative (token/grant/ticket/pass/permit) carries intrinsically.
+   `capability` remains the *concept* one layer up; `lease` is the artifact.
+2. **`session` — RETIRED as a noun.** It named nothing in the system (no session object, id,
+   or state); every property it gestured at lives on the lease (`exp`, `pres`,
+   injected-at-launch). Docs may describe the launch-wrapper *pattern* in prose; no surface
+   name uses it. CLI namespace `session` → **`lease`**, deprecated aliases until 1.0.
+3. **Lease verb set — `issue` / `redeem` / `revoke`.** `mint` replaced by `issue`
+   (CLI: `lease issue`); `redeem` kept over "present" because it names the *effect at the
+   issuer* (accounted, at-most-once semantics), not the gesture; `revoke` unchanged
+   (`--jti` scalpel / `--key` guillotine).
+4. **`vault key` — RATIFIED as the single name** for the credential that seals stored state
+   and issues leases; **"minting key" retired** (it existed only to rhyme with the retired
+   verb, and was the glossary's flagged top ambiguity). "Issuing key" is likewise rejected —
+   one key, one name, and its role is self-explanatory in a project called vaultkeeper.
+5. **Presence-flag ripple (G3):** the scope-suffix family follows the verb change —
+   `--require-presence-at-issuance` (not `-at-mint`; "at-issue" rejected for the English
+   idiom collision). `--require-presence-per-use` unchanged.
+6. **Banned-terms additions** (§3.4 list): `mint`/`minting` and `session` banned from
+   surface artifacts where lease vocabulary applies; `grant` ban stands.
 
 ### 3.4 Vocabulary as lintable surface (SHOULD BE)
 
