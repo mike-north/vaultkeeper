@@ -280,6 +280,22 @@ fn signing_key_id(name: &str) -> String {
     format!("signing-key:{name}")
 }
 
+/// A decrypted claims payload was presented to the wrong redemption entry
+/// point: [`VaultKeeper::authorize`] given a signing-key lease, or
+/// [`VaultKeeper::redeem_signing_lease`] given an ordinary secret token
+/// (issue #300, AC5's "wrong kind, or vice versa"). Mirrors
+/// `crate::identity::handles::wrong_kind_error`'s wording — that helper
+/// covers a *resolved handle*'s kind mismatch, this one covers a *claims
+/// payload*'s kind mismatch before any handle exists to check.
+fn wrong_claims_kind_error(expected: &str, found: &str) -> VaultError {
+    VaultError::AuthorizationDenied {
+        message: format!(
+            "This token authorizes a {found}, not a {expected} — present it to the {found} \
+             redemption path instead."
+        ),
+    }
+}
+
 /// The non-interactive fail-closed error message (issue #299's documented
 /// wording — reproduced verbatim, not paraphrased, since it is part of the
 /// design). `profile_name` is also the profile name embedded in the
@@ -945,22 +961,20 @@ impl VaultKeeper {
         }
     }
 
-    /// Decrypt a JWE token, validate its claims, and return an opaque
-    /// capability [`HandleId`] together with the (secret-redacted) claims and
-    /// key status. Tracks per-JTI usage counts and blocks tokens that exceed
-    /// their use limit.
-    ///
-    /// **The returned [`VaultClaims::val`] is always empty (issue #241 AC1)**
-    /// — the raw secret never leaves core memory through this return value.
-    /// It stays behind the returned handle, in a [`Zeroizing`] buffer, until
-    /// [`VaultKeeper::read_secret`] consumes it exactly once. The handle's
-    /// lifetime is bound to the token's own `exp`/`use_limit` claims, not to
-    /// any interactive session — see `crate::identity::handles` for the full
-    /// eviction-policy rationale.
-    pub fn authorize(
+    /// Shared decrypt + key-lookup + rotation-response logic for
+    /// [`VaultKeeper::authorize`] and [`VaultKeeper::redeem_signing_lease`]:
+    /// resolves the JWE's `kid` header against the current or a still-in-grace
+    /// previous key, decrypts it, and builds the [`VaultResponse`] carrying a
+    /// re-encrypted `rotated_jwt` when the token was decrypted with a
+    /// previous key. Neither claims validation nor handle-table accounting
+    /// happens here — both call sites need distinct validation (secret vs.
+    /// signing-lease shape) before touching the single accounting authority
+    /// ([`HandleTable`]), so this only covers the decrypt step every
+    /// redemption path shares.
+    fn decrypt_and_prepare_response(
         &mut self,
         jwe: &str,
-    ) -> Result<(HandleId, VaultClaims, VaultResponse), VaultError> {
+    ) -> Result<(VaultClaims, VaultResponse), VaultError> {
         let kid = extract_kid(jwe)?;
 
         let (key, is_current) = match &kid {
@@ -978,19 +992,6 @@ impl VaultKeeper {
         };
 
         let claims = decrypt_token(&key.key, jwe)?;
-
-        let current_usage = self.handle_table.current_usage(&claims.jti);
-        validate_claims(&claims, current_usage)?;
-
-        // Increment usage count
-        let new_usage = self.handle_table.record_usage(&claims.jti);
-
-        // If usage limit reached, block the token for future requests
-        if let Some(limit) = claims.use_limit
-            && new_usage >= limit
-        {
-            block_token(&claims.jti);
-        }
 
         let key_status = if is_current {
             KeyStatus::Current
@@ -1014,6 +1015,52 @@ impl VaultKeeper {
                 },
             )?;
             response.rotated_jwt = Some(rotated);
+        }
+
+        Ok((claims, response))
+    }
+
+    /// Decrypt a JWE token, validate its claims, and return an opaque
+    /// capability [`HandleId`] together with the (secret-redacted) claims and
+    /// key status. Tracks per-JTI usage counts and blocks tokens that exceed
+    /// their use limit.
+    ///
+    /// **The returned [`VaultClaims::val`] is always empty (issue #241 AC1)**
+    /// — the raw secret never leaves core memory through this return value.
+    /// It stays behind the returned handle, in a [`Zeroizing`] buffer, until
+    /// [`VaultKeeper::read_secret`] consumes it exactly once. The handle's
+    /// lifetime is bound to the token's own `exp`/`use_limit` claims, not to
+    /// any interactive session — see `crate::identity::handles` for the full
+    /// eviction-policy rationale.
+    ///
+    /// Refuses a signing-key lease (`kty: SigningKey`) with
+    /// [`VaultError::AuthorizationDenied`] (issue #300, AC5's "wrong kind, or
+    /// vice versa") — before this check existed, a signing lease presented
+    /// here was silently stored as a `StoredClaims::Secret` handle whose
+    /// secret was always absent, so `read_secret` returned a misleading
+    /// [`VaultError::AccessorConsumed`] instead of a typed wrong-kind error.
+    /// Use [`VaultKeeper::redeem_signing_lease`] for a signing-key lease.
+    pub fn authorize(
+        &mut self,
+        jwe: &str,
+    ) -> Result<(HandleId, VaultClaims, VaultResponse), VaultError> {
+        let (claims, response) = self.decrypt_and_prepare_response(jwe)?;
+
+        if claims.kty == Some(ClaimsKind::SigningKey) {
+            return Err(wrong_claims_kind_error("secret token", "signing-key lease"));
+        }
+
+        let current_usage = self.handle_table.current_usage(&claims.jti);
+        validate_claims(&claims, current_usage)?;
+
+        // Increment usage count
+        let new_usage = self.handle_table.record_usage(&claims.jti);
+
+        // If usage limit reached, block the token for future requests
+        if let Some(limit) = claims.use_limit
+            && new_usage >= limit
+        {
+            block_token(&claims.jti);
         }
 
         // The handle's expiry is bound to the token's own `exp` — a
@@ -1077,6 +1124,101 @@ impl VaultKeeper {
         self.handle_table.resolve_signing_claims(handle)
     }
 
+    /// Redeem a session signing-key lease (the JWE produced by
+    /// [`VaultKeeper::mint_signing_lease`]) into an opaque signing capability
+    /// [`HandleId`] (issue #300) — the read side of the lease. `exp` and
+    /// `use` are enforced by exactly one accounting authority, the same
+    /// [`HandleTable`] [`VaultKeeper::authorize`] uses for secret tokens:
+    /// [`HandleTable::current_usage`]/[`HandleTable::record_usage`] track the
+    /// lease's `jti`-scoped use budget, and the handle this call installs
+    /// carries the lease's own finite `exp` — there is no second,
+    /// independently-maintained counter or expiry that could drift out of
+    /// sync with the handle table.
+    ///
+    /// Validates every axis, each with its own distinct typed error, none of
+    /// them a panic:
+    ///
+    /// - **Wrong kind** — `jwe` decrypts to an ordinary secret claim (`kty`
+    ///   omitted or `Secret`) rather than a signing-key lease. Checked first,
+    ///   before any handle-table accounting, and returns
+    ///   [`VaultError::AuthorizationDenied`]. Use [`VaultKeeper::authorize`]
+    ///   for a secret token.
+    /// - **Expired** — the lease's `exp` has passed:
+    ///   [`VaultError::TokenExpired`] (via [`crate::jwe::validate_claims`]).
+    /// - **Exhausted** — the lease's `use` budget (tracked by the handle
+    ///   table's `jti` usage count, exactly as `authorize()` tracks it for
+    ///   secret tokens) is spent: [`VaultError::UsageLimitExceeded`] (via
+    ///   [`crate::jwe::validate_claims`]).
+    /// - **Revoked (jti axis)** — the lease's `jti` is on the persisted
+    ///   revocation store: [`VaultError::TokenRevoked`] (via
+    ///   [`VaultKeeper::validate_lease_revocation`]).
+    /// - **Revoked (key-generation axis)** — the lease's `kgen` is below the
+    ///   signing key's current generation: [`VaultError::TokenRevoked`] (via
+    ///   [`VaultKeeper::validate_lease_revocation`]).
+    ///
+    /// **Finite-expiry gate stays intact (issue #282, not reopened here):**
+    /// the installed handle's `expires_at` is always `Some(claims.exp)` —
+    /// [`VaultClaims::exp`] is a required `u64`, not `Option<u64>`, so there
+    /// is no representable claims payload this function could decrypt that
+    /// would let it pass `None` through to
+    /// [`VaultKeeper::register_signing_handle`], which is the single shared
+    /// gate (also used directly by any future caller) that refuses a
+    /// never-expiring signing handle. This redemption path does not bypass
+    /// or duplicate that gate — it calls the same method.
+    ///
+    /// # Errors
+    /// See the axis list above. Any other error propagates as its own typed
+    /// [`VaultError`] variant (e.g. [`VaultError::KeyRevoked`] for an unknown
+    /// `kid` header, [`VaultError::InvalidToken`] for a malformed JWE).
+    pub async fn redeem_signing_lease(
+        &mut self,
+        host: &dyn HostPlatform,
+        jwe: &str,
+    ) -> Result<(HandleId, SigningClaims, VaultResponse), VaultError> {
+        let (claims, response) = self.decrypt_and_prepare_response(jwe)?;
+
+        if claims.kty != Some(ClaimsKind::SigningKey) {
+            return Err(wrong_claims_kind_error("signing-key lease", "secret token"));
+        }
+
+        let current_usage = self.handle_table.current_usage(&claims.jti);
+        validate_claims(&claims, current_usage)?;
+
+        self.validate_lease_revocation(host, &claims).await?;
+
+        // Single accounting authority (AC6): the same `HandleTable` counter
+        // `authorize()` increments for secret tokens, keyed on this lease's
+        // own `jti` — there is no separate signing-lease-only counter.
+        let new_usage = self.handle_table.record_usage(&claims.jti);
+        if let Some(limit) = claims.use_limit
+            && new_usage >= limit
+        {
+            block_token(&claims.jti);
+        }
+
+        // `validate_claims` already enforced that a `SigningKey`-kind claim
+        // carries a non-empty `kid` — this `ok_or_else` is a defensive
+        // fail-closed re-check, not a code path this function's own inputs
+        // can actually reach.
+        let kid = claims
+            .kid
+            .clone()
+            .ok_or_else(|| VaultError::AuthorizationDenied {
+                message: format!(
+                    "Signing lease {} refused: claims carry no kid (malformed lease)",
+                    claims.jti
+                ),
+            })?;
+        let handle_id =
+            self.register_signing_handle(kid.clone(), claims.reference.clone(), Some(claims.exp))?;
+        let signing_claims = SigningClaims {
+            kid,
+            backend_ref: claims.reference,
+        };
+
+        Ok((handle_id, signing_claims, response))
+    }
+
     /// Explicitly release `handle`, evicting it immediately. Returns `true`
     /// if a handle was actually present and removed. See
     /// `crate::identity::handles` for why this is the preferred eviction
@@ -1112,13 +1254,11 @@ impl VaultKeeper {
     /// the returned [`HandleId`]. A finite `expires_at` is unaffected and
     /// registers exactly as before.
     ///
-    /// Only reachable from within this crate — `register_signing_handle` has
-    /// no callers today; the future lease-mint path referenced above is
-    /// in-crate.
-    // Allowed: no in-crate caller exists yet — the future lease-mint path
-    // (issue #282) is the intended first caller. `#[cfg(test)]` exercises
-    // this method directly in the meantime.
-    #[allow(dead_code)]
+    /// Only reachable from within this crate — [`VaultKeeper::redeem_signing_lease`]
+    /// (issue #300) is the intended caller, always with a finite
+    /// `Some(claims.exp)` (a redeemed lease's `exp` is a required `u64`, so
+    /// there is no representable input that reaches this method with `None`
+    /// from that path).
     pub(crate) fn register_signing_handle(
         &mut self,
         kid: String,
@@ -1848,5 +1988,351 @@ mod mint_signing_lease_tests {
             matches!(err, VaultError::ConfigValidation { .. }),
             "expected a typed ConfigValidation refusal, got {err:?}"
         );
+    }
+
+    // --- issue #300: redeem_signing_lease — the read side of the lease ---
+
+    /// Decrypt `jwe` with `vault`'s current key, purely to pull `jti`/`exp`
+    /// out for revocation-store setup in the tests below — mirrors what
+    /// `redeem_signing_lease` itself does internally, but these tests need
+    /// the claims *before* redeeming to set up jti/key revocation.
+    fn peek_claims(vault: &VaultKeeper, jwe: &str) -> VaultClaims {
+        decrypt_token(&vault.key_manager().get_current_key().unwrap().key, jwe).unwrap()
+    }
+
+    /// Happy path: a validly minted lease redeems into a signing handle whose
+    /// claims match what was minted, and the handle is independently
+    /// resolvable via `resolve_signing_claims`.
+    #[tokio::test]
+    async fn redeem_signing_lease_returns_a_working_handle_for_a_valid_lease() {
+        let host = TestHost::new(false);
+        let mut vault = init_vault(&host).await;
+        let backend = MockSigningBackend {
+            capabilities: MockCapabilitiesResponse::Report(BackendCapabilities::none()),
+        };
+        let options = base_options(false, false);
+        let jwe = vault
+            .mint_signing_lease(&host, &backend, &options)
+            .await
+            .expect("mint must succeed");
+
+        let (handle, signing_claims, _response) = vault
+            .redeem_signing_lease(&host, &jwe)
+            .await
+            .expect("a fresh, unrevoked, unexpired lease must redeem");
+
+        assert_eq!(
+            signing_claims.kid,
+            format!("kid-for-signing-key:{RELEASE_SIGNER_KEY_NAME}")
+        );
+        assert_eq!(
+            signing_claims.backend_ref,
+            format!("signing-key:{RELEASE_SIGNER_KEY_NAME}")
+        );
+
+        let resolved = vault
+            .resolve_signing_claims(&handle)
+            .expect("the installed handle must resolve signing claims");
+        assert_eq!(resolved.kid, signing_claims.kid);
+        assert_eq!(resolved.backend_ref, signing_claims.backend_ref);
+    }
+
+    /// AC1: an expired lease is refused with a typed expired error, no
+    /// panic. `ttl_seconds: 0` mints a lease whose `exp` equals its own
+    /// `iat` (`now`) — `validate_claims`'s expiry check is `now >= exp`
+    /// (inclusive), so this is already-expired the instant it is minted,
+    /// with no need to sleep in the test.
+    #[tokio::test]
+    async fn redeem_signing_lease_rejects_an_expired_lease() {
+        let host = TestHost::new(false);
+        let mut vault = init_vault(&host).await;
+        let backend = MockSigningBackend {
+            capabilities: MockCapabilitiesResponse::Report(BackendCapabilities::none()),
+        };
+        let mut options = base_options(false, false);
+        options.ttl_seconds = 0;
+        let jwe = vault
+            .mint_signing_lease(&host, &backend, &options)
+            .await
+            .expect("mint must succeed even for a zero-ttl lease");
+
+        let err = vault
+            .redeem_signing_lease(&host, &jwe)
+            .await
+            .expect_err("an already-expired lease must not redeem");
+
+        assert!(
+            matches!(err, VaultError::TokenExpired { .. }),
+            "expected TokenExpired, got {err:?}"
+        );
+    }
+
+    /// AC2: a lease whose `use` budget is spent is refused with a typed
+    /// exhausted error, no panic — the second redemption of a
+    /// `use_limit: Some(1)` lease is refused even though the lease itself
+    /// has not expired and was never explicitly revoked.
+    ///
+    /// Accepts either [`VaultError::UsageLimitExceeded`] or
+    /// [`VaultError::TokenRevoked`], matching the existing secret-token
+    /// convention (`authorize_enforces_use_limit` in
+    /// `crates/vaultkeeper-core/tests/unit_tests.rs`): `validate_claims`
+    /// (shared by both `authorize()` and `redeem_signing_lease()`) checks
+    /// the process-global JWE blocklist before the usage-limit count, and
+    /// the *first* redemption's own `record_usage`/`block_token` call
+    /// already blocks this exact `jti` the moment its budget is reached — so
+    /// the second call observes the blocklist hit first. Either error is the
+    /// same "exhausted" axis from the caller's perspective; neither is a
+    /// panic.
+    #[tokio::test]
+    async fn redeem_signing_lease_rejects_an_exhausted_lease() {
+        let host = TestHost::new(false);
+        let mut vault = init_vault(&host).await;
+        let backend = MockSigningBackend {
+            capabilities: MockCapabilitiesResponse::Report(BackendCapabilities::none()),
+        };
+        let mut options = base_options(false, false);
+        options.use_limit = Some(1);
+        let jwe = vault
+            .mint_signing_lease(&host, &backend, &options)
+            .await
+            .expect("mint must succeed");
+
+        vault
+            .redeem_signing_lease(&host, &jwe)
+            .await
+            .expect("the first redemption within the use budget must succeed");
+
+        let err = vault
+            .redeem_signing_lease(&host, &jwe)
+            .await
+            .expect_err("a second redemption past the use_limit must be refused");
+
+        assert!(
+            matches!(err, VaultError::UsageLimitExceeded { .. })
+                || matches!(err, VaultError::TokenRevoked { .. }),
+            "expected UsageLimitExceeded or TokenRevoked, got {err:?}"
+        );
+    }
+
+    /// AC3: a lease whose `jti` is on the revocation store's jti axis is
+    /// refused with a typed revoked error, no panic.
+    #[tokio::test]
+    async fn redeem_signing_lease_rejects_a_jti_revoked_lease() {
+        let host = TestHost::new(false);
+        let mut vault = init_vault(&host).await;
+        let backend = MockSigningBackend {
+            capabilities: MockCapabilitiesResponse::Report(BackendCapabilities::none()),
+        };
+        let options = base_options(false, false);
+        let jwe = vault
+            .mint_signing_lease(&host, &backend, &options)
+            .await
+            .expect("mint must succeed");
+        let claims = peek_claims(&vault, &jwe);
+
+        vault
+            .revoke_lease_jti(&host, &claims.jti, claims.exp)
+            .await
+            .expect("revoke_lease_jti must persist");
+
+        let err = vault
+            .redeem_signing_lease(&host, &jwe)
+            .await
+            .expect_err("a jti-revoked lease must not redeem");
+
+        assert!(
+            matches!(err, VaultError::TokenRevoked { .. }),
+            "expected TokenRevoked, got {err:?}"
+        );
+    }
+
+    /// AC4: a lease minted under a generation the revocation store's
+    /// `key_generations` axis has since superseded (`kgen` below the
+    /// current minimum for the key) is refused with a typed revoked error,
+    /// no panic.
+    #[tokio::test]
+    async fn redeem_signing_lease_rejects_a_generation_revoked_lease() {
+        let host = TestHost::new(false);
+        let mut vault = init_vault(&host).await;
+        let backend = MockSigningBackend {
+            capabilities: MockCapabilitiesResponse::Report(BackendCapabilities::none()),
+        };
+        let options = base_options(false, false);
+        let jwe = vault
+            .mint_signing_lease(&host, &backend, &options)
+            .await
+            .expect("mint must succeed at generation 0");
+
+        vault
+            .revoke_lease_key(&host, RELEASE_SIGNER_KEY_NAME)
+            .await
+            .expect("revoke_lease_key must persist");
+
+        let err = vault
+            .redeem_signing_lease(&host, &jwe)
+            .await
+            .expect_err("a lease minted below the current key generation must not redeem");
+
+        assert!(
+            matches!(err, VaultError::TokenRevoked { .. }),
+            "expected TokenRevoked, got {err:?}"
+        );
+    }
+
+    /// AC5: an ordinary secret token presented to `redeem_signing_lease`
+    /// produces a distinct typed wrong-kind error, no panic — it does not
+    /// fall through to the expiry/usage/revocation checks (which secret
+    /// claims cannot satisfy the shape of, e.g. no `kgen`) and does not get
+    /// silently installed as a broken handle.
+    #[tokio::test]
+    async fn redeem_signing_lease_rejects_a_secret_token_wrong_kind() {
+        let host = TestHost::new(false);
+        let mut vault = init_vault(&host).await;
+
+        let secret_token = vault
+            .setup(
+                &host,
+                "my-secret",
+                "s3cret-value",
+                Some(&SetupOptions {
+                    skip_trust: Some(true),
+                    ..Default::default()
+                }),
+            )
+            .await
+            .expect("setup must mint a secret token");
+
+        let err = vault
+            .redeem_signing_lease(&host, &secret_token)
+            .await
+            .expect_err("a secret token must not redeem as a signing lease");
+
+        assert!(
+            matches!(err, VaultError::AuthorizationDenied { .. }),
+            "expected AuthorizationDenied, got {err:?}"
+        );
+    }
+
+    /// AC5 (vice versa): a signing-key lease presented to `authorize()` —
+    /// the ordinary secret-redemption entry point — is refused the same way,
+    /// rather than being silently stored as a secret handle with no secret
+    /// (the pre-#300 behavior this closes: see `authorize`'s doc comment).
+    #[tokio::test]
+    async fn authorize_rejects_a_signing_lease_wrong_kind() {
+        let host = TestHost::new(false);
+        let mut vault = init_vault(&host).await;
+        let backend = MockSigningBackend {
+            capabilities: MockCapabilitiesResponse::Report(BackendCapabilities::none()),
+        };
+        let options = base_options(false, false);
+        let jwe = vault
+            .mint_signing_lease(&host, &backend, &options)
+            .await
+            .expect("mint must succeed");
+
+        let err = vault
+            .authorize(&jwe)
+            .expect_err("a signing-key lease must not authorize as a secret token");
+
+        assert!(
+            matches!(err, VaultError::AuthorizationDenied { .. }),
+            "expected AuthorizationDenied, got {err:?}"
+        );
+    }
+
+    /// AC6: `exp`/`use` are accounted exactly once, by the handle table's
+    /// single `jti`-keyed counter — the same counter `authorize()` shares
+    /// for secret tokens. Redeeming a `use_limit: Some(2)` lease twice
+    /// succeeds (each redemption installs its own independent handle, both
+    /// still resolvable), and a third redemption of the very same lease is
+    /// refused — proving there is no second, independently-tracked counter
+    /// that a redemption could exhaust without the handle table observing
+    /// it (or vice versa).
+    #[tokio::test]
+    async fn redeeming_a_lease_repeatedly_is_accounted_once_by_the_handle_table() {
+        let host = TestHost::new(false);
+        let mut vault = init_vault(&host).await;
+        let backend = MockSigningBackend {
+            capabilities: MockCapabilitiesResponse::Report(BackendCapabilities::none()),
+        };
+        let mut options = base_options(false, false);
+        options.use_limit = Some(2);
+        let jwe = vault
+            .mint_signing_lease(&host, &backend, &options)
+            .await
+            .expect("mint must succeed");
+
+        let (handle_one, _, _) = vault
+            .redeem_signing_lease(&host, &jwe)
+            .await
+            .expect("redemption 1 of 2 must succeed");
+        let (handle_two, _, _) = vault
+            .redeem_signing_lease(&host, &jwe)
+            .await
+            .expect("redemption 2 of 2 must succeed");
+
+        // Both previously-issued handles remain independently resolvable —
+        // exhausting the lease's redemption budget does not retroactively
+        // evict handles already installed from it.
+        vault
+            .resolve_signing_claims(&handle_one)
+            .expect("handle from redemption 1 must still resolve");
+        vault
+            .resolve_signing_claims(&handle_two)
+            .expect("handle from redemption 2 must still resolve");
+
+        let err = vault
+            .redeem_signing_lease(&host, &jwe)
+            .await
+            .expect_err("a third redemption past the use_limit of 2 must be refused");
+        // See `redeem_signing_lease_rejects_an_exhausted_lease` for why
+        // either error is accepted here.
+        assert!(
+            matches!(err, VaultError::UsageLimitExceeded { .. })
+                || matches!(err, VaultError::TokenRevoked { .. }),
+            "expected UsageLimitExceeded or TokenRevoked, got {err:?}"
+        );
+    }
+
+    /// AC7: no redemption path yields a never-expiring handle — the
+    /// finite-expiry gate ([`VaultKeeper::register_signing_handle`], issue
+    /// #282) stays intact and is exactly the gate `redeem_signing_lease`
+    /// routes through, not a bypassed or duplicated copy of it. Two halves:
+    /// (1) the gate itself still refuses a `None` expiry (regression guard —
+    /// `redeem_signing_lease` shares this exact method, so weakening it here
+    /// would silently weaken redemption too); (2) `redeem_signing_lease`
+    /// cannot reach that `None` branch in the first place, since
+    /// `VaultClaims::exp` is a required `u64` — there is no decryptable lease
+    /// payload without a finite `exp` for it to pass through.
+    #[tokio::test]
+    async fn redeem_signing_lease_cannot_bypass_the_finite_expiry_gate() {
+        let host = TestHost::new(false);
+        let mut vault = init_vault(&host).await;
+
+        // (1) The shared gate itself.
+        let gate_err = vault
+            .register_signing_handle("kid-1".to_string(), "backend-ref-1".to_string(), None)
+            .expect_err("register_signing_handle must still refuse a None expiry");
+        assert!(matches!(gate_err, VaultError::AuthorizationDenied { .. }));
+
+        // (2) A genuinely redeemed lease always carries a finite exp end to
+        // end: mint, redeem, and the resulting handle is still resolvable
+        // (i.e. it *was* installed with a real, finite expiry — an entry
+        // installed with `None` would have hit the gate above instead).
+        let backend = MockSigningBackend {
+            capabilities: MockCapabilitiesResponse::Report(BackendCapabilities::none()),
+        };
+        let options = base_options(false, false);
+        let jwe = vault
+            .mint_signing_lease(&host, &backend, &options)
+            .await
+            .expect("mint must succeed");
+        let (handle, _, _) = vault
+            .redeem_signing_lease(&host, &jwe)
+            .await
+            .expect("a valid lease must redeem to a finite-expiry handle");
+        vault
+            .resolve_signing_claims(&handle)
+            .expect("the redeemed handle must be live immediately after redemption");
     }
 }
