@@ -23,13 +23,14 @@ surface change.
 | Command | Purpose |
 |---|---|
 | `exec` *(deprecated → `run --token`)* | Legacy alias for single-token launching; folds into `run` and retires at 1.0 (B9). |
-| `store` | Save a secret into the active backend (value read from stdin — never from arguments). |
-| `delete` | Remove a secret from the active backend. |
+| `secret store` | Save a secret into the active backend (value read from stdin — never from arguments). *(was `store`, deprecated alias until 1.0)* |
+| `secret delete` | Remove a secret from the active backend. *(was `delete`)* |
 | `doctor` | Run preflight checks and report whether vaultkeeper is ready to use on this machine. |
-| `approve` | Pre-approve an executable by recording its hash in the trust manifest. |
-| `dev-mode` | Enable or disable relaxed identity verification for a script during development. |
-| `rotate-key` | Rotate the vault encryption key, re-sealing stored state under the new key. |
-| `revoke-key` | Emergency-revoke the vault encryption key, invalidating all outstanding tokens. |
+| `trust approve` | Trust an executable: record its hash in the trust manifest. *(was `approve`; PATH positional)* |
+| `trust dev-mode` | Enable or disable relaxed identity verification for a script during development. *(was `dev-mode`)* |
+| `trust check` *(designed)* | Report whether trust in an executable is intact right now — recomputed hash vs manifest, tier, dev-mode status; scriptable exit code. |
+| `key rotate` | Rotate the vault encryption key, re-sealing stored state under the new key. *(was `rotate-key`)* |
+| `key revoke` | Emergency-revoke the vault encryption key, invalidating all outstanding tokens. *(was `revoke-key`)* |
 | `config init` | Create a new configuration file with defaults. |
 | `config show` | Print the current effective configuration. |
 | `backend capabilities` | Report the active backend's security capabilities (e.g. per-use presence enforcement). |
@@ -123,9 +124,9 @@ on reflection, recorded to close the question.
 | # | Location | Violates | Divergence | Disposition |
 |---|---|---|---|---|
 | B1 | `store --name`, `delete --name` | G2 | The primary subject (the secret name) is a **flag**, while `profile`/`session` make the subject positional. | **fix-now**: `store NAME` / `delete NAME` positional; keep `--name` as a hidden deprecated alias for one minor. |
-| B2 | `store`, `delete`, `rotate-key`, `revoke-key` as bare verbs | G1 | These act on addressable resource categories (secrets; keys) but are top-level verbs. `store`/`delete`/(future `list`) are the CRUD of a `secret` noun; `rotate-key`/`revoke-key` are `key rotate`/`key revoke`. | **decide**: either promote to `secret <verb>` / `key <verb>` (grammar-pure, my lean) or record a documented exception for the highest-frequency verbs. Owner call — this is the single biggest grammar question. |
-| B3 | `dev-mode --enable` (a boolean subject-mode) | G2 | An enable/disable *mode* is a bare boolean flag; the natural shape is `dev-mode enable PATH` / `dev-mode disable PATH` or `dev-mode set --path --on/--off`. | **fix-now** or **legacy**: low traffic; align to `key`/`secret` decision in B2. |
-| B4 | `approve --path`, `dev-mode --path` | G2 | The path *is* the primary subject and should be positional (`approve PATH`), matching `profile show NAME`. | **fix-now**: positional `PATH`; `--path` deprecated alias. |
+| B2 | `store`, `delete`, `rotate-key`, `revoke-key` as bare verbs | G1 | These act on addressable resource categories (secrets; keys) but are top-level verbs. | **ADJUDICATED (owner)**: promote — `secret store NAME`, `secret delete NAME` (future `secret list`); `key rotate`, `key revoke` (future `key show`, `key generations`). Hyphenated/bare forms become deprecated aliases, removed at 1.0. |
+| B3 | `dev-mode` as a bare top-level verb with `--enable` | G1/G2 | Trust-manifest operation stranded outside any namespace. | **ADJUDICATED (owner)**: joins the `trust` namespace — `trust dev-mode PATH …` (exact enable/disable shape settled at implementation under G2/G3). Deprecated alias until 1.0. |
+| B4 | `approve --path` (and `dev-mode --path`) | G1/G2 | The subject is a flag, and the verb names the act without its noun: approving is a *trust* decision. `command`/`bin` rejected as the noun — "command" is already load-bearing (`run … -- COMMAND`) and "bin" misdescribes interpreted scripts. | **ADJUDICATED (owner)**: `trust approve PATH` (positional). The `trust` namespace matches the domain's own vocabulary (trust manifest, trust tiers) and gains designed future members: `trust check PATH` (recompute + compare now; `--json`; exit 0 intact / non-zero mismatch — a scriptable gate primitive and the first-class surface for TOFU-conflict reporting), `trust list`, `trust revoke PATH`. Deprecated aliases until 1.0. |
 | B5 | `store`/`delete` `--require-presence-per-use` vs `run` `--require-presence` | G3 | Two spellings for the presence family. | **fix-now**: pick one before `run` lands. Recommend `--require-presence-per-use` (precise; "presence" alone is ambiguous about scope) across all commands, or a shared `--require-presence[=per-use]`. Resolve **before** #279 merges so `run` ships correct. |
 | B6 | `session mint PROFILE --entry E` vs `profile show NAME` | G2 | Reviewed in #328: `mint` takes the profile positionally (consistent) but the *entry* — arguably a co-primary subject — is a flag. | **leave** (documented): the profile is the addressed resource; the entry is a selector within it, legitimately a flag. Recorded so the #328 question is closed, not reopened. |
 | B7 | `backend capabilities` is the only `backend` verb | G1 | A noun namespace with a single verb is defensible only if more verbs are foreseen. | **leave**: `backend list`/`backend test` are natural future siblings; the namespace is intentional headroom, not premature. |
