@@ -14,6 +14,34 @@ Three registers are kept distinct throughout: **IS** (current inventory), **SHOU
 
 ## Part 1 — CLI Surface
 
+### 1.0 Command purposes (normative one-liners)
+
+Each command's purpose, stated as the canonical one-liner — these are also the first line of
+each command's `--help` and are pinned by the help snapshots (§3.2). A purpose change is a
+surface change.
+
+| Command | Purpose |
+|---|---|
+| `exec` | Run a command with a single secret injected into its environment, by redeeming a capability token. |
+| `store` | Save a secret into the active backend (value read from stdin — never from arguments). |
+| `delete` | Remove a secret from the active backend. |
+| `doctor` | Run preflight checks and report whether vaultkeeper is ready to use on this machine. |
+| `approve` | Pre-approve an executable by recording its hash in the trust manifest. |
+| `dev-mode` | Enable or disable relaxed identity verification for a script during development. |
+| `rotate-key` | Rotate the vault encryption key, re-sealing stored state under the new key. |
+| `revoke-key` | Emergency-revoke the vault encryption key, invalidating all outstanding tokens. |
+| `config init` | Create a new configuration file with defaults. |
+| `config show` | Print the current effective configuration. |
+| `backend capabilities` | Report the active backend's security capabilities (e.g. per-use presence enforcement). |
+| `profile init` | Scaffold a new named environment profile. |
+| `profile show` | Display a profile's entries and their policy — never secret values. |
+| `profile list` | List the available profiles. |
+| `profile lint` | Validate a profile and warn where its policy is looser than this machine's defaults (advisory). |
+| `session mint` | Mint a session signing lease for a profile entry, proving human presence at mint. |
+| `session revoke` | Revoke an outstanding lease by id, or every outstanding lease for a signing key. |
+| `run` *(in review)* | Resolve a profile and launch a command with that environment — stdio- and signal-transparent. |
+| `session redeem` *(designed)* | Redeem a signing lease into an in-process signing handle for non-interactive signing. |
+
 ### 1.1 Command tree (normative inventory)
 
 Landed on `origin/main`. `stdin`/`stdout`/`stderr` columns state the contract; `exit` is the success/typed
