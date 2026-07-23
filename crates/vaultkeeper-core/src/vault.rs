@@ -2140,9 +2140,13 @@ mod mint_signing_lease_tests {
             .await
             .expect_err("a jti-revoked lease must not redeem");
 
+        // `TokenRevoked` carries no structured axis field (just a free-text
+        // `message`), so a substring match against `validate_lease_revocation`'s
+        // jti-axis message is the strongest available proof this failed on
+        // the jti axis specifically, not the key-generation axis.
         assert!(
-            matches!(err, VaultError::TokenRevoked { .. }),
-            "expected TokenRevoked, got {err:?}"
+            matches!(err, VaultError::TokenRevoked { ref message, .. } if message.contains("(jti)")),
+            "expected TokenRevoked with a jti-axis message, got {err:?}"
         );
     }
 
@@ -2173,9 +2177,13 @@ mod mint_signing_lease_tests {
             .await
             .expect_err("a lease issued below the current key generation must not redeem");
 
+        // `TokenRevoked` carries no structured axis field (just a free-text
+        // `message`), so a substring match against `validate_lease_revocation`'s
+        // key-generation-axis message is the strongest available proof this
+        // failed on the key-generation axis specifically, not the jti axis.
         assert!(
-            matches!(err, VaultError::TokenRevoked { .. }),
-            "expected TokenRevoked, got {err:?}"
+            matches!(err, VaultError::TokenRevoked { ref message, .. } if message.contains("is below the current minimum generation")),
+            "expected TokenRevoked with a key-generation-axis message, got {err:?}"
         );
     }
 
