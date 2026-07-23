@@ -140,16 +140,25 @@ pub fn apply_set_overlay(
 pub fn render_dry_run(
     plan: &RunPlan,
     active_backend_type: &str,
-    require_presence_at_mint: bool,
+    require_presence_at_issuance: bool,
 ) -> String {
     let mut out = String::from(
         "vaultkeeper run --dry-run: plan only \u{2014} nothing minted, nothing launched.\n\n",
     );
 
-    if require_presence_at_mint {
+    if require_presence_at_issuance {
+        // `--dry-run` never launches or mints regardless, so disclosing this
+        // is harmless — but it must not imply a *real* run would silently
+        // proceed: `run` refuses outright (never a silent no-op) when this
+        // flag is set, because presence-at-issuance enforcement (verifying
+        // every minted lease entry's `pres` claim) is not yet wired into
+        // `resolve_profile` (issue #279 — fail-closed, matching the
+        // NotCapable/MaterializeModeUnsupported posture used elsewhere in
+        // this codebase for an unbacked guarantee).
         out.push_str(
-            "--require-presence-at-mint: true (not yet enforced \u{2014} presence-at-mint \
-             plumbing is not wired into `run` yet)\n\n",
+            "--require-presence-at-issuance: true (a real, non-dry-run `run` REFUSES with \
+             this flag set \u{2014} presence-at-issuance enforcement is not yet wired into \
+             `run`)\n\n",
         );
     }
 
@@ -354,7 +363,7 @@ mod tests {
     }
 
     #[test]
-    fn dry_run_render_reports_require_presence_at_mint_as_not_yet_enforced() {
+    fn dry_run_render_reports_require_presence_at_issuance_would_refuse_a_real_run() {
         let profile = load_profile_from_str(
             r#"{ "version": 1, "name": "p", "entries": {} }"#,
             &defaults(),
@@ -362,8 +371,8 @@ mod tests {
         .unwrap();
         let plan = apply_set_overlay(profile, &[], &defaults());
         let rendered = render_dry_run(&plan, "file", true);
-        assert!(rendered.contains("--require-presence-at-mint: true"));
-        assert!(rendered.contains("not yet enforced"));
+        assert!(rendered.contains("--require-presence-at-issuance: true"));
+        assert!(rendered.contains("REFUSES"));
     }
 
     #[test]

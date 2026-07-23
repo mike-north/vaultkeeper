@@ -12,7 +12,8 @@
     "expectedStderr": {
       "type": "Any"
     },
-    "expectedConfigFile": null
+    "expectedConfigFile": null,
+    "extraFiles": []
   },
   {
     "name": "help flag prints help and exits 0",
@@ -29,7 +30,8 @@
     "expectedStderr": {
       "type": "Any"
     },
-    "expectedConfigFile": null
+    "expectedConfigFile": null,
+    "extraFiles": []
   },
   {
     "name": "short help flag prints help and exits 0",
@@ -46,7 +48,8 @@
     "expectedStderr": {
       "type": "Any"
     },
-    "expectedConfigFile": null
+    "expectedConfigFile": null,
+    "extraFiles": []
   },
   {
     "name": "version flag prints version",
@@ -63,7 +66,8 @@
     "expectedStderr": {
       "type": "Any"
     },
-    "expectedConfigFile": null
+    "expectedConfigFile": null,
+    "extraFiles": []
   },
   {
     "name": "help lists all expected commands",
@@ -75,12 +79,13 @@
     "expectedExitCode": 0,
     "expectedStdout": {
       "type": "Regex",
-      "value": "(?s)exec.*doctor.*approve.*dev-mode.*store.*delete.*config.*rotate-key.*revoke-key"
+      "value": "(?s)exec.*run.*doctor.*approve.*dev-mode.*store.*delete.*config.*rotate-key.*revoke-key"
     },
     "expectedStderr": {
       "type": "Any"
     },
-    "expectedConfigFile": null
+    "expectedConfigFile": null,
+    "extraFiles": []
   },
   {
     "name": "unknown command exits with error",
@@ -97,7 +102,8 @@
       "type": "Contains",
       "value": "error"
     },
-    "expectedConfigFile": null
+    "expectedConfigFile": null,
+    "extraFiles": []
   },
   {
     "name": "store requires --name",
@@ -114,7 +120,8 @@
       "type": "Contains",
       "value": "--name"
     },
-    "expectedConfigFile": null
+    "expectedConfigFile": null,
+    "extraFiles": []
   },
   {
     "name": "delete requires --name",
@@ -131,7 +138,8 @@
       "type": "Contains",
       "value": "--name"
     },
-    "expectedConfigFile": null
+    "expectedConfigFile": null,
+    "extraFiles": []
   },
   {
     "name": "exec requires --token",
@@ -148,7 +156,8 @@
       "type": "Contains",
       "value": "--token"
     },
-    "expectedConfigFile": null
+    "expectedConfigFile": null,
+    "extraFiles": []
   },
   {
     "name": "approve requires --path",
@@ -165,7 +174,8 @@
       "type": "Contains",
       "value": "--path"
     },
-    "expectedConfigFile": null
+    "expectedConfigFile": null,
+    "extraFiles": []
   },
   {
     "name": "dev-mode requires --path",
@@ -182,7 +192,8 @@
       "type": "Contains",
       "value": "--path"
     },
-    "expectedConfigFile": null
+    "expectedConfigFile": null,
+    "extraFiles": []
   },
   {
     "name": "config with no subcommand exits 2",
@@ -198,7 +209,8 @@
     "expectedStderr": {
       "type": "Any"
     },
-    "expectedConfigFile": null
+    "expectedConfigFile": null,
+    "extraFiles": []
   },
   {
     "name": "store succeeds with valid secret",
@@ -217,7 +229,8 @@
     "expectedStderr": {
       "type": "Any"
     },
-    "expectedConfigFile": null
+    "expectedConfigFile": null,
+    "extraFiles": []
   },
   {
     "name": "store exits 1 when stdin is empty",
@@ -236,7 +249,8 @@
       "type": "Contains",
       "value": "No secret provided"
     },
-    "expectedConfigFile": null
+    "expectedConfigFile": null,
+    "extraFiles": []
   },
   {
     "name": "delete succeeds",
@@ -255,7 +269,8 @@
     "expectedStderr": {
       "type": "Any"
     },
-    "expectedConfigFile": null
+    "expectedConfigFile": null,
+    "extraFiles": []
   },
   {
     "name": "config init writes the 'file' backend as the zero-config default (#98)",
@@ -282,7 +297,8 @@
           }
         ]
       }
-    }
+    },
+    "extraFiles": []
   },
   {
     "name": "config show outputs valid JSON with version",
@@ -300,7 +316,8 @@
     "expectedStderr": {
       "type": "Any"
     },
-    "expectedConfigFile": null
+    "expectedConfigFile": null,
+    "extraFiles": []
   },
   {
     "name": "config show exits 1 when no config exists",
@@ -318,7 +335,8 @@
       "type": "Contains",
       "value": "Error: No config file found. Run 'vaultkeeper config init' to create one."
     },
-    "expectedConfigFile": null
+    "expectedConfigFile": null,
+    "extraFiles": []
   },
   {
     "name": "config init exits 1 when config already exists",
@@ -336,7 +354,8 @@
       "type": "Contains",
       "value": "Error: Config already exists at"
     },
-    "expectedConfigFile": null
+    "expectedConfigFile": null,
+    "extraFiles": []
   },
   {
     "name": "doctor produces output",
@@ -352,7 +371,8 @@
     "expectedStderr": {
       "type": "Any"
     },
-    "expectedConfigFile": null
+    "expectedConfigFile": null,
+    "extraFiles": []
   },
   {
     "name": "rotate-key succeeds with valid config",
@@ -369,7 +389,8 @@
     "expectedStderr": {
       "type": "Any"
     },
-    "expectedConfigFile": null
+    "expectedConfigFile": null,
+    "extraFiles": []
   },
   {
     "name": "revoke-key succeeds with valid config",
@@ -386,7 +407,8 @@
     "expectedStderr": {
       "type": "Any"
     },
-    "expectedConfigFile": null
+    "expectedConfigFile": null,
+    "extraFiles": []
   },
   {
     "name": "approve succeeds for existing file",
@@ -405,7 +427,8 @@
     "expectedStderr": {
       "type": "Any"
     },
-    "expectedConfigFile": null
+    "expectedConfigFile": null,
+    "extraFiles": []
   },
   {
     "name": "dev-mode enable succeeds",
@@ -425,7 +448,8 @@
     "expectedStderr": {
       "type": "Any"
     },
-    "expectedConfigFile": null
+    "expectedConfigFile": null,
+    "extraFiles": []
   },
   {
     "name": "dev-mode disable succeeds",
@@ -444,7 +468,8 @@
     "expectedStderr": {
       "type": "Any"
     },
-    "expectedConfigFile": null
+    "expectedConfigFile": null,
+    "extraFiles": []
   },
   {
     "name": "backend capabilities exits 0 and reports the file backend as not presence-capable",
@@ -462,7 +487,8 @@
     "expectedStderr": {
       "type": "Any"
     },
-    "expectedConfigFile": null
+    "expectedConfigFile": null,
+    "extraFiles": []
   },
   {
     "name": "backend capabilities --json emits a row with type, displayName, presencePerUse",
@@ -487,7 +513,8 @@
     "expectedStderr": {
       "type": "Any"
     },
-    "expectedConfigFile": null
+    "expectedConfigFile": null,
+    "extraFiles": []
   },
   {
     "name": "backend with no subcommand exits 2",
@@ -503,7 +530,8 @@
     "expectedStderr": {
       "type": "Any"
     },
-    "expectedConfigFile": null
+    "expectedConfigFile": null,
+    "extraFiles": []
   },
   {
     "name": "run requires --profile or --profile-file",
@@ -522,7 +550,8 @@
       "type": "Contains",
       "value": "--profile"
     },
-    "expectedConfigFile": null
+    "expectedConfigFile": null,
+    "extraFiles": []
   },
   {
     "name": "run rejects --profile and --profile-file together",
@@ -544,7 +573,8 @@
     "expectedStderr": {
       "type": "Any"
     },
-    "expectedConfigFile": null
+    "expectedConfigFile": null,
+    "extraFiles": []
   },
   {
     "name": "run rejects a --set value with no '='",
@@ -567,10 +597,11 @@
       "type": "Contains",
       "value": "--set"
     },
-    "expectedConfigFile": null
+    "expectedConfigFile": null,
+    "extraFiles": []
   },
   {
-    "name": "run exits 1 with no command specified for a nonexistent profile",
+    "name": "run exits 1 with 'No profile found' for a nonexistent profile",
     "command": [
       "run",
       "--profile",
@@ -586,10 +617,90 @@
       "type": "Contains",
       "value": "No profile found"
     },
-    "expectedConfigFile": null
+    "expectedConfigFile": null,
+    "extraFiles": []
   },
   {
-    "name": "run --help documents the exact --require-presence-at-mint flag name",
+    "name": "run exits 1 with 'No command specified' for a valid profile and no command",
+    "command": [
+      "run",
+      "--profile",
+      "empty-profile"
+    ],
+    "stdin": null,
+    "needsConfig": true,
+    "expectedExitCode": 1,
+    "expectedStdout": {
+      "type": "Any"
+    },
+    "expectedStderr": {
+      "type": "Contains",
+      "value": "No command specified"
+    },
+    "expectedConfigFile": null,
+    "extraFiles": [
+      [
+        "profiles/empty-profile.json",
+        "{ \"version\": 1, \"name\": \"empty-profile\", \"entries\": {} }"
+      ]
+    ]
+  },
+  {
+    "name": "run --dry-run against a valid profile prints the plan and exits 0",
+    "command": [
+      "run",
+      "--profile",
+      "empty-profile",
+      "--dry-run"
+    ],
+    "stdin": null,
+    "needsConfig": true,
+    "expectedExitCode": 0,
+    "expectedStdout": {
+      "type": "Contains",
+      "value": "plan only"
+    },
+    "expectedStderr": {
+      "type": "Any"
+    },
+    "expectedConfigFile": null,
+    "extraFiles": [
+      [
+        "profiles/empty-profile.json",
+        "{ \"version\": 1, \"name\": \"empty-profile\", \"entries\": {} }"
+      ]
+    ]
+  },
+  {
+    "name": "run refuses a real launch when --require-presence-at-issuance is set",
+    "command": [
+      "run",
+      "--profile",
+      "empty-profile",
+      "--require-presence-at-issuance",
+      "--",
+      "true"
+    ],
+    "stdin": null,
+    "needsConfig": true,
+    "expectedExitCode": 1,
+    "expectedStdout": {
+      "type": "Any"
+    },
+    "expectedStderr": {
+      "type": "Contains",
+      "value": "not yet enforced"
+    },
+    "expectedConfigFile": null,
+    "extraFiles": [
+      [
+        "profiles/empty-profile.json",
+        "{ \"version\": 1, \"name\": \"empty-profile\", \"entries\": {} }"
+      ]
+    ]
+  },
+  {
+    "name": "run --help documents the exact --require-presence-at-issuance flag name",
     "command": [
       "run",
       "--help"
@@ -599,11 +710,12 @@
     "expectedExitCode": 0,
     "expectedStdout": {
       "type": "Contains",
-      "value": "--require-presence-at-mint"
+      "value": "--require-presence-at-issuance"
     },
     "expectedStderr": {
       "type": "Any"
     },
-    "expectedConfigFile": null
+    "expectedConfigFile": null,
+    "extraFiles": []
   }
 ]

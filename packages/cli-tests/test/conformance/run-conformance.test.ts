@@ -33,6 +33,8 @@ interface ConformanceCase {
   expectedStdout: OutputMatcher
   expectedStderr: OutputMatcher
   expectedConfigFile: OutputMatcher | null
+  /** [path relative to the config dir, content] pairs, written before running. */
+  extraFiles: [string, string][]
 }
 
 // ─── Load cases ──────────────────────────────────────────────────
@@ -155,6 +157,12 @@ async function runCase(testCase: ConformanceCase): Promise<RunResult> {
       await fs.writeFile(configPath, DEFAULT_CONFIG + '\n', {
         mode: 0o600,
       })
+    }
+
+    for (const [relPath, content] of testCase.extraFiles) {
+      const filePath = path.join(configDir, relPath)
+      await fs.mkdir(path.dirname(filePath), { recursive: true })
+      await fs.writeFile(filePath, content)
     }
 
     const { stdout, stderr, exitCode } = await new Promise<Omit<RunResult, 'configFileContent'>>(

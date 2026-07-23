@@ -46,7 +46,7 @@ enum Commands {
         command: Vec<String>,
     },
     /// Resolve a profile and launch a command with the resolved environment
-    /// (full stdio and signal transparency — see the `run` module docs).
+    /// (full stdio and signal transparency).
     ///
     /// A distinct verb from `exec`: `exec --token <jwe> -- cmd` is token
     /// *redemption*; `run --profile <name> -- cmd` is environment
@@ -67,11 +67,12 @@ enum Commands {
         #[arg(long)]
         dry_run: bool,
         /// Fail unless every minted lease entry proved fresh human presence
-        /// at session establishment (distinct from
-        /// `--require-presence-per-use`, which forces a fresh action per
-        /// operation).
+        /// at issuance (distinct from `--require-presence-per-use`, which
+        /// forces a fresh action per operation). Not yet enforced: a real
+        /// (non-dry-run) invocation with this flag set refuses rather than
+        /// proceeding without the guarantee.
         #[arg(long)]
-        require_presence_at_mint: bool,
+        require_presence_at_issuance: bool,
         /// Command to launch, with the resolved environment
         #[arg(trailing_var_arg = true)]
         command: Vec<String>,
@@ -250,15 +251,17 @@ async fn main() {
                 profile_file,
                 set,
                 dry_run,
-                require_presence_at_mint,
+                require_presence_at_issuance,
                 command,
             } => {
                 cmd_run(
-                    profile,
-                    profile_file,
+                    RunSource::Profile {
+                        profile,
+                        profile_file,
+                    },
                     set,
                     dry_run,
-                    require_presence_at_mint,
+                    require_presence_at_issuance,
                     command,
                 )
                 .await
@@ -440,11 +443,42 @@ fn stderr_diag(message: &str) {
     let _ = writeln!(io::stderr(), "{message}");
 }
 
-/// `run` — resolve a profile (plus any `--set` overlay) and launch a child
-/// command with the resolved environment, with full stdio and signal
-/// transparency (issue #279). A distinct verb from `exec`: `exec` redeems an
-/// already-minted token; `run` composes an environment from a named profile
-/// and mints where needed.
+/// Write `text` to stdout without panicking on a write failure. Used only by
+/// `run --dry-run` (the one `run` invocation allowed to write to stdout —
+/// see `cmd_run`): `run --dry-run --profile x | head -1` closing the pipe
+/// early must not print a `BrokenPipe` stack trace, mirroring
+/// [`stderr_diag`]'s same non-panicking discipline for stderr.
+fn stdout_write(text: &str) {
+    use std::io::Write as _;
+    let _ = write!(io::stdout(), "{text}");
+}
+
+/// Where `run` draws its environment composition from.
+///
+/// A dedicated enum — not `--profile`/`--profile-file` hard-wired as the
+/// only entry point into [`cmd_run`] — specifically so a future
+/// mutually-exclusive `--token <JWE>` source (issue #333's planned
+/// absorption of `exec`'s token-redemption path into `run`) can slot in as
+/// a sibling variant here without reshaping this dispatch. The launch step
+/// ([`launch_and_wait`]) already only ever sees a plain
+/// [`vaultkeeper_core::ResolvedEnv`] (a `HashMap<String, String>`) and a
+/// command line — it has no dependency on `RunSource` or on profile types
+/// at all, so a new source only has to produce that same map to reuse the
+/// entire stdio/signal-forwarding launcher unchanged.
+enum RunSource {
+    /// A named profile (`--profile <NAME>`) or an explicit path to one
+    /// (`--profile-file <PATH>`) — mutually exclusive at the clap layer.
+    Profile {
+        profile: Option<String>,
+        profile_file: Option<String>,
+    },
+}
+
+/// `run` — resolve an environment (currently always [`RunSource::Profile`],
+/// plus any `--set` overlay) and launch a child command with it, with full
+/// stdio and signal transparency (issue #279). A distinct verb from `exec`:
+/// `exec` redeems an already-minted token; `run` composes an environment
+/// from a named source and mints where needed.
 ///
 /// Flag semantics, `--set` parsing/validation, and `--dry-run` rendering all
 /// live in `vaultkeeper_core::run` so a future host renders byte-identical
@@ -453,11 +487,10 @@ fn stderr_diag(message: &str) {
 /// per-host half of the contract.
 #[allow(clippy::too_many_arguments)]
 async fn cmd_run(
-    profile: Option<String>,
-    profile_file: Option<String>,
+    source: RunSource,
     set: Vec<String>,
     dry_run: bool,
-    require_presence_at_mint: bool,
+    require_presence_at_issuance: bool,
     command: Vec<String>,
 ) -> i32 {
     let host = make_host();
@@ -476,19 +509,25 @@ async fn cmd_run(
         }
     }
 
-    let path = match resolve_profile_path(&host, profile.as_deref(), profile_file) {
-        Ok(p) => p,
-        Err(e) => {
-            stderr_diag(&format!("Error: {e}"));
-            return 1;
-        }
-    };
-
-    let (loaded_profile, cfg) = match load_named_profile(&host, &path).await {
-        Ok(loaded) => loaded,
-        Err(e) => {
-            stderr_diag(&format!("Error: {e}"));
-            return 1;
+    let (loaded_profile, cfg) = match source {
+        RunSource::Profile {
+            profile,
+            profile_file,
+        } => {
+            let path = match resolve_profile_path(&host, profile.as_deref(), profile_file) {
+                Ok(p) => p,
+                Err(e) => {
+                    stderr_diag(&format!("Error: {e}"));
+                    return 1;
+                }
+            };
+            match load_named_profile(&host, &path).await {
+                Ok(loaded) => loaded,
+                Err(e) => {
+                    stderr_diag(&format!("Error: {e}"));
+                    return 1;
+                }
+            }
         }
     };
 
@@ -508,13 +547,43 @@ async fn cmd_run(
         .unwrap_or("none");
 
     if dry_run {
-        // Plan-only: never mints, never touches a backend, never launches.
-        // This is the one `run` invocation allowed to write to stdout.
-        print!(
-            "{}",
-            render_dry_run(&plan, active_backend_type, require_presence_at_mint)
-        );
+        // Plan-only: never mints, never touches a backend, never launches —
+        // so disclosing --require-presence-at-issuance's not-yet-enforced
+        // status here is safe (see render_dry_run's doc comment); a real
+        // run instead refuses outright, below.
+        stdout_write(&render_dry_run(
+            &plan,
+            active_backend_type,
+            require_presence_at_issuance,
+        ));
         return 0;
+    }
+
+    // Fail-closed, not a silent no-op: `--require-presence-at-issuance`
+    // promises every minted lease entry proved fresh human presence at
+    // issuance, but `resolve_profile` has no way to enforce that yet (it
+    // takes no `HostPlatform` to prompt with, and verifying an
+    // already-minted lease's `pres` claim doesn't apply to entries being
+    // minted right now). Proceeding anyway — silently, or with a warning —
+    // would let a caller believe the guarantee held when it didn't; refuse
+    // instead, the same posture `resolve_profile` itself already takes for
+    // a profile-level `requirePresenceAtMint` entry it can't enforce
+    // (`VaultError::MaterializeModeUnsupported`, in `resolve.rs`). Checked
+    // before any backend/key-manager initialization or resolution — this
+    // must never even attempt to mint.
+    if require_presence_at_issuance {
+        stderr_diag(&format!(
+            "Error: {}",
+            vaultkeeper_core::VaultError::MaterializeModeUnsupported {
+                message: "--require-presence-at-issuance is not yet enforced by `run` \
+                          (verifying every minted lease entry's `pres` claim is not yet wired \
+                          into resolve_profile) — refusing rather than proceeding without the \
+                          guarantee this flag promises."
+                    .to_string(),
+                mode: "run-require-presence-at-issuance".to_string(),
+            }
+        ));
+        return 1;
     }
 
     if command.is_empty() {
@@ -579,13 +648,40 @@ async fn cmd_run(
 /// child's real exit code, or `128 + N` if it was killed by signal `N`
 /// (issue #279 AC4).
 ///
-/// `env` is zeroized in place immediately after `spawn()` returns: the
-/// values have already been copied into the child's own environment at that
-/// point (a `fork`+`exec` child's environment is independent of the
-/// parent's), so this process's copy of every resolved secret/lease value is
-/// scrubbed from memory as soon as it is no longer needed here.
+/// On Unix, the SIGINT/SIGTERM signal streams are installed **before**
+/// `spawn()` (see [`SignalGuard::install`]) — installing them only after
+/// spawn, inside the wait loop, would leave a window between spawn and
+/// registration where a signal delivered to this process hits the default
+/// disposition (terminate) instead of being forwarded, killing the wrapper
+/// and orphaning the just-spawned child. Closing that window is what makes
+/// AC3 ("the wrapper must never exit before the child does") hold for a
+/// signal that arrives immediately after launch, not just one that arrives
+/// once the wait loop is already running.
+///
+/// `env`'s own `HashMap<String, String>` storage is zeroized in place
+/// immediately after `spawn()` returns. This does **not** scrub every
+/// in-process copy of the resolved values: `cmd.envs(...)` below has
+/// already copied each one into `tokio::process::Command`'s internal
+/// `OsString` env storage, which `cmd` (and therefore that copy) outlives
+/// this function — it is dropped, un-zeroized, only once the child exits
+/// and `cmd` goes out of scope. Neither `tokio::process::Command` nor
+/// `std::ffi::OsString` expose a way to scrub that storage. This zeroize is
+/// therefore defense-in-depth against the risk of an accidental *second*
+/// reference to `env`'s own buffer sticking around after `spawn()` (e.g. a
+/// future refactor holding onto it, a panic unwind path, or a debug
+/// print) — not a claim that every copy of the plaintext is scrubbed from
+/// this process's heap for the child's lifetime.
 async fn launch_and_wait(command: &[String], mut env: vaultkeeper_core::ResolvedEnv) -> i32 {
     use std::process::Stdio;
+
+    #[cfg(unix)]
+    let signal_guard = match SignalGuard::install() {
+        Ok(g) => g,
+        Err(e) => {
+            stderr_diag(&format!("Error: Failed to install signal handlers: {e}"));
+            return 1;
+        }
+    };
 
     let mut cmd = tokio::process::Command::new(&command[0]);
     cmd.args(&command[1..]);
@@ -607,14 +703,19 @@ async fn launch_and_wait(command: &[String], mut env: vaultkeeper_core::Resolved
         }
     };
 
-    // The resolved values are now live only in the child's own environment
-    // (copied at exec time) and in `env` here — zeroize this copy right
-    // away rather than waiting for the whole function to return.
+    // See the doc comment above: this scrubs `env`'s own buffer, not the
+    // separate copy `cmd.envs(...)` already made.
     for value in env.values_mut() {
         value.zeroize();
     }
 
-    let status = match wait_forwarding_signals(child).await {
+    let status = match wait_forwarding_signals(
+        child,
+        #[cfg(unix)]
+        signal_guard,
+    )
+    .await
+    {
         Ok(s) => s,
         Err(e) => {
             stderr_diag(&format!("Error: Failed to wait for command: {e}"));
@@ -625,6 +726,28 @@ async fn launch_and_wait(command: &[String], mut env: vaultkeeper_core::Resolved
     exit_code_for_status(status)
 }
 
+/// The SIGINT/SIGTERM signal streams, installed once and threaded into
+/// [`wait_forwarding_signals`]. A distinct type (not inlined into that
+/// function) specifically so [`launch_and_wait`] can install it **before**
+/// `cmd.spawn()` — see that function's doc comment for why the ordering
+/// matters (issue #279 AC3).
+#[cfg(unix)]
+struct SignalGuard {
+    sigint: tokio::signal::unix::Signal,
+    sigterm: tokio::signal::unix::Signal,
+}
+
+#[cfg(unix)]
+impl SignalGuard {
+    fn install() -> std::io::Result<Self> {
+        use tokio::signal::unix::{SignalKind, signal};
+        Ok(Self {
+            sigint: signal(SignalKind::interrupt())?,
+            sigterm: signal(SignalKind::terminate())?,
+        })
+    }
+}
+
 /// Wait for `child` to exit, forwarding SIGINT/SIGTERM sent to *this*
 /// process on to the child and then continuing to wait — the wrapper must
 /// never exit before the child does, or it orphans it (issue #279 AC3).
@@ -632,21 +755,22 @@ async fn launch_and_wait(command: &[String], mut env: vaultkeeper_core::Resolved
 /// MCP clients typically terminate the wrapper directly (not via a
 /// controlling tty's process-group signal delivery), which is exactly the
 /// case this handles: a signal delivered to the wrapper's own pid must
-/// still reach the child.
+/// still reach the child. (When the wrapper and child *do* share a
+/// controlling tty's foreground process group, a `Ctrl+C` there delivers
+/// SIGINT to the whole group by the kernel — including the child directly
+/// — and this forwards the same signal again; a benign double-delivery for
+/// well-behaved signal handling, not a correctness issue this function
+/// needs to suppress.)
 #[cfg(unix)]
 async fn wait_forwarding_signals(
     mut child: tokio::process::Child,
+    mut guard: SignalGuard,
 ) -> std::io::Result<std::process::ExitStatus> {
-    use tokio::signal::unix::{SignalKind, signal};
-
-    let mut sigint = signal(SignalKind::interrupt())?;
-    let mut sigterm = signal(SignalKind::terminate())?;
-
     loop {
         tokio::select! {
             status = child.wait() => return status,
-            _ = sigint.recv() => forward_signal(&child, libc::SIGINT),
-            _ = sigterm.recv() => forward_signal(&child, libc::SIGTERM),
+            _ = guard.sigint.recv() => forward_signal(&child, libc::SIGINT),
+            _ = guard.sigterm.recv() => forward_signal(&child, libc::SIGTERM),
         }
     }
 }

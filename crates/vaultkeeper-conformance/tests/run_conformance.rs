@@ -52,6 +52,16 @@ fn run_case(case: &ConformanceCase, bin: &std::path::Path) -> Result<(), String>
             .map_err(|e| format!("failed to write config: {e}"))?;
     }
 
+    for (rel_path, content) in &case.extra_files {
+        let path = dir.path().join(rel_path);
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)
+                .map_err(|e| format!("failed to create dir for extra file {rel_path}: {e}"))?;
+        }
+        fs::write(&path, content)
+            .map_err(|e| format!("failed to write extra file {rel_path}: {e}"))?;
+    }
+
     // Substitute __SELF_BINARY__ with the actual vaultkeeper binary path
     let args: Vec<String> = case
         .command

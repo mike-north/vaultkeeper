@@ -135,10 +135,18 @@ fn ac2_stdout_contains_exactly_the_childs_bytes_and_the_degradation_notice_is_st
     let dir = run_test_env(&single_secret_profile());
     store_secret(&dir, "greeting", "the-real-secret-value");
 
-    // A known, exact byte sequence the child writes — deliberately including
-    // bytes a naive implementation might mangle (embedded newlines, no
-    // trailing newline).
-    let known_bytes = b"KNOWN-BYTES-\x01\x02-NO-TRAILING-NEWLINE";
+    // A known, exact byte sequence the child writes — including an embedded
+    // newline and a non-UTF8 byte (0xff), the cases a naive
+    // buffering/line-oriented implementation might mangle. Written to a
+    // file and read back with `cat`, rather than round-tripped through a
+    // shell command string: shell-quoting a `String::from_utf8_lossy`
+    // rendering can never actually carry a non-UTF8 byte (the lossy
+    // conversion would have already replaced it with U+FFFD before it
+    // reached the shell), which would silently weaken this to a UTF8-only
+    // check despite the byte-exactness claim.
+    let known_bytes: &[u8] = b"KNOWN-BYTES-\x01\x02\n\xff-NO-TRAILING-NEWLINE";
+    let known_bytes_path = dir.path().join("ac2-known-bytes.bin");
+    fs::write(&known_bytes_path, known_bytes).unwrap();
 
     let output = Command::new(vk_bin())
         .env("VAULTKEEPER_CONFIG_DIR", dir.path())
@@ -147,9 +155,8 @@ fn ac2_stdout_contains_exactly_the_childs_bytes_and_the_degradation_notice_is_st
             "--profile",
             "uat",
             "--",
-            "sh",
-            "-c",
-            &format!("printf '%s' '{}'", String::from_utf8_lossy(known_bytes)),
+            "cat",
+            known_bytes_path.to_str().unwrap(),
         ])
         .stdin(Stdio::null())
         .output()
@@ -201,17 +208,24 @@ fn wait_for_file(path: &std::path::Path, timeout: Duration) -> bool {
 fn ac3_sigterm_reaches_the_child_and_the_wrapper_outlives_it() {
     let dir = run_test_env(&empty_profile());
     let marker = dir.path().join("terminated.marker");
+    let ready = dir.path().join("trap_term.ready");
 
-    // A child that traps SIGTERM, records that it was reached, and exits —
-    // proving both halves of AC3: the signal reached the child (the marker
-    // file), and the wrapper did not exit before the child did (asserted
-    // below via the wrapper's own successful, non-timed-out wait).
+    // A child that installs its SIGTERM trap, signals readiness (so the
+    // test can poll for it instead of relying on a fixed sleep — the
+    // wrapper's own signal handlers are installed before `spawn()`, per
+    // `launch_and_wait`'s doc comment, so this ready-marker is the only
+    // remaining race to close), then traps SIGTERM, records that it was
+    // reached, and exits — proving both halves of AC3: the signal reached
+    // the child (the marker file), and the wrapper did not exit before the
+    // child did (asserted below via the wrapper's own successful,
+    // non-timed-out wait).
     let child_script = dir.path().join("trap_term.sh");
     fs::write(
         &child_script,
         format!(
-            "#!/bin/sh\ntrap 'echo reached > {}; exit 0' TERM\nsleep 30 &\nwait $!\n",
-            marker.display()
+            "#!/bin/sh\ntrap 'echo reached > {}; exit 0' TERM\necho ready > {}\nsleep 30 &\nwait $!\n",
+            marker.display(),
+            ready.display()
         ),
     )
     .unwrap();
@@ -236,9 +250,10 @@ fn ac3_sigterm_reaches_the_child_and_the_wrapper_outlives_it() {
         .spawn()
         .expect("failed to spawn run");
 
-    // Give the wrapper time to actually spawn the child and install its
-    // signal handlers before sending SIGTERM.
-    std::thread::sleep(Duration::from_millis(300));
+    assert!(
+        wait_for_file(&ready, Duration::from_secs(5)),
+        "the child never signaled readiness (its SIGTERM trap may not be installed)"
+    );
     send_signal(wrapper.id(), "-TERM");
 
     let status = wrapper.wait().expect("wrapper never exited");
@@ -258,13 +273,15 @@ fn ac3_sigterm_reaches_the_child_and_the_wrapper_outlives_it() {
 fn ac3_sigint_reaches_the_child_and_the_wrapper_outlives_it() {
     let dir = run_test_env(&empty_profile());
     let marker = dir.path().join("interrupted.marker");
+    let ready = dir.path().join("trap_int.ready");
 
     let child_script = dir.path().join("trap_int.sh");
     fs::write(
         &child_script,
         format!(
-            "#!/bin/sh\ntrap 'echo reached > {}; exit 0' INT\nsleep 30 &\nwait $!\n",
-            marker.display()
+            "#!/bin/sh\ntrap 'echo reached > {}; exit 0' INT\necho ready > {}\nsleep 30 &\nwait $!\n",
+            marker.display(),
+            ready.display()
         ),
     )
     .unwrap();
@@ -289,7 +306,10 @@ fn ac3_sigint_reaches_the_child_and_the_wrapper_outlives_it() {
         .spawn()
         .expect("failed to spawn run");
 
-    std::thread::sleep(Duration::from_millis(300));
+    assert!(
+        wait_for_file(&ready, Duration::from_secs(5)),
+        "the child never signaled readiness (its SIGINT trap may not be installed)"
+    );
     send_signal(wrapper.id(), "-INT");
 
     let status = wrapper.wait().expect("wrapper never exited");
@@ -318,19 +338,49 @@ fn ac4_child_exit_code_is_propagated() {
 #[test]
 fn ac4_a_signal_killed_child_yields_128_plus_n() {
     let dir = run_test_env(&empty_profile());
-    // No trap — the default action for SIGTERM is to terminate the process,
-    // so `sleep 30` sent a real SIGTERM below dies by signal, not by its own
-    // `exit()`.
+    let ready = dir.path().join("about_to_sleep.ready");
+
+    // No trap — the default action for SIGTERM is to terminate the
+    // process, so a real SIGTERM sent below dies by signal, not by its own
+    // `exit()`. A bare `sleep 30` can't signal its own readiness, so this
+    // wraps it: touch a ready marker, then `exec` into `sleep 30` in place
+    // (same pid, so the default SIGTERM disposition still applies). Polling
+    // for that marker (rather than a fixed sleep) closes the *entire*
+    // pre-spawn window — host setup, key-manager init, profile
+    // resolution — not just the spawn-to-exec gap; under parallel test-suite
+    // load that whole window can exceed a small fixed sleep, which is what
+    // made an earlier version of this test flaky (see the PR history).
+    let child_script = dir.path().join("about_to_sleep.sh");
+    fs::write(
+        &child_script,
+        format!("#!/bin/sh\ntouch {}\nexec sleep 30\n", ready.display()),
+    )
+    .unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&child_script, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
     let mut wrapper = Command::new(vk_bin())
         .env("VAULTKEEPER_CONFIG_DIR", dir.path())
-        .args(["run", "--profile", "uat", "--", "sleep", "30"])
+        .args([
+            "run",
+            "--profile",
+            "uat",
+            "--",
+            child_script.to_str().unwrap(),
+        ])
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()
         .expect("failed to spawn run");
 
-    std::thread::sleep(Duration::from_millis(300));
+    assert!(
+        wait_for_file(&ready, Duration::from_secs(5)),
+        "the child never signaled readiness before entering sleep"
+    );
     send_signal(wrapper.id(), "-TERM");
 
     let status = wrapper.wait().expect("wrapper never exited");
@@ -342,8 +392,17 @@ fn ac4_a_signal_killed_child_yields_128_plus_n() {
     );
 }
 
+/// A child closing its OWN stdout write end (`exec 1>&-`) and writing
+/// nothing more can never itself produce an EPIPE/broken-pipe condition —
+/// that only arises when the *reader* closes the read end while a writer
+/// keeps writing. What this proves instead: the wrapper treats an early
+/// stdout close as an ordinary part of the child's lifecycle (it waits for
+/// the child's real exit, no special-casing, no error). The genuinely
+/// EPIPE-driving scenario — the read end closing out from under an active
+/// writer — is exercised separately below by
+/// `ac4_a_broken_pipe_from_the_downstream_reader_does_not_panic_or_crash_the_wrapper`.
 #[test]
-fn ac4_child_closing_stdout_early_still_exits_cleanly_with_no_epipe_trace() {
+fn ac4_child_closing_its_own_stdout_early_is_not_treated_as_an_error() {
     let dir = run_test_env(&empty_profile());
     let output = Command::new(vk_bin())
         .env("VAULTKEEPER_CONFIG_DIR", dir.path())
@@ -371,6 +430,64 @@ fn ac4_child_closing_stdout_early_still_exits_cleanly_with_no_epipe_trace() {
     assert!(
         !stderr.to_lowercase().contains("epipe"),
         "EPIPE must never surface as an error here, got: {stderr}"
+    );
+}
+
+/// The genuine EPIPE-driving scenario: the downstream consumer of `run`'s
+/// stdout closes its read end while the child is still actively writing —
+/// the classic `yes | head -1` trigger. Because stdout is inherited (never
+/// piped/captured by the wrapper itself — see the module docs), `yes`
+/// writes directly to the shared fd and is the one to receive `SIGPIPE`
+/// once the reader disappears; the wrapper's job is only to propagate that
+/// as an ordinary signal-death exit, never to panic or print a stack trace
+/// on its own stderr.
+#[test]
+fn ac4_a_broken_pipe_from_the_downstream_reader_does_not_panic_or_crash_the_wrapper() {
+    let dir = run_test_env(&empty_profile());
+    let mut child = Command::new(vk_bin())
+        .env("VAULTKEEPER_CONFIG_DIR", dir.path())
+        .args(["run", "--profile", "uat", "--", "yes"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("failed to spawn run");
+
+    // Read a handful of bytes to prove the pipe is actually flowing, then
+    // drop the reader while `yes` is still writing.
+    let mut stdout = child.stdout.take().unwrap();
+    let mut buf = [0u8; 16];
+    stdout
+        .read_exact(&mut buf)
+        .expect("failed to read from run's stdout");
+    drop(stdout);
+
+    // Drain stderr to EOF (blocks until the process tree closes it, i.e.
+    // until exit) so it can be inspected below.
+    let mut stderr = String::new();
+    child
+        .stderr
+        .take()
+        .unwrap()
+        .read_to_string(&mut stderr)
+        .ok();
+
+    let status = child.wait().expect("run did not exit");
+
+    assert_eq!(
+        status.code(),
+        Some(128 + 13),
+        "`yes` dies by SIGPIPE (13) once its downstream reader disappears — \
+         the wrapper must propagate that as an ordinary signal-death exit \
+         (128+13=141), got stderr: {stderr}"
+    );
+    assert!(
+        !stderr.to_lowercase().contains("panic"),
+        "no panic/stack trace on a genuine broken-pipe condition, got: {stderr}"
+    );
+    assert!(
+        !stderr.to_lowercase().contains("backtrace"),
+        "no backtrace dump on a genuine broken-pipe condition, got: {stderr}"
     );
 }
 
@@ -503,6 +620,44 @@ fn run_rejects_profile_and_profile_file_together() {
     assert!(!output.status.success());
 }
 
+/// `--profile-file <PATH>` is only ever exercised negatively elsewhere in
+/// this file (rejected when combined with `--profile`) — this drives the
+/// actual happy path: a profile loaded from an explicit path outside the
+/// default `profiles/` directory.
+#[test]
+fn run_profile_file_loads_a_profile_from_an_explicit_path() {
+    let dir = run_test_env(&empty_profile()); // writes profiles/uat.json, unused here
+    let explicit_path = dir.path().join("elsewhere.json");
+    fs::write(
+        &explicit_path,
+        serde_json::to_string_pretty(&serde_json::json!({
+            "version": 1,
+            "name": "elsewhere",
+            "entries": {
+                "GREETING": { "secret": "greeting", "materialize": "secret" }
+            }
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+
+    let output = Command::new(vk_bin())
+        .env("VAULTKEEPER_CONFIG_DIR", dir.path())
+        .args([
+            "run",
+            "--profile-file",
+            explicit_path.to_str().unwrap(),
+            "--dry-run",
+        ])
+        .stdin(Stdio::null())
+        .output()
+        .expect("failed to run");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("GREETING"));
+}
+
 #[test]
 fn run_rejects_a_malformed_set_flag() {
     let dir = run_test_env(&empty_profile());
@@ -518,7 +673,7 @@ fn run_rejects_a_malformed_set_flag() {
 }
 
 #[test]
-fn run_help_documents_the_exact_require_presence_at_mint_flag_name() {
+fn run_help_documents_the_exact_require_presence_at_issuance_flag_name() {
     let dir = run_test_env(&empty_profile());
     let mut child = Command::new(vk_bin())
         .env("VAULTKEEPER_CONFIG_DIR", dir.path())
@@ -537,11 +692,80 @@ fn run_help_documents_the_exact_require_presence_at_mint_flag_name() {
     child.wait().unwrap();
 
     assert!(
-        stdout.contains("--require-presence-at-mint"),
+        stdout.contains("--require-presence-at-issuance"),
         "help text must use the exact scope-suffixed flag name, got: {stdout}"
     );
     assert!(
         !stdout.contains("--require-presence <"),
         "must never be spelled as the bare/per-use --require-presence form"
     );
+    assert!(
+        !stdout.contains("--require-presence-at-mint"),
+        "the retired -at-mint spelling must not reappear, got: {stdout}"
+    );
+}
+
+/// The security-relevant refusal path (owner-adjudicated correction, issue
+/// #279): `--require-presence-at-issuance` is not yet enforceable by `run`
+/// (no plumbing exists to verify a minted lease entry's `pres` claim at
+/// issuance time), so a real, non-dry-run invocation with the flag set must
+/// refuse outright — never proceed silently, and never merely warn and
+/// proceed, since that would let a caller believe an unproven guarantee
+/// held. Nothing may reach stdout on this path — a refusal is not
+/// "success"'s stdout, it is a diagnostic.
+#[test]
+fn run_refuses_a_real_launch_when_require_presence_at_issuance_is_set() {
+    let dir = run_test_env(&empty_profile());
+    let output = Command::new(vk_bin())
+        .env("VAULTKEEPER_CONFIG_DIR", dir.path())
+        .args([
+            "run",
+            "--profile",
+            "uat",
+            "--require-presence-at-issuance",
+            "--",
+            "true",
+        ])
+        .stdin(Stdio::null())
+        .output()
+        .expect("failed to run");
+
+    assert!(
+        !output.status.success(),
+        "must refuse, not silently proceed, when the flag is set on a real run"
+    );
+    assert!(
+        output.stdout.is_empty(),
+        "a refusal must never write to stdout"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("--require-presence-at-issuance") && stderr.contains("not yet enforced"),
+        "the refusal must name the flag and explain why, got: {stderr}"
+    );
+}
+
+/// `--dry-run` never launches or mints, so it is safe to disclose the same
+/// not-yet-enforced status without refusing — but it must make clear a real
+/// run would refuse, not imply the flag is silently accepted.
+#[test]
+fn run_dry_run_discloses_require_presence_at_issuance_would_refuse_a_real_run() {
+    let dir = run_test_env(&empty_profile());
+    let output = Command::new(vk_bin())
+        .env("VAULTKEEPER_CONFIG_DIR", dir.path())
+        .args([
+            "run",
+            "--profile",
+            "uat",
+            "--require-presence-at-issuance",
+            "--dry-run",
+        ])
+        .stdin(Stdio::null())
+        .output()
+        .expect("failed to run");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("--require-presence-at-issuance: true"));
+    assert!(stdout.contains("REFUSES"));
 }
