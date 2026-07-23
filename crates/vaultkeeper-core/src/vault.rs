@@ -961,20 +961,20 @@ impl VaultKeeper {
         }
     }
 
-    /// Shared decrypt + key-lookup + rotation-response logic for
-    /// [`VaultKeeper::authorize`] and [`VaultKeeper::redeem_signing_lease`]:
-    /// resolves the JWE's `kid` header against the current or a still-in-grace
-    /// previous key, decrypts it, and builds the [`VaultResponse`] carrying a
-    /// re-encrypted `rotated_jwt` when the token was decrypted with a
-    /// previous key. Neither claims validation nor handle-table accounting
-    /// happens here — both call sites need distinct validation (secret vs.
-    /// signing-lease shape) before touching the single accounting authority
-    /// ([`HandleTable`]), so this only covers the decrypt step every
-    /// redemption path shares.
-    fn decrypt_and_prepare_response(
-        &mut self,
-        jwe: &str,
-    ) -> Result<(VaultClaims, VaultResponse), VaultError> {
+    /// Shared decrypt + key-lookup logic for [`VaultKeeper::authorize`] and
+    /// [`VaultKeeper::redeem_signing_lease`]: resolves the JWE's `kid` header
+    /// against the current or a still-in-grace previous key and decrypts it.
+    /// Returns the claims together with whether the decrypting key was
+    /// current — callers pass that flag to [`VaultKeeper::prepare_response`]
+    /// *after* their own validation (kind check, `validate_claims`,
+    /// revocation, etc.) succeeds, so an invalid token decrypted during a
+    /// previous key's grace period never triggers the re-encryption that
+    /// `prepare_response` performs. Neither claims validation nor
+    /// handle-table accounting happens here — both call sites need distinct
+    /// validation (secret vs. signing-lease shape) before touching the
+    /// single accounting authority ([`HandleTable`]), so this only covers
+    /// the decrypt step every redemption path shares.
+    fn decrypt_claims(&mut self, jwe: &str) -> Result<(VaultClaims, bool), VaultError> {
         let kid = extract_kid(jwe)?;
 
         let (key, is_current) = match &kid {
@@ -993,6 +993,24 @@ impl VaultKeeper {
 
         let claims = decrypt_token(&key.key, jwe)?;
 
+        Ok((claims, is_current))
+    }
+
+    /// Build the [`VaultResponse`] for a redemption whose validation already
+    /// succeeded — call only after the caller's own claims validation (kind
+    /// check, `validate_claims`, revocation, etc.) has passed for `claims`.
+    /// Carries a re-encrypted `rotated_jwt` when `is_current` is `false`
+    /// (the token was decrypted with a still-in-grace previous key, per
+    /// [`VaultKeeper::decrypt_claims`]); `None` otherwise. Deferring this
+    /// until after validation means an expired/exhausted/revoked/wrong-kind
+    /// token decrypted during a previous key's grace period never pays for
+    /// a re-encryption whose result would just be discarded on the `Err`
+    /// return.
+    fn prepare_response(
+        &mut self,
+        claims: &VaultClaims,
+        is_current: bool,
+    ) -> Result<VaultResponse, VaultError> {
         let key_status = if is_current {
             KeyStatus::Current
         } else {
@@ -1009,7 +1027,7 @@ impl VaultKeeper {
             let current_key = self.key_manager.get_current_key()?;
             let rotated = create_token(
                 &current_key.key,
-                &claims,
+                claims,
                 &CreateTokenOptions {
                     kid: Some(current_key.id.clone()),
                 },
@@ -1017,7 +1035,7 @@ impl VaultKeeper {
             response.rotated_jwt = Some(rotated);
         }
 
-        Ok((claims, response))
+        Ok(response)
     }
 
     /// Decrypt a JWE token, validate its claims, and return an opaque
@@ -1044,7 +1062,7 @@ impl VaultKeeper {
         &mut self,
         jwe: &str,
     ) -> Result<(HandleId, VaultClaims, VaultResponse), VaultError> {
-        let (claims, response) = self.decrypt_and_prepare_response(jwe)?;
+        let (claims, is_current) = self.decrypt_claims(jwe)?;
 
         if claims.kty == Some(ClaimsKind::SigningKey) {
             return Err(wrong_claims_kind_error("secret token", "signing-key lease"));
@@ -1052,6 +1070,8 @@ impl VaultKeeper {
 
         let current_usage = self.handle_table.current_usage(&claims.jti);
         validate_claims(&claims, current_usage)?;
+
+        let response = self.prepare_response(&claims, is_current)?;
 
         // Increment usage count
         let new_usage = self.handle_table.record_usage(&claims.jti);
@@ -1175,7 +1195,7 @@ impl VaultKeeper {
         host: &dyn HostPlatform,
         jwe: &str,
     ) -> Result<(HandleId, SigningClaims, VaultResponse), VaultError> {
-        let (claims, response) = self.decrypt_and_prepare_response(jwe)?;
+        let (claims, is_current) = self.decrypt_claims(jwe)?;
 
         if claims.kty != Some(ClaimsKind::SigningKey) {
             return Err(wrong_claims_kind_error("signing-key lease", "secret token"));
@@ -1185,6 +1205,8 @@ impl VaultKeeper {
         validate_claims(&claims, current_usage)?;
 
         self.validate_lease_revocation(host, &claims).await?;
+
+        let response = self.prepare_response(&claims, is_current)?;
 
         // Single accounting authority (AC6): the same `HandleTable` counter
         // `authorize()` increments for secret tokens, keyed on this lease's
