@@ -180,6 +180,12 @@ pub fn render_dry_run(
             out.push_str(&format!("    ttlSeconds:  {ttl}\n"));
         }
         out.push_str(&format!(
+            "    useLimit:    {}\n",
+            entry
+                .use_limit
+                .map_or_else(|| "unlimited".to_string(), |v| v.to_string())
+        ));
+        out.push_str(&format!(
             "    requirePresencePerUse: {}\n",
             entry.require_presence_per_use
         ));
@@ -373,6 +379,40 @@ mod tests {
         let rendered = render_dry_run(&plan, "file", true);
         assert!(rendered.contains("--require-presence-at-issuance: true"));
         assert!(rendered.contains("REFUSES"));
+    }
+
+    #[test]
+    fn dry_run_render_includes_use_limit_for_an_entry_that_has_one() {
+        let profile = load_profile_from_str(
+            r#"{
+                "version": 1, "name": "p",
+                "entries": {
+                    "LIMITED": { "secret": "s", "materialize": "secret", "useLimit": 3 }
+                }
+            }"#,
+            &defaults(),
+        )
+        .unwrap();
+        let plan = apply_set_overlay(profile, &[], &defaults());
+        let rendered = render_dry_run(&plan, "file", false);
+        assert!(rendered.contains("    useLimit:    3\n"));
+    }
+
+    #[test]
+    fn dry_run_render_reports_use_limit_as_unlimited_when_absent() {
+        let profile = load_profile_from_str(
+            r#"{
+                "version": 1, "name": "p",
+                "entries": {
+                    "UNLIMITED": { "secret": "s", "materialize": "secret" }
+                }
+            }"#,
+            &defaults(),
+        )
+        .unwrap();
+        let plan = apply_set_overlay(profile, &[], &defaults());
+        let rendered = render_dry_run(&plan, "file", false);
+        assert!(rendered.contains("    useLimit:    unlimited\n"));
     }
 
     #[test]

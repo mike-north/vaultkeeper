@@ -42,6 +42,25 @@ fn default_config_json() -> String {
         + "\n"
 }
 
+/// Reject any `extra_files` path that is absolute or contains a
+/// parent-directory (`..`) component, so a malicious/malformed conformance
+/// case can never write outside the case's isolated temp directory.
+fn validate_extra_file_path(rel_path: &str) -> Result<(), String> {
+    let components: Vec<_> = std::path::Path::new(rel_path).components().collect();
+    let is_safe_relative = !components.is_empty()
+        && components
+            .iter()
+            .all(|c| matches!(c, std::path::Component::Normal(_)));
+    if is_safe_relative {
+        Ok(())
+    } else {
+        Err(format!(
+            "extra_files path {rel_path:?} must be relative and contain no parent-directory \
+             (`..`) components"
+        ))
+    }
+}
+
 /// Run a single conformance case and return a detailed error message on failure.
 fn run_case(case: &ConformanceCase, bin: &std::path::Path) -> Result<(), String> {
     let dir = TempDir::new().map_err(|e| format!("failed to create temp dir: {e}"))?;
@@ -53,6 +72,8 @@ fn run_case(case: &ConformanceCase, bin: &std::path::Path) -> Result<(), String>
     }
 
     for (rel_path, content) in &case.extra_files {
+        validate_extra_file_path(rel_path).map_err(|e| format!("case '{}': {e}", case.name))?;
+
         let path = dir.path().join(rel_path);
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)
@@ -169,6 +190,36 @@ fn check_output(
             stderr.chars().take(300).collect::<String>(),
             exit_code
         ))
+    }
+}
+
+#[cfg(test)]
+mod extra_file_path_validation_tests {
+    use super::validate_extra_file_path;
+
+    #[test]
+    fn accepts_a_plain_relative_path() {
+        assert!(validate_extra_file_path("profiles/empty-profile.json").is_ok());
+    }
+
+    #[test]
+    fn rejects_an_absolute_path() {
+        assert!(validate_extra_file_path("/etc/passwd").is_err());
+    }
+
+    #[test]
+    fn rejects_a_parent_directory_traversal() {
+        assert!(validate_extra_file_path("../../etc/passwd").is_err());
+    }
+
+    #[test]
+    fn rejects_a_parent_directory_component_in_the_middle_of_the_path() {
+        assert!(validate_extra_file_path("profiles/../../escape.json").is_err());
+    }
+
+    #[test]
+    fn rejects_an_empty_path() {
+        assert!(validate_extra_file_path("").is_err());
     }
 }
 

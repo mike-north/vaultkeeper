@@ -504,7 +504,7 @@ fn ac5_dry_run_prints_plan_and_never_mints_or_launches() {
             },
             "LEASE_ENTRY": {
                 "secret": "greeting", "materialize": "lease",
-                "minTrust": "unverified", "ttlSeconds": 900
+                "minTrust": "unverified", "ttlSeconds": 900, "useLimit": 5
             }
         }
     }));
@@ -538,6 +538,10 @@ fn ac5_dry_run_prints_plan_and_never_mints_or_launches() {
     assert!(stdout.contains("LEASE_ENTRY"));
     assert!(stdout.contains("rung:        3 (lease)"));
     assert!(stdout.contains("backend:     file"));
+
+    // The resolved policy, including useLimit, is rendered.
+    assert!(stdout.contains("useLimit:    unlimited")); // GREETING has none
+    assert!(stdout.contains("useLimit:    5")); // LEASE_ENTRY's useLimit
 
     // The --set entry is marked UNREVIEWED.
     assert!(stdout.contains("ADHOC"));

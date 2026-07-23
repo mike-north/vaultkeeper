@@ -138,6 +138,25 @@ function jsonContains(haystack: unknown, needle: unknown): boolean {
   return haystack === needle
 }
 
+// ─── Fixture path validation ──────────────────────────────────────
+
+/**
+ * Reject any `extraFiles` path that is absolute or contains a
+ * parent-directory (`..`) segment, so a malicious/malformed conformance case
+ * can never write outside the case's isolated temp directory.
+ */
+function validateExtraFilePath(relPath: string): void {
+  if (path.isAbsolute(relPath)) {
+    throw new Error(`extraFiles path ${JSON.stringify(relPath)} must be relative, not absolute`)
+  }
+  const segments = relPath.split(/[/\\]/)
+  if (segments.length === 0 || segments.includes('..') || segments.includes('')) {
+    throw new Error(
+      `extraFiles path ${JSON.stringify(relPath)} must be relative and contain no parent-directory ('..') segments`,
+    )
+  }
+}
+
 // ─── Run a single case ───────────────────────────────────────────
 
 interface RunResult {
@@ -160,6 +179,7 @@ async function runCase(testCase: ConformanceCase): Promise<RunResult> {
     }
 
     for (const [relPath, content] of testCase.extraFiles) {
+      validateExtraFilePath(relPath)
       const filePath = path.join(configDir, relPath)
       await fs.mkdir(path.dirname(filePath), { recursive: true })
       await fs.writeFile(filePath, content)
@@ -220,6 +240,38 @@ async function runCase(testCase: ConformanceCase): Promise<RunResult> {
 }
 
 // ─── Test suite ──────────────────────────────────────────────────
+
+describe('validateExtraFilePath', () => {
+  it('accepts a plain relative path', () => {
+    expect(() => {
+      validateExtraFilePath('profiles/empty-profile.json')
+    }).not.toThrow()
+  })
+
+  it('rejects an absolute path', () => {
+    expect(() => {
+      validateExtraFilePath('/etc/passwd')
+    }).toThrow(/must be relative/)
+  })
+
+  it('rejects a parent-directory traversal', () => {
+    expect(() => {
+      validateExtraFilePath('../../etc/passwd')
+    }).toThrow(/parent-directory/)
+  })
+
+  it('rejects a parent-directory segment in the middle of the path', () => {
+    expect(() => {
+      validateExtraFilePath('profiles/../../escape.json')
+    }).toThrow(/parent-directory/)
+  })
+
+  it('rejects an empty path', () => {
+    expect(() => {
+      validateExtraFilePath('')
+    }).toThrow()
+  })
+})
 
 // Skip the entire suite when the Rust binary isn't available (e.g., in CI
 // where only the TypeScript packages are built).
