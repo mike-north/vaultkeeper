@@ -1124,7 +1124,7 @@ impl VaultKeeper {
         self.handle_table.resolve_signing_claims(handle)
     }
 
-    /// Redeem a session signing-key lease (the JWE produced by
+    /// Redeem a signing-key lease (the JWE produced by
     /// [`VaultKeeper::mint_signing_lease`]) into an opaque signing capability
     /// [`HandleId`] (issue #300) — the read side of the lease. `exp` and
     /// `use` are enforced by exactly one accounting authority, the same
@@ -2000,8 +2000,8 @@ mod mint_signing_lease_tests {
         decrypt_token(&vault.key_manager().get_current_key().unwrap().key, jwe).unwrap()
     }
 
-    /// Happy path: a validly minted lease redeems into a signing handle whose
-    /// claims match what was minted, and the handle is independently
+    /// Happy path: a validly issued lease redeems into a signing handle whose
+    /// claims match what was issued, and the handle is independently
     /// resolvable via `resolve_signing_claims`.
     #[tokio::test]
     async fn redeem_signing_lease_returns_a_working_handle_for_a_valid_lease() {
@@ -2038,9 +2038,9 @@ mod mint_signing_lease_tests {
     }
 
     /// AC1: an expired lease is refused with a typed expired error, no
-    /// panic. `ttl_seconds: 0` mints a lease whose `exp` equals its own
+    /// panic. `ttl_seconds: 0` issues a lease whose `exp` equals its own
     /// `iat` (`now`) — `validate_claims`'s expiry check is `now >= exp`
-    /// (inclusive), so this is already-expired the instant it is minted,
+    /// (inclusive), so this is already-expired the instant it is issued,
     /// with no need to sleep in the test.
     #[tokio::test]
     async fn redeem_signing_lease_rejects_an_expired_lease() {
@@ -2146,7 +2146,7 @@ mod mint_signing_lease_tests {
         );
     }
 
-    /// AC4: a lease minted under a generation the revocation store's
+    /// AC4: a lease issued under a generation the revocation store's
     /// `key_generations` axis has since superseded (`kgen` below the
     /// current minimum for the key) is refused with a typed revoked error,
     /// no panic.
@@ -2171,7 +2171,7 @@ mod mint_signing_lease_tests {
         let err = vault
             .redeem_signing_lease(&host, &jwe)
             .await
-            .expect_err("a lease minted below the current key generation must not redeem");
+            .expect_err("a lease issued below the current key generation must not redeem");
 
         assert!(
             matches!(err, VaultError::TokenRevoked { .. }),
@@ -2316,7 +2316,7 @@ mod mint_signing_lease_tests {
         assert!(matches!(gate_err, VaultError::AuthorizationDenied { .. }));
 
         // (2) A genuinely redeemed lease always carries a finite exp end to
-        // end: mint, redeem, and the resulting handle is still resolvable
+        // end: issue, redeem, and the resulting handle is still resolvable
         // (i.e. it *was* installed with a real, finite expiry — an entry
         // installed with `None` would have hit the gate above instead).
         let backend = MockSigningBackend {
