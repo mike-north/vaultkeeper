@@ -303,9 +303,14 @@ pub enum VaultError {
     ///    refused at resolve time. `mode` then carries a stable kebab-case
     ///    slug naming the unsupported request — currently
     ///    `"signing-key-lease"` (session signing leases, pending the epic's
-    ///    session-mint work) and `"secret-lease-presence-at-mint"`
+    ///    session-mint work), `"secret-lease-presence-at-mint"`
     ///    (`requirePresenceAtMint` on a secret-backed lease; no
-    ///    `HostPlatform` exists at resolve time to prompt with). These slugs
+    ///    `HostPlatform` exists at resolve time to prompt with), and
+    ///    `"run-require-presence-at-issuance"` (the CLI `run` command's
+    ///    `--require-presence-at-issuance` flag; presence-at-issuance
+    ///    verification of every minted lease entry's `pres` claim is not yet
+    ///    wired into `resolve_profile`, so `run` refuses outright rather than
+    ///    proceeding without the guarantee the flag promises). These slugs
     ///    are a documented, stable contract for programmatic callers.
     #[error("{message}")]
     MaterializeModeUnsupported {

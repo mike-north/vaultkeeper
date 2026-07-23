@@ -126,7 +126,12 @@ fn validation_error(entry: &str, field: &str, message: impl Into<String>) -> Vau
 }
 
 /// `[A-Z_][A-Z0-9_]*` — load-time invariant #3 (env var name shape).
-fn is_valid_env_var_name(name: &str) -> bool {
+///
+/// `pub(crate)`, not private: [`crate::run::parse_set_flag`] reuses this
+/// exact shape check for a `run --set VAR=SECRET` flag's `VAR`, so a
+/// `--set`-declared entry name is held to the identical invariant a
+/// profile-file-declared entry name is (issue #279).
+pub(crate) fn is_valid_env_var_name(name: &str) -> bool {
     let mut chars = name.chars();
     match chars.next() {
         Some(c) if c == '_' || c.is_ascii_uppercase() => {}

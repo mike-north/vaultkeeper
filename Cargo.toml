@@ -50,6 +50,10 @@ console_error_panic_hook = "0.1"
 
 # CLI
 clap = { version = "4", features = ["derive"] }
+# `run` verb signal forwarding (issue #279, native CLI only): sends a
+# specific signal (SIGINT/SIGTERM) to the child process, which neither
+# `std::process::Child::kill()` (SIGKILL only) nor tokio expose directly.
+libc = "0.2"
 
 # Internal
 vaultkeeper-core = { path = "crates/vaultkeeper-core", version = "0.4.0" }

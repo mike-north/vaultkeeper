@@ -42,6 +42,42 @@ fn default_config_json() -> String {
         + "\n"
 }
 
+/// Reject any `extra_files` path that isn't made up entirely of plain,
+/// relative name components — i.e. every [`std::path::Component`] must be
+/// `Normal`, so absolute paths, `.` and `..` segments, an empty path, and
+/// Windows path prefixes/root-dirs are all rejected — so a
+/// malicious/malformed conformance case can never write outside the case's
+/// isolated temp directory.
+///
+/// `Path::components()` alone is not enough: it silently collapses repeated
+/// separators (`a//b` parses as the same two `Normal` components as `a/b`),
+/// so a doubled separator would otherwise slip past the component check —
+/// and disagree with the TS runner's equivalent validator, which rejects it.
+/// A raw string split on `/` (and `\` for symmetry with the TS side, which
+/// also treats it as a separator) catches that case explicitly.
+fn validate_extra_file_path(rel_path: &str) -> Result<(), String> {
+    let components: Vec<_> = std::path::Path::new(rel_path).components().collect();
+    let is_safe_relative = !components.is_empty()
+        && components
+            .iter()
+            .all(|c| matches!(c, std::path::Component::Normal(_)));
+
+    let raw_segments: Vec<&str> = rel_path.split(['/', '\\']).collect();
+    let has_no_bad_raw_segments = !raw_segments.is_empty()
+        && raw_segments
+            .iter()
+            .all(|s| !s.is_empty() && *s != "." && *s != "..");
+
+    if is_safe_relative && has_no_bad_raw_segments {
+        Ok(())
+    } else {
+        Err(format!(
+            "extra_files path {rel_path:?} must be relative and contain no '.', '..', or empty \
+             path segments"
+        ))
+    }
+}
+
 /// Run a single conformance case and return a detailed error message on failure.
 fn run_case(case: &ConformanceCase, bin: &std::path::Path) -> Result<(), String> {
     let dir = TempDir::new().map_err(|e| format!("failed to create temp dir: {e}"))?;
@@ -50,6 +86,18 @@ fn run_case(case: &ConformanceCase, bin: &std::path::Path) -> Result<(), String>
     if case.needs_config {
         fs::write(&config_path, default_config_json())
             .map_err(|e| format!("failed to write config: {e}"))?;
+    }
+
+    for (rel_path, content) in &case.extra_files {
+        validate_extra_file_path(rel_path).map_err(|e| format!("case '{}': {e}", case.name))?;
+
+        let path = dir.path().join(rel_path);
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)
+                .map_err(|e| format!("failed to create dir for extra file {rel_path}: {e}"))?;
+        }
+        fs::write(&path, content)
+            .map_err(|e| format!("failed to write extra file {rel_path}: {e}"))?;
     }
 
     // Substitute __SELF_BINARY__ with the actual vaultkeeper binary path
@@ -159,6 +207,47 @@ fn check_output(
             stderr.chars().take(300).collect::<String>(),
             exit_code
         ))
+    }
+}
+
+#[cfg(test)]
+mod extra_file_path_validation_tests {
+    use super::validate_extra_file_path;
+
+    #[test]
+    fn accepts_a_plain_relative_path() {
+        assert!(validate_extra_file_path("profiles/empty-profile.json").is_ok());
+    }
+
+    #[test]
+    fn rejects_an_absolute_path() {
+        assert!(validate_extra_file_path("/etc/passwd").is_err());
+    }
+
+    #[test]
+    fn rejects_a_parent_directory_traversal() {
+        assert!(validate_extra_file_path("../../etc/passwd").is_err());
+    }
+
+    #[test]
+    fn rejects_a_parent_directory_component_in_the_middle_of_the_path() {
+        assert!(validate_extra_file_path("profiles/../../escape.json").is_err());
+    }
+
+    #[test]
+    fn rejects_an_empty_path() {
+        assert!(validate_extra_file_path("").is_err());
+    }
+
+    // Regression test: `Path::components()` collapses a doubled separator
+    // ("a//b") into the same two `Normal` components as "a/b", so the
+    // component-only check would accept it — while the TS runner's
+    // string-level check rejects it, a cross-runner divergence on the same
+    // conformance case. This must fail before the explicit raw-string
+    // segment check is added, and pass after.
+    #[test]
+    fn rejects_a_doubled_path_separator() {
+        assert!(validate_extra_file_path("a//b").is_err());
     }
 }
 

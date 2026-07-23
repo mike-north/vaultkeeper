@@ -64,6 +64,13 @@ pub struct ConformanceCase {
     /// init` — see #98 / #235).
     #[serde(default)]
     pub expected_config_file: Option<OutputMatcher>,
+    /// Additional files to write under the isolated config dir before
+    /// running, as `(path relative to the config dir, content)` pairs.
+    /// Parent directories are created as needed. Used for cases that need a
+    /// real on-disk fixture beyond `config.json` — e.g. a `run`/`profile`
+    /// case that needs a loadable `profiles/<name>.json` (issue #279).
+    #[serde(default)]
+    pub extra_files: Vec<(String, String)>,
 }
 
 // ─── Help and usage cases ────────────────────────────────────────
@@ -79,6 +86,7 @@ fn help_cases() -> Vec<ConformanceCase> {
             expected_stdout: OutputMatcher::Contains("vaultkeeper".into()),
             expected_stderr: OutputMatcher::Any,
             expected_config_file: None,
+            extra_files: Vec::new(),
         },
         ConformanceCase {
             name: "help flag prints help and exits 0".into(),
@@ -89,6 +97,7 @@ fn help_cases() -> Vec<ConformanceCase> {
             expected_stdout: OutputMatcher::Contains("vaultkeeper".into()),
             expected_stderr: OutputMatcher::Any,
             expected_config_file: None,
+            extra_files: Vec::new(),
         },
         ConformanceCase {
             name: "short help flag prints help and exits 0".into(),
@@ -99,6 +108,7 @@ fn help_cases() -> Vec<ConformanceCase> {
             expected_stdout: OutputMatcher::Contains("vaultkeeper".into()),
             expected_stderr: OutputMatcher::Any,
             expected_config_file: None,
+            extra_files: Vec::new(),
         },
         ConformanceCase {
             name: "version flag prints version".into(),
@@ -109,6 +119,7 @@ fn help_cases() -> Vec<ConformanceCase> {
             expected_stdout: OutputMatcher::Contains("vaultkeeper".into()),
             expected_stderr: OutputMatcher::Any,
             expected_config_file: None,
+            extra_files: Vec::new(),
         },
         ConformanceCase {
             name: "help lists all expected commands".into(),
@@ -117,10 +128,11 @@ fn help_cases() -> Vec<ConformanceCase> {
             needs_config: false,
             expected_exit_code: 0,
             expected_stdout: OutputMatcher::Regex(
-                "(?s)exec.*doctor.*approve.*dev-mode.*store.*delete.*config.*rotate-key.*revoke-key".into(),
+                "(?s)exec.*run.*doctor.*approve.*dev-mode.*store.*delete.*config.*rotate-key.*revoke-key".into(),
             ),
             expected_stderr: OutputMatcher::Any,
             expected_config_file: None,
+            extra_files: Vec::new(),
         },
     ]
 }
@@ -137,6 +149,7 @@ fn error_cases() -> Vec<ConformanceCase> {
         expected_stdout: OutputMatcher::Any,
         expected_stderr: OutputMatcher::Contains("error".into()),
         expected_config_file: None,
+        extra_files: Vec::new(),
     }]
 }
 
@@ -153,6 +166,7 @@ fn argument_validation_cases() -> Vec<ConformanceCase> {
             expected_stdout: OutputMatcher::Any,
             expected_stderr: OutputMatcher::Contains("--name".into()),
             expected_config_file: None,
+            extra_files: Vec::new(),
         },
         ConformanceCase {
             name: "delete requires --name".into(),
@@ -163,6 +177,7 @@ fn argument_validation_cases() -> Vec<ConformanceCase> {
             expected_stdout: OutputMatcher::Any,
             expected_stderr: OutputMatcher::Contains("--name".into()),
             expected_config_file: None,
+            extra_files: Vec::new(),
         },
         ConformanceCase {
             name: "exec requires --token".into(),
@@ -173,6 +188,7 @@ fn argument_validation_cases() -> Vec<ConformanceCase> {
             expected_stdout: OutputMatcher::Any,
             expected_stderr: OutputMatcher::Contains("--token".into()),
             expected_config_file: None,
+            extra_files: Vec::new(),
         },
         ConformanceCase {
             name: "approve requires --path".into(),
@@ -183,6 +199,7 @@ fn argument_validation_cases() -> Vec<ConformanceCase> {
             expected_stdout: OutputMatcher::Any,
             expected_stderr: OutputMatcher::Contains("--path".into()),
             expected_config_file: None,
+            extra_files: Vec::new(),
         },
         ConformanceCase {
             name: "dev-mode requires --path".into(),
@@ -193,6 +210,7 @@ fn argument_validation_cases() -> Vec<ConformanceCase> {
             expected_stdout: OutputMatcher::Any,
             expected_stderr: OutputMatcher::Contains("--path".into()),
             expected_config_file: None,
+            extra_files: Vec::new(),
         },
         ConformanceCase {
             name: "config with no subcommand exits 2".into(),
@@ -203,6 +221,7 @@ fn argument_validation_cases() -> Vec<ConformanceCase> {
             expected_stdout: OutputMatcher::Any,
             expected_stderr: OutputMatcher::Any,
             expected_config_file: None,
+            extra_files: Vec::new(),
         },
     ]
 }
@@ -220,6 +239,7 @@ fn store_delete_cases() -> Vec<ConformanceCase> {
             expected_stdout: OutputMatcher::Contains("stored successfully".into()),
             expected_stderr: OutputMatcher::Any,
             expected_config_file: None,
+            extra_files: Vec::new(),
         },
         ConformanceCase {
             name: "store exits 1 when stdin is empty".into(),
@@ -230,6 +250,7 @@ fn store_delete_cases() -> Vec<ConformanceCase> {
             expected_stdout: OutputMatcher::Any,
             expected_stderr: OutputMatcher::Contains("No secret provided".into()),
             expected_config_file: None,
+            extra_files: Vec::new(),
         },
         ConformanceCase {
             name: "delete succeeds".into(),
@@ -240,6 +261,7 @@ fn store_delete_cases() -> Vec<ConformanceCase> {
             expected_stdout: OutputMatcher::Contains("deleted".into()),
             expected_stderr: OutputMatcher::Any,
             expected_config_file: None,
+            extra_files: Vec::new(),
         },
     ]
 }
@@ -263,6 +285,7 @@ fn config_cases() -> Vec<ConformanceCase> {
             expected_config_file: Some(OutputMatcher::JsonContains(serde_json::json!({
                 "backends": [{ "type": "file" }]
             }))),
+            extra_files: Vec::new(),
         },
         ConformanceCase {
             name: "config show outputs valid JSON with version".into(),
@@ -273,6 +296,7 @@ fn config_cases() -> Vec<ConformanceCase> {
             expected_stdout: OutputMatcher::Contains("\"version\"".into()),
             expected_stderr: OutputMatcher::Any,
             expected_config_file: None,
+            extra_files: Vec::new(),
         },
         ConformanceCase {
             name: "config show exits 1 when no config exists".into(),
@@ -285,6 +309,7 @@ fn config_cases() -> Vec<ConformanceCase> {
                 "Error: No config file found. Run 'vaultkeeper config init' to create one.".into(),
             ),
             expected_config_file: None,
+            extra_files: Vec::new(),
         },
         ConformanceCase {
             name: "config init exits 1 when config already exists".into(),
@@ -295,6 +320,7 @@ fn config_cases() -> Vec<ConformanceCase> {
             expected_stdout: OutputMatcher::Any,
             expected_stderr: OutputMatcher::Contains("Error: Config already exists at".into()),
             expected_config_file: None,
+            extra_files: Vec::new(),
         },
     ]
 }
@@ -312,6 +338,7 @@ fn doctor_cases() -> Vec<ConformanceCase> {
         expected_stdout: OutputMatcher::Any,
         expected_stderr: OutputMatcher::Any,
         expected_config_file: None,
+        extra_files: Vec::new(),
     }]
 }
 
@@ -327,6 +354,7 @@ fn rotate_key_cases() -> Vec<ConformanceCase> {
         expected_stdout: OutputMatcher::Contains("rotated successfully".into()),
         expected_stderr: OutputMatcher::Any,
         expected_config_file: None,
+        extra_files: Vec::new(),
     }]
 }
 
@@ -347,6 +375,7 @@ fn approve_cases() -> Vec<ConformanceCase> {
         expected_stdout: OutputMatcher::Contains("Approved".into()),
         expected_stderr: OutputMatcher::Any,
         expected_config_file: None,
+        extra_files: Vec::new(),
     }]
 }
 
@@ -368,6 +397,7 @@ fn dev_mode_cases() -> Vec<ConformanceCase> {
             expected_stdout: OutputMatcher::Contains("enabled".into()),
             expected_stderr: OutputMatcher::Any,
             expected_config_file: None,
+            extra_files: Vec::new(),
         },
         ConformanceCase {
             name: "dev-mode disable succeeds".into(),
@@ -382,6 +412,7 @@ fn dev_mode_cases() -> Vec<ConformanceCase> {
             expected_stdout: OutputMatcher::Contains("disabled".into()),
             expected_stderr: OutputMatcher::Any,
             expected_config_file: None,
+            extra_files: Vec::new(),
         },
     ]
 }
@@ -416,6 +447,7 @@ fn backend_capabilities_cases() -> Vec<ConformanceCase> {
             ),
             expected_stderr: OutputMatcher::Any,
             expected_config_file: None,
+            extra_files: Vec::new(),
         },
         ConformanceCase {
             name: "backend capabilities --json emits a row with type, displayName, presencePerUse"
@@ -432,6 +464,7 @@ fn backend_capabilities_cases() -> Vec<ConformanceCase> {
             }])),
             expected_stderr: OutputMatcher::Any,
             expected_config_file: None,
+            extra_files: Vec::new(),
         },
         ConformanceCase {
             name: "backend with no subcommand exits 2".into(),
@@ -442,6 +475,167 @@ fn backend_capabilities_cases() -> Vec<ConformanceCase> {
             expected_stdout: OutputMatcher::Any,
             expected_stderr: OutputMatcher::Any,
             expected_config_file: None,
+            extra_files: Vec::new(),
+        },
+    ]
+}
+
+// ─── Run cases (issue #279) ───────────────────────────────────────
+//
+// These exercise the `run` CLI surface's flag semantics/validation only —
+// exact conformance coverage of the same kind `argument_validation_cases`
+// already provides for `exec`/`store`/`delete`/etc. `run`'s stdio/signal
+// behavior is exercised by real-subprocess UATs in
+// `crates/vaultkeeper-cli/tests/run_uat.rs` (this harness's `stdin`-only,
+// no-pty `Command::output()` model isn't the right layer for signal
+// forwarding or byte-exact fd-inheritance assertions).
+
+fn run_cases() -> Vec<ConformanceCase> {
+    vec![
+        ConformanceCase {
+            name: "run requires --profile or --profile-file".into(),
+            command: vec!["run".into(), "--".into(), "true".into()],
+            stdin: None,
+            needs_config: false,
+            expected_exit_code: 2,
+            expected_stdout: OutputMatcher::Any,
+            expected_stderr: OutputMatcher::Contains("--profile".into()),
+            expected_config_file: None,
+            extra_files: Vec::new(),
+        },
+        ConformanceCase {
+            name: "run rejects --profile and --profile-file together".into(),
+            command: vec![
+                "run".into(),
+                "--profile".into(),
+                "x".into(),
+                "--profile-file".into(),
+                "/tmp/x.json".into(),
+                "--".into(),
+                "true".into(),
+            ],
+            stdin: None,
+            needs_config: false,
+            expected_exit_code: 2,
+            expected_stdout: OutputMatcher::Any,
+            expected_stderr: OutputMatcher::Any,
+            expected_config_file: None,
+            extra_files: Vec::new(),
+        },
+        ConformanceCase {
+            name: "run rejects a --set value with no '='".into(),
+            command: vec![
+                "run".into(),
+                "--profile".into(),
+                "nonexistent".into(),
+                "--set".into(),
+                "NOEQUALS".into(),
+                "--".into(),
+                "true".into(),
+            ],
+            stdin: None,
+            needs_config: true,
+            expected_exit_code: 1,
+            expected_stdout: OutputMatcher::Any,
+            expected_stderr: OutputMatcher::Contains("--set".into()),
+            expected_config_file: None,
+            extra_files: Vec::new(),
+        },
+        ConformanceCase {
+            // Renamed from a previous version of this case that claimed to
+            // test the "no command specified" path but actually only
+            // exercised profile lookup (the "No profile found" branch runs
+            // first) — see the two cases below for genuine coverage of the
+            // no-command branch against a profile that actually loads.
+            name: "run exits 1 with 'No profile found' for a nonexistent profile".into(),
+            command: vec![
+                "run".into(),
+                "--profile".into(),
+                "nonexistent-profile".into(),
+            ],
+            stdin: None,
+            needs_config: true,
+            expected_exit_code: 1,
+            expected_stdout: OutputMatcher::Any,
+            expected_stderr: OutputMatcher::Contains("No profile found".into()),
+            expected_config_file: None,
+            extra_files: Vec::new(),
+        },
+        ConformanceCase {
+            // Genuine coverage of the "No command specified" branch: a real,
+            // loadable profile (via `extra_files`) with no trailing command
+            // and no `--dry-run` — `command.is_empty()` must fire, not the
+            // profile-lookup error above.
+            name: "run exits 1 with 'No command specified' for a valid profile and no command"
+                .into(),
+            command: vec!["run".into(), "--profile".into(), "empty-profile".into()],
+            stdin: None,
+            needs_config: true,
+            expected_exit_code: 1,
+            expected_stdout: OutputMatcher::Any,
+            expected_stderr: OutputMatcher::Contains("No command specified".into()),
+            expected_config_file: None,
+            extra_files: vec![(
+                "profiles/empty-profile.json".into(),
+                r#"{ "version": 1, "name": "empty-profile", "entries": {} }"#.into(),
+            )],
+        },
+        ConformanceCase {
+            // `--dry-run` against that same real profile is plan-only and
+            // needs no trailing command at all.
+            name: "run --dry-run against a valid profile prints the plan and exits 0".into(),
+            command: vec![
+                "run".into(),
+                "--profile".into(),
+                "empty-profile".into(),
+                "--dry-run".into(),
+            ],
+            stdin: None,
+            needs_config: true,
+            expected_exit_code: 0,
+            expected_stdout: OutputMatcher::Contains("plan only".into()),
+            expected_stderr: OutputMatcher::Any,
+            expected_config_file: None,
+            extra_files: vec![(
+                "profiles/empty-profile.json".into(),
+                r#"{ "version": 1, "name": "empty-profile", "entries": {} }"#.into(),
+            )],
+        },
+        ConformanceCase {
+            // The security-relevant refusal path (issue #279, owner-adjudicated
+            // correction): a real, non-dry-run invocation with
+            // --require-presence-at-issuance set must refuse outright, never
+            // proceed silently or with a mere warning.
+            name: "run refuses a real launch when --require-presence-at-issuance is set".into(),
+            command: vec![
+                "run".into(),
+                "--profile".into(),
+                "empty-profile".into(),
+                "--require-presence-at-issuance".into(),
+                "--".into(),
+                "true".into(),
+            ],
+            stdin: None,
+            needs_config: true,
+            expected_exit_code: 1,
+            expected_stdout: OutputMatcher::Any,
+            expected_stderr: OutputMatcher::Contains("not yet enforced".into()),
+            expected_config_file: None,
+            extra_files: vec![(
+                "profiles/empty-profile.json".into(),
+                r#"{ "version": 1, "name": "empty-profile", "entries": {} }"#.into(),
+            )],
+        },
+        ConformanceCase {
+            name: "run --help documents the exact --require-presence-at-issuance flag name".into(),
+            command: vec!["run".into(), "--help".into()],
+            stdin: None,
+            needs_config: false,
+            expected_exit_code: 0,
+            expected_stdout: OutputMatcher::Contains("--require-presence-at-issuance".into()),
+            expected_stderr: OutputMatcher::Any,
+            expected_config_file: None,
+            extra_files: Vec::new(),
         },
     ]
 }
@@ -458,6 +652,7 @@ fn revoke_key_cases() -> Vec<ConformanceCase> {
         expected_stdout: OutputMatcher::Contains("revoked successfully".into()),
         expected_stderr: OutputMatcher::Any,
         expected_config_file: None,
+        extra_files: Vec::new(),
     }]
 }
 
@@ -475,6 +670,7 @@ pub fn all_cases() -> Vec<ConformanceCase> {
     cases.extend(approve_cases());
     cases.extend(dev_mode_cases());
     cases.extend(backend_capabilities_cases());
+    cases.extend(run_cases());
     cases
 }
 
