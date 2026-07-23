@@ -48,13 +48,27 @@ fn default_config_json() -> String {
 /// Windows path prefixes/root-dirs are all rejected — so a
 /// malicious/malformed conformance case can never write outside the case's
 /// isolated temp directory.
+///
+/// `Path::components()` alone is not enough: it silently collapses repeated
+/// separators (`a//b` parses as the same two `Normal` components as `a/b`),
+/// so a doubled separator would otherwise slip past the component check —
+/// and disagree with the TS runner's equivalent validator, which rejects it.
+/// A raw string split on `/` (and `\` for symmetry with the TS side, which
+/// also treats it as a separator) catches that case explicitly.
 fn validate_extra_file_path(rel_path: &str) -> Result<(), String> {
     let components: Vec<_> = std::path::Path::new(rel_path).components().collect();
     let is_safe_relative = !components.is_empty()
         && components
             .iter()
             .all(|c| matches!(c, std::path::Component::Normal(_)));
-    if is_safe_relative {
+
+    let raw_segments: Vec<&str> = rel_path.split(['/', '\\']).collect();
+    let has_no_bad_raw_segments = !raw_segments.is_empty()
+        && raw_segments
+            .iter()
+            .all(|s| !s.is_empty() && *s != "." && *s != "..");
+
+    if is_safe_relative && has_no_bad_raw_segments {
         Ok(())
     } else {
         Err(format!(
@@ -223,6 +237,17 @@ mod extra_file_path_validation_tests {
     #[test]
     fn rejects_an_empty_path() {
         assert!(validate_extra_file_path("").is_err());
+    }
+
+    // Regression test: `Path::components()` collapses a doubled separator
+    // ("a//b") into the same two `Normal` components as "a/b", so the
+    // component-only check would accept it — while the TS runner's
+    // string-level check rejects it, a cross-runner divergence on the same
+    // conformance case. This must fail before the explicit raw-string
+    // segment check is added, and pass after.
+    #[test]
+    fn rejects_a_doubled_path_separator() {
+        assert!(validate_extra_file_path("a//b").is_err());
     }
 }
 

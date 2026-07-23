@@ -20,7 +20,7 @@ use vaultkeeper_core::run::{
     render_dry_run,
 };
 use vaultkeeper_core::vault::{MintLeaseOptions, enforce_presence_requirement};
-use zeroize::Zeroize;
+use zeroize::{Zeroize, Zeroizing};
 
 #[derive(Parser)]
 #[command(
@@ -658,21 +658,33 @@ async fn cmd_run(
 /// signal that arrives immediately after launch, not just one that arrives
 /// once the wait loop is already running.
 ///
-/// `env`'s own `HashMap<String, String>` storage is zeroized in place
-/// immediately after `spawn()` returns. This does **not** scrub every
+/// `env`'s own `HashMap<String, String>` storage is wrapped in
+/// [`zeroize::Zeroizing`] (via the local [`ResolvedEnvMap`] newtype, since
+/// `Zeroize` has no blanket impl for `HashMap`) — the same wrapper the
+/// resolver already uses for individual secret values (see `resolve.rs`),
+/// extended here to the whole map. That guarantees the buffer is zeroized
+/// on **every** exit path from this function, including the early returns
+/// before a child is ever spawned (`SignalGuard::install()` or
+/// `cmd.spawn()` failing) — not only after a successful `spawn()`. The
+/// happy path still scrubs the buffer explicitly, immediately after
+/// `spawn()` returns, rather than deferring to the implicit end-of-function
+/// drop — the wrapper's `Drop` then re-zeroizes an already-empty buffer on
+/// that path, which is a harmless no-op. This does **not** scrub every
 /// in-process copy of the resolved values: `cmd.envs(...)` below has
 /// already copied each one into `tokio::process::Command`'s internal
 /// `OsString` env storage, which `cmd` (and therefore that copy) outlives
 /// this function — it is dropped, un-zeroized, only once the child exits
 /// and `cmd` goes out of scope. Neither `tokio::process::Command` nor
-/// `std::ffi::OsString` expose a way to scrub that storage. This zeroize is
-/// therefore defense-in-depth against the risk of an accidental *second*
-/// reference to `env`'s own buffer sticking around after `spawn()` (e.g. a
-/// future refactor holding onto it, a panic unwind path, or a debug
-/// print) — not a claim that every copy of the plaintext is scrubbed from
-/// this process's heap for the child's lifetime.
-async fn launch_and_wait(command: &[String], mut env: vaultkeeper_core::ResolvedEnv) -> i32 {
+/// `std::ffi::OsString` expose a way to scrub that storage. So this is
+/// defense-in-depth against the risk of an accidental *second* reference to
+/// `env`'s own buffer sticking around past its useful lifetime (e.g. a
+/// future refactor holding onto it, a panic unwind path, or a debug print)
+/// — not a claim that every copy of the plaintext is scrubbed from this
+/// process's heap for the child's lifetime.
+async fn launch_and_wait(command: &[String], env: vaultkeeper_core::ResolvedEnv) -> i32 {
     use std::process::Stdio;
+
+    let mut env = Zeroizing::new(ResolvedEnvMap(env));
 
     #[cfg(unix)]
     let signal_guard = match SignalGuard::install() {
@@ -704,10 +716,10 @@ async fn launch_and_wait(command: &[String], mut env: vaultkeeper_core::Resolved
     };
 
     // See the doc comment above: this scrubs `env`'s own buffer, not the
-    // separate copy `cmd.envs(...)` already made.
-    for value in env.values_mut() {
-        value.zeroize();
-    }
+    // separate copy `cmd.envs(...)` already made. Every other exit path —
+    // including the two early returns above — scrubs it too, via `env`'s
+    // `Zeroizing` wrapper running on drop.
+    env.zeroize();
 
     let status = match wait_forwarding_signals(
         child,
@@ -724,6 +736,29 @@ async fn launch_and_wait(command: &[String], mut env: vaultkeeper_core::Resolved
     };
 
     exit_code_for_status(status)
+}
+
+/// A [`vaultkeeper_core::ResolvedEnv`] wrapped so [`zeroize::Zeroizing`] can
+/// scrub it on drop — see [`launch_and_wait`]'s doc comment. `Zeroize` has
+/// no blanket impl for `HashMap`, so this newtype supplies one by zeroizing
+/// every value; [`std::ops::Deref`] passes reads (`.iter()`, etc.) straight
+/// through to the underlying map.
+struct ResolvedEnvMap(vaultkeeper_core::ResolvedEnv);
+
+impl std::ops::Deref for ResolvedEnvMap {
+    type Target = vaultkeeper_core::ResolvedEnv;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl Zeroize for ResolvedEnvMap {
+    fn zeroize(&mut self) {
+        for value in self.0.values_mut() {
+            value.zeroize();
+        }
+    }
 }
 
 /// The SIGINT/SIGTERM signal streams, installed once and threaded into
@@ -1589,4 +1624,44 @@ async fn cmd_profile_lint(name: Option<String>, profile_file: Option<String>) ->
         vaultkeeper_core::profile::render_lint(&profile, &lint, active_backend_type)
     );
     0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ResolvedEnvMap;
+    use zeroize::Zeroize;
+
+    // `launch_and_wait` wraps its resolved env in `Zeroizing<ResolvedEnvMap>`
+    // specifically so every exit path — not just the happy path after a
+    // successful `spawn()` — scrubs the buffer on drop. That "scrubbed on
+    // every path" guarantee itself comes from Rust's own `Drop` semantics
+    // (a value's destructor runs on every exit from its scope, including an
+    // early `return`), which isn't something a test can regress
+    // independently of the language — there is no assertable surface for
+    // "did drop run on this particular early return," short of reading the
+    // process's freed memory, which isn't observable from safe Rust. What
+    // *can* regress, and is worth covering, is `ResolvedEnvMap`'s own
+    // `Zeroize` impl — e.g. someone changing the loop to skip a key, or
+    // zeroizing keys instead of values. This test pins that behavior.
+    #[test]
+    fn resolved_env_map_zeroize_clears_every_value() {
+        let mut map = ResolvedEnvMap(
+            [
+                ("GITHUB_TOKEN".to_string(), "ghp_sentinel_value".to_string()),
+                ("OTHER_SECRET".to_string(), "another_sentinel".to_string()),
+            ]
+            .into_iter()
+            .collect(),
+        );
+
+        map.zeroize();
+
+        for value in map.0.values() {
+            assert_eq!(value, "", "zeroize must clear every value in the map");
+        }
+        // Keys are not secret material (env var names), so `Zeroize` is
+        // deliberately scoped to values only — confirm they survive.
+        assert!(map.0.contains_key("GITHUB_TOKEN"));
+        assert!(map.0.contains_key("OTHER_SECRET"));
+    }
 }
