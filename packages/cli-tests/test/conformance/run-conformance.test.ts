@@ -149,10 +149,14 @@ function validateExtraFilePath(relPath: string): void {
   if (path.isAbsolute(relPath)) {
     throw new Error(`extraFiles path ${JSON.stringify(relPath)} must be relative, not absolute`)
   }
+  // Mirrors the Rust runner's `Component::Normal`-only rule: every segment
+  // must be a plain name, so '.', '..', and empty segments are all rejected.
   const segments = relPath.split(/[/\\]/)
-  if (segments.length === 0 || segments.includes('..') || segments.includes('')) {
+  const isSafeRelative =
+    segments.length > 0 && segments.every((s) => s !== '' && s !== '.' && s !== '..')
+  if (!isSafeRelative) {
     throw new Error(
-      `extraFiles path ${JSON.stringify(relPath)} must be relative and contain no parent-directory ('..') segments`,
+      `extraFiles path ${JSON.stringify(relPath)} must be relative and contain no '.', '..', or empty path segments`,
     )
   }
 }
@@ -257,19 +261,37 @@ describe('validateExtraFilePath', () => {
   it('rejects a parent-directory traversal', () => {
     expect(() => {
       validateExtraFilePath('../../etc/passwd')
-    }).toThrow(/parent-directory/)
+    }).toThrow(/\.\./)
   })
 
   it('rejects a parent-directory segment in the middle of the path', () => {
     expect(() => {
       validateExtraFilePath('profiles/../../escape.json')
-    }).toThrow(/parent-directory/)
+    }).toThrow(/\.\./)
   })
 
   it('rejects an empty path', () => {
     expect(() => {
       validateExtraFilePath('')
     }).toThrow()
+  })
+
+  it("rejects a leading './' current-directory segment", () => {
+    expect(() => {
+      validateExtraFilePath('./profiles/x.json')
+    }).toThrow(/'\.'/)
+  })
+
+  it("rejects a './' segment in the middle of the path", () => {
+    expect(() => {
+      validateExtraFilePath('a/./b')
+    }).toThrow(/'\.'/)
+  })
+
+  it('rejects a doubled path separator (empty segment)', () => {
+    expect(() => {
+      validateExtraFilePath('a//b')
+    }).toThrow(/empty/)
   })
 })
 
