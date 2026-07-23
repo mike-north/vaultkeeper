@@ -80,9 +80,10 @@ grammar review covers them before they land:
 
 **G1 — Noun-verb for resource families; bare verb for whole-vault process actions.** A command earns a
 **noun namespace** (`<noun> <verb>`) when it manages a *category of addressable resources* with more than one
-operation: `config`, `backend`, `profile`, `session`. A command is a **bare top-level verb** when it is a
-single process action against the vault as a whole with no sibling operations on a shared resource: `exec`,
-`run`, `doctor`, `approve`, `dev-mode`.
+operation: `config`, `backend`, `profile`, `session`, and (post-B2/B3/B4 adjudication) `secret`, `key`,
+`trust`. A command is a **bare top-level verb** only when it is a single process action against the vault as
+a whole with no sibling operations on a shared resource — after adjudication, exactly two qualify: `run`
+(the launcher) and `doctor` (the whole-machine check).
 
 **G2 — The primary subject is positional; modifiers are flags.** A command's required primary subject — the
 resource it acts on — is a **positional argument**. Options, policy toggles, and alternate sources are
