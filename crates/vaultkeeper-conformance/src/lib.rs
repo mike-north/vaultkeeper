@@ -446,6 +446,91 @@ fn backend_capabilities_cases() -> Vec<ConformanceCase> {
     ]
 }
 
+// ─── Run cases (issue #279) ───────────────────────────────────────
+//
+// These exercise the `run` CLI surface's flag semantics/validation only —
+// exact conformance coverage of the same kind `argument_validation_cases`
+// already provides for `exec`/`store`/`delete`/etc. `run`'s stdio/signal
+// behavior is exercised by real-subprocess UATs in
+// `crates/vaultkeeper-cli/tests/run_uat.rs` (this harness's `stdin`-only,
+// no-pty `Command::output()` model isn't the right layer for signal
+// forwarding or byte-exact fd-inheritance assertions).
+
+fn run_cases() -> Vec<ConformanceCase> {
+    vec![
+        ConformanceCase {
+            name: "run requires --profile or --profile-file".into(),
+            command: vec!["run".into(), "--".into(), "true".into()],
+            stdin: None,
+            needs_config: false,
+            expected_exit_code: 2,
+            expected_stdout: OutputMatcher::Any,
+            expected_stderr: OutputMatcher::Contains("--profile".into()),
+            expected_config_file: None,
+        },
+        ConformanceCase {
+            name: "run rejects --profile and --profile-file together".into(),
+            command: vec![
+                "run".into(),
+                "--profile".into(),
+                "x".into(),
+                "--profile-file".into(),
+                "/tmp/x.json".into(),
+                "--".into(),
+                "true".into(),
+            ],
+            stdin: None,
+            needs_config: false,
+            expected_exit_code: 2,
+            expected_stdout: OutputMatcher::Any,
+            expected_stderr: OutputMatcher::Any,
+            expected_config_file: None,
+        },
+        ConformanceCase {
+            name: "run rejects a --set value with no '='".into(),
+            command: vec![
+                "run".into(),
+                "--profile".into(),
+                "nonexistent".into(),
+                "--set".into(),
+                "NOEQUALS".into(),
+                "--".into(),
+                "true".into(),
+            ],
+            stdin: None,
+            needs_config: true,
+            expected_exit_code: 1,
+            expected_stdout: OutputMatcher::Any,
+            expected_stderr: OutputMatcher::Contains("--set".into()),
+            expected_config_file: None,
+        },
+        ConformanceCase {
+            name: "run exits 1 with no command specified for a nonexistent profile".into(),
+            command: vec![
+                "run".into(),
+                "--profile".into(),
+                "nonexistent-profile".into(),
+            ],
+            stdin: None,
+            needs_config: true,
+            expected_exit_code: 1,
+            expected_stdout: OutputMatcher::Any,
+            expected_stderr: OutputMatcher::Contains("No profile found".into()),
+            expected_config_file: None,
+        },
+        ConformanceCase {
+            name: "run --help documents the exact --require-presence-at-mint flag name".into(),
+            command: vec!["run".into(), "--help".into()],
+            stdin: None,
+            needs_config: false,
+            expected_exit_code: 0,
+            expected_stdout: OutputMatcher::Contains("--require-presence-at-mint".into()),
+            expected_stderr: OutputMatcher::Any,
+            expected_config_file: None,
+        },
+    ]
+}
+
 // ─── Revoke-key cases ────────────────────────────────────────────
 
 fn revoke_key_cases() -> Vec<ConformanceCase> {
@@ -475,6 +560,7 @@ pub fn all_cases() -> Vec<ConformanceCase> {
     cases.extend(approve_cases());
     cases.extend(dev_mode_cases());
     cases.extend(backend_capabilities_cases());
+    cases.extend(run_cases());
     cases
 }
 

@@ -504,5 +504,106 @@
       "type": "Any"
     },
     "expectedConfigFile": null
+  },
+  {
+    "name": "run requires --profile or --profile-file",
+    "command": [
+      "run",
+      "--",
+      "true"
+    ],
+    "stdin": null,
+    "needsConfig": false,
+    "expectedExitCode": 2,
+    "expectedStdout": {
+      "type": "Any"
+    },
+    "expectedStderr": {
+      "type": "Contains",
+      "value": "--profile"
+    },
+    "expectedConfigFile": null
+  },
+  {
+    "name": "run rejects --profile and --profile-file together",
+    "command": [
+      "run",
+      "--profile",
+      "x",
+      "--profile-file",
+      "/tmp/x.json",
+      "--",
+      "true"
+    ],
+    "stdin": null,
+    "needsConfig": false,
+    "expectedExitCode": 2,
+    "expectedStdout": {
+      "type": "Any"
+    },
+    "expectedStderr": {
+      "type": "Any"
+    },
+    "expectedConfigFile": null
+  },
+  {
+    "name": "run rejects a --set value with no '='",
+    "command": [
+      "run",
+      "--profile",
+      "nonexistent",
+      "--set",
+      "NOEQUALS",
+      "--",
+      "true"
+    ],
+    "stdin": null,
+    "needsConfig": true,
+    "expectedExitCode": 1,
+    "expectedStdout": {
+      "type": "Any"
+    },
+    "expectedStderr": {
+      "type": "Contains",
+      "value": "--set"
+    },
+    "expectedConfigFile": null
+  },
+  {
+    "name": "run exits 1 with no command specified for a nonexistent profile",
+    "command": [
+      "run",
+      "--profile",
+      "nonexistent-profile"
+    ],
+    "stdin": null,
+    "needsConfig": true,
+    "expectedExitCode": 1,
+    "expectedStdout": {
+      "type": "Any"
+    },
+    "expectedStderr": {
+      "type": "Contains",
+      "value": "No profile found"
+    },
+    "expectedConfigFile": null
+  },
+  {
+    "name": "run --help documents the exact --require-presence-at-mint flag name",
+    "command": [
+      "run",
+      "--help"
+    ],
+    "stdin": null,
+    "needsConfig": false,
+    "expectedExitCode": 0,
+    "expectedStdout": {
+      "type": "Contains",
+      "value": "--require-presence-at-mint"
+    },
+    "expectedStderr": {
+      "type": "Any"
+    },
+    "expectedConfigFile": null
   }
 ]

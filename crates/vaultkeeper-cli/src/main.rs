@@ -14,7 +14,13 @@ use vaultkeeper_core::backend::{
 };
 use vaultkeeper_core::config;
 use vaultkeeper_core::profile::{EntrySource, MaterializeMode};
+use vaultkeeper_core::resolve::{ResolveOptions, resolve_profile};
+use vaultkeeper_core::run::{
+    FILE_ONLY_DEGRADATION_NOTICE, apply_set_overlay, file_only_degradation_applies, parse_set_flag,
+    render_dry_run,
+};
 use vaultkeeper_core::vault::{MintLeaseOptions, enforce_presence_requirement};
+use zeroize::Zeroize;
 
 #[derive(Parser)]
 #[command(
@@ -36,6 +42,37 @@ enum Commands {
         #[arg(long)]
         token: String,
         /// Command to execute
+        #[arg(trailing_var_arg = true)]
+        command: Vec<String>,
+    },
+    /// Resolve a profile and launch a command with the resolved environment
+    /// (full stdio and signal transparency — see the `run` module docs).
+    ///
+    /// A distinct verb from `exec`: `exec --token <jwe> -- cmd` is token
+    /// *redemption*; `run --profile <name> -- cmd` is environment
+    /// *composition* (named declaration, minting where needed, launch).
+    Run {
+        /// Named profile from `$CONFIG_DIR/profiles/<NAME>.json`
+        #[arg(long, required_unless_present = "profile_file")]
+        profile: Option<String>,
+        /// Load a profile from an explicit path instead
+        #[arg(long, conflicts_with = "profile")]
+        profile_file: Option<String>,
+        /// Ad-hoc rung-2 entry, layered over the profile (repeatable).
+        /// Marked UNREVIEWED in --dry-run output.
+        #[arg(long = "set")]
+        set: Vec<String>,
+        /// Print each var, its rung, source backend, and resolved policy,
+        /// then exit without launching. Never prints values.
+        #[arg(long)]
+        dry_run: bool,
+        /// Fail unless every minted lease entry proved fresh human presence
+        /// at session establishment (distinct from
+        /// `--require-presence-per-use`, which forces a fresh action per
+        /// operation).
+        #[arg(long)]
+        require_presence_at_mint: bool,
+        /// Command to launch, with the resolved environment
         #[arg(trailing_var_arg = true)]
         command: Vec<String>,
     },
@@ -208,6 +245,24 @@ async fn main() {
                 require_presence_per_use,
             } => cmd_delete(&name, require_presence_per_use).await,
             Commands::Exec { token, command } => cmd_exec(&token, &command).await,
+            Commands::Run {
+                profile,
+                profile_file,
+                set,
+                dry_run,
+                require_presence_at_mint,
+                command,
+            } => {
+                cmd_run(
+                    profile,
+                    profile_file,
+                    set,
+                    dry_run,
+                    require_presence_at_mint,
+                    command,
+                )
+                .await
+            }
             Commands::Doctor => cmd_doctor().await,
             Commands::Approve { path } => cmd_approve(&path).await,
             Commands::DevMode { path, enable } => cmd_dev_mode(&path, enable).await,
@@ -370,6 +425,281 @@ async fn cmd_exec(token: &str, command: &[String]) -> i32 {
             1
         }
     }
+}
+
+/// Write a single diagnostic line to stderr without panicking on a write
+/// failure (e.g. a broken pipe). `eprintln!`/`writeln!(io::stderr(), ..)`
+/// panics on an `Err` by default — acceptable everywhere else in this file,
+/// but `run` launches a long-lived child whose consumer may legitimately
+/// close its pipes early, and a diagnostic write racing that must never
+/// crash the wrapper (issue #279 AC4: "handle EPIPE without a panic or
+/// stack trace, and never on stdout" — this helper is stderr-only, matching
+/// that stdout is the child's alone).
+fn stderr_diag(message: &str) {
+    use std::io::Write as _;
+    let _ = writeln!(io::stderr(), "{message}");
+}
+
+/// `run` — resolve a profile (plus any `--set` overlay) and launch a child
+/// command with the resolved environment, with full stdio and signal
+/// transparency (issue #279). A distinct verb from `exec`: `exec` redeems an
+/// already-minted token; `run` composes an environment from a named profile
+/// and mints where needed.
+///
+/// Flag semantics, `--set` parsing/validation, and `--dry-run` rendering all
+/// live in `vaultkeeper_core::run` so a future host renders byte-identical
+/// output; this function only parses arguments (already done by clap) and
+/// performs the final spawn/signal-forwarding/exit-code translation — the
+/// per-host half of the contract.
+#[allow(clippy::too_many_arguments)]
+async fn cmd_run(
+    profile: Option<String>,
+    profile_file: Option<String>,
+    set: Vec<String>,
+    dry_run: bool,
+    require_presence_at_mint: bool,
+    command: Vec<String>,
+) -> i32 {
+    let host = make_host();
+
+    // Flag-content validation (`--set`'s VAR=SECRET shape) happens before
+    // any filesystem access — a malformed flag is a usage error the caller
+    // should see regardless of whether the named profile happens to exist.
+    let mut set_entries = Vec::with_capacity(set.len());
+    for raw in &set {
+        match parse_set_flag(raw) {
+            Ok(entry) => set_entries.push(entry),
+            Err(e) => {
+                stderr_diag(&format!("Error: {e}"));
+                return 1;
+            }
+        }
+    }
+
+    let path = match resolve_profile_path(&host, profile.as_deref(), profile_file) {
+        Ok(p) => p,
+        Err(e) => {
+            stderr_diag(&format!("Error: {e}"));
+            return 1;
+        }
+    };
+
+    let (loaded_profile, cfg) = match load_named_profile(&host, &path).await {
+        Ok(loaded) => loaded,
+        Err(e) => {
+            stderr_diag(&format!("Error: {e}"));
+            return 1;
+        }
+    };
+
+    let defaults = vaultkeeper_core::profile::ProfileDefaults::from_vault_defaults(&cfg.defaults);
+    let plan = apply_set_overlay(loaded_profile, &set_entries, &defaults);
+
+    // The native CLI only ever operates against the `file` backend today
+    // (see `cmd_backend_capabilities`/`cmd_profile_lint`'s identical
+    // pattern) — this reads the *configured* backend name for `--dry-run`'s
+    // "source backend" column and the file-only degradation check, without
+    // instantiating a backend or touching the filesystem.
+    let active_backend_type = cfg
+        .backends
+        .iter()
+        .find(|b| b.enabled)
+        .map(|b| b.backend_type.as_str())
+        .unwrap_or("none");
+
+    if dry_run {
+        // Plan-only: never mints, never touches a backend, never launches.
+        // This is the one `run` invocation allowed to write to stdout.
+        print!(
+            "{}",
+            render_dry_run(&plan, active_backend_type, require_presence_at_mint)
+        );
+        return 0;
+    }
+
+    if command.is_empty() {
+        stderr_diag("Error: No command specified");
+        return 1;
+    }
+
+    let vault = match vaultkeeper_core::VaultKeeper::init(
+        host.as_ref(),
+        Some(vaultkeeper_core::vault::VaultKeeperOptions {
+            skip_doctor: true,
+            ..Default::default()
+        }),
+    )
+    .await
+    {
+        Ok(v) => v,
+        Err(e) => {
+            stderr_diag(&format!("Error: {e}"));
+            return 1;
+        }
+    };
+
+    let backend = FileBackend::new(host.clone());
+
+    // The file-only degradation notice — stderr only, never stdout, and
+    // emitted *before* resolution so it is visible even if resolution then
+    // fails (issue #279).
+    if file_only_degradation_applies(&plan, active_backend_type) {
+        stderr_diag(FILE_ONLY_DEGRADATION_NOTICE);
+    }
+
+    let resolve_options = ResolveOptions {
+        backend: &backend,
+        key_manager: vault.key_manager(),
+        // `run` does not yet perform executable-trust verification of the
+        // launched command (that would require resolving `command[0]` to a
+        // real file path — via `$PATH` — and hashing it, mirroring
+        // `VaultKeeper::setup`'s `executable_path`/TOFU flow). Until that
+        // lands, a `materialize: "lease"` entry whose resolved trust tier is
+        // `sigstore`/`registry` is refused by `resolve_profile` itself
+        // (`VaultError::ExecutableTrustRequired`) rather than silently
+        // minted with an incoherent "dev" exe marker — see the PR
+        // description for the tracked follow-up.
+        executable_hash: None,
+    };
+
+    let resolved = match resolve_profile(&plan.profile, &resolve_options).await {
+        Ok(r) => r,
+        Err(e) => {
+            stderr_diag(&format!("Error: {e}"));
+            return 1;
+        }
+    };
+
+    launch_and_wait(&command, resolved).await
+}
+
+/// Launch `command` with `env` injected, full stdio inheritance (never
+/// piped/captured — see the module docs), and signal forwarding, then wait
+/// for it to exit — returning the process's own exit-code convention: the
+/// child's real exit code, or `128 + N` if it was killed by signal `N`
+/// (issue #279 AC4).
+///
+/// `env` is zeroized in place immediately after `spawn()` returns: the
+/// values have already been copied into the child's own environment at that
+/// point (a `fork`+`exec` child's environment is independent of the
+/// parent's), so this process's copy of every resolved secret/lease value is
+/// scrubbed from memory as soon as it is no longer needed here.
+async fn launch_and_wait(command: &[String], mut env: vaultkeeper_core::ResolvedEnv) -> i32 {
+    use std::process::Stdio;
+
+    let mut cmd = tokio::process::Command::new(&command[0]);
+    cmd.args(&command[1..]);
+    cmd.envs(env.iter().map(|(k, v)| (k.as_str(), v.as_str())));
+    // Fd inheritance, not piping: the child gets the wrapper's real stdin/
+    // stdout/stderr file descriptors directly, which is what makes
+    // byte-exact, zero-added-buffering passthrough true by construction
+    // (issue #279 — never route through `HostPlatform::exec`, which
+    // captures output).
+    cmd.stdin(Stdio::inherit());
+    cmd.stdout(Stdio::inherit());
+    cmd.stderr(Stdio::inherit());
+
+    let child = match cmd.spawn() {
+        Ok(c) => c,
+        Err(e) => {
+            stderr_diag(&format!("Error: Failed to launch command: {e}"));
+            return 1;
+        }
+    };
+
+    // The resolved values are now live only in the child's own environment
+    // (copied at exec time) and in `env` here — zeroize this copy right
+    // away rather than waiting for the whole function to return.
+    for value in env.values_mut() {
+        value.zeroize();
+    }
+
+    let status = match wait_forwarding_signals(child).await {
+        Ok(s) => s,
+        Err(e) => {
+            stderr_diag(&format!("Error: Failed to wait for command: {e}"));
+            return 1;
+        }
+    };
+
+    exit_code_for_status(status)
+}
+
+/// Wait for `child` to exit, forwarding SIGINT/SIGTERM sent to *this*
+/// process on to the child and then continuing to wait — the wrapper must
+/// never exit before the child does, or it orphans it (issue #279 AC3).
+///
+/// MCP clients typically terminate the wrapper directly (not via a
+/// controlling tty's process-group signal delivery), which is exactly the
+/// case this handles: a signal delivered to the wrapper's own pid must
+/// still reach the child.
+#[cfg(unix)]
+async fn wait_forwarding_signals(
+    mut child: tokio::process::Child,
+) -> std::io::Result<std::process::ExitStatus> {
+    use tokio::signal::unix::{SignalKind, signal};
+
+    let mut sigint = signal(SignalKind::interrupt())?;
+    let mut sigterm = signal(SignalKind::terminate())?;
+
+    loop {
+        tokio::select! {
+            status = child.wait() => return status,
+            _ = sigint.recv() => forward_signal(&child, libc::SIGINT),
+            _ = sigterm.recv() => forward_signal(&child, libc::SIGTERM),
+        }
+    }
+}
+
+#[cfg(unix)]
+fn forward_signal(child: &tokio::process::Child, sig: libc::c_int) {
+    if let Some(pid) = child.id() {
+        // SAFETY: `pid` is this child's own pid, as reported by the OS via
+        // `tokio::process::Child::id()`. `kill(2)` on a pid that has already
+        // exited (a benign race with the child's own natural exit) simply
+        // returns `ESRCH`, which is intentionally ignored here — forwarding
+        // a signal to an about-to-be-reaped child is a no-op, not an error.
+        unsafe {
+            libc::kill(pid as libc::pid_t, sig);
+        }
+    }
+}
+
+/// Non-Unix fallback: no `SIGTERM` equivalent exists to forward, but a
+/// Ctrl+C sent to the wrapper's own console still must not orphan the child
+/// — this still waits for the child's real exit rather than racing it.
+#[cfg(not(unix))]
+async fn wait_forwarding_signals(
+    mut child: tokio::process::Child,
+) -> std::io::Result<std::process::ExitStatus> {
+    loop {
+        tokio::select! {
+            status = child.wait() => return status,
+            _ = tokio::signal::ctrl_c() => {
+                // Best-effort: no per-child signal-forwarding primitive is
+                // available outside Unix here; continue waiting rather than
+                // exiting first, matching the outlive-the-child contract.
+            }
+        }
+    }
+}
+
+/// Translate a completed child's [`std::process::ExitStatus`] into this
+/// process's own exit code: the child's real exit code when it exited
+/// normally, or `128 + N` when it was terminated by signal `N` (POSIX
+/// convention — issue #279 AC4).
+fn exit_code_for_status(status: std::process::ExitStatus) -> i32 {
+    if let Some(code) = status.code() {
+        return code;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::ExitStatusExt;
+        if let Some(sig) = status.signal() {
+            return 128 + sig;
+        }
+    }
+    1
 }
 
 async fn cmd_doctor() -> i32 {
