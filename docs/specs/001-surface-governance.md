@@ -22,7 +22,7 @@ surface change.
 
 | Command | Purpose |
 |---|---|
-| `exec` | Run a command with a single secret injected into its environment, by redeeming a capability token. |
+| `exec` *(deprecated → `run --token`)* | Legacy alias for single-token launching; folds into `run` and retires at 1.0 (B9). |
 | `store` | Save a secret into the active backend (value read from stdin — never from arguments). |
 | `delete` | Remove a secret from the active backend. |
 | `doctor` | Run preflight checks and report whether vaultkeeper is ready to use on this machine. |
@@ -39,7 +39,7 @@ surface change.
 | `profile lint` | Validate a profile and warn where its policy is looser than this machine's defaults (advisory). |
 | `session mint` | Mint a session signing lease for a profile entry, proving human presence at mint. |
 | `session revoke` | Revoke an outstanding lease by id, or every outstanding lease for a signing key. |
-| `run` *(in review)* | Resolve a profile and launch a command with that environment — stdio- and signal-transparent. |
+| `run` *(in review)* | Launch a command with one or more secrets available in its subshell — stdio- and signal-transparent. The source options (`--profile`, `--token`, `--set`) describe only *how many secrets and by what means they are populated*; the operation is one. (Owner-adjudicated: `run` is the single launcher verb.) |
 | `session redeem` *(designed)* | Redeem a signing lease into an in-process signing handle for non-interactive signing. |
 
 ### 1.1 Command tree (normative inventory)
@@ -130,6 +130,7 @@ on reflection, recorded to close the question.
 | B6 | `session mint PROFILE --entry E` vs `profile show NAME` | G2 | Reviewed in #328: `mint` takes the profile positionally (consistent) but the *entry* — arguably a co-primary subject — is a flag. | **leave** (documented): the profile is the addressed resource; the entry is a selector within it, legitimately a flag. Recorded so the #328 question is closed, not reopened. |
 | B7 | `backend capabilities` is the only `backend` verb | G1 | A noun namespace with a single verb is defensible only if more verbs are foreseen. | **leave**: `backend list`/`backend test` are natural future siblings; the namespace is intentional headroom, not premature. |
 | B8 | `config`/`backend`/`profile` support `--json` unevenly | G5 | `backend capabilities` has `--json`; `config show`, `profile show/list` do not. | **fix-now (additive)**: any command whose output a script would consume gets `--json`. Audit `config show`, `profile show`, `profile list`, `doctor`. |
+| B9 | `exec` vs `run` as separate launchers | G1 | Both launch a delegated command with secret(s) in its subshell; token-vs-profile is the *source*, not a different action — two verbs for one operation. | **fix-pre-1.0 (owner-adjudicated)**: `run` is the single launcher. `run --token <JWE> [--as VAR]` absorbs `exec` (`--as` defaults to `VAULTKEEPER_SECRET`); `exec` becomes a deprecated alias, removed at 1.0. Sequencing: land #279 as scoped (`--profile`), then fold `--token`/`--as` in as an immediate follow-up. One stdio-transparency contract lives in one command. |
 
 ### 1.4 Evolution policy (SHOULD BE)
 
