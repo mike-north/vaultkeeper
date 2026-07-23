@@ -42,9 +42,12 @@ fn default_config_json() -> String {
         + "\n"
 }
 
-/// Reject any `extra_files` path that is absolute or contains a
-/// parent-directory (`..`) component, so a malicious/malformed conformance
-/// case can never write outside the case's isolated temp directory.
+/// Reject any `extra_files` path that isn't made up entirely of plain,
+/// relative name components — i.e. every [`std::path::Component`] must be
+/// `Normal`, so absolute paths, `.` and `..` segments, an empty path, and
+/// Windows path prefixes/root-dirs are all rejected — so a
+/// malicious/malformed conformance case can never write outside the case's
+/// isolated temp directory.
 fn validate_extra_file_path(rel_path: &str) -> Result<(), String> {
     let components: Vec<_> = std::path::Path::new(rel_path).components().collect();
     let is_safe_relative = !components.is_empty()
@@ -55,8 +58,8 @@ fn validate_extra_file_path(rel_path: &str) -> Result<(), String> {
         Ok(())
     } else {
         Err(format!(
-            "extra_files path {rel_path:?} must be relative and contain no parent-directory \
-             (`..`) components"
+            "extra_files path {rel_path:?} must be relative and contain no '.', '..', or empty \
+             path segments"
         ))
     }
 }
