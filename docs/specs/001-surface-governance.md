@@ -115,6 +115,17 @@ VAR=SECRET` on `run` is the one deliberate exception and is documented as such, 
 child yields `128+N`. Advisory commands that cannot "fail" (`profile lint`) exit `0` on any successfully
 loaded input and signal concerns only through stderr warnings — this is deliberate and normative, not a bug.
 
+**G8 — Analysis-verb vocabulary: `lint` judges what you wrote; `check` verifies what is** *(owner-adjudicated)*.
+`lint` is **advisory static analysis of an authored artifact** (a profile file): opinions about a document,
+never a verdict — and it always exits `0`, because its baseline (this machine's `config.json` defaults) is
+machine-relative, so gating on it would crown one machine's defaults as project authority. `check` is
+**pass/fail verification of live state against an objective baseline** (a recomputed hash vs the committed
+manifest): a machine-independent verdict with a meaningful exit code, safe for scripts and CI to gate on.
+The exit-code semantics *derive from the subject* — machine-relative baselines cannot gate; objective
+baselines must. `doctor` remains the bundled whole-machine check. New commands must pick the verb that
+matches their subject; near-synonyms (`validate`, `verify`, `audit`) are reserved — propose them through
+this spec, not ad hoc.
+
 ### 1.3 Inconsistencies (BROKEN) — the review surface
 
 Each row is a concrete divergence from §1.2 with a recommended disposition. **fix-now** = correct before the
