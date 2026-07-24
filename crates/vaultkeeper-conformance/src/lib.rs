@@ -14,7 +14,7 @@ pub mod backend_cases;
 use serde::{Deserialize, Serialize};
 
 /// How to match expected output.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(tag = "type", content = "value")]
 pub enum OutputMatcher {
     /// Exact string match.
@@ -26,6 +26,7 @@ pub enum OutputMatcher {
     /// Output must parse as JSON containing these keys.
     JsonContains(serde_json::Value),
     /// Any output is acceptable.
+    #[default]
     Any,
 }
 
@@ -71,6 +72,49 @@ pub struct ConformanceCase {
     /// case that needs a loadable `profiles/<name>.json` (issue #279).
     #[serde(default)]
     pub extra_files: Vec<(String, String)>,
+    /// StubTool axes (issue #313): world-mutation, state-conditional-response,
+    /// and shape-assertion, exercised directly against a `StubTool`-driven
+    /// fake CLI rather than the file-backend `vaultkeeper` binary this
+    /// struct's other fields target. `None` for every case predating #313 —
+    /// existing runners that only ever read
+    /// command/stdin/expected_stdout/etc. keep working with those cases
+    /// completely unchanged; only a runner that specifically understands
+    /// `StubScenario` (see `crates/vaultkeeper-stub-tools`'s tests and
+    /// `packages/cli-tests`' stub-tool axis test) drives this field.
+    #[serde(default)]
+    pub stub_scenario: Option<StubScenario>,
+}
+
+/// A world-mutation/state-conditional/shape-assertion scenario (issue #313):
+/// an ordered sequence of [`StubStep`]s run against one freshly constructed
+/// [`crate::stub_scenarios`]-consumer's `World` for a single named tool
+/// (`"ykman"`, `"secret-tool"`, `"op"`, ...).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StubScenario {
+    /// Which built-in behavior table this scenario targets — see
+    /// `vaultkeeper_stub_tools::tables::by_tool_name`.
+    pub tool: String,
+    pub steps: Vec<StubStep>,
+}
+
+/// One step of a [`StubScenario`]: an argv + stdin invocation against the
+/// shared world, and the response that invocation must produce.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StubStep {
+    /// Freeform note documenting which axis this step demonstrates
+    /// (world-mutation / state-conditional-response / shape-assertion) —
+    /// not machine-consumed, purely for corpus readability.
+    #[serde(default)]
+    pub note: Option<String>,
+    pub args: Vec<String>,
+    #[serde(default)]
+    pub stdin: Option<String>,
+    pub expected_exit_code: i32,
+    pub expected_stdout: OutputMatcher,
+    #[serde(default)]
+    pub expected_stderr: OutputMatcher,
 }
 
 // ─── Help and usage cases ────────────────────────────────────────
@@ -87,6 +131,7 @@ fn help_cases() -> Vec<ConformanceCase> {
             expected_stderr: OutputMatcher::Any,
             expected_config_file: None,
             extra_files: Vec::new(),
+            stub_scenario: None,
         },
         ConformanceCase {
             name: "help flag prints help and exits 0".into(),
@@ -98,6 +143,7 @@ fn help_cases() -> Vec<ConformanceCase> {
             expected_stderr: OutputMatcher::Any,
             expected_config_file: None,
             extra_files: Vec::new(),
+            stub_scenario: None,
         },
         ConformanceCase {
             name: "short help flag prints help and exits 0".into(),
@@ -109,6 +155,7 @@ fn help_cases() -> Vec<ConformanceCase> {
             expected_stderr: OutputMatcher::Any,
             expected_config_file: None,
             extra_files: Vec::new(),
+            stub_scenario: None,
         },
         ConformanceCase {
             name: "version flag prints version".into(),
@@ -120,6 +167,7 @@ fn help_cases() -> Vec<ConformanceCase> {
             expected_stderr: OutputMatcher::Any,
             expected_config_file: None,
             extra_files: Vec::new(),
+            stub_scenario: None,
         },
         ConformanceCase {
             name: "help lists all expected commands".into(),
@@ -134,6 +182,7 @@ fn help_cases() -> Vec<ConformanceCase> {
             expected_stderr: OutputMatcher::Any,
             expected_config_file: None,
             extra_files: Vec::new(),
+            stub_scenario: None,
         },
     ]
 }
@@ -151,6 +200,7 @@ fn error_cases() -> Vec<ConformanceCase> {
         expected_stderr: OutputMatcher::Contains("error".into()),
         expected_config_file: None,
         extra_files: Vec::new(),
+        stub_scenario: None,
     }]
 }
 
@@ -168,6 +218,7 @@ fn argument_validation_cases() -> Vec<ConformanceCase> {
             expected_stderr: OutputMatcher::Contains("--name".into()),
             expected_config_file: None,
             extra_files: Vec::new(),
+            stub_scenario: None,
         },
         ConformanceCase {
             name: "delete requires --name".into(),
@@ -179,6 +230,7 @@ fn argument_validation_cases() -> Vec<ConformanceCase> {
             expected_stderr: OutputMatcher::Contains("--name".into()),
             expected_config_file: None,
             extra_files: Vec::new(),
+            stub_scenario: None,
         },
         ConformanceCase {
             name: "exec requires --token".into(),
@@ -190,6 +242,7 @@ fn argument_validation_cases() -> Vec<ConformanceCase> {
             expected_stderr: OutputMatcher::Contains("--token".into()),
             expected_config_file: None,
             extra_files: Vec::new(),
+            stub_scenario: None,
         },
         ConformanceCase {
             name: "approve requires --path".into(),
@@ -201,6 +254,7 @@ fn argument_validation_cases() -> Vec<ConformanceCase> {
             expected_stderr: OutputMatcher::Contains("--path".into()),
             expected_config_file: None,
             extra_files: Vec::new(),
+            stub_scenario: None,
         },
         ConformanceCase {
             name: "dev-mode requires --path".into(),
@@ -212,6 +266,7 @@ fn argument_validation_cases() -> Vec<ConformanceCase> {
             expected_stderr: OutputMatcher::Contains("--path".into()),
             expected_config_file: None,
             extra_files: Vec::new(),
+            stub_scenario: None,
         },
         ConformanceCase {
             name: "config with no subcommand exits 2".into(),
@@ -223,6 +278,7 @@ fn argument_validation_cases() -> Vec<ConformanceCase> {
             expected_stderr: OutputMatcher::Any,
             expected_config_file: None,
             extra_files: Vec::new(),
+            stub_scenario: None,
         },
     ]
 }
@@ -241,6 +297,7 @@ fn store_delete_cases() -> Vec<ConformanceCase> {
             expected_stderr: OutputMatcher::Any,
             expected_config_file: None,
             extra_files: Vec::new(),
+            stub_scenario: None,
         },
         ConformanceCase {
             name: "store exits 1 when stdin is empty".into(),
@@ -252,6 +309,7 @@ fn store_delete_cases() -> Vec<ConformanceCase> {
             expected_stderr: OutputMatcher::Contains("No secret provided".into()),
             expected_config_file: None,
             extra_files: Vec::new(),
+            stub_scenario: None,
         },
         ConformanceCase {
             name: "delete succeeds".into(),
@@ -263,6 +321,7 @@ fn store_delete_cases() -> Vec<ConformanceCase> {
             expected_stderr: OutputMatcher::Any,
             expected_config_file: None,
             extra_files: Vec::new(),
+            stub_scenario: None,
         },
     ]
 }
@@ -287,6 +346,7 @@ fn config_cases() -> Vec<ConformanceCase> {
                 "backends": [{ "type": "file" }]
             }))),
             extra_files: Vec::new(),
+            stub_scenario: None,
         },
         ConformanceCase {
             name: "config show outputs valid JSON with version".into(),
@@ -298,6 +358,7 @@ fn config_cases() -> Vec<ConformanceCase> {
             expected_stderr: OutputMatcher::Any,
             expected_config_file: None,
             extra_files: Vec::new(),
+            stub_scenario: None,
         },
         ConformanceCase {
             name: "config show exits 1 when no config exists".into(),
@@ -311,6 +372,7 @@ fn config_cases() -> Vec<ConformanceCase> {
             ),
             expected_config_file: None,
             extra_files: Vec::new(),
+            stub_scenario: None,
         },
         ConformanceCase {
             name: "config init exits 1 when config already exists".into(),
@@ -322,6 +384,7 @@ fn config_cases() -> Vec<ConformanceCase> {
             expected_stderr: OutputMatcher::Contains("Error: Config already exists at".into()),
             expected_config_file: None,
             extra_files: Vec::new(),
+            stub_scenario: None,
         },
     ]
 }
@@ -340,6 +403,7 @@ fn doctor_cases() -> Vec<ConformanceCase> {
         expected_stderr: OutputMatcher::Any,
         expected_config_file: None,
         extra_files: Vec::new(),
+        stub_scenario: None,
     }]
 }
 
@@ -356,6 +420,7 @@ fn rotate_key_cases() -> Vec<ConformanceCase> {
         expected_stderr: OutputMatcher::Any,
         expected_config_file: None,
         extra_files: Vec::new(),
+        stub_scenario: None,
     }]
 }
 
@@ -377,6 +442,7 @@ fn approve_cases() -> Vec<ConformanceCase> {
         expected_stderr: OutputMatcher::Any,
         expected_config_file: None,
         extra_files: Vec::new(),
+        stub_scenario: None,
     }]
 }
 
@@ -399,6 +465,7 @@ fn dev_mode_cases() -> Vec<ConformanceCase> {
             expected_stderr: OutputMatcher::Any,
             expected_config_file: None,
             extra_files: Vec::new(),
+            stub_scenario: None,
         },
         ConformanceCase {
             name: "dev-mode disable succeeds".into(),
@@ -414,6 +481,7 @@ fn dev_mode_cases() -> Vec<ConformanceCase> {
             expected_stderr: OutputMatcher::Any,
             expected_config_file: None,
             extra_files: Vec::new(),
+            stub_scenario: None,
         },
     ]
 }
@@ -449,6 +517,7 @@ fn backend_capabilities_cases() -> Vec<ConformanceCase> {
             expected_stderr: OutputMatcher::Any,
             expected_config_file: None,
             extra_files: Vec::new(),
+            stub_scenario: None,
         },
         ConformanceCase {
             name: "backend capabilities --json emits a row with type, displayName, presencePerUse"
@@ -466,6 +535,7 @@ fn backend_capabilities_cases() -> Vec<ConformanceCase> {
             expected_stderr: OutputMatcher::Any,
             expected_config_file: None,
             extra_files: Vec::new(),
+            stub_scenario: None,
         },
         ConformanceCase {
             name: "backend with no subcommand exits 2".into(),
@@ -477,6 +547,7 @@ fn backend_capabilities_cases() -> Vec<ConformanceCase> {
             expected_stderr: OutputMatcher::Any,
             expected_config_file: None,
             extra_files: Vec::new(),
+            stub_scenario: None,
         },
     ]
 }
@@ -503,6 +574,7 @@ fn run_cases() -> Vec<ConformanceCase> {
             expected_stderr: OutputMatcher::Contains("--profile".into()),
             expected_config_file: None,
             extra_files: Vec::new(),
+            stub_scenario: None,
         },
         ConformanceCase {
             name: "run rejects --profile and --profile-file together".into(),
@@ -522,6 +594,7 @@ fn run_cases() -> Vec<ConformanceCase> {
             expected_stderr: OutputMatcher::Any,
             expected_config_file: None,
             extra_files: Vec::new(),
+            stub_scenario: None,
         },
         ConformanceCase {
             name: "run rejects a --set value with no '='".into(),
@@ -541,6 +614,7 @@ fn run_cases() -> Vec<ConformanceCase> {
             expected_stderr: OutputMatcher::Contains("--set".into()),
             expected_config_file: None,
             extra_files: Vec::new(),
+            stub_scenario: None,
         },
         ConformanceCase {
             // Renamed from a previous version of this case that claimed to
@@ -561,6 +635,7 @@ fn run_cases() -> Vec<ConformanceCase> {
             expected_stderr: OutputMatcher::Contains("No profile found".into()),
             expected_config_file: None,
             extra_files: Vec::new(),
+            stub_scenario: None,
         },
         ConformanceCase {
             // Genuine coverage of the "No command specified" branch: a real,
@@ -580,6 +655,7 @@ fn run_cases() -> Vec<ConformanceCase> {
                 "profiles/empty-profile.json".into(),
                 r#"{ "version": 1, "name": "empty-profile", "entries": {} }"#.into(),
             )],
+            stub_scenario: None,
         },
         ConformanceCase {
             // `--dry-run` against that same real profile is plan-only and
@@ -601,6 +677,7 @@ fn run_cases() -> Vec<ConformanceCase> {
                 "profiles/empty-profile.json".into(),
                 r#"{ "version": 1, "name": "empty-profile", "entries": {} }"#.into(),
             )],
+            stub_scenario: None,
         },
         ConformanceCase {
             // The security-relevant refusal path (issue #279, owner-adjudicated
@@ -626,6 +703,7 @@ fn run_cases() -> Vec<ConformanceCase> {
                 "profiles/empty-profile.json".into(),
                 r#"{ "version": 1, "name": "empty-profile", "entries": {} }"#.into(),
             )],
+            stub_scenario: None,
         },
         ConformanceCase {
             name: "run --help documents the exact --require-presence-at-issuance flag name".into(),
@@ -637,6 +715,7 @@ fn run_cases() -> Vec<ConformanceCase> {
             expected_stderr: OutputMatcher::Any,
             expected_config_file: None,
             extra_files: Vec::new(),
+            stub_scenario: None,
         },
         // ─── run --token (issue #333: exec folded into run) ───────
         //
@@ -798,6 +877,7 @@ fn revoke_key_cases() -> Vec<ConformanceCase> {
         expected_stderr: OutputMatcher::Any,
         expected_config_file: None,
         extra_files: Vec::new(),
+        stub_scenario: None,
     }]
 }
 
@@ -822,6 +902,170 @@ pub fn all_cases() -> Vec<ConformanceCase> {
 /// Serialize all conformance cases to JSON for the JS runner.
 pub fn cases_as_json() -> String {
     serde_json::to_string_pretty(&all_cases()).expect("conformance cases must serialize")
+}
+
+// ─── StubTool axis cases (issue #313 AC4) ─────────────────────────
+//
+// Deliberately **not** part of [`all_cases`]/[`cases_as_json`]: every
+// pre-#313 `ConformanceCase` in this file targets the file-backend
+// `vaultkeeper` CLI binary via its `command`/`needs_config` fields, and the
+// existing Rust (`tests/run_conformance.rs`) and JS
+// (`packages/cli-tests/test/conformance/run-conformance.test.ts`) runners
+// only understand that contract. Folding stub-scenario cases into the same
+// list those runners iterate would require either teaching them a second
+// dispatch path or giving every case here a `command` that's meaningless
+// for a stub-scenario case — both work against "existing conformance
+// assertions still consume the same cases unchanged" (AC4). Instead, this
+// is its own small corpus, consumed only by a runner that specifically
+// understands [`StubScenario`]:
+/// `crates/vaultkeeper-stub-tools/tests/conformance_axes.rs` (Rust) and
+/// `packages/cli-tests/test/conformance/stub-tool-axes.test.ts` (JS).
+pub fn stub_scenario_cases() -> Vec<ConformanceCase> {
+    fn stub_case(name: &str, tool: &str, steps: Vec<StubStep>) -> ConformanceCase {
+        ConformanceCase {
+            name: name.into(),
+            command: Vec::new(),
+            stdin: None,
+            needs_config: false,
+            expected_exit_code: -1,
+            expected_stdout: OutputMatcher::Any,
+            expected_stderr: OutputMatcher::Any,
+            expected_config_file: None,
+            extra_files: Vec::new(),
+            stub_scenario: Some(StubScenario {
+                tool: tool.into(),
+                steps,
+            }),
+        }
+    }
+
+    vec![
+        // World-mutation axis: a `store` creates an item a later `get`
+        // (here, secret-tool's `lookup`) must return.
+        stub_case(
+            "secret-tool: store then lookup round-trips through the shared world",
+            "secret-tool",
+            vec![
+                StubStep {
+                    note: Some("world-mutation: store upserts an item into the shared world".into()),
+                    args: vec![
+                        "store".into(),
+                        "--label".into(),
+                        "vaultkeeper: axis-demo".into(),
+                        "--".into(),
+                        "vaultkeeper-id".into(),
+                        "axis-demo".into(),
+                    ],
+                    stdin: Some("axis-secret".into()),
+                    expected_exit_code: 0,
+                    expected_stdout: OutputMatcher::Exact(String::new()),
+                    expected_stderr: OutputMatcher::Any,
+                },
+                StubStep {
+                    note: Some(
+                        "world-mutation: lookup observes the earlier store's mutation".into(),
+                    ),
+                    args: vec![
+                        "lookup".into(),
+                        "--".into(),
+                        "vaultkeeper-id".into(),
+                        "axis-demo".into(),
+                    ],
+                    stdin: None,
+                    expected_exit_code: 0,
+                    expected_stdout: OutputMatcher::Exact("axis-secret".into()),
+                    expected_stderr: OutputMatcher::Any,
+                },
+            ],
+        ),
+        // State-conditional-response axis: `lookup`'s response for the
+        // identical argv is gated on `world.locked`, not just item
+        // existence (see `secret_tool()`'s "lookup (secret service locked)"
+        // rule, tried before the existence check) — this case exercises the
+        // unlocked branch parsing and driving correctly through the
+        // corpus's `StubStep` sequencing; the locked branch (identical argv,
+        // opposite response) is exercised directly against the engine in
+        // `crates/vaultkeeper-stub-tools/tests/engine_table_driven.rs`'s
+        // `secret_tool_lookup_reports_locked_regardless_of_item_existence`.
+        stub_case(
+            "secret-tool: unlocked lookup of an existing item succeeds (locked-vs-unlocked axis)",
+            "secret-tool",
+            vec![
+                StubStep {
+                    note: Some("seed: store an item while unlocked".into()),
+                    args: vec![
+                        "store".into(),
+                        "--label".into(),
+                        "vaultkeeper: axis-locked-demo".into(),
+                        "--".into(),
+                        "vaultkeeper-id".into(),
+                        "axis-locked-demo".into(),
+                    ],
+                    stdin: Some("axis-secret".into()),
+                    expected_exit_code: 0,
+                    expected_stdout: OutputMatcher::Exact(String::new()),
+                    expected_stderr: OutputMatcher::Any,
+                },
+                StubStep {
+                    note: Some(
+                        "state-conditional: unlocked lookup of an existing item succeeds".into(),
+                    ),
+                    args: vec![
+                        "lookup".into(),
+                        "--".into(),
+                        "vaultkeeper-id".into(),
+                        "axis-locked-demo".into(),
+                    ],
+                    stdin: None,
+                    expected_exit_code: 0,
+                    expected_stdout: OutputMatcher::Exact("axis-secret".into()),
+                    expected_stderr: OutputMatcher::Any,
+                },
+            ],
+        ),
+        // Shape-assertion axis: write-then-read must return the value
+        // through the real `op` item field shape, not just value equality —
+        // reproduces the op-CLI spike's silent-field-drop defect class when
+        // the write's stdin does not match that shape.
+        stub_case(
+            "op: item create then item get round-trips the password through the real field shape",
+            "op",
+            vec![
+                StubStep {
+                    note: Some(
+                        "shape-assertion: stdin puts the value at the real fields.password.value path".into(),
+                    ),
+                    args: vec![
+                        "item".into(),
+                        "create".into(),
+                        "--format".into(),
+                        "json".into(),
+                    ],
+                    stdin: Some(r#"{"fields":{"password":{"value":"axis-shape-secret"}}}"#.into()),
+                    expected_exit_code: 0,
+                    expected_stdout: OutputMatcher::Contains("op-item".into()),
+                    expected_stderr: OutputMatcher::Any,
+                },
+                StubStep {
+                    note: Some(
+                        "shape-assertion: the round trip must return the value, not just a field with the right id"
+                            .into(),
+                    ),
+                    args: vec![
+                        "item".into(),
+                        "get".into(),
+                        "op-item".into(),
+                        "--format".into(),
+                        "json".into(),
+                    ],
+                    stdin: None,
+                    expected_exit_code: 0,
+                    expected_stdout: OutputMatcher::Contains("axis-shape-secret".into()),
+                    expected_stderr: OutputMatcher::Any,
+                },
+            ],
+        ),
+    ]
 }
 
 /// Check whether an output matches the expected pattern.

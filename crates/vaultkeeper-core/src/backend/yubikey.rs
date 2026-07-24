@@ -719,41 +719,35 @@ mod tests {
                 });
             }
 
-            match args.first().copied() {
-                Some("--version") => Ok(ExecOutput {
-                    stdout: b"YubiKey Manager (ykman) version: 5.4.0".to_vec(),
-                    stderr: Vec::new(),
-                    exit_code: 0,
-                }),
-                Some("list") => {
-                    if self.device_available {
-                        Ok(ExecOutput {
-                            stdout: b"YubiKey 5 NFC (5.4.3) [OTP+FIDO+CCID] Serial: 12345".to_vec(),
-                            stderr: Vec::new(),
-                            exit_code: 0,
-                        })
-                    } else {
-                        Ok(ExecOutput {
-                            stdout: Vec::new(),
-                            stderr: Vec::new(),
-                            exit_code: 0,
-                        })
-                    }
-                }
-                Some("otp") => {
-                    // ["otp", "calculate", "2", <hex-challenge>]
-                    assert_eq!(args.get(1).copied(), Some("calculate"));
-                    assert_eq!(args.get(2).copied(), Some("2"));
-                    assert!(args.get(3).is_some(), "challenge hex value must be present");
-                    let response = self.hmac_response.lock().unwrap().clone();
-                    Ok(ExecOutput {
-                        stdout: response.into_bytes(),
-                        stderr: Vec::new(),
-                        exit_code: 0,
-                    })
-                }
-                other => panic!("unexpected ykman invocation: {other:?}"),
+            // Ported onto the generalized `StubTool` engine (issue #313
+            // AC6): this used to be a hand-written match over `args.first()`
+            // — now it's the exact same `ykman` behavior table
+            // `vk-stub-ykman` (a real subprocess binary) loads, driven
+            // in-process here for speed/hermeticity. `device_available` and
+            // `hmac_response` seed a fresh `World` per call rather than
+            // persisting one across calls, matching this double's original
+            // per-call semantics (`hmac_response` can be swapped mid-test —
+            // see e.g. `wrong_key_decrypt_surfaces_typed_error_never_a_garbage_secret`).
+            let hmac_response = self.hmac_response.lock().unwrap().clone();
+            let table = vaultkeeper_stub_tools::tables::ykman(&hmac_response);
+            let mut world = vaultkeeper_stub_tools::World::new();
+            world.flags.insert(
+                vaultkeeper_stub_tools::tables::YKMAN_DEVICE_AVAILABLE_FLAG.to_string(),
+                self.device_available,
+            );
+            let args_owned: Vec<String> = args.iter().map(|s| s.to_string()).collect();
+            let result =
+                vaultkeeper_stub_tools::StubTool::run(&table, &mut world, &args_owned, b"");
+
+            if result.exit_code == vaultkeeper_stub_tools::NO_MATCH_EXIT_CODE {
+                panic!("unexpected ykman invocation: {args_owned:?}");
             }
+
+            Ok(ExecOutput {
+                stdout: result.stdout,
+                stderr: result.stderr,
+                exit_code: result.exit_code,
+            })
         }
         async fn read_file(&self, path: &Path) -> Result<Vec<u8>, VaultError> {
             if self.deny_read.lock().unwrap().contains(path) {

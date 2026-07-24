@@ -48,6 +48,40 @@ jobs:
             exit 1
           fi
 
+      - name: Verify committed StubTool axis corpus matches a fresh export (drift check, issue #313)
+        # Same rationale/pattern as the backend-conformance drift check above,
+        # for the world-mutation/state-conditional/shape-assertion corpus
+        # (vaultkeeper_conformance::stub_scenario_cases()) the JS runner in
+        # packages/cli-tests/test/conformance/stub-tool-axes.test.ts loads a
+        # committed export of.
+        run: |
+          cargo run -q -p vaultkeeper-conformance --bin export-stub-scenarios \
+            > /tmp/stub-scenarios-fresh.json
+          if ! diff -u packages/cli-tests/test/conformance/stub-scenarios.json /tmp/stub-scenarios-fresh.json; then
+            echo "::error::packages/cli-tests/test/conformance/stub-scenarios.json is stale. Regenerate it: cargo run -p vaultkeeper-conformance --bin export-stub-scenarios > packages/cli-tests/test/conformance/stub-scenarios.json"
+            exit 1
+          fi
+
+      - name: Build vk-stub-* binaries
+        # packages/cli-tests' StubTool axis conformance test (issue #313 AC3)
+        # resolves these from target/debug at test time, the same way the
+        # `vaultkeeper` binary itself is resolved by run-conformance.test.ts —
+        # built here (debug profile is enough; they're never shipped) so the
+        # TS job below can download and use them without a Cargo toolchain.
+        run: cargo build -p vaultkeeper-stub-tools --bins
+
+      - name: Upload vk-stub-* binaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: vk-stub-tools-binaries
+          path: |
+            target/debug/vk-stub-ykman
+            target/debug/vk-stub-secret-tool
+            target/debug/vk-stub-security
+            target/debug/vk-stub-op
+            target/debug/vk-stub-powershell
+          retention-days: 1
+
       - name: Build release binary
         run: cargo build --release
 
@@ -253,6 +287,15 @@ jobs:
 
       - name: Make binary executable
         run: chmod +x target/release/vaultkeeper
+
+      - name: Download vk-stub-* binaries
+        uses: actions/download-artifact@v4
+        with:
+          name: vk-stub-tools-binaries
+          path: target/debug
+
+      - name: Make vk-stub-* binaries executable
+        run: chmod +x target/debug/vk-stub-ykman target/debug/vk-stub-secret-tool target/debug/vk-stub-security target/debug/vk-stub-op target/debug/vk-stub-powershell
 
       # Standalone, non-workspace install of the pinned TypeScript compiler
       # versions used by the consumer-typecheck TS-version matrix (#125).

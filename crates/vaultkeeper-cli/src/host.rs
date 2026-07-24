@@ -1081,4 +1081,164 @@ mod tests {
         .await
         .unwrap();
     }
+
+    // ── StubTool through a real HostPlatform::exec (issue #313 AC2) ────────
+    //
+    // Spawns the real `vk-stub-secret-tool` binary — not an in-process
+    // double — through `NativeHostPlatform::exec`, driven by the real
+    // `SecretToolBackend`. This exercises `SecretToolBackend`'s actual
+    // argv-build (`store --label <label> -- vaultkeeper-id <id>`),
+    // stdin-routing (the secret goes over stdin, never argv), stdout-parse
+    // (trailing-newline stripping), and error-classify (`SecretNotFound`
+    // via exit code) path against a real subprocess end to end.
+    #[cfg(unix)]
+    mod stub_tool_secret_tool_ac2 {
+        use super::*;
+        use serial_test::serial;
+        use std::os::unix::fs::symlink;
+        use vaultkeeper_core::backend::{SecretBackend, SecretToolBackend};
+        use vaultkeeper_stub_tools::{SENTINEL_ENV_VAR, WORLD_PATH_ENV_VAR};
+
+        /// Locates the compiled `vk-stub-secret-tool` binary the same way
+        /// `packages/cli-tests`' JS conformance runner locates the
+        /// `vaultkeeper` binary: relative to the workspace's `target/debug`.
+        /// `cargo test` at the workspace root always builds it first (it's
+        /// a bin target of the sibling `vaultkeeper-stub-tools` crate); a
+        /// scoped `cargo test -p vaultkeeper-cli` run without that crate
+        /// having been built is the one case this returns `None` for.
+        fn find_stub_binary() -> Option<std::path::PathBuf> {
+            let manifest_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+            let workspace_root = manifest_dir.parent()?.parent()?;
+            let candidate = workspace_root
+                .join("target")
+                .join("debug")
+                .join("vk-stub-secret-tool");
+            candidate.exists().then_some(candidate)
+        }
+
+        /// Builds a `SecretToolBackend` whose `secret-tool` resolves (via
+        /// `PATH`) to the real `vk-stub-secret-tool` binary, and mutates
+        /// this test process's environment to make that so — hence
+        /// `#[serial]`: `NativeHostPlatform::exec` inherits the process
+        /// environment wholesale (it has no per-call `PATH` override), so
+        /// two of these tests running concurrently would race each other's
+        /// `PATH`/sentinel mutation.
+        struct Fixture {
+            _path_dir: tempfile::TempDir,
+            _world_dir: tempfile::TempDir,
+            previous_path: Option<String>,
+        }
+
+        impl Fixture {
+            fn new(stub_binary: &std::path::Path) -> Self {
+                let path_dir = tempfile::tempdir().unwrap();
+                // Guardrail 2 (issue #313): the binary is named
+                // `vk-stub-secret-tool`; only a symlink named `secret-tool`,
+                // scoped to this test-only PATH directory, ever resolves as
+                // the real tool name.
+                symlink(stub_binary, path_dir.path().join("secret-tool")).unwrap();
+
+                // The stub is a fresh process per `exec` call, so its
+                // `World` (the store `secret-tool store` writes into) must
+                // be persisted to a file a later `secret-tool lookup`
+                // process reads back from — otherwise every invocation
+                // would see an empty world and "store" would appear to
+                // silently do nothing.
+                let world_dir = tempfile::tempdir().unwrap();
+                let world_path = world_dir.path().join("world.json");
+
+                let previous_path = std::env::var("PATH").ok();
+                let mut new_path = path_dir.path().display().to_string();
+                if let Some(existing) = &previous_path {
+                    new_path.push(':');
+                    new_path.push_str(existing);
+                }
+                // SAFETY: serialized by `#[serial]` — no concurrent reader
+                // of `PATH`/the sentinel/world-path vars in this process
+                // while a `Fixture` is alive.
+                unsafe {
+                    std::env::set_var("PATH", &new_path);
+                    std::env::set_var(SENTINEL_ENV_VAR, "1");
+                    std::env::set_var(WORLD_PATH_ENV_VAR, &world_path);
+                }
+
+                Self {
+                    _path_dir: path_dir,
+                    _world_dir: world_dir,
+                    previous_path,
+                }
+            }
+        }
+
+        impl Drop for Fixture {
+            fn drop(&mut self) {
+                // SAFETY: see `Fixture::new`.
+                unsafe {
+                    match &self.previous_path {
+                        Some(p) => std::env::set_var("PATH", p),
+                        None => std::env::remove_var("PATH"),
+                    }
+                    std::env::remove_var(SENTINEL_ENV_VAR);
+                    std::env::remove_var(WORLD_PATH_ENV_VAR);
+                }
+            }
+        }
+
+        #[tokio::test]
+        #[serial(stub_tool_path_env)]
+        async fn secret_tool_backend_store_retrieve_delete_round_trip_through_the_real_stub_binary()
+        {
+            let Some(stub_binary) = find_stub_binary() else {
+                eprintln!(
+                    "skipping: vk-stub-secret-tool not built at target/debug \
+                     (run `cargo test` from the workspace root, not `-p vaultkeeper-cli` alone)"
+                );
+                return;
+            };
+            let _fixture = Fixture::new(&stub_binary);
+
+            let config_dir = tempfile::tempdir().unwrap();
+            let host =
+                std::sync::Arc::new(NativeHostPlatform::new(config_dir.path().to_path_buf()));
+            let backend = SecretToolBackend::new(host);
+
+            let id = "ac2-round-trip";
+            assert!(!backend.exists(id).await.unwrap());
+
+            backend.store(id, "s3cret-value").await.unwrap();
+            assert!(backend.exists(id).await.unwrap());
+            assert_eq!(backend.retrieve(id).await.unwrap(), "s3cret-value");
+
+            backend.delete(id).await.unwrap();
+            assert!(!backend.exists(id).await.unwrap());
+        }
+
+        #[tokio::test]
+        #[serial(stub_tool_path_env)]
+        async fn secret_tool_backend_retrieve_of_a_never_stored_id_classifies_as_secret_not_found()
+        {
+            let Some(stub_binary) = find_stub_binary() else {
+                eprintln!(
+                    "skipping: vk-stub-secret-tool not built at target/debug \
+                     (run `cargo test` from the workspace root, not `-p vaultkeeper-cli` alone)"
+                );
+                return;
+            };
+            let _fixture = Fixture::new(&stub_binary);
+
+            let config_dir = tempfile::tempdir().unwrap();
+            let host =
+                std::sync::Arc::new(NativeHostPlatform::new(config_dir.path().to_path_buf()));
+            let backend = SecretToolBackend::new(host);
+
+            let err = backend.retrieve("never-stored-ac2").await.unwrap_err();
+            assert!(
+                matches!(
+                    err,
+                    vaultkeeper_core::errors::VaultError::SecretNotFound { .. }
+                ),
+                "expected SecretNotFound, got {err:?}"
+            );
+        }
+    }
 }
