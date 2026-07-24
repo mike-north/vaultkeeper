@@ -201,6 +201,71 @@ pub fn render_dry_run(
     out
 }
 
+/// The default env var a `run --token`/`exec` redeemed secret is injected
+/// under when `--as` is not given — matching `exec`'s long-standing
+/// `VAULTKEEPER_SECRET` default so `exec --token <jwe> -- cmd` and
+/// `run --token <jwe> -- cmd` (no `--as`) are byte-for-byte identical on the
+/// child's environment (issue #333 AC1).
+pub const DEFAULT_TOKEN_VAR: &str = "VAULTKEEPER_SECRET";
+
+/// Validate a `run --as <VAR>` / redeemed-token target env var name.
+///
+/// Reuses the identical `[A-Z_][A-Z0-9_]*` shape every other env-var-name
+/// surface in this crate is held to ([`is_valid_env_var_name`], also used by
+/// `--set`'s `VAR` half and every profile entry name) — an `--as` name is not
+/// a looser or stricter invariant than those.
+///
+/// # Errors
+/// Returns [`VaultError::ConfigValidation`] (field `"--as"`) when `name`
+/// does not match that shape.
+pub fn validate_as_var_name(name: &str) -> Result<(), VaultError> {
+    if is_valid_env_var_name(name) {
+        return Ok(());
+    }
+    Err(VaultError::ConfigValidation {
+        message: format!(
+            "--as \"{name}\" is not a valid env var name — must match [A-Z_][A-Z0-9_]*"
+        ),
+        field: "--as".to_string(),
+        config_file_path: None,
+    })
+}
+
+/// Render `run --token --dry-run`: the single var the redeemed token will be
+/// injected under, plus any `--set` overlay entries — mirroring
+/// [`render_dry_run`]'s shape for the profile source, but for the token
+/// source: the primary entry is never resolved through the active backend
+/// (a token is redeemed directly, not minted/looked up), so it is rendered
+/// with an explicit `source: --token (redeemed at launch)` line instead of a
+/// `backend:` column, keeping the two sources visually distinct rather than
+/// implying the token entry went through backend resolution it never did.
+/// Never touches the vault or decrypts the token — dry-run must never mint,
+/// resolve, or launch (issue #279's plan-only contract, extended to the
+/// token source by issue #333).
+#[must_use]
+pub fn render_token_dry_run(as_var: &str, set_plan: &RunPlan, active_backend_type: &str) -> String {
+    let mut out = String::from(
+        "vaultkeeper run --dry-run: plan only \u{2014} nothing redeemed, nothing launched.\n\n",
+    );
+
+    out.push_str(&format!("  {as_var}\n"));
+    out.push_str("    rung:        2 (secret)\n");
+    out.push_str("    source:      --token (redeemed at launch, not resolved now)\n");
+
+    for (name, entry) in &set_plan.profile.entries {
+        let rung = match entry.materialize {
+            MaterializeMode::Secret => "2 (secret)",
+            MaterializeMode::Lease => "3 (lease)",
+        };
+        out.push_str(&format!("  {name}\n"));
+        out.push_str(&format!("    rung:        {rung}\n"));
+        out.push_str(&format!("    backend:     {active_backend_type}\n"));
+        out.push_str("    UNREVIEWED (ad hoc --set entry, not part of the declared profile)\n");
+    }
+
+    out
+}
+
 /// The file-only degradation notice: emitted on **stderr only, never
 /// stdout**, whenever every entry `run` resolves goes through the `file`
 /// backend. File-only resolution buys organizational hygiene — no plaintext
@@ -466,5 +531,70 @@ mod tests {
         .unwrap();
         let plan = apply_set_overlay(profile, &[], &defaults());
         assert!(!file_only_degradation_applies(&plan, "file"));
+    }
+
+    // --- validate_as_var_name (issue #333 AC2) ---
+
+    #[test]
+    fn validate_as_var_name_accepts_the_shout_case_shape() {
+        assert!(validate_as_var_name("VAULTKEEPER_SECRET").is_ok());
+        assert!(validate_as_var_name("_PRIVATE").is_ok());
+        assert!(validate_as_var_name("A1").is_ok());
+    }
+
+    #[test]
+    fn validate_as_var_name_rejects_lower_case() {
+        let err = validate_as_var_name("lower_case").unwrap_err();
+        assert_matches!(err, VaultError::ConfigValidation { field, .. } if field == "--as");
+    }
+
+    #[test]
+    fn validate_as_var_name_rejects_empty() {
+        assert_matches!(
+            validate_as_var_name("").unwrap_err(),
+            VaultError::ConfigValidation { field, .. } if field == "--as"
+        );
+    }
+
+    #[test]
+    fn validate_as_var_name_rejects_a_leading_digit() {
+        assert_matches!(
+            validate_as_var_name("1ABC").unwrap_err(),
+            VaultError::ConfigValidation { .. }
+        );
+    }
+
+    // --- render_token_dry_run (issue #333) ---
+
+    #[test]
+    fn token_dry_run_render_shows_the_as_var_and_never_touches_backend_for_it() {
+        let empty = load_profile_from_str(
+            r#"{ "version": 1, "name": "p", "entries": {} }"#,
+            &defaults(),
+        )
+        .unwrap();
+        let plan = apply_set_overlay(empty, &[], &defaults());
+        let rendered = render_token_dry_run("VAULTKEEPER_SECRET", &plan, "file");
+        assert!(rendered.contains("VAULTKEEPER_SECRET"));
+        assert!(rendered.contains("source:      --token"));
+        assert!(rendered.contains("rung:        2 (secret)"));
+    }
+
+    #[test]
+    fn token_dry_run_render_includes_combined_set_entries_marked_unreviewed() {
+        let empty = load_profile_from_str(
+            r#"{ "version": 1, "name": "p", "entries": {} }"#,
+            &defaults(),
+        )
+        .unwrap();
+        let sets = vec![SetEntry {
+            var: "EXTRA".to_string(),
+            secret_name: "extra-secret".to_string(),
+        }];
+        let plan = apply_set_overlay(empty, &sets, &defaults());
+        let rendered = render_token_dry_run("VAULTKEEPER_SECRET", &plan, "file");
+        assert!(rendered.contains("EXTRA"));
+        assert!(rendered.contains("UNREVIEWED"));
+        assert!(rendered.contains("backend:     file"));
     }
 }

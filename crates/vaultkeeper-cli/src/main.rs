@@ -4,7 +4,7 @@
 
 mod host;
 
-use clap::{Parser, Subcommand};
+use clap::{ArgGroup, Parser, Subcommand};
 use host::NativeHostPlatform;
 use std::io::{self, IsTerminal, Read};
 use std::path::{Path, PathBuf};
@@ -16,8 +16,9 @@ use vaultkeeper_core::config;
 use vaultkeeper_core::profile::{EntrySource, MaterializeMode};
 use vaultkeeper_core::resolve::{ResolveOptions, resolve_profile};
 use vaultkeeper_core::run::{
-    FILE_ONLY_DEGRADATION_NOTICE, apply_set_overlay, file_only_degradation_applies, parse_set_flag,
-    render_dry_run,
+    DEFAULT_TOKEN_VAR, FILE_ONLY_DEGRADATION_NOTICE, apply_set_overlay,
+    file_only_degradation_applies, parse_set_flag, render_dry_run, render_token_dry_run,
+    validate_as_var_name,
 };
 use vaultkeeper_core::vault::{MintLeaseOptions, enforce_presence_requirement};
 use zeroize::{Zeroize, Zeroizing};
@@ -36,7 +37,12 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Run a command with a secret injected as an env var
+    /// Deprecated alias for `run --token` (issue #333, surface-governance
+    /// ruling B9). Hidden from `--help` — `run` is the single documented
+    /// launcher verb — but kept working, unhidden, until 1.0. Emits a
+    /// single-line deprecation notice on stderr (never stdout) pointing at
+    /// `run --token`.
+    #[command(hide = true)]
     Exec {
         /// JWE token
         #[arg(long)]
@@ -45,19 +51,39 @@ enum Commands {
         #[arg(trailing_var_arg = true)]
         command: Vec<String>,
     },
-    /// Resolve a profile and launch a command with the resolved environment
-    /// (full stdio and signal transparency).
+    /// Launch a command with one or more secrets available in its subshell —
+    /// full stdio and signal transparency. The source options (`--profile`/
+    /// `--profile-file`, `--token`) describe only *how* the environment is
+    /// populated; `--token`'s `--as`-named entry can be combined with
+    /// `--set` overlay entries in the same launch.
     ///
-    /// A distinct verb from `exec`: `exec --token <jwe> -- cmd` is token
-    /// *redemption*; `run --profile <name> -- cmd` is environment
-    /// *composition* (named declaration, minting where needed, launch).
+    /// `run` is the single launcher verb (surface-governance ruling B9,
+    /// issue #333): `exec` is a deprecated alias for `run --token`.
+    #[command(group(
+        ArgGroup::new("run_source")
+            .args(["profile", "profile_file", "token"])
+            .required(true)
+    ))]
     Run {
-        /// Named profile from `$CONFIG_DIR/profiles/<NAME>.json`
-        #[arg(long, required_unless_present = "profile_file")]
+        /// Named profile from `$CONFIG_DIR/profiles/<NAME>.json`. Mutually
+        /// exclusive with `--profile-file` and `--token`.
+        #[arg(long)]
         profile: Option<String>,
-        /// Load a profile from an explicit path instead
-        #[arg(long, conflicts_with = "profile")]
+        /// Load a profile from an explicit path instead. Mutually exclusive
+        /// with `--profile` and `--token`.
+        #[arg(long)]
         profile_file: Option<String>,
+        /// Redeem an already-minted JWE token and inject its secret as an
+        /// env var (the `exec --token` behavior, folded into `run`).
+        /// Mutually exclusive with `--profile`/`--profile-file`;
+        /// combinable with `--set`.
+        #[arg(long)]
+        token: Option<String>,
+        /// Env var the `--token`-redeemed secret is injected under. Ignored
+        /// without `--token`. Defaults to `VAULTKEEPER_SECRET` — the same
+        /// default `exec` has always injected under.
+        #[arg(long = "as", default_value_t = String::from(DEFAULT_TOKEN_VAR))]
+        as_var: String,
         /// Ad-hoc rung-2 entry, layered over the profile (repeatable).
         /// Marked UNREVIEWED in --dry-run output.
         #[arg(long = "set")]
@@ -70,7 +96,8 @@ enum Commands {
         /// at issuance (distinct from `--require-presence-per-use`, which
         /// forces a fresh action per operation). Not yet enforced: a real
         /// (non-dry-run) invocation with this flag set refuses rather than
-        /// proceeding without the guarantee.
+        /// proceeding without the guarantee. Not applicable to `--token`
+        /// (a redeemed token is never minted by `run`).
         #[arg(long)]
         require_presence_at_issuance: bool,
         /// Command to launch, with the resolved environment
@@ -249,22 +276,23 @@ async fn main() {
             Commands::Run {
                 profile,
                 profile_file,
+                token,
+                as_var,
                 set,
                 dry_run,
                 require_presence_at_issuance,
                 command,
             } => {
-                cmd_run(
-                    RunSource::Profile {
+                // The `run_source` `ArgGroup` (required, exactly-one) guarantees
+                // exactly one of profile/profile_file/token is `Some` here.
+                let source = match token {
+                    Some(token) => RunSource::Token { token, as_var },
+                    None => RunSource::Profile {
                         profile,
                         profile_file,
                     },
-                    set,
-                    dry_run,
-                    require_presence_at_issuance,
-                    command,
-                )
-                .await
+                };
+                cmd_run(source, set, dry_run, require_presence_at_issuance, command).await
             }
             Commands::Doctor => cmd_doctor().await,
             Commands::Approve { path } => cmd_approve(&path).await,
@@ -357,77 +385,26 @@ async fn cmd_delete(name: &str, require_presence_per_use: bool) -> i32 {
     0
 }
 
+/// `exec` — a hidden, deprecated alias for `run --token` (issue #333,
+/// surface-governance ruling B9). Emits a single-line deprecation notice on
+/// **stderr only** (never stdout, so a byte-exact stdout comparison against
+/// `run --token` is unaffected), then delegates entirely to
+/// [`cmd_run_token`] — same authorize/read-secret/launch path, same
+/// `VAULTKEEPER_SECRET` default target var, same full stdio/signal-
+/// transparency contract `run` already provides. Retired at 1.0.
 async fn cmd_exec(token: &str, command: &[String]) -> i32 {
-    if command.is_empty() {
-        eprintln!("Error: No command specified");
-        return 1;
-    }
-
-    let host = make_host();
-
-    // Initialize VaultKeeper with doctor checks skipped (exec should be fast)
-    let mut vault = match vaultkeeper_core::VaultKeeper::init(
-        host.as_ref(),
-        Some(vaultkeeper_core::vault::VaultKeeperOptions {
-            skip_doctor: true,
-            ..Default::default()
-        }),
+    stderr_diag(
+        "Warning: `exec` is deprecated and will be removed at 1.0 — use \
+         `vaultkeeper run --token <jwe> -- <command>` instead.",
+    );
+    cmd_run_token(
+        token,
+        DEFAULT_TOKEN_VAR,
+        Vec::new(),
+        false,
+        command.to_vec(),
     )
     .await
-    {
-        Ok(v) => v,
-        Err(e) => {
-            eprintln!("Error: {e}");
-            return 1;
-        }
-    };
-
-    // Decrypt and validate the JWE token
-    let (handle, claims, _response) = match vault.authorize(token) {
-        Ok(r) => r,
-        Err(e) => {
-            eprintln!("Error: Failed to authorize token: {e}");
-            return 1;
-        }
-    };
-
-    // `exec` only makes sense for a secret claim — a signing-key lease
-    // carries no secret value to inject, and its handle refuses `read_secret`
-    // outright (issue #241 AC3). Check `kty` up front so that refusal is
-    // reported with the same message as before the handle-table refactor,
-    // rather than a lower-level handle error.
-    if claims.kty == Some(vaultkeeper_core::ClaimsKind::SigningKey) {
-        eprintln!("Error: token does not authorize a secret value");
-        return 1;
-    }
-
-    // Read the secret exactly once (issue #241) — it never traveled through
-    // `authorize()`'s return value.
-    let secret = match vault.read_secret(&handle) {
-        Ok(s) => s,
-        Err(e) => {
-            eprintln!("Error: Failed to read secret: {e}");
-            return 1;
-        }
-    };
-
-    // Run the command with the secret injected as VAULTKEEPER_SECRET env var
-    let cmd_name = &command[0];
-    let cmd_args: Vec<&str> = command[1..].iter().map(String::as_str).collect();
-
-    use std::process::Command;
-    let status = Command::new(cmd_name)
-        .args(&cmd_args)
-        .env("VAULTKEEPER_SECRET", secret.as_str())
-        .status();
-
-    match status {
-        Ok(s) => s.code().unwrap_or(1),
-        Err(e) => {
-            eprintln!("Error: Failed to execute command: {e}");
-            1
-        }
-    }
 }
 
 /// Write a single diagnostic line to stderr without panicking on a write
@@ -472,6 +449,13 @@ enum RunSource {
         profile: Option<String>,
         profile_file: Option<String>,
     },
+    /// An already-minted JWE (`--token <JWE>`), redeemed directly and
+    /// injected as `as_var` — the `exec --token` behavior (issue #333),
+    /// folded into `run` as a second source alongside `Profile`. Mutually
+    /// exclusive with `Profile` at the clap layer (`run_source` `ArgGroup`);
+    /// combinable with `--set`, which layers additional profile-resolved
+    /// entries into the same launched environment.
+    Token { token: String, as_var: String },
 }
 
 /// `run` — resolve an environment (currently always [`RunSource::Profile`],
@@ -493,11 +477,10 @@ async fn cmd_run(
     require_presence_at_issuance: bool,
     command: Vec<String>,
 ) -> i32 {
-    let host = make_host();
-
     // Flag-content validation (`--set`'s VAR=SECRET shape) happens before
     // any filesystem access — a malformed flag is a usage error the caller
-    // should see regardless of whether the named profile happens to exist.
+    // should see regardless of whether the named profile/token happens to
+    // resolve, and is shared by both sources.
     let mut set_entries = Vec::with_capacity(set.len());
     for raw in &set {
         match parse_set_flag(raw) {
@@ -509,25 +492,52 @@ async fn cmd_run(
         }
     }
 
-    let (loaded_profile, cfg) = match source {
+    match source {
         RunSource::Profile {
             profile,
             profile_file,
         } => {
-            let path = match resolve_profile_path(&host, profile.as_deref(), profile_file) {
-                Ok(p) => p,
-                Err(e) => {
-                    stderr_diag(&format!("Error: {e}"));
-                    return 1;
-                }
-            };
-            match load_named_profile(&host, &path).await {
-                Ok(loaded) => loaded,
-                Err(e) => {
-                    stderr_diag(&format!("Error: {e}"));
-                    return 1;
-                }
-            }
+            cmd_run_profile(
+                profile,
+                profile_file,
+                set_entries,
+                dry_run,
+                require_presence_at_issuance,
+                command,
+            )
+            .await
+        }
+        RunSource::Token { token, as_var } => {
+            cmd_run_token(&token, &as_var, set_entries, dry_run, command).await
+        }
+    }
+}
+
+/// `run --profile`/`--profile-file` — resolve a named profile plus any
+/// `--set` overlay, then launch (issue #279). See [`cmd_run`]'s doc comment
+/// for the source-dispatch shape shared with [`cmd_run_token`].
+async fn cmd_run_profile(
+    profile: Option<String>,
+    profile_file: Option<String>,
+    set_entries: Vec<vaultkeeper_core::run::SetEntry>,
+    dry_run: bool,
+    require_presence_at_issuance: bool,
+    command: Vec<String>,
+) -> i32 {
+    let host = make_host();
+
+    let path = match resolve_profile_path(&host, profile.as_deref(), profile_file) {
+        Ok(p) => p,
+        Err(e) => {
+            stderr_diag(&format!("Error: {e}"));
+            return 1;
+        }
+    };
+    let (loaded_profile, cfg) = match load_named_profile(&host, &path).await {
+        Ok(loaded) => loaded,
+        Err(e) => {
+            stderr_diag(&format!("Error: {e}"));
+            return 1;
         }
     };
 
@@ -640,6 +650,168 @@ async fn cmd_run(
     };
 
     launch_and_wait(&command, resolved).await
+}
+
+/// `run --token`/`exec` — redeem an already-minted JWE directly (never mints,
+/// never touches a profile file) and inject its secret as `as_var`, combined
+/// with any `--set` overlay entries resolved through the active profile
+/// machinery (issue #333). This is `exec`'s historical behavior, now shared
+/// by both verbs via [`cmd_exec`] delegating here.
+///
+/// `--require-presence-at-issuance` has no effect on this source — `run
+/// --token` never mints a lease, so there is nothing for that flag to
+/// refuse (unlike [`cmd_run_profile`], which fails closed on it).
+async fn cmd_run_token(
+    token: &str,
+    as_var: &str,
+    set_entries: Vec<vaultkeeper_core::run::SetEntry>,
+    dry_run: bool,
+    command: Vec<String>,
+) -> i32 {
+    if let Err(e) = validate_as_var_name(as_var) {
+        stderr_diag(&format!("Error: {e}"));
+        return 1;
+    }
+
+    let host = make_host();
+
+    if dry_run {
+        // Plan-only: --set entries still need config defaults to render their
+        // rung/backend, but the primary --token entry never touches the
+        // backend or decrypts the token — see render_token_dry_run's doc
+        // comment. A missing/invalid config for the --set half is reported
+        // the same way `run --profile --dry-run` reports it.
+        let cfg = match vaultkeeper_core::config::load_config(host.as_ref()).await {
+            Ok(c) => c,
+            Err(e) => {
+                stderr_diag(&format!("Error: {e}"));
+                return 1;
+            }
+        };
+        let defaults =
+            vaultkeeper_core::profile::ProfileDefaults::from_vault_defaults(&cfg.defaults);
+        let empty_profile = vaultkeeper_core::profile::LoadedProfile {
+            version: 1,
+            name: "run --token".to_string(),
+            entries: Vec::new(),
+        };
+        let plan = apply_set_overlay(empty_profile, &set_entries, &defaults);
+        let active_backend_type = cfg
+            .backends
+            .iter()
+            .find(|b| b.enabled)
+            .map(|b| b.backend_type.as_str())
+            .unwrap_or("none");
+        stdout_write(&render_token_dry_run(as_var, &plan, active_backend_type));
+        return 0;
+    }
+
+    if command.is_empty() {
+        stderr_diag("Error: No command specified");
+        return 1;
+    }
+
+    // Initialize VaultKeeper with doctor checks skipped — matches `exec`'s
+    // historical fast-path and `run --profile`'s own init call.
+    let mut vault = match vaultkeeper_core::VaultKeeper::init(
+        host.as_ref(),
+        Some(vaultkeeper_core::vault::VaultKeeperOptions {
+            skip_doctor: true,
+            ..Default::default()
+        }),
+    )
+    .await
+    {
+        Ok(v) => v,
+        Err(e) => {
+            stderr_diag(&format!("Error: {e}"));
+            return 1;
+        }
+    };
+
+    // Decrypt and validate the JWE token.
+    let (handle, claims, _response) = match vault.authorize(token) {
+        Ok(r) => r,
+        Err(e) => {
+            stderr_diag(&format!("Error: Failed to authorize token: {e}"));
+            return 1;
+        }
+    };
+
+    // A signing-key lease carries no secret value to inject (see
+    // `cmd_exec`'s identical historical check — `authorize` itself already
+    // rejects a signing-key JWE before returning, so this is defense in
+    // depth, not the only guard).
+    if claims.kty == Some(vaultkeeper_core::ClaimsKind::SigningKey) {
+        stderr_diag("Error: token does not authorize a secret value");
+        return 1;
+    }
+
+    let secret = match vault.read_secret(&handle) {
+        Ok(s) => s,
+        Err(e) => {
+            stderr_diag(&format!("Error: Failed to read secret: {e}"));
+            return 1;
+        }
+    };
+
+    let mut env: vaultkeeper_core::ResolvedEnv = std::collections::HashMap::new();
+    env.insert(as_var.to_string(), secret.to_string());
+
+    if !set_entries.is_empty() {
+        let cfg = match vaultkeeper_core::config::load_config(host.as_ref()).await {
+            Ok(c) => c,
+            Err(e) => {
+                stderr_diag(&format!("Error: {e}"));
+                return 1;
+            }
+        };
+        let defaults =
+            vaultkeeper_core::profile::ProfileDefaults::from_vault_defaults(&cfg.defaults);
+        let empty_profile = vaultkeeper_core::profile::LoadedProfile {
+            version: 1,
+            name: "run --token".to_string(),
+            entries: Vec::new(),
+        };
+        let plan = apply_set_overlay(empty_profile, &set_entries, &defaults);
+        let backend = FileBackend::new(host.clone());
+
+        let active_backend_type = cfg
+            .backends
+            .iter()
+            .find(|b| b.enabled)
+            .map(|b| b.backend_type.as_str())
+            .unwrap_or("none");
+        if file_only_degradation_applies(&plan, active_backend_type) {
+            stderr_diag(FILE_ONLY_DEGRADATION_NOTICE);
+        }
+
+        let resolve_options = ResolveOptions {
+            backend: &backend,
+            key_manager: vault.key_manager(),
+            executable_hash: None,
+        };
+        let resolved = match resolve_profile(&plan.profile, &resolve_options).await {
+            Ok(r) => r,
+            Err(e) => {
+                stderr_diag(&format!("Error: {e}"));
+                return 1;
+            }
+        };
+
+        for (var, value) in resolved {
+            if env.contains_key(&var) {
+                stderr_diag(&format!(
+                    "Error: --set \"{var}=...\" conflicts with --as \"{var}\" (--token's redeemed \
+                     secret already targets that env var)"
+                ));
+                return 1;
+            }
+            env.insert(var, value);
+        }
+    }
+
+    launch_and_wait(&command, env).await
 }
 
 /// Launch `command` with `env` injected, full stdio inheritance (never
