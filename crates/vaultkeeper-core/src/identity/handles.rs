@@ -157,8 +157,10 @@ use crate::util::time::now_secs;
 /// (release/expiry/usage-limit are).
 pub const HANDLE_TABLE_MAX_SIZE: usize = 10_000;
 
-/// Opaque handle identifier returned by [`HandleTable::insert_secret`] /
-/// [`HandleTable::insert_signing`].
+/// Opaque handle identifier returned by [`HandleTable::insert_secret`] or by
+/// the crate-internal signing-handle insertion path (see
+/// [`crate::vault::VaultKeeper::register_signing_handle`], the sole gated
+/// entry point for signing handles — issue #282).
 ///
 /// Carries no claims data itself — it is a bare, unguessable (UUID v4)
 /// lookup key. **It is bearer capability material, not a public
@@ -439,7 +441,24 @@ impl HandleTable {
 
     /// Register a signing-key handle. Carries no secret — a signing-key
     /// handle's `read_secret` is always refused (see [`wrong_kind_error`]).
-    pub fn insert_signing(&mut self, claims: SigningClaims, expires_at: Option<u64>) -> HandleId {
+    ///
+    /// Deliberately `pub(crate)`, not `pub`, even though [`HandleTable`]
+    /// itself is re-exported from this crate's root (`vaultkeeper-core` is
+    /// published to crates.io). This method performs no `expires_at`
+    /// validation of its own — [`crate::vault::VaultKeeper::register_signing_handle`]
+    /// is the sole gate that refuses a never-expiring (`None`) signing
+    /// handle (issue #282). If this method were `pub`, any downstream crate
+    /// could construct a bare [`HandleTable`] and call it directly with
+    /// `expires_at: None`, minting the exact durable ambient signing
+    /// capability that gate exists to prevent — bypassing
+    /// `register_signing_handle` entirely rather than merely calling it. Keep
+    /// this crate-internal until the issuance-side principal check (issue
+    /// #261) makes a public, ungated `insert_signing` safe to expose again.
+    pub(crate) fn insert_signing(
+        &mut self,
+        claims: SigningClaims,
+        expires_at: Option<u64>,
+    ) -> HandleId {
         self.insert(StoredClaims::Signing(claims), None, expires_at)
     }
 
