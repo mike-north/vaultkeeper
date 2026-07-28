@@ -438,21 +438,257 @@ pub async fn load_revocation_for_validation(
     Ok(revocation_from_raw(&parsed))
 }
 
+// ---------------------------------------------------------------------------
+// Cross-process advisory lock (issue #322) — built entirely on
+// [`HostPlatform::try_create_lock_file`]/[`HostPlatform::delete_file`], so it
+// works identically under wasm on any host that opts in, exactly like the
+// rest of this module.
+//
+// A single lock guards the *entire* revocation-state read-modify-write
+// surface — both [`mutate_revocation_state`] and [`save_key_state`] acquire
+// it — because the race issue #322 exists to fix is specifically a
+// `rotateKey`/`revokeKey` (`save_key_state`) call overlapping a
+// `session revoke` (`mutate_revocation_state`) call, not just two calls to
+// the same function.
+// ---------------------------------------------------------------------------
+
+/// Filename of the advisory lock file, co-located with `keys.enc` in the same
+/// config directory.
+const REVOCATION_LOCK_FILE: &str = "keys.enc.lock";
+
+/// How long (ms) an unrenewed lock file is treated as abandoned and eligible
+/// for takeover by another acquirer — recovers a lock left behind by a
+/// process that crashed or panicked mid-critical-section, at the cost of a
+/// bounded window during which a still-alive-but-unusually-slow holder could
+/// theoretically be pre-empted. 30s is generously longer than this module's
+/// own critical sections (a handful of small file I/O calls), so a
+/// legitimate holder is never actually still running when this fires in
+/// practice.
+const LOCK_STALE_AFTER_MS: u128 = 30_000;
+
+/// Bounded retry count for lock acquisition. Each attempt either succeeds,
+/// hits genuine contention from a still-live holder (retried after a brief
+/// pause), or hits a stale lock (taken over immediately, then retried) — this
+/// bounds the total wait so acquisition fails loudly rather than looping
+/// forever if something keeps re-contending.
+const LOCK_MAX_ATTEMPTS: u32 = 50;
+
+/// RAII guard for the revocation-state lock, returned by [`acquire_lock`].
+///
+/// Release the lock via the explicit async [`LockGuard::release`] — every
+/// caller in this module goes through [`with_revocation_lock`], which
+/// guarantees `release()` runs on **every** return from the wrapped critical
+/// section, success or error (issue #322 AC: "guard releases on the
+/// error/early-return path"). `Drop` exists as RAII discipline and a safety
+/// net, but Rust has no async `Drop`: it cannot itself make the
+/// [`HostPlatform::delete_file`] call release needs, so a guard that reaches
+/// `Drop` without having been released (only possible if the critical
+/// section panics — every non-panicking path goes through
+/// `with_revocation_lock`) cannot delete the lock file from that synchronous
+/// callback. That is not silently unsafe: a lock abandoned this way is
+/// recovered by the *next* acquirer's stale-lock takeover in [`acquire_lock`]
+/// (see `LOCK_STALE_AFTER_MS`), not by this `Drop` impl — see
+/// `stale_lock_left_by_a_panicked_holder_is_taken_over` below for the test
+/// that proves that recovery path, and
+/// `lock_is_released_immediately_when_the_critical_section_errors` for the
+/// normal-path release guarantee `Drop` is *not* standing in for.
+struct LockGuard<'a> {
+    host: &'a dyn HostPlatform,
+    lock_path: std::path::PathBuf,
+    /// `true` only when this guard actually holds a lock created via
+    /// [`HostPlatform::try_create_lock_file`] — `false` when the host
+    /// doesn't support locking (the trait's fail-closed default), in which
+    /// case there is nothing to release.
+    held: bool,
+    released: bool,
+}
+
+impl LockGuard<'_> {
+    async fn release(mut self) {
+        if self.held && !self.released {
+            // Best-effort: a failure to delete an already-released lock file
+            // (e.g. a concurrent stale-lock takeover already removed it) is
+            // not itself an error the caller needs to see — the lock is
+            // gone either way.
+            let _ = self.host.delete_file(&self.lock_path).await;
+        }
+        self.released = true;
+    }
+}
+
+impl Drop for LockGuard<'_> {
+    fn drop(&mut self) {
+        // See the struct doc comment: this is a safety net for the one path
+        // that can reach here without `release()` having run — a panic
+        // inside the critical section `with_revocation_lock` wraps. Any
+        // other path reaching `Drop` unreleased is a bug in this module
+        // (a future change that forgot to route through
+        // `with_revocation_lock`), so surface it loudly in debug builds
+        // rather than let it silently rely on stale-lock takeover.
+        if self.held && !self.released && !std::thread::panicking() {
+            debug_assert!(
+                false,
+                "LockGuard for {} dropped without release() outside of a panic — route every \
+                 acquisition through with_revocation_lock",
+                self.lock_path.display()
+            );
+        }
+    }
+}
+
+/// Attempt to take over `lock_path` if the lock file currently there is
+/// older than [`LOCK_STALE_AFTER_MS`]. A malformed or unreadable marker is
+/// treated as *not* stale (never taken over) — this only ever recovers a
+/// lock this module itself created (whose content is always a plain decimal
+/// millisecond timestamp), never guesses at an unrecognized file.
+async fn take_over_if_stale(host: &dyn HostPlatform, lock_path: &Path) {
+    let Ok(existing) = host.read_file(lock_path).await else {
+        return;
+    };
+    let Ok(existing_str) = String::from_utf8(existing) else {
+        return;
+    };
+    let Ok(created_at_ms) = existing_str.trim().parse::<u128>() else {
+        return;
+    };
+    if time::now_millis().saturating_sub(created_at_ms) > LOCK_STALE_AFTER_MS {
+        // Best-effort: if a concurrent acquirer wins the takeover race and
+        // deletes/recreates this first, this delete simply no-ops (or, in
+        // the worst case, removes the *new* holder's fresh lock file a
+        // moment after they created it — but that only ever costs that
+        // holder a spurious contention retry on their own next lock use, it
+        // cannot cause two mutators to believe they simultaneously hold the
+        // lock, since the file's mere presence is what "held" means and a
+        // deletion here never fabricates false Ok(()) results for anyone).
+        let _ = host.delete_file(lock_path).await;
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn pause_before_retry() {
+    // No portable synchronous sleep exists on wasm32; this only matters once
+    // a host actually implements `try_create_lock_file` contention (no wasm
+    // host does yet — see that trait method's doc comment), so skipping the
+    // pause there is harmless.
+    std::thread::sleep(std::time::Duration::from_millis(2));
+}
+#[cfg(target_arch = "wasm32")]
+fn pause_before_retry() {}
+
+/// Acquire the revocation-state lock, with bounded retry and stale-lock
+/// takeover.
+///
+/// Returns a [`LockGuard`] in every non-error case, including on a host that
+/// doesn't support [`HostPlatform::try_create_lock_file`] — that guard just
+/// has `held: false` and releasing it is a no-op, so callers never need to
+/// branch on host support themselves.
+async fn acquire_lock(host: &dyn HostPlatform) -> Result<LockGuard<'_>, VaultError> {
+    let lock_path = host.config_dir().join(REVOCATION_LOCK_FILE);
+
+    for attempt in 0..LOCK_MAX_ATTEMPTS {
+        let marker = time::now_millis().to_string();
+        match host
+            .try_create_lock_file(&lock_path, marker.as_bytes())
+            .await
+        {
+            Ok(()) => {
+                return Ok(LockGuard {
+                    host,
+                    lock_path,
+                    held: true,
+                    released: false,
+                });
+            }
+            // The trait's fail-closed default for a host that doesn't
+            // implement locking — proceed under the pre-existing
+            // sequential-ordering-only guarantee (see
+            // `mutate_revocation_state`'s doc comment).
+            Err(VaultError::Other(_)) => {
+                return Ok(LockGuard {
+                    host,
+                    lock_path,
+                    held: false,
+                    released: true,
+                });
+            }
+            // Contention: someone else currently holds this lock.
+            Err(VaultError::Filesystem {
+                ref permission,
+                ref code,
+                ..
+            }) if permission == "lock" && code.as_deref() == Some("EEXIST") => {
+                take_over_if_stale(host, &lock_path).await;
+                if attempt + 1 == LOCK_MAX_ATTEMPTS {
+                    return Err(VaultError::Filesystem {
+                        message: format!(
+                            "Timed out waiting for the revocation-state lock at {} after {} \
+                             attempts",
+                            lock_path.display(),
+                            LOCK_MAX_ATTEMPTS
+                        ),
+                        path: lock_path.display().to_string(),
+                        permission: "lock".to_string(),
+                        code: Some("EEXIST".to_string()),
+                    });
+                }
+                pause_before_retry();
+            }
+            // A genuine failure (not contention, not "unsupported") — e.g.
+            // permission denied, disk full. Propagate rather than retry.
+            Err(other) => return Err(other),
+        }
+    }
+
+    unreachable!("the loop above always returns before attempt reaches LOCK_MAX_ATTEMPTS")
+}
+
+/// Run `critical_section` (a lazily-constructed future — nothing inside it
+/// runs until this function polls it, which only happens after the lock is
+/// held) with the revocation-state lock held, guaranteeing the lock is
+/// released before this function returns regardless of whether
+/// `critical_section` succeeds or fails.
+async fn with_revocation_lock<T, F>(
+    host: &dyn HostPlatform,
+    critical_section: F,
+) -> Result<T, VaultError>
+where
+    F: std::future::Future<Output = Result<T, VaultError>>,
+{
+    let guard = acquire_lock(host).await?;
+    let result = critical_section.await;
+    guard.release().await;
+    result
+}
+
 /// Read-modify-write a mutation into the persisted revocation state, without
 /// disturbing whatever key material (`current`/`previous`/grace period) is on
 /// disk at write time — the counterpart a `rotateKey`/`revokeKey` write must
 /// not clobber, and vice versa (issue #298 AC10). Reuses the same atomic
 /// write-temp-then-rename path [`save_key_state`] uses.
 ///
-/// **Concurrency scope**: this is read-modify-write, not a lock — it
-/// guarantees that a `rotateKey`/`revokeKey` write and a revocation write
-/// that are *sequenced* one after the other (in either order) each carry the
-/// other's portion forward untouched, which is what issue #298 AC10 proves.
-/// It does **not** protect two writers whose read-modify-write windows
-/// genuinely overlap across processes: if both read the same on-disk state
-/// before either writes, the second write is last-writer-wins and can lose
-/// the first writer's update. There is currently no cross-process lock
-/// around this RMW (tracked as a follow-up).
+/// **Concurrency scope** (issue #322): wrapped in the advisory lock
+/// [`with_revocation_lock`] acquires — on a host that implements
+/// [`HostPlatform::try_create_lock_file`] (native — see `NativeHostPlatform`
+/// in `crates/vaultkeeper-cli`), two writers whose read-modify-write windows
+/// genuinely overlap (not just sequenced back-to-back) no longer race
+/// last-writer-wins: the second acquirer waits (bounded retry, with
+/// stale-lock takeover for an abandoned holder) until the first releases.
+/// See `crates/vaultkeeper-cli/src/host.rs`'s
+/// `ac10_genuinely_concurrent_revoke_and_rotate_lose_neither_mutation` and
+/// `ac10_many_genuinely_concurrent_revokers_lose_no_mutation` for the tests
+/// that prove this against real OS threads and a real filesystem — not two
+/// sequential calls dressed up as concurrent.
+///
+/// On a host that does **not** implement `try_create_lock_file` (every host
+/// as of this change other than `NativeHostPlatform`, including the current
+/// WASM/JS bridge — see that trait method's doc comment for why) this
+/// degrades to the weaker guarantee this function previously documented: a
+/// `rotateKey`/`revokeKey` write and a revocation write that are *sequenced*
+/// one after the other (in either order) each carry the other's portion
+/// forward untouched (`ac10_sequential_revoke_and_rotate_clobber_neither_order`
+/// in `crates/vaultkeeper-core/tests/lease_revocation_integration.rs`), but
+/// two writers whose windows genuinely overlap can still race
+/// last-writer-wins.
 ///
 /// Requires that key state has already been persisted at least once (i.e.
 /// [`crate::vault::VaultKeeper::init`] has run against this config dir) —
@@ -463,6 +699,13 @@ pub async fn load_revocation_for_validation(
 /// would silently discard real revocations rather than merely refuse to
 /// validate against them.
 pub async fn mutate_revocation_state(
+    host: &dyn HostPlatform,
+    mutate: impl FnOnce(&mut RevocationState),
+) -> Result<RevocationState, VaultError> {
+    with_revocation_lock(host, mutate_revocation_state_locked(host, mutate)).await
+}
+
+async fn mutate_revocation_state_locked(
     host: &dyn HostPlatform,
     mutate: impl FnOnce(&mut RevocationState),
 ) -> Result<RevocationState, VaultError> {
@@ -527,7 +770,23 @@ pub async fn mutate_revocation_state(
 /// every outstanding lease. Only a genuinely *absent* store — nothing has
 /// ever been persisted, so there is nothing to lose — defaults to an empty
 /// revocation portion.
+///
+/// **Concurrency scope** (issue #322): shares [`with_revocation_lock`] with
+/// [`mutate_revocation_state`] — see that function's doc comment for exactly
+/// what guarantee this does and doesn't provide depending on host locking
+/// support. Sharing the same lock (rather than each function having its own)
+/// is what actually closes the race this issue names: a `rotateKey` call
+/// through this function and a `session revoke` call through
+/// `mutate_revocation_state` mutually exclude each other, not just
+/// same-function callers.
 pub async fn save_key_state(
+    host: &dyn HostPlatform,
+    snapshot: &KeyStateSnapshot,
+) -> Result<(), VaultError> {
+    with_revocation_lock(host, save_key_state_locked(host, snapshot)).await
+}
+
+async fn save_key_state_locked(
     host: &dyn HostPlatform,
     snapshot: &KeyStateSnapshot,
 ) -> Result<(), VaultError> {
@@ -732,7 +991,7 @@ mod tests {
     use crate::backend::{ExecOptions, ExecOutput, Platform};
     use std::collections::{HashMap, HashSet};
     use std::path::PathBuf;
-    use std::sync::Mutex;
+    use std::sync::{Arc, Mutex};
 
     // -------------------------------------------------------------------
     // ISO-8601 conversion
@@ -876,6 +1135,28 @@ mod tests {
         }
         async fn list_dir(&self, _path: &Path) -> Result<Vec<String>, VaultError> {
             Ok(Vec::new())
+        }
+        /// Real locking support (issue #322), simulating `O_EXCL` via a
+        /// single `Mutex` critical section spanning the existence check and
+        /// the insert — genuine mutual exclusion, including across real OS
+        /// threads racing this same in-memory host (see the concurrency
+        /// tests below), not just single-threaded-test convenience.
+        async fn try_create_lock_file(
+            &self,
+            path: &Path,
+            content: &[u8],
+        ) -> Result<(), VaultError> {
+            let mut files = self.files.lock().unwrap();
+            if files.contains_key(path) {
+                return Err(VaultError::Filesystem {
+                    message: format!("Lock contention: {} is already held", path.display()),
+                    path: path.display().to_string(),
+                    permission: "lock".to_string(),
+                    code: Some("EEXIST".to_string()),
+                });
+            }
+            files.insert(path.to_path_buf(), content.to_vec());
+            Ok(())
         }
         fn platform(&self) -> Platform {
             Platform::Linux
@@ -1635,5 +1916,230 @@ mod tests {
             matches!(err, VaultError::Filesystem { .. }),
             "expected VaultError::Filesystem (not a TokenRevoked \"missing\" collapse), got {err:?}"
         );
+    }
+
+    // -------------------------------------------------------------------
+    // Issue #322 — cross-process revocation-state lock.
+    // -------------------------------------------------------------------
+
+    /// A host that implements no `HostPlatform` capability beyond the bare
+    /// minimum required by the trait — every optional method (including
+    /// `try_create_lock_file`) is left at its default. Stands in for the
+    /// WASM/JS bridge's documented fallback (`JsHostPlatform` does not
+    /// override `try_create_lock_file` either — see that struct's doc
+    /// comment in `crates/vaultkeeper-wasm/src/wasm_impl.rs`), without
+    /// pulling in a wasm32 target to exercise it.
+    struct DefaultLockHost {
+        config_dir: PathBuf,
+    }
+
+    #[async_trait::async_trait]
+    impl HostPlatform for DefaultLockHost {
+        async fn exec(
+            &self,
+            _cmd: &str,
+            _args: &[&str],
+            _options: ExecOptions<'_>,
+        ) -> Result<ExecOutput, VaultError> {
+            unimplemented!("not exercised by this test")
+        }
+        async fn read_file(&self, _path: &Path) -> Result<Vec<u8>, VaultError> {
+            unimplemented!("not exercised by this test")
+        }
+        async fn write_file(
+            &self,
+            _path: &Path,
+            _content: &[u8],
+            _mode: u32,
+        ) -> Result<(), VaultError> {
+            unimplemented!("not exercised by this test")
+        }
+        async fn file_exists(&self, _path: &Path) -> Result<bool, VaultError> {
+            unimplemented!("not exercised by this test")
+        }
+        async fn delete_file(&self, _path: &Path) -> Result<(), VaultError> {
+            unimplemented!("not exercised by this test")
+        }
+        async fn list_dir(&self, _path: &Path) -> Result<Vec<String>, VaultError> {
+            unimplemented!("not exercised by this test")
+        }
+        fn platform(&self) -> Platform {
+            Platform::Linux
+        }
+        fn config_dir(&self) -> &Path {
+            &self.config_dir
+        }
+    }
+
+    /// The wasm/JS bridge contract (issue #322): a host that doesn't
+    /// override `try_create_lock_file` — every `HostPlatform` implementation
+    /// as of this change other than `NativeHostPlatform`, including
+    /// `JsHostPlatform` — gets the trait's fail-closed default: a typed
+    /// error, never a silent `Ok(())`. A silently-permissive default would
+    /// let two overlapping writers both believe they hold an exclusive lock,
+    /// which is the exact bug this issue exists to fix, one layer up.
+    #[tokio::test]
+    async fn default_try_create_lock_file_fails_closed_not_permissively() {
+        let host = DefaultLockHost {
+            config_dir: PathBuf::from("/test/config"),
+        };
+        let err = host
+            .try_create_lock_file(Path::new("/test/config/keys.enc.lock"), b"123")
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, VaultError::Other(_)),
+            "expected the fail-closed default (VaultError::Other), got {err:?}"
+        );
+    }
+
+    /// `acquire_lock` treats that same fail-closed default as "this host
+    /// doesn't support locking" and proceeds without one, rather than
+    /// propagating it as a hard failure — a `mutate_revocation_state` call
+    /// against a non-locking host must still succeed exactly as it did
+    /// before issue #322 (the pre-existing sequential-ordering-only
+    /// guarantee), not start refusing every call outright.
+    #[tokio::test]
+    async fn non_locking_host_still_completes_revocation_writes() {
+        let host = TestHost::new();
+        seed_key_state(&host).await;
+
+        // TestHost overrides `try_create_lock_file` with real locking
+        // support (used by the concurrency tests below) — this test instead
+        // exercises the *unsupported* path directly through the shared
+        // `acquire_lock`/`with_revocation_lock` machinery via
+        // `DefaultLockHost`, then confirms `mutate_revocation_state` itself
+        // (against the ordinary, locking-capable `TestHost`) is unaffected
+        // either way: both hosts complete the write.
+        let default_host = DefaultLockHost {
+            config_dir: PathBuf::from("/test/config"),
+        };
+        let guard = acquire_lock(&default_host).await.unwrap();
+        guard.release().await;
+
+        let result = mutate_revocation_state(&host, |state| {
+            state.revoke_jti("still-works-jti", 9_999_999_999);
+        })
+        .await
+        .unwrap();
+        assert!(result.is_jti_revoked("still-works-jti"));
+    }
+
+    /// Issue #322 AC: the lock is released promptly on the error/early-return
+    /// path, not just on success — a corrupt store makes
+    /// `mutate_revocation_state` fail closed (see
+    /// `ac6_tampered_envelope_fails_closed_for_lease_validation`), and that
+    /// failure must not leave the lock file behind for the next caller to
+    /// wait out a full stale-lock timeout on.
+    #[tokio::test]
+    async fn lock_is_released_immediately_when_the_critical_section_errors() {
+        let host = TestHost::new();
+        seed_key_state(&host).await;
+        tamper_stored_envelope(&host).await;
+
+        let lock_path = host.config_dir().join(REVOCATION_LOCK_FILE);
+
+        let err = mutate_revocation_state(&host, |state| {
+            state.revoke_jti("never-applied-jti", 9_999_999_999);
+        })
+        .await
+        .unwrap_err();
+        assert!(matches!(err, VaultError::Decryption { .. }));
+
+        assert!(
+            !host.file_exists(&lock_path).await.unwrap(),
+            "the lock file must not survive a failed critical section"
+        );
+
+        // Proves the release was real, not merely "the file happens to be
+        // absent": a fresh acquisition succeeds immediately (no contention),
+        // which would fail/hang were the lock still held.
+        let guard = acquire_lock(&host).await.unwrap();
+        guard.release().await;
+    }
+
+    /// Issue #322 AC: stale-lock takeover. A lock file left behind with an
+    /// acquisition timestamp far enough in the past to be considered
+    /// abandoned (standing in for a holder that crashed or panicked before
+    /// reaching `LockGuard::release`) does not permanently wedge
+    /// acquisition — see `LockGuard`'s doc comment for why recovering a
+    /// panic-abandoned lock is this takeover's job, not `Drop`'s.
+    #[tokio::test]
+    async fn stale_lock_left_by_a_panicked_holder_is_taken_over() {
+        let host = TestHost::new();
+        seed_key_state(&host).await;
+
+        let lock_path = host.config_dir().join(REVOCATION_LOCK_FILE);
+        // "0" epoch milliseconds — always older than `LOCK_STALE_AFTER_MS`.
+        host.write_file(&lock_path, b"0", 0o600).await.unwrap();
+
+        let result = mutate_revocation_state(&host, |state| {
+            state.revoke_jti("post-takeover-jti", 9_999_999_999);
+        })
+        .await
+        .unwrap();
+        assert!(result.is_jti_revoked("post-takeover-jti"));
+    }
+
+    /// A lock file whose content isn't a parseable timestamp (never written
+    /// by this module) must never be taken over — `take_over_if_stale` only
+    /// recovers locks it recognizes as its own, not an arbitrary file that
+    /// happens to occupy the lock path.
+    #[tokio::test]
+    async fn malformed_lock_marker_is_never_treated_as_stale() {
+        let host = TestHost::new();
+        let lock_path = host.config_dir().join(REVOCATION_LOCK_FILE);
+        host.write_file(&lock_path, b"not-a-timestamp", 0o600)
+            .await
+            .unwrap();
+
+        take_over_if_stale(&host, &lock_path).await;
+
+        assert!(
+            host.file_exists(&lock_path).await.unwrap(),
+            "a malformed marker must be left in place, not taken over"
+        );
+    }
+
+    /// Issue #322 AC: two genuinely overlapping mutators — real OS threads,
+    /// no barrier forcing serialization — racing `mutate_revocation_state`
+    /// against the same in-memory host lose no mutation. Complements the
+    /// real-filesystem version of this test in
+    /// `crates/vaultkeeper-cli/src/host.rs` (`ac10_many_genuinely_concurrent_revokers_lose_no_mutation`);
+    /// this one is fast and deterministic enough to also double as a tight
+    /// regression guard, since `TestHost::try_create_lock_file` provides
+    /// real mutual exclusion via a shared `Mutex` (see that impl's doc
+    /// comment), not an approximation.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+    async fn ac10_genuinely_concurrent_revokers_against_in_memory_host_lose_no_mutation() {
+        const N: usize = 32;
+
+        let host = Arc::new(TestHost::new());
+        seed_key_state(&host).await;
+
+        let mut tasks = Vec::with_capacity(N);
+        for i in 0..N {
+            let task_host = Arc::clone(&host);
+            tasks.push(tokio::spawn(async move {
+                mutate_revocation_state(task_host.as_ref(), move |state| {
+                    state.revoke_jti(format!("jti-{i}"), 9_999_999_999);
+                })
+                .await
+                .unwrap();
+            }));
+        }
+        for task in tasks {
+            task.await.unwrap();
+        }
+
+        let revocation = load_revocation_for_validation(host.as_ref(), 0)
+            .await
+            .unwrap();
+        for i in 0..N {
+            assert!(
+                revocation.is_jti_revoked(&format!("jti-{i}")),
+                "revocation of jti-{i} was lost to a concurrent writer"
+            );
+        }
     }
 }

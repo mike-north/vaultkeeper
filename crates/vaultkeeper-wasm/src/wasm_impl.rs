@@ -38,6 +38,34 @@ use vaultkeeper_core::{ClaimsKind, ExecutableTrustRequiredReason, VaultClaims, V
 /// - `promptApproval?(context)` → `Promise<boolean>` (issue #239, optional —
 ///   absent means fail closed, never an automatic allow)
 ///
+/// # Locking contract (issue #322)
+///
+/// This bridge deliberately does **not** implement
+/// `HostPlatform::try_create_lock_file` — there is no `createLockFile`/
+/// `tryCreateLockFile` entry in the JS host contract above, and this `impl`
+/// block has no override for it, so every call falls through to the trait's
+/// fail-closed default (`crates/vaultkeeper-core/src/backend/types.rs`):
+/// `Err(VaultError::Other(..))`, never a silent `Ok(())`.
+///
+/// Concretely, this means `keys::storage`'s revocation-state read-modify-write
+/// (`mutate_revocation_state`/`save_key_state`) runs under the WASM SDK with
+/// the pre-#322 sequential-ordering-only guarantee: two writes that are
+/// *sequenced* one after the other (in either order) each carry the other's
+/// portion forward untouched, but two writers whose read-modify-write windows
+/// genuinely overlap (e.g. two separate Node processes both using
+/// `@vaultkeeper/wasm` against the same config directory) can still race
+/// last-writer-wins — see `mutate_revocation_state`'s doc comment for the
+/// full concurrency-scope statement this bridge is bound by.
+///
+/// This is a deliberate scope cut, not an oversight: Node's `fs` module could
+/// implement genuine `O_EXCL` semantics via `fs.open(path, 'wx')` (mirroring
+/// `NativeHostPlatform`'s real lock in `crates/vaultkeeper-cli/src/host.rs`
+/// closely enough that adding it later is a small, additive change to
+/// `node-host.ts` plus this bridge — no `HostPlatform` trait change needed,
+/// since the primitive already exists), but wiring that through the Node host
+/// bridge and its test double contract is separate follow-on work, not part
+/// of landing the primitive itself.
+///
 /// # No-reentrancy contract
 ///
 /// None of these JS callbacks may call back into the vault (no
