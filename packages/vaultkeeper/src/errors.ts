@@ -801,6 +801,94 @@ export class RotationInProgressError extends VaultError {
 }
 
 /**
+ * Thrown from the `default`/impossible arm of an exhaustive `switch` (or
+ * equivalent conditional) over a discriminated union. The constructor
+ * parameter is typed `never`, so passing anything other than a value the
+ * compiler has already narrowed to `never` — i.e. a union member that was
+ * missed — is a compile-time error at the call site, not just a runtime
+ * throw. This turns an unhandled union arm into a build failure the moment a
+ * new variant is added, rather than a silent fallthrough discovered later at
+ * runtime.
+ *
+ * @example
+ * ```ts
+ * switch (claims.kty) {
+ *   case 'secret':
+ *     // ...
+ *     break
+ *   case 'signing-key':
+ *     // ...
+ *     break
+ *   default:
+ *     throw new UnreachableError(claims.kty, 'unrecognized claim kind')
+ * }
+ * ```
+ *
+ * @public
+ */
+export class UnreachableError extends VaultError {
+  /**
+   * The value that reached the supposedly-unreachable arm, stringified for
+   * diagnostics. Always present because `never` at the type level does not
+   * guarantee `never` at runtime — a value that bypassed static narrowing
+   * (e.g. crossed an untyped boundary such as `JSON.parse`) can still reach
+   * this constructor.
+   */
+  readonly value: string
+
+  constructor(value: never, detail?: string) {
+    const stringified = describeUnreachableValue(value)
+    const message =
+      detail === undefined
+        ? `Reached unreachable code: unexpected value ${stringified}`
+        : `Reached unreachable code (${detail}): unexpected value ${stringified}`
+    super(message)
+    this.name = 'UnreachableError'
+    this.value = stringified
+  }
+}
+
+/**
+ * Stringifies a value that was statically typed as `never` but has, in
+ * practice, reached a runtime check — for example a discriminant value that
+ * did not go through the narrowing the type system assumed. `String()` alone
+ * is insufficient because it renders `undefined`/objects unhelpfully for
+ * diagnostics, so this special-cases the common discriminant shapes.
+ *
+ * @remarks
+ * Typed `unknown` rather than `never` — the caller's argument genuinely is
+ * `never` at its call site, but declaring the parameter here as `never` too
+ * would make every runtime branch below statically unreachable (the value
+ * has no overlap with `string`/`undefined`/`null`), which `no-unnecessary-condition`
+ * correctly flags. `unknown` still accepts the `never`-typed caller argument
+ * (`never` is a subtype of everything) while letting the runtime checks — the
+ * actual point of this function, since a real value can still bypass static
+ * narrowing — typecheck normally.
+ */
+function describeUnreachableValue(value: unknown): string {
+  if (typeof value === 'string') {
+    return JSON.stringify(value)
+  }
+  if (value === undefined) {
+    return 'undefined'
+  }
+  if (value === null) {
+    return 'null'
+  }
+  try {
+    return JSON.stringify(value)
+  } catch {
+    // JSON.stringify itself threw (e.g. a circular structure or a BigInt).
+    // `String(value)` is avoided here because the value's static type at
+    // this point no longer guarantees a meaningful `toString` — fall back to
+    // the same tag `Object.prototype.toString` would render as text
+    // (`'[object Object]'`, `'[object BigInt]'`, etc.), which is always a
+    // safe, defined string regardless of the value's actual shape.
+    return Object.prototype.toString.call(value)
+  }
+}
+
+/**
  * Thrown when a test-only double — a class built purely to fabricate a
  * vaultkeeper-internal signal (e.g. a granted presence check, an unlocked
  * backend) for driving negative test cases — refuses to construct because it

@@ -1,5 +1,10 @@
 import { describe, it, expect } from 'vitest'
-import { FilesystemError, toFilesystemError } from '../../src/errors.js'
+import {
+  FilesystemError,
+  toFilesystemError,
+  UnreachableError,
+  VaultError,
+} from '../../src/errors.js'
 
 /** Build a Node.js-shaped filesystem error with a `code` (e.g. 'ENOENT'). */
 function fsError(code: string, message: string): NodeJS.ErrnoException {
@@ -92,5 +97,69 @@ describe('toFilesystemError', () => {
     expect(err.message).toBe('Failed to read wrapping key file at /x/.key: boom')
     expect(err.code).toBeUndefined()
     expect(err.cause).toBe('boom')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// UnreachableError (issue #340) — the exhaustiveness-check error. The type
+// system only guarantees the compile-time contract (see
+// test/types/unreachable-error.test-d.ts); these are the runtime-shape
+// assertions (VaultError subclass, name, message, and the `.value`
+// diagnostic field) that criterion 1 also requires.
+//
+// The repo forbids `as` casts, so a value that has genuinely bypassed
+// exhaustive narrowing (the only real way to reach `UnreachableError` at
+// runtime — e.g. an unvalidated payload from outside the type system) is
+// simulated with a deliberately-lying type predicate, matching the
+// `Record<string, unknown>`-narrowing pattern already used for the same
+// purpose in test/unit/jwe/claims.test.ts.
+// ---------------------------------------------------------------------------
+
+/** Always returns true; only used to narrow a test value to `never`. */
+function isNever(_value: unknown): _value is never {
+  return true
+}
+
+/** Narrows any test-time value to `never`, without an `as` cast. */
+function toNeverForTest(value: unknown): never {
+  if (isNever(value)) {
+    return value
+  }
+  throw new Error('unreachable: isNever always returns true')
+}
+
+describe('UnreachableError', () => {
+  it('should extend VaultError and set its own name', () => {
+    const err = new UnreachableError(toNeverForTest('unexpected'))
+
+    expect(err).toBeInstanceOf(VaultError)
+    expect(err).toBeInstanceOf(Error)
+    expect(err.name).toBe('UnreachableError')
+  })
+
+  it('should embed the unexpected value in the message', () => {
+    const err = new UnreachableError(toNeverForTest('unexpected'))
+
+    expect(err.message).toContain('"unexpected"')
+    expect(err.value).toBe('"unexpected"')
+  })
+
+  it('should embed an optional detail string in the message', () => {
+    const err = new UnreachableError(toNeverForTest('bogus'), 'unrecognized claim kind')
+
+    expect(err.message).toBe(
+      'Reached unreachable code (unrecognized claim kind): unexpected value "bogus"',
+    )
+  })
+
+  it('should describe undefined and null distinctly from other values', () => {
+    expect(new UnreachableError(toNeverForTest(undefined)).value).toBe('undefined')
+    expect(new UnreachableError(toNeverForTest(null)).value).toBe('null')
+  })
+
+  it('should describe a non-string primitive via JSON.stringify', () => {
+    const err = new UnreachableError(toNeverForTest(42))
+
+    expect(err.value).toBe('42')
   })
 })

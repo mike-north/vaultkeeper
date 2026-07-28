@@ -470,6 +470,12 @@ export class UnknownBackendTypeError extends ConfigValidationError {
 }
 
 // @public
+export class UnreachableError extends VaultError {
+    constructor(value: never, detail?: string);
+    readonly value: string;
+}
+
+// @public
 export class UsageLimitExceededError extends VaultError {
     constructor(message: string);
 }

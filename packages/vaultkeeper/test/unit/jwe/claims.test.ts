@@ -4,6 +4,7 @@ import type { VaultClaims } from '../../../src/types.js'
 import {
   TokenExpiredError,
   TokenRevokedError,
+  UnreachableError,
   UsageLimitExceededError,
   VaultError,
 } from '../../../src/errors.js'
@@ -349,7 +350,12 @@ describe('validateClaims', () => {
       expect(() => {
         validateClaims(
           makeValidClaims({
-            pres: { op: 'sign', at: Math.floor(Date.now() / 1000), method: 'touch', backend: 'yubikey' },
+            pres: {
+              op: 'sign',
+              at: Math.floor(Date.now() / 1000),
+              method: 'touch',
+              backend: 'yubikey',
+            },
           }),
         )
       }).toThrow('Invalid token: secret claim must not carry signing-lease fields (kid/kgen/pres)')
@@ -361,9 +367,22 @@ describe('validateClaims', () => {
       if (!isRecordVaultClaimsShapedIgnoringKty(record)) {
         throw new Error('unreachable: base claims always satisfy the minimal shape')
       }
-      expect(() => {
+      let caught: unknown
+      try {
         validateClaims(record)
-      }).toThrow('Invalid token: unrecognized claim kind kty=wat')
+      } catch (err: unknown) {
+        caught = err
+      }
+      // Routed through UnreachableError (issue #340): a `kty` that is
+      // present but not a known ClaimsKind reaches the switch's `default`
+      // arm, which is the exhaustiveness-check error, not a bare VaultError.
+      if (!(caught instanceof UnreachableError)) {
+        throw new Error('expected validateClaims to throw an UnreachableError')
+      }
+      expect(caught.message).toBe(
+        'Reached unreachable code (Invalid token: unrecognized claim kind): unexpected value "wat"',
+      )
+      expect(caught.value).toBe('"wat"')
     })
   })
 })
