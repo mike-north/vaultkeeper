@@ -39,6 +39,15 @@ sets `{ "type": "yubikey", "enabled": true, "options": { "touchPolicy": "require
 4. Reconfigure the slot **without** a touch policy (`touchPolicy` absent) → the
    `yubikey` row now shows `presencePerUse: false`, and `--require-presence-per-use`
    fails with `NotCapableError` before any device access.
+5. **`delete` is not touch-enforced (issue #326).** Even with the slot's touch
+   policy `required`, `delete()` never performs challenge-response — it only
+   probes that a YubiKey is connected, then unlinks the entry file. Store a
+   secret, then run `vaultkeeper delete --name S --require-presence-per-use`.
+   Expect it to fail immediately with `NotCapableError` (exit 1) — no tap
+   prompt, no device access — because `presenceEnforcedOperations` for this
+   instance covers `read`/`store` only, never `delete`. Confirm the secret
+   still exists afterward (`vaultkeeper delete --name S` without the flag
+   removes it normally).
 
 ## 1Password (per-access mode)
 

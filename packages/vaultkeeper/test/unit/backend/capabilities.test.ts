@@ -73,8 +73,25 @@ describe('per-backend truth basis (AC2)', () => {
     // same type differ purely by their configured touch policy.
     const withTouch = new YubikeyBackend('/tmp/vk-caps-yk', true)
     const withoutTouch = new YubikeyBackend('/tmp/vk-caps-yk', false)
-    await expect(withTouch.getCapabilities()).resolves.toEqual({ presencePerUse: true })
+    await expect(withTouch.getCapabilities()).resolves.toEqual({
+      presencePerUse: true,
+      presenceEnforcedOperations: ['read', 'store'],
+    })
     await expect(withoutTouch.getCapabilities()).resolves.toEqual({ presencePerUse: false })
+  })
+
+  it('YubiKey excludes delete from presenceEnforcedOperations (regression, issue #326)', async () => {
+    // delete() never performs challenge-response — it only probes device
+    // presence (requireDevice) and unlinks the entry — so a touch-configured
+    // slot must not claim `delete` is presence-enforced. Before the fix,
+    // getCapabilities omitted `presenceEnforcedOperations` entirely, which
+    // the shared capability contract treats as "every keyed operation is
+    // covered" — silently misrepresenting `delete` as touch-gated.
+    const withTouch = new YubikeyBackend('/tmp/vk-caps-yk', true)
+    const caps = await withTouch.getCapabilities()
+    expect(caps.presencePerUse).toBe(true)
+    expect(caps.presenceEnforcedOperations).toEqual(['read', 'store'])
+    expect(caps.presenceEnforcedOperations).not.toContain('delete')
   })
 
   it('YubiKey defaults to false when no touch policy is configured', async () => {
