@@ -159,7 +159,7 @@ pub const HANDLE_TABLE_MAX_SIZE: usize = 10_000;
 
 /// Opaque handle identifier returned by [`HandleTable::insert_secret`] or by
 /// the crate-internal signing-handle insertion path (see
-/// [`crate::vault::VaultKeeper::register_signing_handle`], the sole gated
+/// `crate::vault::VaultKeeper::register_signing_handle`, the sole gated
 /// entry point for signing handles — issue #282).
 ///
 /// Carries no claims data itself — it is a bare, unguessable (UUID v4)
