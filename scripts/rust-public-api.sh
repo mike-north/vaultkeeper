@@ -22,8 +22,21 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 toolchain_env="${repo_root}/crates/vaultkeeper-core/rust-api-toolchain.env"
 committed_file="${repo_root}/crates/vaultkeeper-core/public-api.txt"
 
-# shellcheck disable=SC1090
-source <(grep -v '^[[:space:]]*#' "${toolchain_env}" | grep -v '^[[:space:]]*$')
+# Parse KEY=VALUE pairs without evaluating the file, mirroring how the CI
+# job loads it via $GITHUB_ENV (also non-evaluating).
+read_env_key() {
+  local key="$1"
+  local value
+  value="$(grep -E "^${key}=" "${toolchain_env}" | tail -n1 | cut -d= -f2-)"
+  if [[ -z "${value}" ]]; then
+    echo "::error::${key} is missing from ${toolchain_env}" >&2
+    exit 1
+  fi
+  printf '%s' "${value}"
+}
+
+RUST_API_NIGHTLY_TOOLCHAIN="$(read_env_key RUST_API_NIGHTLY_TOOLCHAIN)"
+CARGO_PUBLIC_API_VERSION="$(read_env_key CARGO_PUBLIC_API_VERSION)"
 
 if ! command -v cargo >/dev/null 2>&1; then
   echo "::error::cargo not found on PATH" >&2
