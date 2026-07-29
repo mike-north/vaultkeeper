@@ -248,6 +248,44 @@ jobs:
           done
           exit $status
 
+  rust-public-api:
+    name: Rust Public API Snapshot (vaultkeeper-core)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Single source of truth for the pinned nightly toolchain and
+      # cargo-public-api version — shared with the local check/generate
+      # commands documented in CLAUDE.md's "Rust public-API snapshot" section.
+      - name: Load pinned rust-api toolchain versions
+        run: grep -v '^[[:space:]]*#' crates/vaultkeeper-core/rust-api-toolchain.env | grep -v '^[[:space:]]*$' >> "$GITHUB_ENV"
+
+      # `cargo public-api` builds rustdoc JSON, which needs the nightly
+      # `-Z unstable-options` rustdoc flags — same reason the wasm-guards job
+      # above needs a pinned toolchain, applied here to the nightly channel
+      # instead of stable. Pinned to a commit SHA on the `master` branch
+      # (rather than the mutable `master` ref) for supply-chain
+      # reproducibility; @master is still required (not @stable) for the
+      # same reason documented in the wasm-guards job above — only @master
+      # honors an explicit `toolchain:` input.
+      - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # master, as of 2026-07-29
+        with:
+          toolchain: ${{ env.RUST_API_NIGHTLY_TOOLCHAIN }}
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install pinned cargo-public-api
+        run: cargo install cargo-public-api --version "${CARGO_PUBLIC_API_VERSION}" --locked
+
+      - name: Verify committed public-API listing matches a fresh regeneration (drift check)
+        # AC2: mirrors the check:api-report regeneration-diff pattern —
+        # scripts/rust-public-api.sh regenerates the listing with the pinned
+        # toolchain/version and diffs it against the committed
+        # crates/vaultkeeper-core/public-api.txt, failing on any drift. Per
+        # docs/specs/001 §3.5, a diff touching this listing is a surface
+        # change requiring a spec update in the same PR.
+        run: bash scripts/rust-public-api.sh check
+
   typescript:
     name: TypeScript Build & Check (Node ${{ matrix.node-version }})
     needs: rust
