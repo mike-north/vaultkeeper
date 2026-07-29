@@ -745,6 +745,7 @@ fn run_cases() -> Vec<ConformanceCase> {
             expected_stderr: OutputMatcher::Contains("--profile".into()),
             expected_config_file: None,
             extra_files: Vec::new(),
+            stub_scenario: None,
         },
         ConformanceCase {
             name: "run --token conflicts with --profile-file, naming both flags".into(),
@@ -764,6 +765,7 @@ fn run_cases() -> Vec<ConformanceCase> {
             expected_stderr: OutputMatcher::Contains("--profile-file".into()),
             expected_config_file: None,
             extra_files: Vec::new(),
+            stub_scenario: None,
         },
         ConformanceCase {
             name: "run --token rejects an invalid --as var name with a typed error".into(),
@@ -783,6 +785,7 @@ fn run_cases() -> Vec<ConformanceCase> {
             expected_stderr: OutputMatcher::Contains("--as".into()),
             expected_config_file: None,
             extra_files: Vec::new(),
+            stub_scenario: None,
         },
         ConformanceCase {
             name: "run --token --dry-run never redeems or decrypts the token".into(),
@@ -799,6 +802,7 @@ fn run_cases() -> Vec<ConformanceCase> {
             expected_stderr: OutputMatcher::Any,
             expected_config_file: None,
             extra_files: Vec::new(),
+            stub_scenario: None,
         },
         ConformanceCase {
             name: "run --token conflicts with --require-presence-at-issuance, naming both flags"
@@ -818,6 +822,7 @@ fn run_cases() -> Vec<ConformanceCase> {
             expected_stderr: OutputMatcher::Contains("--require-presence-at-issuance".into()),
             expected_config_file: None,
             extra_files: Vec::new(),
+            stub_scenario: None,
         },
         ConformanceCase {
             // Needs no real token: the --set/--as collision is checked
@@ -843,6 +848,7 @@ fn run_cases() -> Vec<ConformanceCase> {
             expected_stderr: OutputMatcher::Contains("--as".into()),
             expected_config_file: None,
             extra_files: Vec::new(),
+            stub_scenario: None,
         },
         ConformanceCase {
             name: "exec emits a deprecation notice on stderr even when the token is invalid".into(),
@@ -860,6 +866,7 @@ fn run_cases() -> Vec<ConformanceCase> {
             expected_stderr: OutputMatcher::Contains("deprecated".into()),
             expected_config_file: None,
             extra_files: Vec::new(),
+            stub_scenario: None,
         },
     ]
 }
