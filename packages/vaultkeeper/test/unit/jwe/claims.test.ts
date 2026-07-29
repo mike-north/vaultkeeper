@@ -382,7 +382,7 @@ describe('validateClaims', () => {
       expect(caught.message).toBe(
         'Reached unreachable code (Invalid token: unrecognized claim kind): unexpected value "wat"',
       )
-      expect(caught.value).toBe('"wat"')
+      expect(caught.describedValue).toBe('"wat"')
     })
   })
 })

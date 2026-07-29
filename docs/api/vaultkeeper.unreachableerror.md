@@ -17,15 +17,21 @@ declare class UnreachableError extends VaultError
 
 
 ```ts
-switch (claims.kty) {
-  case 'secret':
+switch (check.kind) {
+  case 'config-parse':
     // ...
     break
-  case 'signing-key':
+  case 'config-validation':
+    // ...
+    break
+  case 'config-unknown-backend':
+    // ...
+    break
+  case 'config-read':
     // ...
     break
   default:
-    throw new UnreachableError(claims.kty, 'unrecognized claim kind')
+    throw new UnreachableError(check.kind, 'unrecognized preflight check kind')
 }
 ```
 
@@ -88,7 +94,7 @@ Description
 </th></tr></thead>
 <tbody><tr><td>
 
-[value](./vaultkeeper.unreachableerror.value.md)
+[describedValue](./vaultkeeper.unreachableerror.describedvalue.md)
 
 
 </td><td>
@@ -103,7 +109,7 @@ string
 
 </td><td>
 
-The value that reached the supposedly-unreachable arm, stringified for diagnostics. Always present because `never` at the type level does not guarantee `never` at runtime — a value that bypassed static narrowing (e.g. crossed an untyped boundary such as `JSON.parse`<!-- -->) can still reach this constructor.
+A stringified rendering of the value that reached the supposedly-unreachable arm, for diagnostics. Always present because `never` at the type level does not guarantee `never` at runtime — a value that bypassed static narrowing (e.g. crossed an untyped boundary such as `JSON.parse`<!-- -->) can still reach this constructor.
 
 
 </td></tr>

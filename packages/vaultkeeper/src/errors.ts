@@ -812,15 +812,21 @@ export class RotationInProgressError extends VaultError {
  *
  * @example
  * ```ts
- * switch (claims.kty) {
- *   case 'secret':
+ * switch (check.kind) {
+ *   case 'config-parse':
  *     // ...
  *     break
- *   case 'signing-key':
+ *   case 'config-validation':
+ *     // ...
+ *     break
+ *   case 'config-unknown-backend':
+ *     // ...
+ *     break
+ *   case 'config-read':
  *     // ...
  *     break
  *   default:
- *     throw new UnreachableError(claims.kty, 'unrecognized claim kind')
+ *     throw new UnreachableError(check.kind, 'unrecognized preflight check kind')
  * }
  * ```
  *
@@ -828,13 +834,13 @@ export class RotationInProgressError extends VaultError {
  */
 export class UnreachableError extends VaultError {
   /**
-   * The value that reached the supposedly-unreachable arm, stringified for
-   * diagnostics. Always present because `never` at the type level does not
-   * guarantee `never` at runtime — a value that bypassed static narrowing
-   * (e.g. crossed an untyped boundary such as `JSON.parse`) can still reach
-   * this constructor.
+   * A stringified rendering of the value that reached the
+   * supposedly-unreachable arm, for diagnostics. Always present because
+   * `never` at the type level does not guarantee `never` at runtime — a
+   * value that bypassed static narrowing (e.g. crossed an untyped boundary
+   * such as `JSON.parse`) can still reach this constructor.
    */
-  readonly value: string
+  readonly describedValue: string
 
   constructor(value: never, detail?: string) {
     const stringified = describeUnreachableValue(value)
@@ -844,7 +850,7 @@ export class UnreachableError extends VaultError {
         : `Reached unreachable code (${detail}): unexpected value ${stringified}`
     super(message)
     this.name = 'UnreachableError'
-    this.value = stringified
+    this.describedValue = stringified
   }
 }
 
@@ -893,6 +899,17 @@ function describeUnreachableValue(value: unknown): string {
   }
   if (typeof value === 'bigint') {
     return `${value.toString()}n`
+  }
+  if (value instanceof Error) {
+    // `Error#message`/`stack` are non-enumerable, so `JSON.stringify` below
+    // would otherwise render an Error instance as the uninformative `'{}'`.
+    // Guarded in its own try/catch because a hostile Error subclass can
+    // still override `name`/`message` with a throwing getter.
+    try {
+      return `[Error ${value.name}: ${value.message}]`
+    } catch {
+      // Fall through to the same JSON.stringify-based fallback used below.
+    }
   }
   try {
     const json: string | undefined = JSON.stringify(value)

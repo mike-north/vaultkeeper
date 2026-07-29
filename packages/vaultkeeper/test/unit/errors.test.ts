@@ -104,7 +104,7 @@ describe('toFilesystemError', () => {
 // UnreachableError (issue #340) — the exhaustiveness-check error. The type
 // system only guarantees the compile-time contract (see
 // test/types/unreachable-error.test-d.ts); these are the runtime-shape
-// assertions (VaultError subclass, name, message, and the `.value`
+// assertions (VaultError subclass, name, message, and the `.describedValue`
 // diagnostic field) that criterion 1 also requires.
 //
 // The repo forbids `as` casts, so a value that has genuinely bypassed
@@ -141,7 +141,7 @@ describe('UnreachableError', () => {
     const err = new UnreachableError(toNeverForTest('unexpected'))
 
     expect(err.message).toContain('"unexpected"')
-    expect(err.value).toBe('"unexpected"')
+    expect(err.describedValue).toBe('"unexpected"')
   })
 
   it('should embed an optional detail string in the message', () => {
@@ -153,14 +153,14 @@ describe('UnreachableError', () => {
   })
 
   it('should describe undefined and null distinctly from other values', () => {
-    expect(new UnreachableError(toNeverForTest(undefined)).value).toBe('undefined')
-    expect(new UnreachableError(toNeverForTest(null)).value).toBe('null')
+    expect(new UnreachableError(toNeverForTest(undefined)).describedValue).toBe('undefined')
+    expect(new UnreachableError(toNeverForTest(null)).describedValue).toBe('null')
   })
 
   it('should describe a non-string primitive via JSON.stringify', () => {
     const err = new UnreachableError(toNeverForTest(42))
 
-    expect(err.value).toBe('42')
+    expect(err.describedValue).toBe('42')
   })
 
   // -------------------------------------------------------------------------
@@ -179,8 +179,8 @@ describe('UnreachableError', () => {
 
     const err = new UnreachableError(toNeverForTest(namedFn))
 
-    expect(err.value).toBe('[Function: namedFn]')
-    expect(err.value.length).toBeGreaterThan(0)
+    expect(err.describedValue).toBe('[Function: namedFn]')
+    expect(err.describedValue.length).toBeGreaterThan(0)
   })
 
   it('should describe an anonymous function without throwing', () => {
@@ -193,13 +193,13 @@ describe('UnreachableError', () => {
 
     const err = new UnreachableError(toNeverForTest(anonymous))
 
-    expect(err.value).toBe('[Function: anonymous]')
+    expect(err.describedValue).toBe('[Function: anonymous]')
   })
 
   it('should describe a symbol without throwing', () => {
     const err = new UnreachableError(toNeverForTest(Symbol('bogus-kind')))
 
-    expect(err.value).toBe('Symbol(bogus-kind)')
+    expect(err.describedValue).toBe('Symbol(bogus-kind)')
   })
 
   it('should describe a BigInt without throwing', () => {
@@ -207,7 +207,7 @@ describe('UnreachableError', () => {
     // Number.MAX_SAFE_INTEGER without losing precision beforehand.
     const err = new UnreachableError(toNeverForTest(BigInt('9007199254740993')))
 
-    expect(err.value).toBe('9007199254740993n')
+    expect(err.describedValue).toBe('9007199254740993n')
   })
 
   it('should describe an object whose toJSON returns undefined without a literal "undefined" body', () => {
@@ -220,8 +220,8 @@ describe('UnreachableError', () => {
 
     const err = new UnreachableError(toNeverForTest(toJsonUndefined))
 
-    expect(err.value.length).toBeGreaterThan(0)
-    expect(err.value).toBe('[object Object]')
+    expect(err.describedValue.length).toBeGreaterThan(0)
+    expect(err.describedValue).toBe('[object Object]')
   })
 
   it('should describe a circular object without throwing', () => {
@@ -230,7 +230,7 @@ describe('UnreachableError', () => {
 
     const err = new UnreachableError(toNeverForTest(circular))
 
-    expect(err.value).toBe('[object Object]')
+    expect(err.describedValue).toBe('[object Object]')
   })
 
   it('should describe an object with a throwing getter without throwing', () => {
@@ -244,7 +244,7 @@ describe('UnreachableError', () => {
 
     const err = new UnreachableError(toNeverForTest(hostile))
 
-    expect(err.value).toBe('[object Object]')
+    expect(err.describedValue).toBe('[object Object]')
   })
 
   it('should describe an object with a throwing Symbol.toStringTag getter without throwing', () => {
@@ -262,6 +262,34 @@ describe('UnreachableError', () => {
 
     const err = new UnreachableError(toNeverForTest(hostile))
 
-    expect(err.value).toBe('[unstringifiable value]')
+    expect(err.describedValue).toBe('[unstringifiable value]')
+  })
+
+  it('should describe an Error instance by its name and message, not "{}"', () => {
+    // `Error#message`/`name` are non-enumerable, so JSON.stringify alone
+    // would render any Error instance as the uninformative '{}'.
+    const err = new UnreachableError(toNeverForTest(new TypeError('bad kind')))
+
+    expect(err.describedValue).toBe('[Error TypeError: bad kind]')
+  })
+
+  it('should fall through safely for an Error subclass with a throwing message getter', () => {
+    class HostileMessageError extends Error {
+      constructor() {
+        super()
+        Object.defineProperty(this, 'message', {
+          get(): never {
+            throw new Error('message boom')
+          },
+        })
+      }
+    }
+
+    const err = new UnreachableError(toNeverForTest(new HostileMessageError()))
+
+    // The throwing getter forces a fall-through past the Error-specific
+    // branch to the JSON.stringify fallback, which renders an Error
+    // instance's (non-enumerable, so invisible to it) message as '{}'.
+    expect(err.describedValue).toBe('{}')
   })
 })
