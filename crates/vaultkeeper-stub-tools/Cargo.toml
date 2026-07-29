@@ -1,0 +1,36 @@
+[package]
+name = "vaultkeeper-stub-tools"
+description = "Generic table-driven fake-CLI harness (StubTool) for every subprocess-driven vaultkeeper backend"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[[bin]]
+name = "vk-stub-ykman"
+path = "src/bin/vk-stub-ykman.rs"
+
+[[bin]]
+name = "vk-stub-secret-tool"
+path = "src/bin/vk-stub-secret-tool.rs"
+
+[[bin]]
+name = "vk-stub-security"
+path = "src/bin/vk-stub-security.rs"
+
+[[bin]]
+name = "vk-stub-op"
+path = "src/bin/vk-stub-op.rs"
+
+[[bin]]
+name = "vk-stub-powershell"
+path = "src/bin/vk-stub-powershell.rs"
+
+[dev-dependencies]
+tempfile = "3"
+vaultkeeper-conformance = { path = "../vaultkeeper-conformance" }

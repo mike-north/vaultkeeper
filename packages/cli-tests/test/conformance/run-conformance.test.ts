@@ -16,13 +16,9 @@ import * as os from 'node:os'
 import * as path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, it, expect } from 'vitest'
+import { matchesOutput, type OutputMatcher } from './matches-output.js'
 
 // ─── Types mirroring the Rust ConformanceCase / OutputMatcher ────
-
-interface OutputMatcher {
-  type: 'Any' | 'Exact' | 'Contains' | 'Regex' | 'JsonContains'
-  value?: string | Record<string, unknown>
-}
 
 interface ConformanceCase {
   name: string
@@ -85,58 +81,6 @@ const DEFAULT_CONFIG = JSON.stringify(
   null,
   2,
 )
-
-// ─── Output matching ─────────────────────────────────────────────
-
-function matcherValueAsString(matcher: OutputMatcher): string {
-  if (typeof matcher.value === 'string') return matcher.value
-  return ''
-}
-
-function matchesOutput(matcher: OutputMatcher, output: string): boolean {
-  switch (matcher.type) {
-    case 'Any':
-      return true
-    case 'Exact':
-      return output.trim() === matcherValueAsString(matcher).trim()
-    case 'Contains':
-      return output.includes(matcherValueAsString(matcher))
-    case 'Regex': {
-      let pattern = matcherValueAsString(matcher)
-      let flags = ''
-      // Translate Rust inline (?s) flag to JS 's' flag (dotall mode)
-      if (pattern.startsWith('(?s)')) {
-        pattern = pattern.slice(4)
-        flags = 's'
-      }
-      return new RegExp(pattern, flags).test(output)
-    }
-    case 'JsonContains': {
-      try {
-        const parsed: unknown = JSON.parse(output)
-        return jsonContains(parsed, matcher.value)
-      } catch {
-        return false
-      }
-    }
-    default:
-      return false
-  }
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === 'object' && !Array.isArray(value)
-}
-
-function jsonContains(haystack: unknown, needle: unknown): boolean {
-  if (isRecord(haystack) && isRecord(needle)) {
-    return Object.entries(needle).every(([k, v]) => k in haystack && jsonContains(haystack[k], v))
-  }
-  if (Array.isArray(haystack) && Array.isArray(needle)) {
-    return needle.every((nv: unknown) => haystack.some((hv: unknown) => jsonContains(hv, nv)))
-  }
-  return haystack === needle
-}
 
 // ─── Fixture path validation ──────────────────────────────────────
 
