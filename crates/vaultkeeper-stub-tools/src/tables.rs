@@ -286,9 +286,14 @@ pub fn secret_tool() -> BehaviorTable {
 /// piped JSON matched that exact structure) is reproduced by construction:
 /// this table's `item create` rule only captures the password when stdin
 /// puts it at `fields.password.value` (the real shape); any other shape
-/// falls through to the lower-priority "created but empty" rule, exactly
-/// mirroring the spike's "exit 0, item created, password field empty"
-/// symptom.
+/// falls through to the lower-priority "created but empty" rule, which
+/// upserts the item with an empty `fields` map. On the following `item get`,
+/// `render_body`'s `{item.<field>}` substitution only replaces placeholders
+/// for fields actually present on the item (see `engine::render_body`), so
+/// with no `password` field to substitute, the `{item.password}` placeholder
+/// in the `item get` template is left in the emitted JSON verbatim, unresolved
+/// — not an empty string — exactly mirroring the spike's "exit 0, item
+/// created, password field silently missing from the round trip" symptom.
 pub fn op() -> BehaviorTable {
     let mut correct_fields = BTreeMap::new();
     correct_fields.insert(

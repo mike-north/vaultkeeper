@@ -8,7 +8,7 @@
 //! wrong *shape* (e.g. drops a field, nests it under the wrong key) because
 //! there is no shape to check against. `World` gives every stub tool a real
 //! item store so shape-assertion cases (see
-//! [`crate::table::Mutation::UpsertItemFromField`]) have something to
+//! [`crate::table::Mutation::UpsertItem`]) have something to
 //! assert on.
 
 use std::collections::BTreeMap;

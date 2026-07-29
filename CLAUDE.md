@@ -19,6 +19,7 @@ vaultkeeper is a polyglot monorepo (TypeScript + Rust) providing unified, policy
 - **`vaultkeeper-cli`** — Native CLI binary using clap. Provides `NativeHostPlatform` impl.
 - **`vaultkeeper-wasm`** — wasm-bindgen wrapper over core. Compiled with `wasm-pack --target nodejs`.
 - **`vaultkeeper-conformance`** — Data-driven conformance test definitions. Exports cases as JSON for both Rust and JS test runners.
+- **`vaultkeeper-stub-tools`** — Dev-only, table-driven paired-double/stub-tool framework. Ships five `vk-stub-*` binaries (`vk-stub-ykman`, `vk-stub-secret-tool`, `vk-stub-security`, `vk-stub-op`, `vk-stub-powershell`) that reproduce the argv/stdin/stdout/stderr/exit contract of the real subprocess-driven backends; never a runtime dependency.
 
 ## Package manager
 
@@ -44,7 +45,8 @@ vaultkeeper/
 │   ├── vaultkeeper-core/       (Rust core library)
 │   ├── vaultkeeper-cli/        (Rust native CLI)
 │   ├── vaultkeeper-wasm/       (Rust WASM bindings)
-│   └── vaultkeeper-conformance/ (conformance test data)
+│   ├── vaultkeeper-conformance/ (conformance test data)
+│   └── vaultkeeper-stub-tools/  (dev-only paired-double/stub-tool framework)
 ├── packages/
 │   ├── vaultkeeper/            (TS library)
 │   ├── cli/                    (TS CLI)
