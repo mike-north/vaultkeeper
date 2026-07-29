@@ -271,6 +271,7 @@ pub fn vaultkeeper_core::backend::HostPlatform::platform(&self) -> vaultkeeper_c
 pub fn vaultkeeper_core::backend::HostPlatform::prompt_approval<'life0, 'life1, 'async_trait>(&'life0 self, vaultkeeper_core::backend::ApprovalContext<'life1>) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<bool, vaultkeeper_core::errors::VaultError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
 pub fn vaultkeeper_core::backend::HostPlatform::read_file<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 std::path::Path) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<alloc::vec::Vec<u8>, vaultkeeper_core::errors::VaultError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
 pub fn vaultkeeper_core::backend::HostPlatform::rename_file<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 std::path::Path, &'life2 std::path::Path) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<(), vaultkeeper_core::errors::VaultError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
+pub fn vaultkeeper_core::backend::HostPlatform::try_create_lock_file<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 std::path::Path, &'life2 [u8]) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<(), vaultkeeper_core::errors::VaultError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
 pub fn vaultkeeper_core::backend::HostPlatform::write_file<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 std::path::Path, &'life2 [u8], u32) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<(), vaultkeeper_core::errors::VaultError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
 pub trait vaultkeeper_core::backend::ListableBackend: vaultkeeper_core::backend::SecretBackend
 pub fn vaultkeeper_core::backend::ListableBackend::list<'life0, 'async_trait>(&'life0 self) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<alloc::vec::Vec<alloc::string::String>, vaultkeeper_core::errors::VaultError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
@@ -443,6 +444,8 @@ pub vaultkeeper_core::errors::VaultError::KeyRevoked
 pub vaultkeeper_core::errors::VaultError::KeyRevoked::message: alloc::string::String
 pub vaultkeeper_core::errors::VaultError::KeyRotated
 pub vaultkeeper_core::errors::VaultError::KeyRotated::message: alloc::string::String
+pub vaultkeeper_core::errors::VaultError::LockingNotSupported
+pub vaultkeeper_core::errors::VaultError::LockingNotSupported::message: alloc::string::String
 pub vaultkeeper_core::errors::VaultError::MaterializeModeUnsupported
 pub vaultkeeper_core::errors::VaultError::MaterializeModeUnsupported::message: alloc::string::String
 pub vaultkeeper_core::errors::VaultError::MaterializeModeUnsupported::mode: alloc::string::String
@@ -520,7 +523,6 @@ pub struct vaultkeeper_core::identity::handles::HandleTable
 impl vaultkeeper_core::identity::handles::HandleTable
 pub fn vaultkeeper_core::identity::handles::HandleTable::current_usage(&self, &str) -> u64
 pub fn vaultkeeper_core::identity::handles::HandleTable::insert_secret(&mut self, vaultkeeper_core::types::VaultClaims, core::option::Option<u64>) -> vaultkeeper_core::identity::handles::HandleId
-pub fn vaultkeeper_core::identity::handles::HandleTable::insert_signing(&mut self, vaultkeeper_core::types::SigningClaims, core::option::Option<u64>) -> vaultkeeper_core::identity::handles::HandleId
 pub fn vaultkeeper_core::identity::handles::HandleTable::is_empty(&self) -> bool
 pub fn vaultkeeper_core::identity::handles::HandleTable::len(&self) -> usize
 pub fn vaultkeeper_core::identity::handles::HandleTable::new() -> Self
@@ -570,7 +572,6 @@ pub struct vaultkeeper_core::identity::HandleTable
 impl vaultkeeper_core::identity::handles::HandleTable
 pub fn vaultkeeper_core::identity::handles::HandleTable::current_usage(&self, &str) -> u64
 pub fn vaultkeeper_core::identity::handles::HandleTable::insert_secret(&mut self, vaultkeeper_core::types::VaultClaims, core::option::Option<u64>) -> vaultkeeper_core::identity::handles::HandleId
-pub fn vaultkeeper_core::identity::handles::HandleTable::insert_signing(&mut self, vaultkeeper_core::types::SigningClaims, core::option::Option<u64>) -> vaultkeeper_core::identity::handles::HandleId
 pub fn vaultkeeper_core::identity::handles::HandleTable::is_empty(&self) -> bool
 pub fn vaultkeeper_core::identity::handles::HandleTable::len(&self) -> usize
 pub fn vaultkeeper_core::identity::handles::HandleTable::new() -> Self
@@ -1119,6 +1120,8 @@ pub vaultkeeper_core::VaultError::KeyRevoked
 pub vaultkeeper_core::VaultError::KeyRevoked::message: alloc::string::String
 pub vaultkeeper_core::VaultError::KeyRotated
 pub vaultkeeper_core::VaultError::KeyRotated::message: alloc::string::String
+pub vaultkeeper_core::VaultError::LockingNotSupported
+pub vaultkeeper_core::VaultError::LockingNotSupported::message: alloc::string::String
 pub vaultkeeper_core::VaultError::MaterializeModeUnsupported
 pub vaultkeeper_core::VaultError::MaterializeModeUnsupported::message: alloc::string::String
 pub vaultkeeper_core::VaultError::MaterializeModeUnsupported::mode: alloc::string::String
@@ -1212,7 +1215,6 @@ pub struct vaultkeeper_core::HandleTable
 impl vaultkeeper_core::identity::handles::HandleTable
 pub fn vaultkeeper_core::identity::handles::HandleTable::current_usage(&self, &str) -> u64
 pub fn vaultkeeper_core::identity::handles::HandleTable::insert_secret(&mut self, vaultkeeper_core::types::VaultClaims, core::option::Option<u64>) -> vaultkeeper_core::identity::handles::HandleId
-pub fn vaultkeeper_core::identity::handles::HandleTable::insert_signing(&mut self, vaultkeeper_core::types::SigningClaims, core::option::Option<u64>) -> vaultkeeper_core::identity::handles::HandleId
 pub fn vaultkeeper_core::identity::handles::HandleTable::is_empty(&self) -> bool
 pub fn vaultkeeper_core::identity::handles::HandleTable::len(&self) -> usize
 pub fn vaultkeeper_core::identity::handles::HandleTable::new() -> Self
