@@ -864,11 +864,15 @@ pub vaultkeeper_core::run::RunPlan::profile: vaultkeeper_core::profile::loader::
 pub struct vaultkeeper_core::run::SetEntry
 pub vaultkeeper_core::run::SetEntry::secret_name: alloc::string::String
 pub vaultkeeper_core::run::SetEntry::var: alloc::string::String
+pub const vaultkeeper_core::run::DEFAULT_TOKEN_VAR: &str
 pub const vaultkeeper_core::run::FILE_ONLY_DEGRADATION_NOTICE: &str
 pub fn vaultkeeper_core::run::apply_set_overlay(vaultkeeper_core::profile::loader::LoadedProfile, &[vaultkeeper_core::run::SetEntry], &vaultkeeper_core::profile::loader::ProfileDefaults) -> vaultkeeper_core::run::RunPlan
+pub fn vaultkeeper_core::run::check_as_var_collision(&str, &vaultkeeper_core::run::RunPlan) -> core::result::Result<(), vaultkeeper_core::errors::VaultError>
 pub fn vaultkeeper_core::run::file_only_degradation_applies(&vaultkeeper_core::run::RunPlan, &str) -> bool
 pub fn vaultkeeper_core::run::parse_set_flag(&str) -> core::result::Result<vaultkeeper_core::run::SetEntry, vaultkeeper_core::errors::VaultError>
 pub fn vaultkeeper_core::run::render_dry_run(&vaultkeeper_core::run::RunPlan, &str, bool) -> alloc::string::String
+pub fn vaultkeeper_core::run::render_token_dry_run(&str, &vaultkeeper_core::run::RunPlan, &str) -> alloc::string::String
+pub fn vaultkeeper_core::run::validate_as_var_name(&str) -> core::result::Result<(), vaultkeeper_core::errors::VaultError>
 pub mod vaultkeeper_core::signing
 pub mod vaultkeeper_core::signing::ed25519
 pub fn vaultkeeper_core::signing::ed25519::kid_for_verifying_key(&ed25519_dalek::verifying::VerifyingKey) -> alloc::string::String
