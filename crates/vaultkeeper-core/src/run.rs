@@ -231,6 +231,38 @@ pub fn validate_as_var_name(name: &str) -> Result<(), VaultError> {
     })
 }
 
+/// Check whether `as_var` (the env var a redeemed `--token` secret targets)
+/// collides with a `--set` overlay entry declared in `set_plan` — shared by
+/// `run --token`'s dry-run and real launch paths (issue #333 follow-up) so
+/// the collision is refused identically on both instead of only surfacing
+/// once resolution has already run on the real path.
+///
+/// Only the overlay's *declared entries* are consulted — never a resolved
+/// value — so this can run before any backend/key-manager work, matching
+/// the rest of `run --dry-run`'s plan-only contract.
+///
+/// # Errors
+/// Returns [`VaultError::ConfigValidation`] (field `"--as"`) naming both
+/// flags when `set_plan` already declares an entry for `as_var`.
+pub fn check_as_var_collision(as_var: &str, set_plan: &RunPlan) -> Result<(), VaultError> {
+    if set_plan
+        .profile
+        .entries
+        .iter()
+        .any(|(name, _)| name == as_var)
+    {
+        return Err(VaultError::ConfigValidation {
+            message: format!(
+                "--set \"{as_var}=...\" conflicts with --as \"{as_var}\" (--token's redeemed \
+                 secret already targets that env var)"
+            ),
+            field: "--as".to_string(),
+            config_file_path: None,
+        });
+    }
+    Ok(())
+}
+
 /// Render `run --token --dry-run`: the single var the redeemed token will be
 /// injected under, plus any `--set` overlay entries — mirroring
 /// [`render_dry_run`]'s shape for the profile source, but for the token
@@ -596,5 +628,72 @@ mod tests {
         assert!(rendered.contains("EXTRA"));
         assert!(rendered.contains("UNREVIEWED"));
         assert!(rendered.contains("backend:     file"));
+    }
+
+    // --- check_as_var_collision (issue #333 follow-up: --dry-run must catch
+    // the --set/--as collision the same way a real run does, before any
+    // backend/key-manager work runs) ---
+
+    #[test]
+    fn as_var_collision_is_refused_when_a_set_entry_targets_the_same_var() {
+        let empty = load_profile_from_str(
+            r#"{ "version": 1, "name": "p", "entries": {} }"#,
+            &defaults(),
+        )
+        .unwrap();
+        let sets = vec![SetEntry {
+            var: "VAULTKEEPER_SECRET".to_string(),
+            secret_name: "other-secret".to_string(),
+        }];
+        let plan = apply_set_overlay(empty, &sets, &defaults());
+        let err = check_as_var_collision("VAULTKEEPER_SECRET", &plan).unwrap_err();
+        assert_matches!(err, VaultError::ConfigValidation { field, .. } if field == "--as");
+    }
+
+    #[test]
+    fn as_var_collision_names_both_flags_in_the_message() {
+        let empty = load_profile_from_str(
+            r#"{ "version": 1, "name": "p", "entries": {} }"#,
+            &defaults(),
+        )
+        .unwrap();
+        let sets = vec![SetEntry {
+            var: "TOKEN".to_string(),
+            secret_name: "s".to_string(),
+        }];
+        let plan = apply_set_overlay(empty, &sets, &defaults());
+        let err = check_as_var_collision("TOKEN", &plan).unwrap_err();
+        let VaultError::ConfigValidation { message, .. } = err else {
+            panic!("expected ConfigValidation");
+        };
+        assert!(message.contains("--set"));
+        assert!(message.contains("--as"));
+        assert!(message.contains("TOKEN"));
+    }
+
+    #[test]
+    fn as_var_collision_is_ok_when_no_set_entry_targets_the_as_var() {
+        let empty = load_profile_from_str(
+            r#"{ "version": 1, "name": "p", "entries": {} }"#,
+            &defaults(),
+        )
+        .unwrap();
+        let sets = vec![SetEntry {
+            var: "OTHER".to_string(),
+            secret_name: "s".to_string(),
+        }];
+        let plan = apply_set_overlay(empty, &sets, &defaults());
+        assert!(check_as_var_collision("VAULTKEEPER_SECRET", &plan).is_ok());
+    }
+
+    #[test]
+    fn as_var_collision_is_ok_with_no_set_entries_at_all() {
+        let empty = load_profile_from_str(
+            r#"{ "version": 1, "name": "p", "entries": {} }"#,
+            &defaults(),
+        )
+        .unwrap();
+        let plan = apply_set_overlay(empty, &[], &defaults());
+        assert!(check_as_var_collision("VAULTKEEPER_SECRET", &plan).is_ok());
     }
 }

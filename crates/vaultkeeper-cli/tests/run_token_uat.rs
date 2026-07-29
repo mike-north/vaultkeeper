@@ -521,3 +521,103 @@ fn exec_is_hidden_from_the_top_level_help_list() {
 
     assert!(!stdout.contains("exec"), "got: {stdout}");
 }
+
+// ─── --require-presence-at-issuance has nothing to apply to under
+// --token (a redeemed token is never minted by `run`) — refuse the
+// combination outright as a usage error rather than silently ignoring the
+// flag ────
+
+#[test]
+fn run_rejects_token_and_require_presence_at_issuance_together_naming_the_conflict() {
+    let dir = TempDir::new().unwrap();
+    write_config(&dir);
+
+    let output = Command::new(vk_bin())
+        .env("VAULTKEEPER_CONFIG_DIR", dir.path())
+        .args([
+            "run",
+            "--token",
+            "irrelevant",
+            "--require-presence-at-issuance",
+            "--",
+            "true",
+        ])
+        .stdin(Stdio::null())
+        .output()
+        .expect("failed to run");
+
+    assert!(!output.status.success());
+    assert_eq!(output.status.code(), Some(2), "clap usage errors exit 2");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("--token"), "got: {stderr}");
+    assert!(
+        stderr.contains("--require-presence-at-issuance"),
+        "got: {stderr}"
+    );
+}
+
+// ─── --dry-run must catch the --set/--as collision the same way a real
+// launch does — before this fix, --dry-run rendered cleanly and exited 0
+// even though the real launch below refuses ────
+
+#[test]
+fn run_token_dry_run_refuses_a_set_as_collision_instead_of_rendering_cleanly() {
+    let dir = TempDir::new().unwrap();
+    write_config(&dir);
+
+    // No token needs to be minted: the collision is between --as's default
+    // (VAULTKEEPER_SECRET) and --set's VAR half, checked against the
+    // declared --set overlay entries — never against a resolved value — so
+    // it must fire before the token is ever decrypted.
+    let output = Command::new(vk_bin())
+        .env("VAULTKEEPER_CONFIG_DIR", dir.path())
+        .args([
+            "run",
+            "--token",
+            "irrelevant",
+            "--dry-run",
+            "--set",
+            "VAULTKEEPER_SECRET=some-secret",
+            "--",
+            "true",
+        ])
+        .stdin(Stdio::null())
+        .output()
+        .expect("failed to run");
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("--set"), "got: {stderr}");
+    assert!(stderr.contains("--as"), "got: {stderr}");
+    assert!(
+        !String::from_utf8_lossy(&output.stdout).contains("vaultkeeper run --dry-run"),
+        "must refuse instead of rendering a dry-run plan on a colliding --set/--as pair"
+    );
+}
+
+#[tokio::test]
+async fn run_token_real_launch_refuses_a_set_as_collision() {
+    let dir = TempDir::new().unwrap();
+    write_config(&dir);
+    let token = mint_token(&dir, "token-value").await;
+
+    let output = Command::new(vk_bin())
+        .env("VAULTKEEPER_CONFIG_DIR", dir.path())
+        .args([
+            "run",
+            "--token",
+            &token,
+            "--set",
+            "VAULTKEEPER_SECRET=some-secret",
+            "--",
+            "true",
+        ])
+        .stdin(Stdio::null())
+        .output()
+        .expect("failed to run");
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("--set"), "got: {stderr}");
+    assert!(stderr.contains("--as"), "got: {stderr}");
+}

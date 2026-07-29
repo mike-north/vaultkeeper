@@ -96,9 +96,11 @@ enum Commands {
         /// at issuance (distinct from `--require-presence-per-use`, which
         /// forces a fresh action per operation). Not yet enforced: a real
         /// (non-dry-run) invocation with this flag set refuses rather than
-        /// proceeding without the guarantee. Not applicable to `--token`
-        /// (a redeemed token is never minted by `run`).
-        #[arg(long)]
+        /// proceeding without the guarantee. Not applicable to `--token` (a
+        /// redeemed token is never minted by `run`) — combining the two is a
+        /// usage error rather than a silent no-op, since `--token` has
+        /// nothing for this flag to apply to.
+        #[arg(long, conflicts_with = "token")]
         require_presence_at_issuance: bool,
         /// Command to launch, with the resolved environment
         #[arg(trailing_var_arg = true)]
@@ -649,7 +651,7 @@ async fn cmd_run_profile(
         }
     };
 
-    launch_and_wait(&command, resolved).await
+    launch_and_wait(&command, Zeroizing::new(ResolvedEnvMap(resolved))).await
 }
 
 /// `run --token`/`exec` — redeem an already-minted JWE directly (never mints,
@@ -696,6 +698,10 @@ async fn cmd_run_token(
             entries: Vec::new(),
         };
         let plan = apply_set_overlay(empty_profile, &set_entries, &defaults);
+        if let Err(e) = vaultkeeper_core::run::check_as_var_collision(as_var, &plan) {
+            stderr_diag(&format!("Error: {e}"));
+            return 1;
+        }
         let active_backend_type = cfg
             .backends
             .iter()
@@ -755,7 +761,13 @@ async fn cmd_run_token(
         }
     };
 
-    let mut env: vaultkeeper_core::ResolvedEnv = std::collections::HashMap::new();
+    // Wrapped in `Zeroizing` from the moment the secret enters this map —
+    // not deferred to `launch_and_wait` — so every early return below (a
+    // failed config load, a failed profile resolution, or the --set/--as
+    // collision) scrubs the buffer on drop too, not only the happy path
+    // that reaches `launch_and_wait` (see that function's doc comment for
+    // why the wrapper is needed at all).
+    let mut env = Zeroizing::new(ResolvedEnvMap(std::collections::HashMap::new()));
     env.insert(as_var.to_string(), secret.to_string());
 
     if !set_entries.is_empty() {
@@ -774,6 +786,10 @@ async fn cmd_run_token(
             entries: Vec::new(),
         };
         let plan = apply_set_overlay(empty_profile, &set_entries, &defaults);
+        if let Err(e) = vaultkeeper_core::run::check_as_var_collision(as_var, &plan) {
+            stderr_diag(&format!("Error: {e}"));
+            return 1;
+        }
         let backend = FileBackend::new(host.clone());
 
         let active_backend_type = cfg
@@ -800,13 +816,6 @@ async fn cmd_run_token(
         };
 
         for (var, value) in resolved {
-            if env.contains_key(&var) {
-                stderr_diag(&format!(
-                    "Error: --set \"{var}=...\" conflicts with --as \"{var}\" (--token's redeemed \
-                     secret already targets that env var)"
-                ));
-                return 1;
-            }
             env.insert(var, value);
         }
     }
@@ -834,14 +843,17 @@ async fn cmd_run_token(
 /// [`zeroize::Zeroizing`] (via the local [`ResolvedEnvMap`] newtype, since
 /// `Zeroize` has no blanket impl for `HashMap`) — the same wrapper the
 /// resolver already uses for individual secret values (see `resolve.rs`),
-/// extended here to the whole map. That guarantees the buffer is zeroized
-/// on **every** exit path from this function, including the early returns
-/// before a child is ever spawned (`SignalGuard::install()` or
-/// `cmd.spawn()` failing) — not only after a successful `spawn()`. The
-/// happy path still scrubs the buffer explicitly, immediately after
-/// `spawn()` returns, rather than deferring to the implicit end-of-function
-/// drop — the wrapper's `Drop` then re-zeroizes an already-empty buffer on
-/// that path, which is a harmless no-op. This does **not** scrub every
+/// extended here to the whole map. Callers wrap the map at the point the
+/// first secret value enters it (not here) so the buffer is zeroized on
+/// **every** exit path from *both* this function and the caller building
+/// `env` — including a caller's own early returns before `env` is ever
+/// passed here (e.g. `cmd_run_token`'s config-load, profile-resolution, or
+/// `--set`/`--as` collision failures), not only the paths internal to this
+/// function (`SignalGuard::install()` or `cmd.spawn()` failing). The happy
+/// path still scrubs the buffer explicitly, immediately after `spawn()`
+/// returns, rather than deferring to the implicit end-of-function drop —
+/// the wrapper's `Drop` then re-zeroizes an already-empty buffer on that
+/// path, which is a harmless no-op. This does **not** scrub every
 /// in-process copy of the resolved values: `cmd.envs(...)` below has
 /// already copied each one into `tokio::process::Command`'s internal
 /// `OsString` env storage, which `cmd` (and therefore that copy) outlives
@@ -853,10 +865,8 @@ async fn cmd_run_token(
 /// future refactor holding onto it, a panic unwind path, or a debug print)
 /// — not a claim that every copy of the plaintext is scrubbed from this
 /// process's heap for the child's lifetime.
-async fn launch_and_wait(command: &[String], env: vaultkeeper_core::ResolvedEnv) -> i32 {
+async fn launch_and_wait(command: &[String], mut env: Zeroizing<ResolvedEnvMap>) -> i32 {
     use std::process::Stdio;
-
-    let mut env = Zeroizing::new(ResolvedEnvMap(env));
 
     #[cfg(unix)]
     let signal_guard = match SignalGuard::install() {
@@ -922,6 +932,12 @@ impl std::ops::Deref for ResolvedEnvMap {
 
     fn deref(&self) -> &Self::Target {
         &self.0
+    }
+}
+
+impl std::ops::DerefMut for ResolvedEnvMap {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
     }
 }
 

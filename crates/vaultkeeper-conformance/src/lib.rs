@@ -722,6 +722,50 @@ fn run_cases() -> Vec<ConformanceCase> {
             extra_files: Vec::new(),
         },
         ConformanceCase {
+            name: "run --token conflicts with --require-presence-at-issuance, naming both flags"
+                .into(),
+            command: vec![
+                "run".into(),
+                "--token".into(),
+                "irrelevant".into(),
+                "--require-presence-at-issuance".into(),
+                "--".into(),
+                "true".into(),
+            ],
+            stdin: None,
+            needs_config: false,
+            expected_exit_code: 2,
+            expected_stdout: OutputMatcher::Any,
+            expected_stderr: OutputMatcher::Contains("--require-presence-at-issuance".into()),
+            expected_config_file: None,
+            extra_files: Vec::new(),
+        },
+        ConformanceCase {
+            // Needs no real token: the --set/--as collision is checked
+            // against the declared --set overlay entries, never a resolved
+            // value, so it fires before the token is ever decrypted — same
+            // as "run --token --dry-run never redeems or decrypts the
+            // token" above.
+            name: "run --token --dry-run refuses a --set/--as collision instead of rendering \
+                   cleanly"
+                .into(),
+            command: vec![
+                "run".into(),
+                "--token".into(),
+                "not-a-real-jwe".into(),
+                "--dry-run".into(),
+                "--set".into(),
+                "VAULTKEEPER_SECRET=some-secret".into(),
+            ],
+            stdin: None,
+            needs_config: true,
+            expected_exit_code: 1,
+            expected_stdout: OutputMatcher::Exact(String::new()),
+            expected_stderr: OutputMatcher::Contains("--as".into()),
+            expected_config_file: None,
+            extra_files: Vec::new(),
+        },
+        ConformanceCase {
             name: "exec emits a deprecation notice on stderr even when the token is invalid".into(),
             command: vec![
                 "exec".into(),
