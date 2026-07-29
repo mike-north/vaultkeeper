@@ -22,7 +22,7 @@ surface change.
 
 | Command | Purpose |
 |---|---|
-| `exec` *(deprecated → `run --token`)* | Legacy alias for single-token launching; folds into `run` and retires at 1.0 (B9). |
+| `exec` *(deprecated → `run --token`; hidden from `--help`, still works until 1.0)* | Legacy alias for single-token launching; folds into `run` and retires at 1.0 (B9). Landed: emits a stderr-only deprecation notice, delegates entirely to `run --token`'s launch path. |
 | `secret store` | Save a secret into the active backend (value read from stdin — never from arguments). *(was `store`, deprecated alias until 1.0)* |
 | `secret delete` | Remove a secret from the active backend. *(was `delete`)* |
 | `doctor` | Run preflight checks and report whether vaultkeeper is ready to use on this machine. |
@@ -40,7 +40,7 @@ surface change.
 | `profile lint` | Validate a profile and warn where its policy is looser than this machine's defaults (advisory). |
 | `lease issue` | Issue a signing lease for a profile entry, proving human presence at issuance. *(was `session mint`, deprecated alias until 1.0)* |
 | `lease revoke` | Revoke an outstanding lease by id, or every outstanding lease for a signing key. *(was `session revoke`)* |
-| `run` *(in review)* | Launch a command with one or more secrets available in its subshell — stdio- and signal-transparent. The source options (`--profile`, `--token`, `--set`) describe only *how many secrets and by what means they are populated*; the operation is one. (Owner-adjudicated: `run` is the single launcher verb.) |
+| `run` *(landed — native Rust CLI; `--token` source landed on the TS CLI too, `--profile`/`--profile-file` native-CLI-only for now)* | Launch a command with one or more secrets available in its subshell — stdio- and signal-transparent. The source options (`--profile`, `--token`, `--set`) describe only *how many secrets and by what means they are populated*; the operation is one. (Owner-adjudicated: `run` is the single launcher verb.) |
 | `lease redeem` *(designed; library/core operation — CLI shape deliberately TBD)* | Redeem a signing lease into an in-process signing handle for non-interactive signing. *(né `session redeem`)* |
 
 ### 1.1 Command tree (normative inventory)
@@ -50,7 +50,8 @@ range. "Secrets" = does a secret value transit this command, and by what channel
 
 | Command | Positional | Flags | stdin | stdout | Secrets | exit |
 |---|---|---|---|---|---|---|
-| `exec` | `COMMAND…` (trailing) | `--token <jwe>` | inherited by child | child's | value → child env (`VAULTKEEPER_SECRET`) | child's code |
+| `exec` *(deprecated — hidden alias for `run --token`)* | `COMMAND…` (trailing) | `--token <jwe>` | inherited by child | child's | value → child env (`VAULTKEEPER_SECRET`) | child's code |
+| `run` | `COMMAND…` (trailing) | `--profile <n>` \| `--profile-file <p>` \| `--token <jwe>` (exactly one, native CLI; TS CLI: `--token` only), `--as <VAR>` (`--token` only, default `VAULTKEEPER_SECRET`), `--set <VAR=SECRET>` (native CLI only), `--dry-run` (native CLI only), `--require-presence-at-issuance` (per §3.3.1 r.5; `--profile` source only, native CLI only) | inherited by child (never read by `run` itself) | child's (`--dry-run` prints the plan to stdout instead of launching) | value → child env; `--token` redeems an already-minted JWE, `--profile`/`--set` mint/resolve | child's code (128+N on signal-kill) |
 | `store` | — | `--name <n>`, `--require-presence-per-use` | **secret value** | status line | value ← stdin | 0 / 1 |
 | `delete` | — | `--name <n>`, `--require-presence-per-use` | — | status line | — | 0 / 1 |
 | `doctor` | — | — | — | check report | — | 0 ready / 1 not |
@@ -73,7 +74,6 @@ grammar review covers them before they land:
 
 | Command | Positional | Flags | Notes |
 |---|---|---|---|
-| `run` | `COMMAND…` (trailing) | `--profile <n>`, `--profile-file <p>`, `--set <VAR=SECRET>`, `--dry-run`, `--require-presence-at-issuance` (per §3.3.1 r.5) | stdio/signal transparent; stdout is the child's alone; **in review** |
 | `lease redeem` (shape TBD) | — | lease presenter | lease redemption over the #268 handle table; **designed — library/core first, CLI surface TBD** |
 
 ### 1.2 Design grammar (SHOULD BE)
@@ -177,7 +177,7 @@ on reflection, recorded to close the question.
 | B6 | `session mint PROFILE --entry E` vs `profile show NAME` | G2 | Reviewed in #328: `mint` takes the profile positionally (consistent) but the *entry* — arguably a co-primary subject — is a flag. | **leave** (documented): the profile is the addressed resource; the entry is a selector within it, legitimately a flag. Recorded so the #328 question is closed, not reopened. |
 | B7 | `backend capabilities` is the only `backend` verb | G1 | A noun namespace with a single verb is defensible only if more verbs are foreseen. | **leave**: `backend list`/`backend test` are natural future siblings; the namespace is intentional headroom, not premature. |
 | B8 | `config`/`backend`/`profile` support `--json` unevenly | G5 | `backend capabilities` has `--json`; `config show`, `profile show/list` do not. | **fix-now (additive)**: any command whose output a script would consume gets `--json`. Audit `config show`, `profile show`, `profile list`, `doctor`. |
-| B9 | `exec` vs `run` as separate launchers | G1 | Both launch a delegated command with secret(s) in its subshell; token-vs-profile is the *source*, not a different action — two verbs for one operation. | **fix-pre-1.0 (owner-adjudicated)**: `run` is the single launcher. `run --token <JWE> [--as VAR]` absorbs `exec` (`--as` defaults to `VAULTKEEPER_SECRET`); `exec` becomes a deprecated alias, removed at 1.0. Sequencing: land #279 as scoped (`--profile`), then fold `--token`/`--as` in as an immediate follow-up. One stdio-transparency contract lives in one command. |
+| B9 | `exec` vs `run` as separate launchers | G1 | Both launch a delegated command with secret(s) in its subshell; token-vs-profile is the *source*, not a different action — two verbs for one operation. | **LANDED (issue #333, owner-adjudicated)**: `run` is the single launcher. `run --token <JWE> [--as VAR]` absorbs `exec` (`--as` defaults to `VAULTKEEPER_SECRET`); `exec` is a hidden, deprecated alias (stderr-only notice, removed at 1.0) on the native Rust CLI. TS CLI: `run --token`/`--as` landed as new functionality with the same stdio/signal-transparency contract; the TS `exec --secret/--env/--caller` command (a distinct, TOFU-trust-gated mint-from-scratch flow that has no `--token` mode to alias from) is unchanged — see the issue #333 PR description for why that pre-existing divergence isn't folded here. One stdio-transparency contract lives in one command (`run`). |
 
 ### 1.4 Evolution policy (SHOULD BE)
 
@@ -311,7 +311,7 @@ compatibility on surface we never deliberately chose.
 
 | Persona (product brief) | Primary surface | Status |
 |---|---|---|
-| **Tool user** (unmodified tool via CLI) | Part 1 — `run`/`secret store`/`profile` | served (pending `run`) |
+| **Tool user** (unmodified tool via CLI) | Part 1 — `run`/`secret store`/`profile` | served (`run` landed) |
 | **Library / tool author** (embeds vaultkeeper) | `VaultKeeper` façade + access patterns + `SecretBackend` for a custom store | served for secrets/signing; **gap: profile resolution (§2.2 BROKEN-L1)** |
 | **Backend author** (new OS/store) | `SecretBackend` + `BackendRegistry` + `Setup*` + capability/signing extension interfaces | served; stabilize `Setup*` (§2.3) |
 | **Redemption-endpoint consumer** (future, any language) | — | **no designed entry point.** The local redemption socket (env-epic §7) is the intended home; until it is specced, this persona has no surface. **Flag, do not improvise.** |
@@ -531,5 +531,5 @@ divergences with a disposition the owner approves, defers, or vetoes line by lin
 the glossary (§3.3) are vocabulary tensions surfaced for the owner to rule on, each with a recommendation he
 may accept or overturn — this is the artifact the amendment most wants him to author. **S\*** items (§3.6) are
 enforcement/glossary work, mechanical gates separated from owner-in-the-loop ratification. In-review CLI rows
-(`run`, `lease redeem`) are proposals; they must satisfy the grammar *before* landing, which is the point of
-reviewing them here rather than after.
+(`lease redeem`) are proposals; they must satisfy the grammar *before* landing, which is the point of
+reviewing them here rather than after. (`run` was one such row and has since landed — §1.0/§1.1.)

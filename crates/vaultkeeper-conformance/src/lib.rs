@@ -128,7 +128,8 @@ fn help_cases() -> Vec<ConformanceCase> {
             needs_config: false,
             expected_exit_code: 0,
             expected_stdout: OutputMatcher::Regex(
-                "(?s)exec.*run.*doctor.*approve.*dev-mode.*store.*delete.*config.*rotate-key.*revoke-key".into(),
+                "(?s)run.*doctor.*approve.*dev-mode.*store.*delete.*config.*rotate-key.*revoke-key"
+                    .into(),
             ),
             expected_stderr: OutputMatcher::Any,
             expected_config_file: None,
@@ -634,6 +635,150 @@ fn run_cases() -> Vec<ConformanceCase> {
             expected_exit_code: 0,
             expected_stdout: OutputMatcher::Contains("--require-presence-at-issuance".into()),
             expected_stderr: OutputMatcher::Any,
+            expected_config_file: None,
+            extra_files: Vec::new(),
+        },
+        // ─── run --token (issue #333: exec folded into run) ───────
+        //
+        // Positive redemption requires a real, freshly-minted JWE bound to
+        // this test's own key material — not something a static,
+        // stdin/argv-only conformance case can produce — so that coverage
+        // lives in the real-subprocess UATs
+        // (`crates/vaultkeeper-cli/tests/run_token_uat.rs`). These cases
+        // cover the flag-validation surface only, the same scope
+        // `argument_validation_cases`'s "exec requires --token" already
+        // established for the predecessor verb.
+        ConformanceCase {
+            name: "run --token conflicts with --profile, naming both flags".into(),
+            command: vec![
+                "run".into(),
+                "--profile".into(),
+                "x".into(),
+                "--token".into(),
+                "y".into(),
+                "--".into(),
+                "true".into(),
+            ],
+            stdin: None,
+            needs_config: false,
+            expected_exit_code: 2,
+            expected_stdout: OutputMatcher::Any,
+            expected_stderr: OutputMatcher::Contains("--profile".into()),
+            expected_config_file: None,
+            extra_files: Vec::new(),
+        },
+        ConformanceCase {
+            name: "run --token conflicts with --profile-file, naming both flags".into(),
+            command: vec![
+                "run".into(),
+                "--profile-file".into(),
+                "/tmp/x.json".into(),
+                "--token".into(),
+                "y".into(),
+                "--".into(),
+                "true".into(),
+            ],
+            stdin: None,
+            needs_config: false,
+            expected_exit_code: 2,
+            expected_stdout: OutputMatcher::Any,
+            expected_stderr: OutputMatcher::Contains("--profile-file".into()),
+            expected_config_file: None,
+            extra_files: Vec::new(),
+        },
+        ConformanceCase {
+            name: "run --token rejects an invalid --as var name with a typed error".into(),
+            command: vec![
+                "run".into(),
+                "--token".into(),
+                "irrelevant".into(),
+                "--as".into(),
+                "lower_case".into(),
+                "--".into(),
+                "true".into(),
+            ],
+            stdin: None,
+            needs_config: true,
+            expected_exit_code: 1,
+            expected_stdout: OutputMatcher::Any,
+            expected_stderr: OutputMatcher::Contains("--as".into()),
+            expected_config_file: None,
+            extra_files: Vec::new(),
+        },
+        ConformanceCase {
+            name: "run --token --dry-run never redeems or decrypts the token".into(),
+            command: vec![
+                "run".into(),
+                "--token".into(),
+                "not-a-real-jwe".into(),
+                "--dry-run".into(),
+            ],
+            stdin: None,
+            needs_config: true,
+            expected_exit_code: 0,
+            expected_stdout: OutputMatcher::Contains("VAULTKEEPER_SECRET".into()),
+            expected_stderr: OutputMatcher::Any,
+            expected_config_file: None,
+            extra_files: Vec::new(),
+        },
+        ConformanceCase {
+            name: "run --token conflicts with --require-presence-at-issuance, naming both flags"
+                .into(),
+            command: vec![
+                "run".into(),
+                "--token".into(),
+                "irrelevant".into(),
+                "--require-presence-at-issuance".into(),
+                "--".into(),
+                "true".into(),
+            ],
+            stdin: None,
+            needs_config: false,
+            expected_exit_code: 2,
+            expected_stdout: OutputMatcher::Any,
+            expected_stderr: OutputMatcher::Contains("--require-presence-at-issuance".into()),
+            expected_config_file: None,
+            extra_files: Vec::new(),
+        },
+        ConformanceCase {
+            // Needs no real token: the --set/--as collision is checked
+            // against the declared --set overlay entries, never a resolved
+            // value, so it fires before the token is ever decrypted — same
+            // as "run --token --dry-run never redeems or decrypts the
+            // token" above.
+            name: "run --token --dry-run refuses a --set/--as collision instead of rendering \
+                   cleanly"
+                .into(),
+            command: vec![
+                "run".into(),
+                "--token".into(),
+                "not-a-real-jwe".into(),
+                "--dry-run".into(),
+                "--set".into(),
+                "VAULTKEEPER_SECRET=some-secret".into(),
+            ],
+            stdin: None,
+            needs_config: true,
+            expected_exit_code: 1,
+            expected_stdout: OutputMatcher::Exact(String::new()),
+            expected_stderr: OutputMatcher::Contains("--as".into()),
+            expected_config_file: None,
+            extra_files: Vec::new(),
+        },
+        ConformanceCase {
+            name: "exec emits a deprecation notice on stderr even when the token is invalid".into(),
+            command: vec![
+                "exec".into(),
+                "--token".into(),
+                "not-a-real-jwe".into(),
+                "--".into(),
+                "true".into(),
+            ],
+            stdin: None,
+            needs_config: true,
+            expected_exit_code: 1,
+            expected_stdout: OutputMatcher::Exact(String::new()),
+            expected_stderr: OutputMatcher::Contains("deprecated".into()),
             expected_config_file: None,
             extra_files: Vec::new(),
         },

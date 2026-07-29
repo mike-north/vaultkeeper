@@ -79,7 +79,7 @@
     "expectedExitCode": 0,
     "expectedStdout": {
       "type": "Regex",
-      "value": "(?s)exec.*run.*doctor.*approve.*dev-mode.*store.*delete.*config.*rotate-key.*revoke-key"
+      "value": "(?s)run.*doctor.*approve.*dev-mode.*store.*delete.*config.*rotate-key.*revoke-key"
     },
     "expectedStderr": {
       "type": "Any"
@@ -714,6 +714,169 @@
     },
     "expectedStderr": {
       "type": "Any"
+    },
+    "expectedConfigFile": null,
+    "extraFiles": []
+  },
+  {
+    "name": "run --token conflicts with --profile, naming both flags",
+    "command": [
+      "run",
+      "--profile",
+      "x",
+      "--token",
+      "y",
+      "--",
+      "true"
+    ],
+    "stdin": null,
+    "needsConfig": false,
+    "expectedExitCode": 2,
+    "expectedStdout": {
+      "type": "Any"
+    },
+    "expectedStderr": {
+      "type": "Contains",
+      "value": "--profile"
+    },
+    "expectedConfigFile": null,
+    "extraFiles": []
+  },
+  {
+    "name": "run --token conflicts with --profile-file, naming both flags",
+    "command": [
+      "run",
+      "--profile-file",
+      "/tmp/x.json",
+      "--token",
+      "y",
+      "--",
+      "true"
+    ],
+    "stdin": null,
+    "needsConfig": false,
+    "expectedExitCode": 2,
+    "expectedStdout": {
+      "type": "Any"
+    },
+    "expectedStderr": {
+      "type": "Contains",
+      "value": "--profile-file"
+    },
+    "expectedConfigFile": null,
+    "extraFiles": []
+  },
+  {
+    "name": "run --token rejects an invalid --as var name with a typed error",
+    "command": [
+      "run",
+      "--token",
+      "irrelevant",
+      "--as",
+      "lower_case",
+      "--",
+      "true"
+    ],
+    "stdin": null,
+    "needsConfig": true,
+    "expectedExitCode": 1,
+    "expectedStdout": {
+      "type": "Any"
+    },
+    "expectedStderr": {
+      "type": "Contains",
+      "value": "--as"
+    },
+    "expectedConfigFile": null,
+    "extraFiles": []
+  },
+  {
+    "name": "run --token --dry-run never redeems or decrypts the token",
+    "command": [
+      "run",
+      "--token",
+      "not-a-real-jwe",
+      "--dry-run"
+    ],
+    "stdin": null,
+    "needsConfig": true,
+    "expectedExitCode": 0,
+    "expectedStdout": {
+      "type": "Contains",
+      "value": "VAULTKEEPER_SECRET"
+    },
+    "expectedStderr": {
+      "type": "Any"
+    },
+    "expectedConfigFile": null,
+    "extraFiles": []
+  },
+  {
+    "name": "run --token conflicts with --require-presence-at-issuance, naming both flags",
+    "command": [
+      "run",
+      "--token",
+      "irrelevant",
+      "--require-presence-at-issuance",
+      "--",
+      "true"
+    ],
+    "stdin": null,
+    "needsConfig": false,
+    "expectedExitCode": 2,
+    "expectedStdout": {
+      "type": "Any"
+    },
+    "expectedStderr": {
+      "type": "Contains",
+      "value": "--require-presence-at-issuance"
+    },
+    "expectedConfigFile": null,
+    "extraFiles": []
+  },
+  {
+    "name": "run --token --dry-run refuses a --set/--as collision instead of rendering cleanly",
+    "command": [
+      "run",
+      "--token",
+      "not-a-real-jwe",
+      "--dry-run",
+      "--set",
+      "VAULTKEEPER_SECRET=some-secret"
+    ],
+    "stdin": null,
+    "needsConfig": true,
+    "expectedExitCode": 1,
+    "expectedStdout": {
+      "type": "Exact",
+      "value": ""
+    },
+    "expectedStderr": {
+      "type": "Contains",
+      "value": "--as"
+    },
+    "expectedConfigFile": null,
+    "extraFiles": []
+  },
+  {
+    "name": "exec emits a deprecation notice on stderr even when the token is invalid",
+    "command": [
+      "exec",
+      "--token",
+      "not-a-real-jwe",
+      "--",
+      "true"
+    ],
+    "stdin": null,
+    "needsConfig": true,
+    "expectedExitCode": 1,
+    "expectedStdout": {
+      "type": "Exact",
+      "value": ""
+    },
+    "expectedStderr": {
+      "type": "Contains",
+      "value": "deprecated"
     },
     "expectedConfigFile": null,
     "extraFiles": []
