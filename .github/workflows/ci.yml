@@ -229,8 +229,12 @@ jobs:
       # `cargo public-api` builds rustdoc JSON, which needs the nightly
       # `-Z unstable-options` rustdoc flags — same reason the wasm-guards job
       # above needs a pinned toolchain, applied here to the nightly channel
-      # instead of stable.
-      - uses: dtolnay/rust-toolchain@master
+      # instead of stable. Pinned to a commit SHA on the `master` branch
+      # (rather than the mutable `master` ref) for supply-chain
+      # reproducibility; @master is still required (not @stable) for the
+      # same reason documented in the wasm-guards job above — only @master
+      # honors an explicit `toolchain:` input.
+      - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # master, as of 2026-07-29
         with:
           toolchain: ${{ env.RUST_API_NIGHTLY_TOOLCHAIN }}
 
