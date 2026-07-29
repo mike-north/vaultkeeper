@@ -288,6 +288,49 @@ impl HostPlatform for NativeHostPlatform {
         }
     }
 
+    /// Real `O_EXCL`-based exclusive create, overriding the trait's
+    /// fail-closed default (see that method's doc comment in
+    /// `vaultkeeper-core`). `std::fs::OpenOptions::create_new(true)` maps to
+    /// `O_EXCL` on Unix and `CREATE_NEW` on Windows — both atomically fail
+    /// with "already exists" rather than racing a separate exists-check
+    /// against a subsequent create.
+    async fn try_create_lock_file(&self, path: &Path, content: &[u8]) -> Result<(), VaultError> {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| VaultError::Filesystem {
+                message: format!("Failed to create directory {}: {e}", parent.display()),
+                path: parent.display().to_string(),
+                permission: "lock".to_string(),
+                code: None,
+            })?;
+        }
+
+        let file = match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(path)
+        {
+            Ok(file) => file,
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                return Err(VaultError::Filesystem {
+                    message: format!("Lock contention: {} is already held", path.display()),
+                    path: path.display().to_string(),
+                    permission: "lock".to_string(),
+                    code: Some("EEXIST".to_string()),
+                });
+            }
+            Err(e) => {
+                return Err(VaultError::Filesystem {
+                    message: format!("Failed to create lock file {}: {e}", path.display()),
+                    path: path.display().to_string(),
+                    permission: "lock".to_string(),
+                    code: None,
+                });
+            }
+        };
+
+        write_lock_file_contents(path, file, content)
+    }
+
     fn platform(&self) -> Platform {
         if cfg!(target_os = "macos") {
             Platform::Darwin
@@ -301,6 +344,56 @@ impl HostPlatform for NativeHostPlatform {
     fn config_dir(&self) -> &Path {
         &self.config_dir
     }
+}
+
+/// Write `content` to an already-`create_new`-opened lock `file` at `path`,
+/// setting owner-only permissions on success.
+///
+/// Split out of [`NativeHostPlatform::try_create_lock_file`] so the
+/// write-failure cleanup path below is directly unit-testable (see
+/// `try_create_lock_file_cleans_up_the_lock_file_when_the_write_fails`)
+/// without needing to force a real `O_EXCL` create to be immediately
+/// followed by a real write failure (disk full, quota, etc.) end-to-end.
+fn write_lock_file_contents(
+    path: &Path,
+    mut file: std::fs::File,
+    content: &[u8],
+) -> Result<(), VaultError> {
+    use std::io::Write;
+
+    if let Err(e) = file.write_all(content) {
+        // The caller's `create_new` already succeeded, so an empty (or
+        // partially written) lock file now exists at `path`. Leaving it
+        // behind on this error path would create a permanent phantom
+        // lock: every future acquirer sees the path occupied and treats
+        // it as genuine contention, with no marker content for
+        // `take_over_if_stale` (in `vaultkeeper-core`) to ever recognize
+        // as its own stale format — it would sit there forever. Clean it
+        // up before returning the write failure. Best-effort: if the
+        // delete itself also fails (e.g. the same disk-full condition
+        // that caused the write to fail), there is nothing more this
+        // function can do about it — the write error is still the one
+        // that matters to the caller.
+        drop(file);
+        let _ = std::fs::remove_file(path);
+        return Err(VaultError::Filesystem {
+            message: format!("Failed to write lock file {}: {e}", path.display()),
+            path: path.display().to_string(),
+            permission: "lock".to_string(),
+            code: None,
+        });
+    }
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        // Best-effort — a permission-setting failure on an already
+        // successfully created/written lock file is not itself a
+        // reason to fail lock acquisition.
+        let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
+    }
+
+    Ok(())
 }
 
 #[cfg(test)]
@@ -690,5 +783,302 @@ mod tests {
         host.write_file(&target, b"secret", 0o600).await.unwrap();
 
         assert!(existing.is_dir());
+    }
+
+    // -------------------------------------------------------------------
+    // `try_create_lock_file` (issue #322) — real `O_EXCL` semantics, and
+    // the genuinely-concurrent revocation-state guarantee it's built to
+    // support.
+    // -------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn try_create_lock_file_succeeds_on_a_fresh_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let host = NativeHostPlatform::new(dir.path().to_path_buf());
+        let lock_path = dir.path().join("keys.enc.lock");
+
+        host.try_create_lock_file(&lock_path, b"12345")
+            .await
+            .unwrap();
+
+        assert_eq!(fs::read(&lock_path).unwrap(), b"12345");
+    }
+
+    /// The second `O_EXCL` create against an already-held lock must fail
+    /// with the specific `Filesystem { permission: "lock", code: Some("EEXIST") }`
+    /// shape `keys::storage`'s lock acquisition matches on to distinguish
+    /// contention from a genuine I/O failure.
+    #[tokio::test]
+    async fn try_create_lock_file_reports_contention_as_typed_eexist() {
+        let dir = tempfile::tempdir().unwrap();
+        let host = NativeHostPlatform::new(dir.path().to_path_buf());
+        let lock_path = dir.path().join("keys.enc.lock");
+
+        host.try_create_lock_file(&lock_path, b"first")
+            .await
+            .unwrap();
+        let err = host
+            .try_create_lock_file(&lock_path, b"second")
+            .await
+            .unwrap_err();
+
+        match err {
+            VaultError::Filesystem {
+                permission, code, ..
+            } => {
+                assert_eq!(permission, "lock");
+                assert_eq!(code.as_deref(), Some("EEXIST"));
+            }
+            other => panic!("expected VaultError::Filesystem, got {other:?}"),
+        }
+        // The original holder's content must survive an unsuccessful
+        // contender's create attempt untouched.
+        assert_eq!(fs::read(&lock_path).unwrap(), b"first");
+    }
+
+    #[tokio::test]
+    async fn try_create_lock_file_creates_missing_parent_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        let host = NativeHostPlatform::new(dir.path().to_path_buf());
+        let lock_path = dir.path().join("fresh-config-dir").join("keys.enc.lock");
+
+        host.try_create_lock_file(&lock_path, b"x").await.unwrap();
+
+        assert!(lock_path.exists());
+    }
+
+    /// Regression test for issue #322 review feedback: if `write_all` fails
+    /// after `create_new` already succeeded, the just-created lock file must
+    /// not be left behind — otherwise it becomes a permanent phantom lock
+    /// (every future acquirer sees the path occupied and treats it as
+    /// contention forever, since its content never matches the
+    /// `take_over_if_stale` marker format).
+    ///
+    /// This exercises `write_lock_file_contents` (the extracted helper
+    /// `try_create_lock_file` delegates to after its own `create_new`
+    /// succeeds) directly, handing it a deliberately write-incapable
+    /// `File` — opened read-only, so `write_all` fails immediately and
+    /// deterministically with a real OS error (no rlimit/signal tricks
+    /// needed, and nothing that could destabilize other tests running
+    /// concurrently in the same process). This proves the exact behavior
+    /// `try_create_lock_file` relies on this helper for: the real
+    /// `create_new`-then-write sequence in `try_create_lock_file` above
+    /// composes with it unchanged, so this is not testing an approximation
+    /// of the production path — it's testing the actual cleanup code that
+    /// path calls.
+    #[test]
+    fn try_create_lock_file_cleans_up_the_lock_file_when_the_write_fails() {
+        let dir = tempfile::tempdir().unwrap();
+        let lock_path = dir.path().join("keys.enc.lock");
+
+        // Pre-create the file exactly as `create_new` would have (empty,
+        // present at `lock_path`), then hand `write_lock_file_contents` a
+        // read-only handle to it so the `write_all` call inside fails.
+        fs::write(&lock_path, b"").unwrap();
+        let read_only_file = fs::OpenOptions::new().read(true).open(&lock_path).unwrap();
+
+        let err = write_lock_file_contents(&lock_path, read_only_file, b"12345").unwrap_err();
+
+        match err {
+            VaultError::Filesystem { permission, .. } => assert_eq!(permission, "lock"),
+            other => panic!("expected VaultError::Filesystem, got {other:?}"),
+        }
+        assert!(
+            !lock_path.exists(),
+            "a lock file must not survive a write failure that happened right after its own \
+             creation — it would otherwise become a permanent phantom lock"
+        );
+    }
+
+    /// AC10 (issue #322): a real `session revoke` and a real `rotateKey`
+    /// issued from two genuinely concurrent tasks — scheduled on separate OS
+    /// threads by a multi-worker tokio runtime, with no barrier forcing one
+    /// to complete before the other starts — against the same real
+    /// `NativeHostPlatform` config directory. This is a real overlapping
+    /// race, not two sequential calls dressed up as concurrent: both tasks'
+    /// `mutate_revocation_state`/`save_key_state` read-modify-write windows
+    /// are free to interleave on real disk I/O. Neither writer's mutation is
+    /// lost.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn ac10_genuinely_concurrent_revoke_and_rotate_lose_neither_mutation() {
+        use std::sync::Arc;
+        use vaultkeeper_core::keys::{
+            KeyMaterial, KeyStateSnapshot, load_key_state, load_revocation_for_validation,
+            mutate_revocation_state, save_key_state,
+        };
+
+        let dir = tempfile::tempdir().unwrap();
+        let host = Arc::new(NativeHostPlatform::new(dir.path().to_path_buf()));
+
+        let seed = KeyMaterial {
+            id: "k-seed".to_string(),
+            key: vec![0x01; 32],
+            created_at: 1_705_314_600,
+        };
+        save_key_state(
+            host.as_ref(),
+            &KeyStateSnapshot {
+                current: seed,
+                previous: None,
+                grace_period_expires_at_ms: None,
+            },
+        )
+        .await
+        .unwrap();
+
+        let revoke_host = Arc::clone(&host);
+        let revoke_task = tokio::spawn(async move {
+            mutate_revocation_state(revoke_host.as_ref(), |state| {
+                state.revoke_jti("concurrent-revoke-jti", 9_999_999_999);
+            })
+            .await
+            .unwrap();
+        });
+
+        let rotate_host = Arc::clone(&host);
+        let rotate_task = tokio::spawn(async move {
+            save_key_state(
+                rotate_host.as_ref(),
+                &KeyStateSnapshot {
+                    current: KeyMaterial {
+                        id: "k-rotated".to_string(),
+                        key: vec![0x02; 32],
+                        created_at: 1_705_314_700,
+                    },
+                    previous: Some(KeyMaterial {
+                        id: "k-seed".to_string(),
+                        key: vec![0x01; 32],
+                        created_at: 1_705_314_600,
+                    }),
+                    // Fixed far-future timestamp — the grace period's exact
+                    // value is irrelevant to this test, only that a
+                    // `previous` key round-trips untouched by the
+                    // concurrent revoke.
+                    grace_period_expires_at_ms: Some(4_000_000_000_000),
+                },
+            )
+            .await
+            .unwrap();
+        });
+
+        let (revoke_result, rotate_result) = tokio::join!(revoke_task, rotate_task);
+        revoke_result.unwrap();
+        rotate_result.unwrap();
+
+        let key_state = load_key_state(host.as_ref()).await.unwrap().unwrap();
+        assert_eq!(
+            key_state.current.id, "k-rotated",
+            "rotateKey's mutation must not be lost to a concurrent session revoke"
+        );
+
+        let revocation = load_revocation_for_validation(host.as_ref(), 0)
+            .await
+            .unwrap();
+        assert!(
+            revocation.is_jti_revoked("concurrent-revoke-jti"),
+            "session revoke's mutation must not be lost to a concurrent rotateKey"
+        );
+    }
+
+    /// Same shape as the revoke/rotate race above, but with many concurrent
+    /// revokers racing each other — the scenario most likely to actually
+    /// exercise lock contention (not just a single pairwise race that a fast
+    /// filesystem might happen to serialize on its own). Every one of 24
+    /// concurrently-issued revocations against a shared jti namespace must
+    /// survive.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+    async fn ac10_many_genuinely_concurrent_revokers_lose_no_mutation() {
+        use std::sync::Arc;
+        use vaultkeeper_core::keys::{
+            KeyMaterial, KeyStateSnapshot, load_revocation_for_validation, mutate_revocation_state,
+            save_key_state,
+        };
+
+        const N: usize = 24;
+
+        let dir = tempfile::tempdir().unwrap();
+        let host = Arc::new(NativeHostPlatform::new(dir.path().to_path_buf()));
+
+        save_key_state(
+            host.as_ref(),
+            &KeyStateSnapshot {
+                current: KeyMaterial {
+                    id: "k-seed".to_string(),
+                    key: vec![0x03; 32],
+                    created_at: 1_705_314_600,
+                },
+                previous: None,
+                grace_period_expires_at_ms: None,
+            },
+        )
+        .await
+        .unwrap();
+
+        let mut tasks = Vec::with_capacity(N);
+        for i in 0..N {
+            let task_host = Arc::clone(&host);
+            tasks.push(tokio::spawn(async move {
+                mutate_revocation_state(task_host.as_ref(), move |state| {
+                    state.revoke_jti(format!("jti-{i}"), 9_999_999_999);
+                })
+                .await
+                .unwrap();
+            }));
+        }
+        for task in tasks {
+            task.await.unwrap();
+        }
+
+        let revocation = load_revocation_for_validation(host.as_ref(), 0)
+            .await
+            .unwrap();
+        for i in 0..N {
+            assert!(
+                revocation.is_jti_revoked(&format!("jti-{i}")),
+                "revocation of jti-{i} was lost to a concurrent writer"
+            );
+        }
+    }
+
+    /// Stale-lock takeover, exercised against the real filesystem primitive:
+    /// a lock file left behind with a timestamp far in the past (simulating
+    /// a holder that crashed or panicked before releasing) does not
+    /// permanently wedge acquisition — a fresh `mutate_revocation_state`
+    /// call still succeeds.
+    #[tokio::test]
+    async fn stale_lock_file_does_not_wedge_native_acquisition() {
+        use vaultkeeper_core::keys::{KeyMaterial, KeyStateSnapshot};
+        use vaultkeeper_core::keys::{mutate_revocation_state, save_key_state};
+
+        let dir = tempfile::tempdir().unwrap();
+        let host = NativeHostPlatform::new(dir.path().to_path_buf());
+
+        save_key_state(
+            &host,
+            &KeyStateSnapshot {
+                current: KeyMaterial {
+                    id: "k-seed".to_string(),
+                    key: vec![0x04; 32],
+                    created_at: 1_705_314_600,
+                },
+                previous: None,
+                grace_period_expires_at_ms: None,
+            },
+        )
+        .await
+        .unwrap();
+
+        // Simulate an abandoned lock: a lock file whose acquisition
+        // timestamp is far enough in the past to be considered stale.
+        let lock_path = dir.path().join("keys.enc.lock");
+        fs::write(&lock_path, b"0").unwrap();
+
+        // Without takeover this would time out waiting for a lock nothing
+        // will ever release.
+        mutate_revocation_state(&host, |state| {
+            state.revoke_jti("post-takeover-jti", 9_999_999_999);
+        })
+        .await
+        .unwrap();
     }
 }

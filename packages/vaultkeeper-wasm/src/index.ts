@@ -86,6 +86,7 @@ export {
   ConfigParseError,
   SetupError,
   MaterializeModeUnsupportedError,
+  LockingNotSupportedError,
 } from './errors.js'
 export type { ExecutableTrustRequiredReason } from './errors.js'
 
