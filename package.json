@@ -17,7 +17,9 @@
     "check:api-report": "NX_TUI=false nx run-many -t check:api-report --exclude=vaultkeeper-workspace",
     "check:api-docs": "node scripts/collect-api-json.mjs && node scripts/check-api-docs.mjs",
     "generate:api-report": "NX_TUI=false nx run-many -t generate:api-report --exclude=vaultkeeper-workspace",
-    "generate:api-docs": "pnpm generate:api-report && node scripts/collect-api-json.mjs && api-documenter markdown -i tmp/api-documenter -o docs/api"
+    "generate:api-docs": "pnpm generate:api-report && node scripts/collect-api-json.mjs && api-documenter markdown -i tmp/api-documenter -o docs/api",
+    "check:rust-api": "bash scripts/rust-public-api.sh check",
+    "generate:rust-api": "bash scripts/rust-public-api.sh generate"
   },
   "packageManager": "pnpm@10.12.1",
   "engines": {
