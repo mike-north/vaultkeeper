@@ -781,6 +781,22 @@ export class MaterializeModeUnsupportedError extends VaultError {
 }
 
 /**
+ * Thrown when the active host platform does not implement exclusive
+ * lock-file creation (`HostPlatform::try_create_lock_file` on the Rust
+ * side). This is the WASM/JS host bridge's own state as of issue #322 — it
+ * has no locking primitive of its own to wire in yet — so any operation that
+ * depends on cross-process mutual exclusion instead falls back to the
+ * pre-existing sequential-ordering-only guarantee rather than actually
+ * blocking a concurrent writer.
+ */
+export class LockingNotSupportedError extends VaultError {
+  constructor(message: string) {
+    super(message)
+    this.name = 'LockingNotSupportedError'
+  }
+}
+
+/**
  * Canonical list of every machine-readable `vaultErrorCode` the TypeScript
  * reconstruction map ({@link mapWasmError}) knows how to turn into a
  * dedicated typed subclass, plus the generic `'vault-error'` fallback that
@@ -827,6 +843,7 @@ export const ALL_VAULT_ERROR_CODES = [
   'unknown-backend-type',
   'config-parse',
   'materialize-mode-unsupported',
+  'locking-not-supported',
   'vault-error',
 ] as const
 
@@ -1092,6 +1109,8 @@ export function mapWasmError(thrown: unknown): VaultError {
         )
       case 'materialize-mode-unsupported':
         return new MaterializeModeUnsupportedError(message, optionalString(thrown.mode))
+      case 'locking-not-supported':
+        return new LockingNotSupportedError(message)
       case 'vault-error':
         // The generic fallback code deliberately stays the base VaultError —
         // it represents a malformed/validation failure the core hasn't given

@@ -183,8 +183,11 @@ pub trait HostPlatform: Send + Sync {
     ///
     /// # Default implementation — fails closed, not a silent no-op
     ///
-    /// The default implementation refuses with `VaultError::Other` ("locking
-    /// unsupported by this host") rather than silently succeeding. A
+    /// The default implementation refuses with the dedicated
+    /// [`VaultError::LockingNotSupported`] variant (not `VaultError::Other`,
+    /// which callers must be able to treat as a genuine failure rather than
+    /// this specific "no locking on this host" signal) rather than silently
+    /// succeeding. A
     /// permissive no-op default here (e.g. always returning `Ok(())`) would
     /// let two overlapping writers on a host that never overrode this method
     /// both believe they hold an exclusive lock — recreating exactly the
@@ -201,13 +204,16 @@ pub trait HostPlatform: Send + Sync {
     /// `O_EXCL` file create.
     async fn try_create_lock_file(&self, path: &Path, content: &[u8]) -> Result<(), VaultError> {
         let _ = content;
-        Err(VaultError::Other(format!(
-            "Exclusive lock-file creation is not supported by this host platform (requested \
-             {}). Locking is opt-in per host (see HostPlatform::try_create_lock_file); the \
-             caller must proceed under the pre-existing sequential-ordering-only guarantee \
-             rather than assume mutual exclusion.",
-            path.display()
-        )))
+        Err(VaultError::LockingNotSupported {
+            message: format!(
+                "Exclusive lock-file creation is not supported by this host platform \
+                 (requested {}). Locking is opt-in per host (see \
+                 HostPlatform::try_create_lock_file); the caller must proceed under the \
+                 pre-existing sequential-ordering-only guarantee rather than assume mutual \
+                 exclusion.",
+                path.display()
+            ),
+        })
     }
 
     /// Get platform type.

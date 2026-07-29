@@ -295,8 +295,6 @@ impl HostPlatform for NativeHostPlatform {
     /// with "already exists" rather than racing a separate exists-check
     /// against a subsequent create.
     async fn try_create_lock_file(&self, path: &Path, content: &[u8]) -> Result<(), VaultError> {
-        use std::io::Write;
-
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent).map_err(|e| VaultError::Filesystem {
                 message: format!("Failed to create directory {}: {e}", parent.display()),
@@ -306,7 +304,7 @@ impl HostPlatform for NativeHostPlatform {
             })?;
         }
 
-        let mut file = match std::fs::OpenOptions::new()
+        let file = match std::fs::OpenOptions::new()
             .write(true)
             .create_new(true)
             .open(path)
@@ -330,24 +328,7 @@ impl HostPlatform for NativeHostPlatform {
             }
         };
 
-        file.write_all(content)
-            .map_err(|e| VaultError::Filesystem {
-                message: format!("Failed to write lock file {}: {e}", path.display()),
-                path: path.display().to_string(),
-                permission: "lock".to_string(),
-                code: None,
-            })?;
-
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            // Best-effort — a permission-setting failure on an already
-            // successfully created/written lock file is not itself a
-            // reason to fail lock acquisition.
-            let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
-        }
-
-        Ok(())
+        write_lock_file_contents(path, file, content)
     }
 
     fn platform(&self) -> Platform {
@@ -363,6 +344,56 @@ impl HostPlatform for NativeHostPlatform {
     fn config_dir(&self) -> &Path {
         &self.config_dir
     }
+}
+
+/// Write `content` to an already-`create_new`-opened lock `file` at `path`,
+/// setting owner-only permissions on success.
+///
+/// Split out of [`NativeHostPlatform::try_create_lock_file`] so the
+/// write-failure cleanup path below is directly unit-testable (see
+/// `try_create_lock_file_cleans_up_the_lock_file_when_the_write_fails`)
+/// without needing to force a real `O_EXCL` create to be immediately
+/// followed by a real write failure (disk full, quota, etc.) end-to-end.
+fn write_lock_file_contents(
+    path: &Path,
+    mut file: std::fs::File,
+    content: &[u8],
+) -> Result<(), VaultError> {
+    use std::io::Write;
+
+    if let Err(e) = file.write_all(content) {
+        // The caller's `create_new` already succeeded, so an empty (or
+        // partially written) lock file now exists at `path`. Leaving it
+        // behind on this error path would create a permanent phantom
+        // lock: every future acquirer sees the path occupied and treats
+        // it as genuine contention, with no marker content for
+        // `take_over_if_stale` (in `vaultkeeper-core`) to ever recognize
+        // as its own stale format — it would sit there forever. Clean it
+        // up before returning the write failure. Best-effort: if the
+        // delete itself also fails (e.g. the same disk-full condition
+        // that caused the write to fail), there is nothing more this
+        // function can do about it — the write error is still the one
+        // that matters to the caller.
+        drop(file);
+        let _ = std::fs::remove_file(path);
+        return Err(VaultError::Filesystem {
+            message: format!("Failed to write lock file {}: {e}", path.display()),
+            path: path.display().to_string(),
+            permission: "lock".to_string(),
+            code: None,
+        });
+    }
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        // Best-effort — a permission-setting failure on an already
+        // successfully created/written lock file is not itself a
+        // reason to fail lock acquisition.
+        let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
+    }
+
+    Ok(())
 }
 
 #[cfg(test)]
@@ -814,6 +845,49 @@ mod tests {
         host.try_create_lock_file(&lock_path, b"x").await.unwrap();
 
         assert!(lock_path.exists());
+    }
+
+    /// Regression test for issue #322 review feedback: if `write_all` fails
+    /// after `create_new` already succeeded, the just-created lock file must
+    /// not be left behind — otherwise it becomes a permanent phantom lock
+    /// (every future acquirer sees the path occupied and treats it as
+    /// contention forever, since its content never matches the
+    /// `take_over_if_stale` marker format).
+    ///
+    /// This exercises `write_lock_file_contents` (the extracted helper
+    /// `try_create_lock_file` delegates to after its own `create_new`
+    /// succeeds) directly, handing it a deliberately write-incapable
+    /// `File` — opened read-only, so `write_all` fails immediately and
+    /// deterministically with a real OS error (no rlimit/signal tricks
+    /// needed, and nothing that could destabilize other tests running
+    /// concurrently in the same process). This proves the exact behavior
+    /// `try_create_lock_file` relies on this helper for: the real
+    /// `create_new`-then-write sequence in `try_create_lock_file` above
+    /// composes with it unchanged, so this is not testing an approximation
+    /// of the production path — it's testing the actual cleanup code that
+    /// path calls.
+    #[test]
+    fn try_create_lock_file_cleans_up_the_lock_file_when_the_write_fails() {
+        let dir = tempfile::tempdir().unwrap();
+        let lock_path = dir.path().join("keys.enc.lock");
+
+        // Pre-create the file exactly as `create_new` would have (empty,
+        // present at `lock_path`), then hand `write_lock_file_contents` a
+        // read-only handle to it so the `write_all` call inside fails.
+        fs::write(&lock_path, b"").unwrap();
+        let read_only_file = fs::OpenOptions::new().read(true).open(&lock_path).unwrap();
+
+        let err = write_lock_file_contents(&lock_path, read_only_file, b"12345").unwrap_err();
+
+        match err {
+            VaultError::Filesystem { permission, .. } => assert_eq!(permission, "lock"),
+            other => panic!("expected VaultError::Filesystem, got {other:?}"),
+        }
+        assert!(
+            !lock_path.exists(),
+            "a lock file must not survive a write failure that happened right after its own \
+             creation — it would otherwise become a permanent phantom lock"
+        );
     }
 
     /// AC10 (issue #322): a real `session revoke` and a real `rotateKey`

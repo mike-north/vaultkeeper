@@ -244,6 +244,17 @@ Thrown when the encryption key used to create a JWE has been rotated out of the 
 </td></tr>
 <tr><td>
 
+[LockingNotSupportedError](./wasm.lockingnotsupportederror.md)
+
+
+</td><td>
+
+Thrown when the active host platform does not implement exclusive lock-file creation (`HostPlatform::try_create_lock_file` on the Rust side). This is the WASM/JS host bridge's own state as of issue \#322 — it has no locking primitive of its own to wire in yet — so any operation that depends on cross-process mutual exclusion instead falls back to the pre-existing sequential-ordering-only guarantee rather than actually blocking a concurrent writer.
+
+
+</td></tr>
+<tr><td>
+
 [MaterializeModeUnsupportedError](./wasm.materializemodeunsupportederror.md)
 
 

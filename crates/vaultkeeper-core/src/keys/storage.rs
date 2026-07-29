@@ -541,39 +541,158 @@ impl Drop for LockGuard<'_> {
 /// treated as *not* stale (never taken over) — this only ever recovers a
 /// lock this module itself created (whose content is always a plain decimal
 /// millisecond timestamp), never guesses at an unrecognized file.
+///
+/// **TOCTOU note** (issue #322 review): a naive "read, decide stale, delete"
+/// sequence has a real race, not just a theoretical one — a *second*
+/// contender can independently observe the same stale marker, delete it, and
+/// successfully recreate the lock (a legitimate fresh acquisition) in the
+/// gap between this function's read and its delete. An unconditional delete
+/// at that point would tear down that contender's brand-new, valid lock
+/// (not the stale one this function decided to reap), and the file's mere
+/// absence afterward would let a *third* party acquire it too — two holders
+/// believing they exclusively hold the lock simultaneously, exactly the bug
+/// this whole mechanism exists to prevent. This function closes that window
+/// by re-reading the marker immediately before deleting and only deleting
+/// when its content is byte-identical to what was originally observed as
+/// stale — a marker recreated in between (by definition carrying a fresh,
+/// non-stale timestamp) never matches, so it is left alone. This does not
+/// require a new `HostPlatform` primitive (no atomic compare-and-delete
+/// exists in this trait, nor in the POSIX/Windows filesystem calls it maps
+/// to) — it shrinks the race to the residual gap between the confirmation
+/// read and the delete call directly below it, which is now just two
+/// sequential host calls with nothing else in between, rather than the
+/// entire staleness-check-plus-earlier-read window. See
+/// `take_over_if_stale_never_deletes_a_lock_recreated_between_its_reads` for
+/// the regression test that exercises exactly this interleaving.
 async fn take_over_if_stale(host: &dyn HostPlatform, lock_path: &Path) {
     let Ok(existing) = host.read_file(lock_path).await else {
         return;
     };
-    let Ok(existing_str) = String::from_utf8(existing) else {
+    let Ok(existing_str) = String::from_utf8(existing.clone()) else {
         return;
     };
     let Ok(created_at_ms) = existing_str.trim().parse::<u128>() else {
         return;
     };
-    if time::now_millis().saturating_sub(created_at_ms) > LOCK_STALE_AFTER_MS {
-        // Best-effort: if a concurrent acquirer wins the takeover race and
-        // deletes/recreates this first, this delete simply no-ops (or, in
-        // the worst case, removes the *new* holder's fresh lock file a
-        // moment after they created it — but that only ever costs that
-        // holder a spurious contention retry on their own next lock use, it
-        // cannot cause two mutators to believe they simultaneously hold the
-        // lock, since the file's mere presence is what "held" means and a
-        // deletion here never fabricates false Ok(()) results for anyone).
-        let _ = host.delete_file(lock_path).await;
+    if time::now_millis().saturating_sub(created_at_ms) <= LOCK_STALE_AFTER_MS {
+        return;
     }
+
+    // Re-verify immediately before deleting — see the doc comment above.
+    let Ok(current) = host.read_file(lock_path).await else {
+        // Already gone: a concurrent takeover or a normal release beat us
+        // to it. Nothing to delete.
+        return;
+    };
+    if current != existing {
+        // The marker changed since we decided it was stale — a concurrent
+        // acquirer already took over (or the original holder released and
+        // someone else acquired). This is no longer the stale lock we
+        // observed, so it must not be deleted.
+        return;
+    }
+
+    // Best-effort: if a concurrent release/takeover removes it in the
+    // instant between this check and the delete call itself, this simply
+    // no-ops — there is nothing left to distinguish at that point.
+    let _ = host.delete_file(lock_path).await;
 }
 
+/// How long [`pause_before_retry`] waits between contention retries. Only
+/// meaningful (and only referenced) on the non-wasm32 implementation below
+/// — the wasm32 one never pauses (see its doc comment) — so this is
+/// `cfg`-gated the same way to avoid an unused-constant warning on that
+/// target.
 #[cfg(not(target_arch = "wasm32"))]
-fn pause_before_retry() {
-    // No portable synchronous sleep exists on wasm32; this only matters once
-    // a host actually implements `try_create_lock_file` contention (no wasm
-    // host does yet — see that trait method's doc comment), so skipping the
-    // pause there is harmless.
-    std::thread::sleep(std::time::Duration::from_millis(2));
+const RETRY_PAUSE_MS: u64 = 2;
+
+/// Pause briefly between lock-acquisition retries, without blocking the
+/// calling OS/executor thread.
+///
+/// This crate is platform-agnostic (native and wasm32 both build it) and
+/// deliberately does not take a real async-runtime dependency (e.g. `tokio`
+/// is a dev-only dependency here — see `Cargo.toml`) so it stays usable from
+/// any host's own executor, including the WASM/JS bridge's. That rules out
+/// `tokio::time::sleep`. It also rules back in `std::thread::sleep`, which
+/// blocks whatever OS thread happens to be polling this future — on
+/// `NativeHostPlatform`, that thread is a `tokio` worker shared with every
+/// other task the CLI process is running, so a blocking sleep there stalls
+/// unrelated work for the pause's duration, not just this lock's contention
+/// loop.
+///
+/// # Native: a genuinely non-blocking async sleep
+///
+/// Spawns a short-lived helper OS thread that sleeps and then wakes this
+/// future's `Waker`, so the polling task returns `Pending` immediately and
+/// the executor is free to run other work in the meantime — a small
+/// hand-rolled `Future` rather than a runtime-provided timer, since no async
+/// runtime is a real dependency of this crate. This only ever runs on actual
+/// lock contention (bounded by [`LOCK_MAX_ATTEMPTS`]), so the per-attempt
+/// cost of a helper thread is acceptable.
+///
+/// # WASM: no pause at all
+///
+/// `std::thread::spawn` is unavailable on `wasm32-unknown-unknown` (no OS
+/// threads), and there is no portable non-blocking sleep primitive in this
+/// crate's dependency set for that target either. This only matters once a
+/// wasm host actually implements `try_create_lock_file` contention (no wasm
+/// host does yet — see that trait method's doc comment), so retrying
+/// immediately with no pause there is harmless today; a future wasm host
+/// that adds real lock contention should route its pause through a
+/// `HostPlatform`-supplied primitive (e.g. the JS event loop's
+/// `setTimeout`) instead of extending this function.
+#[cfg(not(target_arch = "wasm32"))]
+async fn pause_before_retry() {
+    use std::sync::{Arc, Mutex};
+    use std::task::Waker;
+
+    struct SleepState {
+        done: bool,
+        waker: Option<Waker>,
+    }
+
+    struct Sleep(Arc<Mutex<SleepState>>);
+
+    impl std::future::Future for Sleep {
+        type Output = ();
+
+        fn poll(
+            self: std::pin::Pin<&mut Self>,
+            cx: &mut std::task::Context<'_>,
+        ) -> std::task::Poll<()> {
+            let mut state = self
+                .0
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if state.done {
+                std::task::Poll::Ready(())
+            } else {
+                state.waker = Some(cx.waker().clone());
+                std::task::Poll::Pending
+            }
+        }
+    }
+
+    let state = Arc::new(Mutex::new(SleepState {
+        done: false,
+        waker: None,
+    }));
+    let thread_state = Arc::clone(&state);
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(RETRY_PAUSE_MS));
+        let mut state = thread_state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        state.done = true;
+        if let Some(waker) = state.waker.take() {
+            waker.wake();
+        }
+    });
+
+    Sleep(state).await;
 }
 #[cfg(target_arch = "wasm32")]
-fn pause_before_retry() {}
+async fn pause_before_retry() {}
 
 /// Acquire the revocation-state lock, with bounded retry and stale-lock
 /// takeover.
@@ -602,8 +721,12 @@ async fn acquire_lock(host: &dyn HostPlatform) -> Result<LockGuard<'_>, VaultErr
             // The trait's fail-closed default for a host that doesn't
             // implement locking — proceed under the pre-existing
             // sequential-ordering-only guarantee (see
-            // `mutate_revocation_state`'s doc comment).
-            Err(VaultError::Other(_)) => {
+            // `mutate_revocation_state`'s doc comment). Matched by variant,
+            // not by string content: `VaultError::LockingNotSupported` is a
+            // dedicated sentinel a real host's genuine failure can never
+            // produce, unlike `VaultError::Other` which many unrelated
+            // failure paths also use.
+            Err(VaultError::LockingNotSupported { .. }) => {
                 return Ok(LockGuard {
                     host,
                     lock_path,
@@ -631,7 +754,7 @@ async fn acquire_lock(host: &dyn HostPlatform) -> Result<LockGuard<'_>, VaultErr
                         code: Some("EEXIST".to_string()),
                     });
                 }
-                pause_before_retry();
+                pause_before_retry().await;
             }
             // A genuine failure (not contention, not "unsupported") — e.g.
             // permission denied, disk full. Propagate rather than retry.
@@ -1988,8 +2111,88 @@ mod tests {
             .await
             .unwrap_err();
         assert!(
+            matches!(err, VaultError::LockingNotSupported { .. }),
+            "expected the fail-closed default (VaultError::LockingNotSupported), got {err:?}"
+        );
+    }
+
+    /// Regression test for issue #322 review feedback: `acquire_lock` must
+    /// only treat the dedicated `VaultError::LockingNotSupported` sentinel as
+    /// "this host doesn't support locking" — a genuine `VaultError::Other`
+    /// failure from a real host's `try_create_lock_file` (e.g. some
+    /// unrelated I/O error the host chose to report generically) must
+    /// propagate as a hard error instead of being silently downgraded to
+    /// "proceed unlocked". Before the fix, `acquire_lock` matched on
+    /// `Err(VaultError::Other(_))`, which could not distinguish "locking
+    /// unsupported" from any other `Other`-shaped failure.
+    #[tokio::test]
+    async fn acquire_lock_propagates_a_genuine_other_error_instead_of_downgrading_it() {
+        struct OtherErrorHost {
+            config_dir: PathBuf,
+        }
+
+        #[async_trait::async_trait]
+        impl HostPlatform for OtherErrorHost {
+            async fn exec(
+                &self,
+                _cmd: &str,
+                _args: &[&str],
+                _options: ExecOptions<'_>,
+            ) -> Result<ExecOutput, VaultError> {
+                unimplemented!("not exercised by this test")
+            }
+            async fn read_file(&self, _path: &Path) -> Result<Vec<u8>, VaultError> {
+                unimplemented!("not exercised by this test")
+            }
+            async fn write_file(
+                &self,
+                _path: &Path,
+                _content: &[u8],
+                _mode: u32,
+            ) -> Result<(), VaultError> {
+                unimplemented!("not exercised by this test")
+            }
+            async fn file_exists(&self, _path: &Path) -> Result<bool, VaultError> {
+                unimplemented!("not exercised by this test")
+            }
+            async fn delete_file(&self, _path: &Path) -> Result<(), VaultError> {
+                unimplemented!("not exercised by this test")
+            }
+            async fn list_dir(&self, _path: &Path) -> Result<Vec<String>, VaultError> {
+                unimplemented!("not exercised by this test")
+            }
+            async fn try_create_lock_file(
+                &self,
+                _path: &Path,
+                _content: &[u8],
+            ) -> Result<(), VaultError> {
+                Err(VaultError::Other(
+                    "some unrelated failure this host chose to report generically".into(),
+                ))
+            }
+            fn platform(&self) -> Platform {
+                Platform::Linux
+            }
+            fn config_dir(&self) -> &Path {
+                &self.config_dir
+            }
+        }
+
+        let host = OtherErrorHost {
+            config_dir: PathBuf::from("/test/config"),
+        };
+        // `LockGuard` (the `Ok` type) intentionally doesn't implement
+        // `Debug` (see its struct doc comment — it deliberately isn't
+        // meant to be inspected/printed), so `unwrap_err()` isn't available
+        // here; match instead.
+        let result = acquire_lock(&host).await;
+        let err = match result {
+            Err(err) => err,
+            Ok(_) => panic!("expected acquire_lock to propagate the genuine Other failure"),
+        };
+        assert!(
             matches!(err, VaultError::Other(_)),
-            "expected the fail-closed default (VaultError::Other), got {err:?}"
+            "a genuine Other failure must propagate, not be downgraded to unlocked; got {err:?}"
         );
     }
 
@@ -2098,6 +2301,146 @@ mod tests {
         assert!(
             host.file_exists(&lock_path).await.unwrap(),
             "a malformed marker must be left in place, not taken over"
+        );
+    }
+
+    /// A host wrapper that simulates a *second* contender taking over the
+    /// same stale lock in the gap between `take_over_if_stale`'s two reads
+    /// of the marker — used by
+    /// [`take_over_if_stale_never_deletes_a_lock_recreated_between_its_reads`]
+    /// to deterministically reproduce the exact interleaving issue #322
+    /// review flagged, rather than relying on real thread-scheduling timing
+    /// (which could pass or fail depending on luck).
+    struct RaceDuringTakeoverHost {
+        inner: TestHost,
+        /// Number of `read_file` calls observed for the lock path so far.
+        lock_reads: std::sync::atomic::AtomicUsize,
+    }
+
+    #[async_trait::async_trait]
+    impl HostPlatform for RaceDuringTakeoverHost {
+        async fn exec(
+            &self,
+            cmd: &str,
+            args: &[&str],
+            options: ExecOptions<'_>,
+        ) -> Result<ExecOutput, VaultError> {
+            self.inner.exec(cmd, args, options).await
+        }
+        async fn read_file(&self, path: &Path) -> Result<Vec<u8>, VaultError> {
+            if path == self.inner.config_dir().join(REVOCATION_LOCK_FILE) {
+                let call = self
+                    .lock_reads
+                    .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                if call == 1 {
+                    // This is `take_over_if_stale`'s confirmation read — the
+                    // second time it reads the lock marker, immediately
+                    // before it would otherwise delete it. Simulate a
+                    // second contender winning the takeover race first: it
+                    // deleted the stale marker and created its own fresh,
+                    // valid lock, right in this gap.
+                    self.inner
+                        .write_file(path, b"fresh-holders-marker", 0o600)
+                        .await
+                        .unwrap();
+                }
+            }
+            self.inner.read_file(path).await
+        }
+        async fn write_file(
+            &self,
+            path: &Path,
+            content: &[u8],
+            mode: u32,
+        ) -> Result<(), VaultError> {
+            self.inner.write_file(path, content, mode).await
+        }
+        async fn file_exists(&self, path: &Path) -> Result<bool, VaultError> {
+            self.inner.file_exists(path).await
+        }
+        async fn delete_file(&self, path: &Path) -> Result<(), VaultError> {
+            self.inner.delete_file(path).await
+        }
+        async fn rename_file(&self, from: &Path, to: &Path) -> Result<(), VaultError> {
+            self.inner.rename_file(from, to).await
+        }
+        async fn list_dir(&self, path: &Path) -> Result<Vec<String>, VaultError> {
+            self.inner.list_dir(path).await
+        }
+        async fn try_create_lock_file(
+            &self,
+            path: &Path,
+            content: &[u8],
+        ) -> Result<(), VaultError> {
+            self.inner.try_create_lock_file(path, content).await
+        }
+        fn platform(&self) -> Platform {
+            self.inner.platform()
+        }
+        fn config_dir(&self) -> &Path {
+            self.inner.config_dir()
+        }
+    }
+
+    /// Regression test for issue #322 review feedback: `take_over_if_stale`
+    /// must not delete a lock file that a concurrent contender has already
+    /// taken over and recreated in the window between this function's
+    /// staleness read and its delete call. Before the fix, an unconditional
+    /// delete at that point would tear down the *new* holder's valid lock
+    /// (not the stale one this function decided to reap), letting a third
+    /// party acquire the now-vacant path too — two simultaneous holders,
+    /// exactly the bug this whole mechanism exists to prevent.
+    #[tokio::test]
+    async fn take_over_if_stale_never_deletes_a_lock_recreated_between_its_reads() {
+        let inner = TestHost::new();
+        let lock_path = inner.config_dir().join(REVOCATION_LOCK_FILE);
+        // "0" epoch milliseconds — always older than `LOCK_STALE_AFTER_MS`,
+        // so the first read correctly judges this stale.
+        inner.write_file(&lock_path, b"0", 0o600).await.unwrap();
+
+        let host = RaceDuringTakeoverHost {
+            inner,
+            lock_reads: std::sync::atomic::AtomicUsize::new(0),
+        };
+
+        take_over_if_stale(&host, &lock_path).await;
+
+        assert_eq!(
+            host.inner.read_file(&lock_path).await.unwrap(),
+            b"fresh-holders-marker",
+            "the concurrent contender's freshly recreated lock must survive \
+             take_over_if_stale untouched"
+        );
+    }
+
+    /// Regression test for issue #322 review feedback: `pause_before_retry`
+    /// must not block the OS thread it is polled on — a blocking
+    /// `std::thread::sleep` there would stall every other task sharing that
+    /// thread (all of them, on a single-threaded runtime) for the pause's
+    /// duration, not just this lock's own contention loop.
+    ///
+    /// Proven by timing, not by inspecting internals: two `pause_before_retry`
+    /// futures run concurrently (`tokio::join!`) on a deliberately
+    /// **single-threaded** runtime. A blocking implementation would
+    /// serialize them — the single worker thread can't poll the second
+    /// future until the first one's blocking sleep call returns — so total
+    /// elapsed time would be roughly double one pause. A genuinely
+    /// non-blocking implementation lets the executor poll both while
+    /// neither is actually occupying the thread, so elapsed time stays close
+    /// to a single pause. The threshold below (`< 3x` a single pause) is
+    /// comfortably below the `~2x` a blocking implementation would produce,
+    /// while generous enough to absorb ordinary CI scheduling jitter on a
+    /// tiny multi-millisecond duration.
+    #[tokio::test(flavor = "current_thread")]
+    async fn pause_before_retry_does_not_block_the_polling_thread() {
+        let start = std::time::Instant::now();
+        tokio::join!(pause_before_retry(), pause_before_retry());
+        let elapsed = start.elapsed();
+
+        assert!(
+            elapsed < std::time::Duration::from_millis(RETRY_PAUSE_MS * 3),
+            "two concurrent pauses took {elapsed:?}, suggesting they were serialized by a \
+             blocking sleep rather than run concurrently (single pause is {RETRY_PAUSE_MS}ms)"
         );
     }
 
