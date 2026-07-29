@@ -58,7 +58,7 @@ readonly [PresenceOperation](./vaultkeeper.presenceoperation.md)<!-- -->\[\]
 
 </td><td>
 
-_(Optional)_ The keyed operations for which this instance actually forces a fresh per-use human action. When \*\*omitted\*\*, a `presencePerUse: true` instance is taken to force presence for \*\*all\*\* keyed operations — the default for a touch device (e.g. a YubiKey whose challenge-response touch fires on every `store`<!-- -->/`retrieve`<!-- -->/`delete`<!-- -->).
+_(Optional)_ The keyed operations for which this instance actually forces a fresh per-use human action. When \*\*omitted\*\*, a `presencePerUse: true` instance is taken to force presence for \*\*all\*\* keyed operations — appropriate only for a device whose per-use action genuinely fires on every keyed operation. Note that a touch-configured YubiKey is \*not\* such a device: its `delete` never performs the challenge-response that demands a touch, so `YubikeyBackend` lists `['read', 'store']` explicitly.
 
 A backend that can force presence for only \*some\* operations must list exactly those, so a `--require-presence-per-use` request for an \*\*uncovered\*\* operation fails closed with a `NotCapableError` rather than silently passing without a fresh action. For example, 1Password `per-access` forces a fresh biometric on reads (`setup`<!-- -->/`exec`<!-- -->) but routes `store`<!-- -->/`delete` through the cached session client, so it reports `['read']` — a flagged `store`<!-- -->/`delete` is then correctly refused.
 
