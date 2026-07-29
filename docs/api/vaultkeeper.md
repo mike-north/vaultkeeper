@@ -407,6 +407,17 @@ A specialization of [ConfigValidationError](./vaultkeeper.configvalidationerror.
 </td></tr>
 <tr><td>
 
+[UnreachableError](./vaultkeeper.unreachableerror.md)
+
+
+</td><td>
+
+Thrown from the `default`<!-- -->/impossible arm of an exhaustive `switch` (or equivalent conditional) over a discriminated union. The constructor parameter is typed `never`<!-- -->, so passing anything other than a value the compiler has already narrowed to `never` — i.e. a union member that was missed — is a compile-time error at the call site, not just a runtime throw. This turns an unhandled union arm into a build failure the moment a new variant is added, rather than a silent fallthrough discovered later at runtime.
+
+
+</td></tr>
+<tr><td>
+
 [UsageLimitExceededError](./vaultkeeper.usagelimitexceedederror.md)
 
 

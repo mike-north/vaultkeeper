@@ -801,6 +801,146 @@ export class RotationInProgressError extends VaultError {
 }
 
 /**
+ * Thrown from the `default`/impossible arm of an exhaustive `switch` (or
+ * equivalent conditional) over a discriminated union. The constructor
+ * parameter is typed `never`, so passing anything other than a value the
+ * compiler has already narrowed to `never` — i.e. a union member that was
+ * missed — is a compile-time error at the call site, not just a runtime
+ * throw. This turns an unhandled union arm into a build failure the moment a
+ * new variant is added, rather than a silent fallthrough discovered later at
+ * runtime.
+ *
+ * @example
+ * ```ts
+ * switch (check.kind) {
+ *   case 'config-parse':
+ *     // ...
+ *     break
+ *   case 'config-validation':
+ *     // ...
+ *     break
+ *   case 'config-unknown-backend':
+ *     // ...
+ *     break
+ *   case 'config-read':
+ *     // ...
+ *     break
+ *   default:
+ *     throw new UnreachableError(check.kind, 'unrecognized preflight check kind')
+ * }
+ * ```
+ *
+ * @public
+ */
+export class UnreachableError extends VaultError {
+  /**
+   * A stringified rendering of the value that reached the
+   * supposedly-unreachable arm, for diagnostics. Always present because
+   * `never` at the type level does not guarantee `never` at runtime — a
+   * value that bypassed static narrowing (e.g. crossed an untyped boundary
+   * such as `JSON.parse`) can still reach this constructor.
+   */
+  readonly describedValue: string
+
+  constructor(value: never, detail?: string) {
+    const stringified = describeUnreachableValue(value)
+    const message =
+      detail === undefined
+        ? `Reached unreachable code: unexpected value ${stringified}`
+        : `Reached unreachable code (${detail}): unexpected value ${stringified}`
+    super(message)
+    this.name = 'UnreachableError'
+    this.describedValue = stringified
+  }
+}
+
+/**
+ * Stringifies a value that was statically typed as `never` but has, in
+ * practice, reached a runtime check — for example a discriminant value that
+ * did not go through the narrowing the type system assumed. `String()` alone
+ * is insufficient because it renders `undefined`/objects unhelpfully for
+ * diagnostics, so this special-cases the common discriminant shapes.
+ *
+ * @remarks
+ * Typed `unknown` rather than `never` — the caller's argument genuinely is
+ * `never` at its call site, but declaring the parameter here as `never` too
+ * would make every runtime branch below statically unreachable (the value
+ * has no overlap with `string`/`undefined`/`null`), which `no-unnecessary-condition`
+ * correctly flags. `unknown` still accepts the `never`-typed caller argument
+ * (`never` is a subtype of everything) while letting the runtime checks — the
+ * actual point of this function, since a real value can still bypass static
+ * narrowing — typecheck normally.
+ *
+ * Must never throw and must never return an empty string, no matter what it
+ * is handed — this runs precisely when an "impossible" value has shown up at
+ * runtime, so the diagnostic path is the one place a formatting failure is
+ * least tolerable. Guards against: `JSON.stringify` returning `undefined`
+ * (functions, symbols, and objects made up solely of such values — its
+ * TypeScript signature claims `string`, but the real runtime return type is
+ * `string | undefined`), `JSON.stringify`/property access throwing (circular
+ * structures, `BigInt`, getters that throw), and `Object.prototype.toString`
+ * itself throwing (a `Symbol.toStringTag` getter that throws).
+ */
+function describeUnreachableValue(value: unknown): string {
+  if (typeof value === 'string') {
+    return JSON.stringify(value)
+  }
+  if (value === undefined) {
+    return 'undefined'
+  }
+  if (value === null) {
+    return 'null'
+  }
+  if (typeof value === 'function') {
+    return `[Function: ${value.name.length > 0 ? value.name : 'anonymous'}]`
+  }
+  if (typeof value === 'symbol') {
+    return value.toString()
+  }
+  if (typeof value === 'bigint') {
+    return `${value.toString()}n`
+  }
+  if (value instanceof Error) {
+    // `Error#message`/`stack` are non-enumerable, so `JSON.stringify` below
+    // would otherwise render an Error instance as the uninformative `'{}'`.
+    // Guarded in its own try/catch because a hostile Error subclass can
+    // still override `name`/`message` with a throwing getter.
+    try {
+      return `[Error ${value.name}: ${value.message}]`
+    } catch {
+      // Fall through to the same JSON.stringify-based fallback used below.
+    }
+  }
+  try {
+    const json: string | undefined = JSON.stringify(value)
+    if (typeof json === 'string') {
+      return json
+    }
+    // JSON.stringify ran without throwing but returned undefined — its
+    // TypeScript signature says `string`, but at runtime it returns
+    // `undefined` for values it cannot represent (e.g. an object whose only
+    // properties are functions, symbols, or undefined). Fall through to the
+    // same tag-based fallback used for the throwing case below.
+  } catch {
+    // JSON.stringify itself threw (e.g. a circular structure, a BigInt
+    // nested inside an object, or a getter that throws during
+    // enumeration). Fall through to the same tag-based fallback.
+  }
+  try {
+    // `String(value)` is avoided here because the value's static type at
+    // this point no longer guarantees a meaningful `toString` — use the tag
+    // `Object.prototype.toString` renders as text (`'[object Object]'`,
+    // `'[object BigInt]'`, etc.), which is defined for any input.
+    return Object.prototype.toString.call(value)
+  } catch {
+    // Even `Object.prototype.toString` can throw: it reads
+    // `value[Symbol.toStringTag]`, which may be a getter that throws. This
+    // is the last resort — a fixed, always-safe string.
+    return '[unstringifiable value]'
+  }
+}
+
+/**
  * Thrown when a test-only double — a class built purely to fabricate a
  * vaultkeeper-internal signal (e.g. a granted presence check, an unlocked
  * backend) for driving negative test cases — refuses to construct because it
