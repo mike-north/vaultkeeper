@@ -32,13 +32,9 @@ import * as os from 'node:os'
 import * as path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, it, expect } from 'vitest'
+import { matchesOutput, type OutputMatcher } from './matches-output.js'
 
 // ─── Types mirroring the Rust StubScenario / StubStep / OutputMatcher ────
-
-interface OutputMatcher {
-  type: 'Any' | 'Exact' | 'Contains' | 'Regex' | 'JsonContains'
-  value?: string | Record<string, unknown>
-}
 
 interface StubStep {
   note: string | null
@@ -86,27 +82,6 @@ const BINARIES = new Map(
 )
 const ALL_BINARIES_PRESENT =
   TOOLS_USED.length > 0 && TOOLS_USED.every((t) => BINARIES.get(t) !== null)
-
-// ─── Output matching (mirrors run-conformance.test.ts's matcher) ─────
-
-function matcherValueAsString(matcher: OutputMatcher): string {
-  return typeof matcher.value === 'string' ? matcher.value : ''
-}
-
-function matchesOutput(matcher: OutputMatcher, output: string): boolean {
-  switch (matcher.type) {
-    case 'Any':
-      return true
-    case 'Exact':
-      return output.trim() === matcherValueAsString(matcher).trim()
-    case 'Contains':
-      return output.includes(matcherValueAsString(matcher))
-    case 'Regex':
-      return new RegExp(matcherValueAsString(matcher)).test(output)
-    default:
-      return false
-  }
-}
 
 // ─── Run one scenario ─────────────────────────────────────────────
 //
@@ -157,6 +132,33 @@ async function runStep(
   })
 }
 
+function isErrnoException(err: unknown): err is NodeJS.ErrnoException {
+  return err instanceof Error && 'code' in err
+}
+
+/**
+ * Places the compiled `vk-stub-*` binary at `<destDir>/<tool>[.exe]` under
+ * its real-tool-name — a symlink where possible, falling back to a copy on
+ * Windows when symlink creation is denied (a non-elevated process without
+ * Developer Mode enabled gets `EPERM`/`EACCES` from `fs.symlink`, per
+ * Node's documented Windows symlink permission requirements).
+ */
+async function linkStubBinary(binary: string, destDir: string, tool: string): Promise<void> {
+  const ext = process.platform === 'win32' ? '.exe' : ''
+  const dest = path.join(destDir, `${tool}${ext}`)
+  try {
+    await fs.symlink(binary, dest)
+  } catch (err) {
+    const isWindowsPermissionDenial =
+      process.platform === 'win32' &&
+      isErrnoException(err) &&
+      (err.code === 'EPERM' || err.code === 'EACCES')
+    if (!isWindowsPermissionDenial) throw err
+    await fs.copyFile(binary, dest)
+    await fs.chmod(dest, 0o755)
+  }
+}
+
 // ─── Test suite ──────────────────────────────────────────────────
 
 // Skipped when the vk-stub-* binaries this corpus needs aren't built yet
@@ -186,7 +188,7 @@ describe.skipIf(!ALL_BINARIES_PRESENT)(
       const worldPath = path.join(worldDir, 'world.json')
 
       try {
-        await fs.symlink(binary, path.join(pathDir, tool))
+        await linkStubBinary(binary, pathDir, tool)
 
         for (const [i, step] of testCase.stubScenario.steps.entries()) {
           const result = await runStep(pathDir, tool, worldPath, step)
