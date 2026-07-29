@@ -864,6 +864,16 @@ export class UnreachableError extends VaultError {
  * (`never` is a subtype of everything) while letting the runtime checks — the
  * actual point of this function, since a real value can still bypass static
  * narrowing — typecheck normally.
+ *
+ * Must never throw and must never return an empty string, no matter what it
+ * is handed — this runs precisely when an "impossible" value has shown up at
+ * runtime, so the diagnostic path is the one place a formatting failure is
+ * least tolerable. Guards against: `JSON.stringify` returning `undefined`
+ * (functions, symbols, and objects made up solely of such values — its
+ * TypeScript signature claims `string`, but the real runtime return type is
+ * `string | undefined`), `JSON.stringify`/property access throwing (circular
+ * structures, `BigInt`, getters that throw), and `Object.prototype.toString`
+ * itself throwing (a `Symbol.toStringTag` getter that throws).
  */
 function describeUnreachableValue(value: unknown): string {
   if (typeof value === 'string') {
@@ -875,16 +885,41 @@ function describeUnreachableValue(value: unknown): string {
   if (value === null) {
     return 'null'
   }
+  if (typeof value === 'function') {
+    return `[Function: ${value.name.length > 0 ? value.name : 'anonymous'}]`
+  }
+  if (typeof value === 'symbol') {
+    return value.toString()
+  }
+  if (typeof value === 'bigint') {
+    return `${value.toString()}n`
+  }
   try {
-    return JSON.stringify(value)
+    const json: string | undefined = JSON.stringify(value)
+    if (typeof json === 'string') {
+      return json
+    }
+    // JSON.stringify ran without throwing but returned undefined — its
+    // TypeScript signature says `string`, but at runtime it returns
+    // `undefined` for values it cannot represent (e.g. an object whose only
+    // properties are functions, symbols, or undefined). Fall through to the
+    // same tag-based fallback used for the throwing case below.
   } catch {
-    // JSON.stringify itself threw (e.g. a circular structure or a BigInt).
+    // JSON.stringify itself threw (e.g. a circular structure, a BigInt
+    // nested inside an object, or a getter that throws during
+    // enumeration). Fall through to the same tag-based fallback.
+  }
+  try {
     // `String(value)` is avoided here because the value's static type at
-    // this point no longer guarantees a meaningful `toString` — fall back to
-    // the same tag `Object.prototype.toString` would render as text
-    // (`'[object Object]'`, `'[object BigInt]'`, etc.), which is always a
-    // safe, defined string regardless of the value's actual shape.
+    // this point no longer guarantees a meaningful `toString` — use the tag
+    // `Object.prototype.toString` renders as text (`'[object Object]'`,
+    // `'[object BigInt]'`, etc.), which is defined for any input.
     return Object.prototype.toString.call(value)
+  } catch {
+    // Even `Object.prototype.toString` can throw: it reads
+    // `value[Symbol.toStringTag]`, which may be a getter that throws. This
+    // is the last resort — a fixed, always-safe string.
+    return '[unstringifiable value]'
   }
 }
 

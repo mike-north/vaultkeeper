@@ -162,4 +162,106 @@ describe('UnreachableError', () => {
 
     expect(err.value).toBe('42')
   })
+
+  // -------------------------------------------------------------------------
+  // Regression: describeUnreachableValue must never throw and must always
+  // produce a non-empty, informative string, even for inputs where
+  // `JSON.stringify` returns `undefined` (despite its TypeScript signature
+  // claiming `string`) or throws outright. This is the diagnostic path for a
+  // value that has already defeated static exhaustiveness checking, so it
+  // must not itself fail when handed a hostile runtime value.
+  // -------------------------------------------------------------------------
+
+  it('should describe a function without throwing', () => {
+    function namedFn(): void {
+      // no-op
+    }
+
+    const err = new UnreachableError(toNeverForTest(namedFn))
+
+    expect(err.value).toBe('[Function: namedFn]')
+    expect(err.value.length).toBeGreaterThan(0)
+  })
+
+  it('should describe an anonymous function without throwing', () => {
+    const anonymous = (): void => {
+      // no-op
+    }
+    // Strip the name JS infers from the `const` binding so the fallback
+    // branch (empty function name) is actually exercised.
+    Object.defineProperty(anonymous, 'name', { value: '' })
+
+    const err = new UnreachableError(toNeverForTest(anonymous))
+
+    expect(err.value).toBe('[Function: anonymous]')
+  })
+
+  it('should describe a symbol without throwing', () => {
+    const err = new UnreachableError(toNeverForTest(Symbol('bogus-kind')))
+
+    expect(err.value).toBe('Symbol(bogus-kind)')
+  })
+
+  it('should describe a BigInt without throwing', () => {
+    // Built from a string, not a numeric literal, so the value exceeds
+    // Number.MAX_SAFE_INTEGER without losing precision beforehand.
+    const err = new UnreachableError(toNeverForTest(BigInt('9007199254740993')))
+
+    expect(err.value).toBe('9007199254740993n')
+  })
+
+  it('should describe an object whose toJSON returns undefined without a literal "undefined" body', () => {
+    // JSON.stringify({ toJSON: () => undefined }) runs to completion without
+    // throwing but returns the *value* `undefined` (not the string
+    // "undefined") — its TypeScript signature claims `string` regardless.
+    // The message must still be non-empty and must not silently collapse to
+    // the same rendering as the real `undefined` value.
+    const toJsonUndefined = { toJSON: (): undefined => undefined }
+
+    const err = new UnreachableError(toNeverForTest(toJsonUndefined))
+
+    expect(err.value.length).toBeGreaterThan(0)
+    expect(err.value).toBe('[object Object]')
+  })
+
+  it('should describe a circular object without throwing', () => {
+    const circular: Record<string, unknown> = { name: 'circular' }
+    circular.self = circular
+
+    const err = new UnreachableError(toNeverForTest(circular))
+
+    expect(err.value).toBe('[object Object]')
+  })
+
+  it('should describe an object with a throwing getter without throwing', () => {
+    const hostile: Record<string, unknown> = {}
+    Object.defineProperty(hostile, 'poison', {
+      enumerable: true,
+      get(): never {
+        throw new Error('getter boom')
+      },
+    })
+
+    const err = new UnreachableError(toNeverForTest(hostile))
+
+    expect(err.value).toBe('[object Object]')
+  })
+
+  it('should describe an object with a throwing Symbol.toStringTag getter without throwing', () => {
+    // JSON.stringify never reads Symbol.toStringTag, so it must be made to
+    // throw for an unrelated reason (a circular reference) first, forcing
+    // fallthrough to Object.prototype.toString — which is what actually
+    // reads Symbol.toStringTag and is the thing this test exercises.
+    const hostile: Record<PropertyKey, unknown> = {}
+    hostile.self = hostile
+    Object.defineProperty(hostile, Symbol.toStringTag, {
+      get(): never {
+        throw new Error('toStringTag boom')
+      },
+    })
+
+    const err = new UnreachableError(toNeverForTest(hostile))
+
+    expect(err.value).toBe('[unstringifiable value]')
+  })
 })
