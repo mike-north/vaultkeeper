@@ -48,7 +48,8 @@ fi
 
 fresh_file="$(mktemp)"
 stderr_file="$(mktemp)"
-trap 'rm -f "${fresh_file}" "${stderr_file}"' EXIT
+atomic_tmp="${committed_file}.tmp"
+trap 'rm -f "${fresh_file}" "${stderr_file}" "${atomic_tmp}"' EXIT
 
 # -sss omits blanket impls, auto trait impls (Send/Sync/Unpin/...), and
 # auto-derived impls — noise that changes with the compiler/dependency
@@ -69,7 +70,14 @@ if ! cargo "+${RUST_API_NIGHTLY_TOOLCHAIN}" public-api \
 fi
 
 if [[ "${mode}" == "generate" ]]; then
-  cp "${fresh_file}" "${committed_file}"
+  # Write to a same-directory temp file and rename into place so a reader
+  # (or an interrupted run) never observes a partially written
+  # public-api.txt — cp truncates the destination in place before writing
+  # the new content, so a failure or concurrent read mid-copy could see a
+  # truncated or mixed file; mv within the same directory is a single
+  # filesystem rename.
+  cp "${fresh_file}" "${atomic_tmp}"
+  mv "${atomic_tmp}" "${committed_file}"
   echo "Wrote ${committed_file}"
   exit 0
 fi
