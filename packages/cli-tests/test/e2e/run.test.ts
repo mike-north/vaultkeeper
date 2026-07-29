@@ -13,10 +13,23 @@
 import * as fs from 'node:fs/promises'
 import * as os from 'node:os'
 import * as path from 'node:path'
+import { spawn } from 'node:child_process'
+import { fileURLToPath } from 'node:url'
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { createCliTestEnv } from '@vaultkeeper/cli-test-helpers'
 import type { CliTestEnv } from '@vaultkeeper/cli-test-helpers'
 import { VaultKeeper } from 'vaultkeeper'
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url))
+
+/** `packages/cli/src/bin.ts` — the same entry point
+ * `@vaultkeeper/cli-test-helpers`'s `run()`/`runWithStdin()` spawn under the
+ * hood, resolved directly here because this suite needs a live handle to
+ * the spawned wrapper process (to deliver a signal to it mid-run) rather
+ * than `run()`'s wait-for-completion-then-return-the-result shape. */
+function cliBinPath(): string {
+  return path.resolve(__dirname, '..', '..', '..', 'cli', 'src', 'bin.ts')
+}
 
 const SECRET_NAME = 'run-token-uat-secret'
 const SECRET_VALUE = 'the-real-secret-value'
@@ -137,6 +150,70 @@ describe('run --token', () => {
     expect(result.stderr).toContain('ExecError:')
     expect(result.stderr).toContain('Could not start "/no/such/command"')
   })
+
+  // Signal transparency (issue #279, extended to this TS CLI by issue #333):
+  // a SIGTERM delivered to the `run` wrapper process must be forwarded to
+  // the child it launched, and the wrapper's own exit code must reflect the
+  // child's signal death (128+15=143) — not exit early and orphan the
+  // child, and not swallow the signal. `it.skipIf` on Windows: POSIX signal
+  // delivery via `process.kill` has no direct Windows equivalent.
+  it.skipIf(process.platform === 'win32')(
+    'forwards SIGTERM to the launched child and reports 128+15',
+    async () => {
+      if (env === undefined) throw new Error('env not initialized')
+      const token = await mintToken(env.configDir, SECRET_NAME, SECRET_VALUE)
+
+      // The child prints a line the instant it starts (no sleep-and-hope
+      // polling) so the test knows precisely when it's safe to deliver the
+      // signal — before that line arrives, the child may not have installed
+      // its own default SIGTERM disposition yet.
+      const child = spawn(
+        'tsx',
+        [
+          cliBinPath(),
+          'run',
+          '--token',
+          token,
+          '--',
+          'node',
+          '-e',
+          "console.log('ready'); setTimeout(() => {}, 30000)",
+        ],
+        {
+          env: { ...process.env, VAULTKEEPER_CONFIG_DIR: env.configDir },
+          stdio: ['ignore', 'pipe', 'pipe'],
+        },
+      )
+
+      const readySignal = new Promise<void>((resolve, reject) => {
+        let buffered = ''
+        child.stdout.on('data', (chunk: Buffer) => {
+          buffered += chunk.toString('utf8')
+          if (buffered.includes('ready')) resolve()
+        })
+        child.on('error', reject)
+      })
+
+      const exited = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
+        (resolve) => {
+          child.on('exit', (code, signal) => {
+            resolve({ code, signal })
+          })
+        },
+      )
+
+      await readySignal
+      child.kill('SIGTERM')
+
+      const { code, signal } = await exited
+      // The wrapper installs its own SIGTERM handler and forwards the
+      // signal rather than dying from it directly, so it exits normally
+      // (signal === null here) with the 128+15 exit code its own child's
+      // signal death maps to — not killed by SIGTERM itself.
+      expect(signal).toBeNull()
+      expect(code).toBe(143)
+    },
+  )
 })
 
 describe('run is documented; exec is unaffected for its own flow', () => {

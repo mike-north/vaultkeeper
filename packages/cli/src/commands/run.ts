@@ -22,6 +22,12 @@
  * - The child's exit code is propagated; a signal-killed child yields
  *   `128+N`.
  *
+ * Note on secret lifetime: the secret must be converted to a JS string for
+ * env var injection via `child_process.spawn`, pinning it in the V8 heap
+ * beyond the `SecretAccessor` callback scope — the same accepted tradeoff
+ * `exec`'s doc comment documents, since this spawn boundary requires a
+ * string too. The string is not persisted or returned.
+ *
  * @internal
  */
 
@@ -47,9 +53,9 @@ function printRunHelp(): void {
   process.stdout.write(
     'Usage: vaultkeeper run --token <jwe> [--as VAR] [options] -- <command...>\n\n' +
       'Options:\n' +
-      '  --token <jwe>      Redeem an already-minted JWE token and inject its\n' +
-      "                     secret as an env var (the deprecated exec's behavior,\n" +
-      '                     folded into run). Required.\n' +
+      '  --token <jwe>      Launch with the environment redeemed from a vault\n' +
+      '                     token (JWE) — its secret is injected as an env var.\n' +
+      '                     Required.\n' +
       '  --as <VAR>         Env var the redeemed secret is injected under.\n' +
       `                     Defaults to ${DEFAULT_TOKEN_VAR}.\n` +
       '  --skip-doctor      Skip doctor preflight checks\n' +
@@ -69,7 +75,8 @@ function printRunHelp(): void {
  * for a signal Node reports that has no listed number on this platform
  * (should not happen in practice, but this must never throw). */
 function signalNumber(signal: NodeJS.Signals): number {
-  return os.constants.signals[signal]
+  const table: Partial<Record<NodeJS.Signals, number>> = os.constants.signals
+  return table[signal] ?? 1
 }
 
 export async function runCommand(args: string[], configDir: string): Promise<number> {
@@ -171,21 +178,27 @@ async function launchWithFullTransparency(
   }
 
   return new Promise<number>((resolve, reject) => {
+    // Installed *before* spawn(), mirroring the native CLI's "handlers
+    // before spawn" ordering (issue #279) — a signal arriving in the window
+    // right after launch must still be forwarded rather than hitting this
+    // process's default disposition and orphaning the child. `handle.child`
+    // starts `undefined` so `forward` can close over the holder object (a
+    // holder, not a reassigned `let`, keeps `prefer-const` satisfied) and is
+    // only ever invoked once `spawn()` below has assigned a real handle;
+    // `?.` makes a signal that (impossibly, in practice) arrived before
+    // assignment a no-op rather than a throw.
+    const handle: { child?: ReturnType<typeof spawn> } = {}
+    const forward = (signal: NodeJS.Signals): void => {
+      handle.child?.kill(signal)
+    }
+    process.on('SIGINT', forward)
+    process.on('SIGTERM', forward)
+
     const child = spawn(commandName, command.slice(1), {
       env: { ...process.env, ...env },
       stdio: 'inherit',
     })
-
-    // Installed before any await/tick beyond spawn() itself, mirroring the
-    // native CLI's "handlers before spawn" ordering (issue #279) — a signal
-    // arriving in the window right after launch must still be forwarded
-    // rather than hitting this process's default disposition and orphaning
-    // the child.
-    const forward = (signal: NodeJS.Signals): void => {
-      child.kill(signal)
-    }
-    process.on('SIGINT', forward)
-    process.on('SIGTERM', forward)
+    handle.child = child
 
     const cleanup = (): void => {
       process.removeListener('SIGINT', forward)
