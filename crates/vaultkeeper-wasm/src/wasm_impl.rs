@@ -45,7 +45,10 @@ use vaultkeeper_core::{ClaimsKind, ExecutableTrustRequiredReason, VaultClaims, V
 /// `tryCreateLockFile` entry in the JS host contract above, and this `impl`
 /// block has no override for it, so every call falls through to the trait's
 /// fail-closed default (`crates/vaultkeeper-core/src/backend/types.rs`):
-/// `Err(VaultError::Other(..))`, never a silent `Ok(())`.
+/// `Err(VaultError::LockingNotSupported { .. })` (wire code
+/// `locking-not-supported`), never a silent `Ok(())`. This is the same
+/// variant the TS `LockingNotSupportedError` bridge (`packages/vaultkeeper-wasm/src/errors.ts`)
+/// reconstructs from the code table.
 ///
 /// Concretely, this means `keys::storage`'s revocation-state read-modify-write
 /// (`mutate_revocation_state`/`save_key_state`) runs under the WASM SDK with

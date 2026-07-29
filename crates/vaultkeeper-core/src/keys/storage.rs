@@ -464,6 +464,17 @@ const REVOCATION_LOCK_FILE: &str = "keys.enc.lock";
 /// own critical sections (a handful of small file I/O calls), so a
 /// legitimate holder is never actually still running when this fires in
 /// practice.
+///
+/// Staleness is judged against a wall-clock (`SystemTime`/`Date.now()`)
+/// epoch-ms marker, not a monotonic clock, because the marker must be
+/// meaningful when read back by a *different* OS process from disk —
+/// monotonic clocks have no cross-process shared origin. The tradeoff: a
+/// backward wall-clock step (NTP correction, manual clock change) can make an
+/// abandoned lock look artificially fresh for up to the size of the step,
+/// delaying takeover. This is self-healing, not a stuck state — once real
+/// time passes `LOCK_STALE_AFTER_MS` again, the existing bounded retry
+/// (`LOCK_MAX_ATTEMPTS`) takes the lock over exactly as it would have
+/// without the clock step.
 const LOCK_STALE_AFTER_MS: u128 = 30_000;
 
 /// Bounded retry count for lock acquisition. Each attempt either succeeds,
@@ -2196,6 +2207,117 @@ mod tests {
         );
     }
 
+    /// Host double whose lock is permanently contended
+    /// (`try_create_lock_file` unconditionally reports `EEXIST`) and whose
+    /// lock marker always reads back as freshly created (`now_millis()` on
+    /// every read) so `take_over_if_stale` never considers it abandoned.
+    /// Used by
+    /// [`acquire_lock_times_out_after_lock_max_attempts_when_contention_never_clears`]
+    /// to exercise the `attempt + 1 == LOCK_MAX_ATTEMPTS` branch — every
+    /// other contention test in this module resolves via a successful
+    /// retry or a stale-lock takeover, so that timeout arm otherwise has no
+    /// coverage.
+    struct AlwaysContendedFreshHost {
+        config_dir: PathBuf,
+    }
+
+    #[async_trait::async_trait]
+    impl HostPlatform for AlwaysContendedFreshHost {
+        async fn exec(
+            &self,
+            _cmd: &str,
+            _args: &[&str],
+            _options: ExecOptions<'_>,
+        ) -> Result<ExecOutput, VaultError> {
+            unimplemented!("not exercised by this test")
+        }
+        async fn read_file(&self, _path: &Path) -> Result<Vec<u8>, VaultError> {
+            // Always "just created" — never stale, so `take_over_if_stale`
+            // never fires and the retry loop must run to genuine
+            // exhaustion rather than resolving via takeover.
+            Ok(time::now_millis().to_string().into_bytes())
+        }
+        async fn write_file(
+            &self,
+            _path: &Path,
+            _content: &[u8],
+            _mode: u32,
+        ) -> Result<(), VaultError> {
+            unimplemented!("not exercised by this test")
+        }
+        async fn file_exists(&self, _path: &Path) -> Result<bool, VaultError> {
+            unimplemented!("not exercised by this test")
+        }
+        async fn delete_file(&self, _path: &Path) -> Result<(), VaultError> {
+            // `take_over_if_stale` would call this if it ever decided the
+            // marker was stale, which it never does here — present only so
+            // the trait is satisfied.
+            Ok(())
+        }
+        async fn list_dir(&self, _path: &Path) -> Result<Vec<String>, VaultError> {
+            unimplemented!("not exercised by this test")
+        }
+        async fn try_create_lock_file(
+            &self,
+            path: &Path,
+            _content: &[u8],
+        ) -> Result<(), VaultError> {
+            Err(VaultError::Filesystem {
+                message: format!("Lock contention: {} is already held", path.display()),
+                path: path.display().to_string(),
+                permission: "lock".to_string(),
+                code: Some("EEXIST".to_string()),
+            })
+        }
+        fn platform(&self) -> Platform {
+            Platform::Linux
+        }
+        fn config_dir(&self) -> &Path {
+            &self.config_dir
+        }
+    }
+
+    /// Regression test for a coverage gap in `acquire_lock`'s bounded-retry
+    /// loop: the `attempt + 1 == LOCK_MAX_ATTEMPTS` timeout branch (never
+    /// resolving via a successful retry or a stale-lock takeover) had zero
+    /// test coverage. Uses [`AlwaysContendedFreshHost`], whose lock is both
+    /// permanently contended and permanently "fresh", to force every one of
+    /// `LOCK_MAX_ATTEMPTS` attempts to hit contention and run out.
+    ///
+    /// Fast by construction: `pause_before_retry`'s per-attempt delay is
+    /// `RETRY_PAUSE_MS` (2ms, see that constant), so `LOCK_MAX_ATTEMPTS`
+    /// (50) attempts cost roughly 100ms total — comfortably sub-second,
+    /// without touching either production constant or adding a sleep here.
+    #[tokio::test]
+    async fn acquire_lock_times_out_after_lock_max_attempts_when_contention_never_clears() {
+        let host = AlwaysContendedFreshHost {
+            config_dir: PathBuf::from("/test/config"),
+        };
+
+        let result = acquire_lock(&host).await;
+        let err = match result {
+            Err(err) => err,
+            Ok(_) => panic!("expected acquire_lock to time out, not succeed"),
+        };
+        assert!(
+            matches!(
+                err,
+                VaultError::Filesystem {
+                    ref permission,
+                    ref code,
+                    ..
+                } if permission == "lock" && code.as_deref() == Some("EEXIST")
+            ),
+            "expected the timeout arm's Filesystem/lock/EEXIST shape, got {err:?}"
+        );
+        if let VaultError::Filesystem { ref message, .. } = err {
+            assert!(
+                message.contains("Timed out waiting"),
+                "expected the timeout message, got {message:?}"
+            );
+        }
+    }
+
     /// `acquire_lock` treats that same fail-closed default as "this host
     /// doesn't support locking" and proceeds without one, rather than
     /// propagating it as a hard failure — a `mutate_revocation_state` call
@@ -2282,6 +2404,67 @@ mod tests {
         .await
         .unwrap();
         assert!(result.is_jti_revoked("post-takeover-jti"));
+    }
+
+    /// A panic inside `with_revocation_lock`'s critical section is the one
+    /// path that reaches `LockGuard::drop` without `release()` having run
+    /// (see that struct's doc comment). This test drives a real panic
+    /// through a real (spawned) unwind — rather than asserting on `Drop`'s
+    /// internals directly — and confirms two things: the lock left behind
+    /// is recovered by the ordinary stale-lock takeover path (not by
+    /// `Drop` itself), and `Drop`'s `debug_assert` safety net does not fire
+    /// on this path. That assert only skips when
+    /// `std::thread::panicking()` is true; if it fired anyway it would be a
+    /// panic raised while already unwinding from another panic, which
+    /// aborts the process outright — so this test completing at all (rather
+    /// than the whole binary aborting) is itself proof the guard's `Drop`
+    /// stayed silent here, as designed.
+    ///
+    /// `with_revocation_lock` is async, so a synchronous
+    /// `std::panic::catch_unwind` around it doesn't cleanly apply across
+    /// `.await` points; a spawned task's `JoinHandle` gives the same
+    /// "did it panic" signal without fighting the executor.
+    #[tokio::test]
+    async fn panicking_critical_section_is_recovered_by_stale_lock_takeover() {
+        let host = Arc::new(TestHost::new());
+        seed_key_state(&host).await;
+
+        let lock_path = host.config_dir().join(REVOCATION_LOCK_FILE);
+
+        let task_host = Arc::clone(&host);
+        let join_result = tokio::spawn(async move {
+            with_revocation_lock::<(), _>(&*task_host, async {
+                panic!("simulated panic inside the revocation-state critical section");
+            })
+            .await
+        })
+        .await;
+
+        let join_err = join_result.expect_err("expected the spawned task to have panicked");
+        assert!(
+            join_err.is_panic(),
+            "expected a panic-flavored JoinError, got {join_err:?}"
+        );
+
+        // The panic pre-empted `LockGuard::release`, so the lock file is
+        // left behind — abandoned, not released — exactly as a real
+        // crashed process would leave it.
+        assert!(
+            host.file_exists(&lock_path).await.unwrap(),
+            "the panicked holder's lock file must still be present, not released"
+        );
+
+        // Simulate the passage of time past `LOCK_STALE_AFTER_MS`, the same
+        // synthetic-stale-marker technique
+        // `stale_lock_left_by_a_panicked_holder_is_taken_over` uses above.
+        host.write_file(&lock_path, b"0", 0o600).await.unwrap();
+
+        let result = mutate_revocation_state(&*host, |state| {
+            state.revoke_jti("post-panic-takeover-jti", 9_999_999_999);
+        })
+        .await
+        .unwrap();
+        assert!(result.is_jti_revoked("post-panic-takeover-jti"));
     }
 
     /// A lock file whose content isn't a parseable timestamp (never written
