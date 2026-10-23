@@ -202,6 +202,16 @@ async fn resolve_entry(
                 });
             }
 
+            // Enforce the executable-trust policy for raw secrets before
+            // touching backend plaintext. `resolve_profile` itself does not
+            // verify executables; a non-Dev `minTrust` therefore requires the
+            // caller to provide a pre-verified executable identity, exactly as
+            // the lease path requires before minting a token with a verified
+            // `exe` claim.
+            if entry.materialize == MaterializeMode::Secret {
+                verified_executable_hash_for_entry(name, secret_name, entry, opts)?;
+            }
+
             enforce_presence_requirement(
                 opts.backend,
                 PresenceOperation::Read,
@@ -221,6 +231,39 @@ async fn resolve_entry(
                 MaterializeMode::Lease => mint_secret_lease(name, secret_name, &value, entry, opts),
             }
         }
+    }
+}
+
+/// Return the pre-verified executable identity required by an entry's
+/// `minTrust` policy, or `None` for Dev-tier entries that need no binding.
+fn verified_executable_hash_for_entry(
+    name: &str,
+    secret_name: &str,
+    entry: &ProfileEntry,
+    opts: &ResolveOptions<'_>,
+) -> Result<Option<String>, VaultError> {
+    let tier = entry.min_trust.to_trust_tier();
+    // Raw secret materialization and lease minting both grant the resolving
+    // executable access to backend plaintext. The `exe` claim must not carry
+    // the unverified `"dev"` sentinel under a trust tier that claims
+    // Sigstore/TOFU verification, and raw secrets must not be returned to an
+    // unverified caller under that same policy. `resolve_profile` performs no
+    // executable-trust verification itself, so the only coherent elevated-trust
+    // path is for the caller to supply an already-verified hash.
+    match tier {
+        TrustTier::Dev => Ok(None),
+        TrustTier::Sigstore | TrustTier::Tofu => match &opts.executable_hash {
+            Some(hash) => Ok(Some(hash.clone())),
+            None => Err(VaultError::ExecutableTrustRequired {
+                message: format!(
+                    "Profile entry \"{name}\" (secret \"{secret_name}\") resolves to trust \
+                     tier {tier:?}, but resolve_profile was given no executable_hash to bind. \
+                     Supply ResolveOptions::executable_hash (a pre-verified executable identity) \
+                     or lower the entry's minTrust to \"unverified\"."
+                ),
+                reason: crate::errors::ExecutableTrustRequiredReason::MissingChoice,
+            }),
+        },
     }
 }
 
@@ -790,6 +833,57 @@ mod tests {
     }
 
     // --- Item 5: exe/tid trust seam ---
+
+    #[tokio::test]
+    async fn sigstore_tier_secret_without_executable_hash_is_refused_before_retrieve() {
+        let json = r#"{
+            "version": 1, "name": "p",
+            "entries": {
+                "K": { "secret": "s", "materialize": "secret", "minTrust": "sigstore" }
+            }
+        }"#;
+        let profile = load_profile_from_str(json, &defaults()).unwrap();
+        let backend = SpyBackend::new();
+        backend.store("s", "v").await.unwrap();
+        let km = key_manager();
+        let opts = ResolveOptions {
+            backend: &backend,
+            key_manager: &km,
+            executable_hash: None,
+        };
+
+        let err = resolve_profile(&profile, &opts).await.unwrap_err();
+        assert_matches!(
+            err,
+            VaultError::ExecutableTrustRequired { ref message, .. }
+                if message.contains('K') && message.contains("executable_hash")
+        );
+        assert!(
+            backend.retrieve_calls().is_empty(),
+            "elevated-trust raw secrets must be refused before retrieving backend plaintext"
+        );
+    }
+
+    #[tokio::test]
+    async fn sigstore_tier_secret_with_executable_hash_resolves_plaintext() {
+        let json = r#"{
+            "version": 1, "name": "p",
+            "entries": {
+                "K": { "secret": "s", "materialize": "secret", "minTrust": "sigstore" }
+            }
+        }"#;
+        let profile = load_profile_from_str(json, &defaults()).unwrap();
+        let backend = seeded_backend(&[("s", "v")]).await;
+        let km = key_manager();
+        let opts = ResolveOptions {
+            backend: &backend,
+            key_manager: &km,
+            executable_hash: Some("verified-hash".to_string()),
+        };
+
+        let resolved = resolve_profile(&profile, &opts).await.unwrap();
+        assert_eq!(resolved.get("K").unwrap(), "v");
+    }
 
     #[tokio::test]
     async fn sigstore_tier_lease_without_executable_hash_is_refused() {
