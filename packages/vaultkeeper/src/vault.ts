@@ -498,8 +498,15 @@ export class VaultKeeper {
     if (token instanceof CapabilityToken) {
       return validateCapabilityToken(token).val
     }
+    const entries = Object.entries(token)
+    if (entries.length === 0) {
+      throw new AuthorizationDeniedError(
+        'At least one capability token is required for delegated access',
+      )
+    }
+
     const result: Record<string, string> = {}
-    for (const [name, t] of Object.entries(token)) {
+    for (const [name, t] of entries) {
       if (!(t instanceof CapabilityToken)) {
         throw new AuthorizationDeniedError(
           `Invalid capability token for secret "${name}" — expected a CapabilityToken from authorize()`,

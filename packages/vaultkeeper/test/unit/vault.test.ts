@@ -4,7 +4,7 @@ import type { VaultConfig } from '../../src/types.js'
 import { BackendRegistry } from '../../src/backend/registry.js'
 import type { SecretBackend } from '../../src/backend/types.js'
 import { clearBlocklist } from '../../src/jwe/claims.js'
-import { UsageLimitExceededError } from '../../src/errors.js'
+import { AuthorizationDeniedError, UsageLimitExceededError } from '../../src/errors.js'
 import * as delegatedFetchModule from '../../src/access/delegated-fetch.js'
 import * as delegatedExecModule from '../../src/access/delegated-exec.js'
 import * as delegatedSignModule from '../../src/access/delegated-sign.js'
@@ -205,6 +205,16 @@ describe('VaultKeeper', () => {
   })
 
   describe('fetch', () => {
+    it('rejects an empty token map before delegating', async () => {
+      const vault = await initVault()
+      const fetchSpy = vi.spyOn(delegatedFetchModule, 'delegatedFetch')
+
+      await expect(
+        vault.fetch({}, { url: 'https://example.com/api' }),
+      ).rejects.toBeInstanceOf(AuthorizationDeniedError)
+      expect(fetchSpy).not.toHaveBeenCalled()
+    })
+
     it('delegates to delegatedFetch and returns the response with current keyStatus', async () => {
       const vault = await initVault()
       const jwe = await vault.setup('my-secret', { executablePath: 'dev' })
@@ -228,6 +238,16 @@ describe('VaultKeeper', () => {
   })
 
   describe('exec', () => {
+    it('rejects an empty token map before delegating', async () => {
+      const vault = await initVault()
+      const execSpy = vi.spyOn(delegatedExecModule, 'delegatedExec')
+
+      await expect(
+        vault.exec({}, { command: 'echo', args: ['no token'] }),
+      ).rejects.toBeInstanceOf(AuthorizationDeniedError)
+      expect(execSpy).not.toHaveBeenCalled()
+    })
+
     it('delegates to delegatedExec and returns the result with current keyStatus', async () => {
       const vault = await initVault()
       const jwe = await vault.setup('my-secret', { executablePath: 'dev' })
