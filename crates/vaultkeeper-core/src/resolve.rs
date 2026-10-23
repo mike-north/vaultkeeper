@@ -62,13 +62,12 @@
 //! [`SecretBackend::retrieve`]. A flagged entry against a non-qualifying
 //! backend is refused before the backend is ever touched.
 //!
-//! A `materialize: "lease"` entry's minted `exe` claim is bound to a real,
-//! caller-supplied [`ResolveOptions::executable_hash`] whenever the entry's
-//! resolved trust tier is `Sigstore` or `Tofu` — binding an unverified
-//! `"dev"` sentinel under a claimed-verified tier would be incoherent. An
-//! entry resolving to such a tier with no `executable_hash` supplied is
-//! refused rather than silently minting the incoherent pair; a `Dev`-tier
-//! entry always keeps the `"dev"` sentinel regardless.
+//! Every entry's `minTrust` is enforced before any backend retrieval happens.
+//! Entries resolving above the `Dev`/`unverified` tier require a typed
+//! [`ResolveOptions::executable_identity`] produced by executable-trust
+//! verification, and the verified tier must meet or exceed the entry's
+//! requirement. Leases bind that verified identity hash into `exe`; `Dev`-tier
+//! leases keep the `"dev"` sentinel.
 //!
 //! A `materialize: "lease"` entry's `exp` computation ([`mint_secret_lease`])
 //! is deliberately overflow-safe: `ttl_seconds` is capped at
@@ -85,6 +84,7 @@ use zeroize::Zeroizing;
 
 use crate::backend::{PresenceOperation, SecretBackend};
 use crate::errors::VaultError;
+use crate::identity::IdentityInfo;
 use crate::keys::KeyManager;
 use crate::profile::loader::{EntrySource, LoadedProfile, ProfileEntry};
 use crate::profile::types::MaterializeMode;
@@ -112,17 +112,12 @@ pub struct ResolveOptions<'a> {
     /// The active key manager, used to mint a `materialize: "lease"` entry's
     /// JWE with the same current key `VaultKeeper::setup()` would use.
     pub key_manager: &'a KeyManager,
-    /// A pre-verified executable identity hash to bind into a minted
-    /// lease's `exe` claim, when the entry's resolved trust tier is
-    /// `Sigstore` or `Tofu`. `resolve_profile` performs no executable-trust
-    /// verification itself (see the module docs) — this is the caller's
-    /// attestation that it already ran that verification (e.g. a future
-    /// `run` verb, before invoking `resolve_profile`). `None` when no such
-    /// verification has been performed; an entry whose resolved tier is
-    /// `Sigstore`/`Tofu` is refused rather than minted with the `"dev"`
-    /// sentinel in that case. Ignored for `Dev`-tier entries, which always
-    /// keep the `"dev"` sentinel.
-    pub executable_hash: Option<String>,
+    /// A verified executable identity decision produced by the trust verifier
+    /// for the resolving executable. Entries whose `minTrust` resolves above
+    /// `Dev` require this typed identity and fail closed if the verified tier
+    /// does not meet the entry's requirement. `Dev`-tier entries deliberately
+    /// keep the `"dev"` sentinel and do not require executable verification.
+    pub executable_identity: Option<IdentityInfo>,
 }
 
 /// Resolve every entry of a loaded profile into a single environment map.
@@ -186,6 +181,8 @@ async fn resolve_entry(
             })
         }
         EntrySource::Secret(secret_name) => {
+            let executable_identity = enforce_min_trust(name, entry, opts)?;
+
             // requirePresenceAtMint on a secret-backed lease: resolve_profile
             // has no HostPlatform to actually prompt for presence at mint
             // time (see the module docs), so refuse rather than silently
@@ -218,9 +215,51 @@ async fn resolve_entry(
             let mut value = Zeroizing::new(opts.backend.retrieve(secret_name).await?);
             match entry.materialize {
                 MaterializeMode::Secret => Ok(std::mem::take(&mut *value)),
-                MaterializeMode::Lease => mint_secret_lease(name, secret_name, &value, entry, opts),
+                MaterializeMode::Lease => {
+                    mint_secret_lease(name, secret_name, &value, entry, opts, executable_identity)
+                }
             }
         }
+    }
+}
+
+/// Enforce an entry's minimum executable-trust requirement before any backend
+/// materialization happens. `TrustTier` uses smaller discriminants for stronger
+/// trust, so an achieved tier meets a requirement when it is numerically less
+/// than or equal to the required tier.
+fn enforce_min_trust<'a>(
+    name: &str,
+    entry: &ProfileEntry,
+    opts: &'a ResolveOptions<'_>,
+) -> Result<Option<&'a IdentityInfo>, VaultError> {
+    let required = entry.min_trust.to_trust_tier();
+    if required == TrustTier::Dev {
+        return Ok(None);
+    }
+
+    let Some(identity) = opts.executable_identity.as_ref() else {
+        return Err(VaultError::ExecutableTrustRequired {
+            message: format!(
+                "Profile entry \"{name}\" requires executable trust tier {required:?}, but \
+                 resolve_profile was not given a verified executable identity. Run executable \
+                 trust verification first and pass its IdentityInfo in \
+                 ResolveOptions::executable_identity, or lower minTrust to \"unverified\"."
+            ),
+            reason: crate::errors::ExecutableTrustRequiredReason::MissingChoice,
+        });
+    };
+
+    if identity.verified && identity.trust_tier as u8 <= required as u8 {
+        Ok(Some(identity))
+    } else {
+        Err(VaultError::ExecutableTrustRequired {
+            message: format!(
+                "Profile entry \"{name}\" requires executable trust tier {required:?}, but \
+                 the executable identity achieved {:?} (verified: {}).",
+                identity.trust_tier, identity.verified
+            ),
+            reason: crate::errors::ExecutableTrustRequiredReason::MissingChoice,
+        })
     }
 }
 
@@ -262,11 +301,12 @@ const DEFENSIVE_DEFAULT_TTL_SECONDS: u64 =
 /// docs for why the full `setup()` method (and its executable-trust binding)
 /// is not called here.
 fn mint_secret_lease(
-    name: &str,
+    _name: &str,
     secret_name: &str,
     value: &str,
     entry: &ProfileEntry,
     opts: &ResolveOptions<'_>,
+    executable_identity: Option<&IdentityInfo>,
 ) -> Result<String, VaultError> {
     let mut ttl_seconds = entry
         .ttl_seconds
@@ -286,30 +326,9 @@ fn mint_secret_lease(
     }
 
     let tier = entry.min_trust.to_trust_tier();
-    // The `exe` claim must not carry the unverified `"dev"` sentinel under a
-    // trust tier that claims Sigstore/TOFU verification — that pairing is
-    // incoherent (a claimed-verified tier with an admittedly-unverified
-    // executable). resolve_profile performs no executable-trust
-    // verification itself, so the only way to mint a coherent Sigstore/Tofu
-    // lease is for the caller to supply an already-verified hash.
-    let exe = match tier {
-        TrustTier::Dev => "dev".to_string(),
-        TrustTier::Sigstore | TrustTier::Tofu => match &opts.executable_hash {
-            Some(hash) => hash.clone(),
-            None => {
-                return Err(VaultError::ExecutableTrustRequired {
-                    message: format!(
-                        "Profile entry \"{name}\" (secret \"{secret_name}\") resolves to trust \
-                         tier {tier:?}, but resolve_profile was given no executable_hash to bind \
-                         — minting a lease with an unverified \"dev\" exe marker under a \
-                         Sigstore/TOFU trust tier would be incoherent. Supply \
-                         ResolveOptions::executable_hash (a pre-verified executable identity) or \
-                         lower the entry's minTrust to \"unverified\"."
-                    ),
-                    reason: crate::errors::ExecutableTrustRequiredReason::MissingChoice,
-                });
-            }
-        },
+    let exe = match executable_identity {
+        Some(identity) => identity.hash.clone(),
+        None => "dev".to_string(),
     };
 
     let now = crate::util::time::now_secs();
@@ -357,6 +376,14 @@ mod tests {
         km
     }
 
+    fn identity(hash: &str, trust_tier: TrustTier) -> IdentityInfo {
+        IdentityInfo {
+            hash: hash.to_string(),
+            trust_tier,
+            verified: trust_tier != TrustTier::Dev,
+        }
+    }
+
     async fn seeded_backend(entries: &[(&str, &str)]) -> InMemoryBackend {
         let backend = InMemoryBackend::new();
         for (id, value) in entries {
@@ -393,7 +420,7 @@ mod tests {
             // The entry's minTrust ("sigstore") requires a verified
             // executable hash to mint a coherent lease — see the
             // exe/tid trust-seam tests below for the refusal without one.
-            executable_hash: Some("verified-caller-hash".to_string()),
+            executable_identity: Some(identity("verified-caller-hash", TrustTier::Sigstore)),
         };
 
         let resolved = resolve_profile(&profile, &opts).await.unwrap();
@@ -538,7 +565,7 @@ mod tests {
         let opts = ResolveOptions {
             backend: &backend,
             key_manager: &km,
-            executable_hash: None,
+            executable_identity: None,
         };
 
         let err = resolve_profile(&profile, &opts).await.unwrap_err();
@@ -576,7 +603,7 @@ mod tests {
         let opts = ResolveOptions {
             backend: &backend,
             key_manager: &km,
-            executable_hash: None,
+            executable_identity: None,
         };
 
         let resolved = resolve_profile(&profile, &opts).await.unwrap();
@@ -615,7 +642,7 @@ mod tests {
         let opts = ResolveOptions {
             backend: &backend,
             key_manager: &km,
-            executable_hash: None,
+            executable_identity: None,
         };
 
         // Must not panic (this call alone is the overflow regression check).
@@ -661,7 +688,7 @@ mod tests {
         let opts = ResolveOptions {
             backend: &backend,
             key_manager: &km,
-            executable_hash: None,
+            executable_identity: None,
         };
 
         let resolved = resolve_profile(&profile, &opts).await.unwrap();
@@ -692,7 +719,7 @@ mod tests {
         let opts = ResolveOptions {
             backend: &backend,
             key_manager: &km,
-            executable_hash: None,
+            executable_identity: None,
         };
 
         let err = resolve_profile(&profile, &opts).await.unwrap_err();
@@ -723,7 +750,7 @@ mod tests {
         let opts = ResolveOptions {
             backend: &backend,
             key_manager: &km,
-            executable_hash: None,
+            executable_identity: None,
         };
 
         let err = resolve_profile(&profile, &opts).await.unwrap_err();
@@ -753,7 +780,7 @@ mod tests {
         let opts = ResolveOptions {
             backend: &backend,
             key_manager: &km,
-            executable_hash: None,
+            executable_identity: None,
         };
 
         let err = resolve_profile(&profile, &opts).await.unwrap_err();
@@ -781,7 +808,7 @@ mod tests {
         let opts = ResolveOptions {
             backend: &backend,
             key_manager: &km,
-            executable_hash: None,
+            executable_identity: None,
         };
 
         let resolved = resolve_profile(&profile, &opts).await.unwrap();
@@ -792,7 +819,7 @@ mod tests {
     // --- Item 5: exe/tid trust seam ---
 
     #[tokio::test]
-    async fn sigstore_tier_lease_without_executable_hash_is_refused() {
+    async fn sigstore_tier_lease_without_executable_identity_is_refused() {
         let json = r#"{
             "version": 1, "name": "p",
             "entries": {
@@ -805,7 +832,7 @@ mod tests {
         let opts = ResolveOptions {
             backend: &backend,
             key_manager: &km,
-            executable_hash: None,
+            executable_identity: None,
         };
 
         let err = resolve_profile(&profile, &opts).await.unwrap_err();
@@ -816,7 +843,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn tofu_tier_lease_without_executable_hash_is_refused() {
+    async fn tofu_tier_lease_without_executable_identity_is_refused() {
         let json = r#"{
             "version": 1, "name": "p",
             "entries": {
@@ -829,7 +856,7 @@ mod tests {
         let opts = ResolveOptions {
             backend: &backend,
             key_manager: &km,
-            executable_hash: None,
+            executable_identity: None,
         };
 
         let err = resolve_profile(&profile, &opts).await.unwrap_err();
@@ -837,7 +864,56 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn sigstore_tier_lease_with_executable_hash_binds_it_into_the_exe_claim() {
+    async fn sigstore_tier_secret_without_executable_identity_is_refused_before_retrieve() {
+        let json = r#"{
+            "version": 1, "name": "p",
+            "entries": {
+                "TOKEN": { "secret": "s", "materialize": "secret", "minTrust": "sigstore" }
+            }
+        }"#;
+        let profile = load_profile_from_str(json, &defaults()).unwrap();
+        let backend = SpyBackend::new();
+        backend.store("s", "v").await.unwrap();
+        let km = key_manager();
+        let opts = ResolveOptions {
+            backend: &backend,
+            key_manager: &km,
+            executable_identity: None,
+        };
+
+        let err = resolve_profile(&profile, &opts).await.unwrap_err();
+        assert_matches!(err, VaultError::ExecutableTrustRequired { .. });
+        assert!(
+            backend.retrieve_calls().is_empty(),
+            "retrieve must never be attempted before minTrust is enforced"
+        );
+    }
+
+    #[tokio::test]
+    async fn sigstore_tier_secret_with_only_registry_identity_is_refused() {
+        let json = r#"{
+            "version": 1, "name": "p",
+            "entries": {
+                "TOKEN": { "secret": "s", "materialize": "secret", "minTrust": "sigstore" }
+            }
+        }"#;
+        let profile = load_profile_from_str(json, &defaults()).unwrap();
+        let backend = SpyBackend::new();
+        backend.store("s", "v").await.unwrap();
+        let km = key_manager();
+        let opts = ResolveOptions {
+            backend: &backend,
+            key_manager: &km,
+            executable_identity: Some(identity("registry-hash", TrustTier::Tofu)),
+        };
+
+        let err = resolve_profile(&profile, &opts).await.unwrap_err();
+        assert_matches!(err, VaultError::ExecutableTrustRequired { .. });
+        assert!(backend.retrieve_calls().is_empty());
+    }
+
+    #[tokio::test]
+    async fn sigstore_tier_lease_with_executable_identity_binds_it_into_the_exe_claim() {
         let json = r#"{
             "version": 1, "name": "p",
             "entries": {
@@ -850,7 +926,7 @@ mod tests {
         let opts = ResolveOptions {
             backend: &backend,
             key_manager: &km,
-            executable_hash: Some("verified-hash".to_string()),
+            executable_identity: Some(identity("verified-hash", TrustTier::Sigstore)),
         };
 
         let resolved = resolve_profile(&profile, &opts).await.unwrap();
@@ -861,7 +937,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn dev_tier_lease_keeps_the_dev_marker_even_when_executable_hash_is_supplied() {
+    async fn dev_tier_lease_keeps_the_dev_marker_even_when_executable_identity_is_supplied() {
         let json = r#"{
             "version": 1, "name": "p",
             "entries": {
@@ -876,7 +952,7 @@ mod tests {
             key_manager: &km,
             // A caller-supplied hash must not leak into a Dev-tier lease's
             // exe claim — Dev always keeps the "dev" sentinel.
-            executable_hash: Some("verified-hash".to_string()),
+            executable_identity: Some(identity("verified-hash", TrustTier::Sigstore)),
         };
 
         let resolved = resolve_profile(&profile, &opts).await.unwrap();
@@ -904,7 +980,7 @@ mod tests {
         let opts = ResolveOptions {
             backend: &backend,
             key_manager: &km,
-            executable_hash: Some("verified-hash".to_string()),
+            executable_identity: Some(identity("verified-hash", TrustTier::Sigstore)),
         };
 
         let resolved = resolve_profile(&profile, &opts).await.unwrap();
@@ -934,7 +1010,7 @@ mod tests {
         let opts = ResolveOptions {
             backend: &backend,
             key_manager: &km,
-            executable_hash: None,
+            executable_identity: None,
         };
 
         let resolved = resolve_profile(&profile, &opts).await.unwrap();
@@ -959,7 +1035,7 @@ mod tests {
         let opts = ResolveOptions {
             backend: &backend,
             key_manager: &km,
-            executable_hash: None,
+            executable_identity: None,
         };
 
         let err = resolve_profile(&profile, &opts).await.unwrap_err();
@@ -982,7 +1058,7 @@ mod tests {
         let opts = ResolveOptions {
             backend: &backend,
             key_manager: &km,
-            executable_hash: None,
+            executable_identity: None,
         };
 
         let resolved = resolve_profile(&profile, &opts).await.unwrap();
