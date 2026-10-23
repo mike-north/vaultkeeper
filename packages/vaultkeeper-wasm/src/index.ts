@@ -10,7 +10,7 @@
  *
  * const vault = await createVaultKeeper({ skipDoctor: true });
  * const token = vault.setup('my-secret', 'secret-value');
- * const { claims } = vault.authorize(token);
+ * const { response } = vault.authorize(token);
  * ```
  */
 
@@ -52,6 +52,16 @@ let wasmBindings: WasmBindings | undefined;
 async function loadWasm(): Promise<WasmBindings> {
   wasmBindings ??= await import('../wasm/vaultkeeper_wasm.js');
   return wasmBindings;
+}
+
+function redactAuthorizeResult(
+  result: AuthorizeResult & {
+    claims: AuthorizeResult['claims'] & { val?: string };
+  },
+): AuthorizeResult {
+  const { val: _secret, ...claims } = result.claims;
+  void _secret;
+  return { claims, response: result.response };
 }
 
 /**
@@ -96,8 +106,8 @@ export class VaultKeeper {
 
   /** Decrypt and validate a JWE token. */
   authorize(jwe: string): AuthorizeResult {
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-return -- WASM boundary: wasm-bindgen returns untyped JsValue
-    return this.#inner.authorize(jwe);
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-argument -- WASM boundary: sanitize raw JsValue before returning
+    return redactAuthorizeResult(this.#inner.authorize(jwe));
   }
 
   /** Rotate the encryption key. */
@@ -119,11 +129,6 @@ export class VaultKeeper {
   /** Store a secret via the file backend. */
   async store(id: string, secret: string): Promise<void> {
     await this.#inner.store(id, secret);
-  }
-
-  /** Retrieve a secret via the file backend. */
-  async retrieve(id: string): Promise<string> {
-    return this.#inner.retrieve(id);
   }
 
   /** Delete a secret via the file backend. */

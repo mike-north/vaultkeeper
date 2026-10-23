@@ -325,7 +325,7 @@ impl WasmVaultKeeper {
             .map_err(|e| JsError::new(&e.to_string()))
     }
 
-    /// Decrypt a JWE token, validate its claims, and return { claims, response }.
+    /// Decrypt and validate a JWE token, returning only non-secret metadata.
     pub fn authorize(&mut self, jwe: &str) -> Result<JsValue, JsError> {
         let (claims, response) = self
             .vault
@@ -333,7 +333,17 @@ impl WasmVaultKeeper {
             .map_err(|e| JsError::new(&e.to_string()))?;
 
         let result = serde_json::json!({
-            "claims": claims,
+            "claims": {
+                "jti": claims.jti,
+                "exp": claims.exp,
+                "iat": claims.iat,
+                "sub": claims.sub,
+                "exe": claims.exe,
+                "use": claims.use_limit,
+                "tid": claims.tid,
+                "bkd": claims.bkd,
+                "ref": claims.reference,
+            },
             "response": response,
         });
         to_js_value(&result)
@@ -368,15 +378,6 @@ impl WasmVaultKeeper {
         let backend = FileBackend::new(self.host.clone());
         backend
             .store(id, secret)
-            .await
-            .map_err(|e| JsError::new(&e.to_string()))
-    }
-
-    /// Retrieve a secret via the file backend.
-    pub async fn retrieve(&self, id: &str) -> Result<String, JsError> {
-        let backend = FileBackend::new(self.host.clone());
-        backend
-            .retrieve(id)
             .await
             .map_err(|e| JsError::new(&e.to_string()))
     }

@@ -77,18 +77,17 @@ describe('@vaultkeeper/wasm SDK', () => {
       const result = vault.authorize(token);
 
       assert.equal(result.claims.sub, 'my-key');
-      assert.equal(result.claims.val, 'super-secret');
+      assert.equal('val' in result.claims, false);
       assert.equal(result.response.keyStatus, 'current');
       vault.dispose();
     });
   });
 
-  it('store and retrieve a secret', async () => {
+  it('stores a secret without exposing a raw retrieve API', async () => {
     await withTempDir(async (dir) => {
       const vault = await createTestVault(dir);
       await vault.store('file-secret', 'file-value');
-      const retrieved = await vault.retrieve('file-secret');
-      assert.equal(retrieved, 'file-value');
+      assert.equal('retrieve' in vault, false);
       vault.dispose();
     });
   });
@@ -107,8 +106,7 @@ describe('@vaultkeeper/wasm SDK', () => {
       const vault = await createTestVault(dir);
       await vault.store('delete-me', 'temp-value');
       await vault.delete('delete-me');
-      // Retrieving deleted secret should throw
-      await assert.rejects(() => vault.retrieve('delete-me'));
+      assert.equal('retrieve' in vault, false);
       vault.dispose();
     });
   });
@@ -169,7 +167,7 @@ describe('@vaultkeeper/wasm SDK', () => {
       // The re-encrypted token should work with the current key
       const result2 = vault.authorize(result.response.rotatedJwt);
       assert.equal(result2.response.keyStatus, 'current');
-      assert.equal(result2.claims.val, 'rotate-value');
+      assert.equal('val' in result2.claims, false);
       vault.dispose();
     });
   });
@@ -184,7 +182,7 @@ describe('@vaultkeeper/wasm SDK', () => {
       // New tokens should still work
       const newToken = vault.setup('post-revoke', 'new-value');
       const result = vault.authorize(newToken);
-      assert.equal(result.claims.val, 'new-value');
+      assert.equal('val' in result.claims, false);
       assert.equal(result.response.keyStatus, 'current');
       vault.dispose();
     });
@@ -201,13 +199,12 @@ describe('@vaultkeeper/wasm SDK', () => {
     });
   });
 
-  it('store and retrieve preserves unicode', async () => {
+  it('store accepts unicode secrets without exposing raw retrieval', async () => {
     await withTempDir(async (dir) => {
       const vault = await createTestVault(dir);
       const unicodeValue = '\u{1F512} secure \u{2603} snowman \u{1F60E}';
       await vault.store('unicode-key', unicodeValue);
-      const retrieved = await vault.retrieve('unicode-key');
-      assert.equal(retrieved, unicodeValue);
+      assert.equal('retrieve' in vault, false);
       vault.dispose();
     });
   });
@@ -224,10 +221,10 @@ describe('@vaultkeeper/wasm SDK', () => {
     });
   });
 
-  it('retrieve non-existent secret throws', async () => {
+  it('does not expose a direct retrieve method', async () => {
     await withTempDir(async (dir) => {
       const vault = await createTestVault(dir);
-      await assert.rejects(() => vault.retrieve('does-not-exist'));
+      assert.equal('retrieve' in vault, false);
       vault.dispose();
     });
   });
@@ -244,7 +241,7 @@ describe('@vaultkeeper/wasm SDK', () => {
       assert.ok(typeof claims.exp === 'number');
       assert.ok(typeof claims.iat === 'number');
       assert.equal(claims.sub, 'claim-key');
-      assert.equal(claims.val, 'claim-value');
+      assert.equal('val' in claims, false);
       assert.equal(claims.ref, 'claim-key');
       assert.ok(typeof claims.exe === 'string');
       assert.ok(typeof claims.tid === 'string');
@@ -326,13 +323,12 @@ describe('@vaultkeeper/wasm SDK', () => {
     });
   });
 
-  it('store then overwrite retrieves latest value', async () => {
+  it('store can overwrite without exposing raw retrieval', async () => {
     await withTempDir(async (dir) => {
       const vault = await createTestVault(dir);
       await vault.store('overwrite-key', 'first-value');
       await vault.store('overwrite-key', 'second-value');
-      const retrieved = await vault.retrieve('overwrite-key');
-      assert.equal(retrieved, 'second-value');
+      assert.equal('retrieve' in vault, false);
       vault.dispose();
     });
   });

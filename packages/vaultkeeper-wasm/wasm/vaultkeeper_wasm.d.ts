@@ -9,7 +9,7 @@ export class WasmVaultKeeper {
     free(): void;
     [Symbol.dispose](): void;
     /**
-     * Decrypt a JWE token, validate its claims, and return { claims, response }.
+     * Decrypt and validate a JWE token, returning only non-secret metadata.
      */
     authorize(jwe: string): any;
     /**
@@ -24,10 +24,6 @@ export class WasmVaultKeeper {
      * Run doctor checks and return a PreflightResult as JSON.
      */
     doctor(): Promise<any>;
-    /**
-     * Retrieve a secret via the file backend.
-     */
-    retrieve(id: string): Promise<string>;
     /**
      * Emergency key revocation — removes previous key and generates a new current key.
      */

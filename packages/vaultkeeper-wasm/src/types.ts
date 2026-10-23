@@ -38,7 +38,7 @@ export type TrustTier = '1' | '2' | '3';
 /** Key status in the vault response. */
 export type KeyStatus = 'current' | 'previous' | 'deprecated';
 
-/** Claims embedded in a JWE token. */
+/** Non-secret metadata for claims embedded in a JWE token. */
 export interface VaultClaims {
   jti: string;
   exp: number;
@@ -48,7 +48,6 @@ export interface VaultClaims {
   use?: number | null;
   tid: TrustTier;
   bkd: string;
-  val: string;
   ref: string;
 }
 
@@ -58,7 +57,7 @@ export interface VaultResponse {
   rotatedJwt?: string | null;
 }
 
-/** Authorization result combining claims and response. */
+/** Authorization result combining non-secret claim metadata and response. */
 export interface AuthorizeResult {
   claims: VaultClaims;
   response: VaultResponse;

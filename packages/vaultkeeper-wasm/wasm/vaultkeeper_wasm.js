@@ -66,17 +66,6 @@ class WasmVaultKeeper {
         return ret;
     }
     /**
-     * Retrieve a secret via the file backend.
-     * @param {string} id
-     * @returns {Promise<string>}
-     */
-    retrieve(id) {
-        const ptr0 = passStringToWasm0(id, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
-        const len0 = WASM_VECTOR_LEN;
-        const ret = wasm.wasmvaultkeeper_retrieve(this.__wbg_ptr, ptr0, len0);
-        return ret;
-    }
-    /**
      * Emergency key revocation — removes previous key and generates a new current key.
      */
     revokeKey() {
