@@ -1,5 +1,6 @@
 //! Native host platform implementation using std::process and std::fs.
 
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use vaultkeeper_core::backend::{ExecOptions, ExecOutput, HostPlatform, Platform};
 use vaultkeeper_core::errors::VaultError;
@@ -33,6 +34,29 @@ impl NativeHostPlatform {
 
         let home = dirs_fallback();
         home.join(".config").join("vaultkeeper")
+    }
+}
+
+/// Open a private staging file on the destination filesystem.
+fn stage_owner_only_file(parent: &Path) -> std::io::Result<(PathBuf, std::fs::File)> {
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static SEQUENCE: AtomicU64 = AtomicU64::new(0);
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    loop {
+        let sequence = SEQUENCE.fetch_add(1, Ordering::Relaxed);
+        let staging = parent.join(format!(".vk-publish-{}-{sequence}.tmp", std::process::id()));
+        match options.open(&staging) {
+            Ok(file) => return Ok((staging, file)),
+            Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(err) => return Err(err),
+        }
     }
 }
 
@@ -172,11 +196,36 @@ impl HostPlatform for NativeHostPlatform {
             message: format!("Failed to read {}: {e}", path.display()),
             path: path.display().to_string(),
             permission: "read".to_string(),
-            // The native host does not yet derive a symbolic errno code from
-            // `std::io::Error` (out of scope here — see issue #138); only the
-            // WASM host bridge currently populates `code`.
-            code: None,
+            code: (e.kind() == std::io::ErrorKind::NotFound).then(|| "ENOENT".to_string()),
         })
+    }
+
+    async fn publish_file_if_absent(
+        &self,
+        path: &Path,
+        content: &[u8],
+    ) -> Result<bool, VaultError> {
+        let fs_error = |err: std::io::Error| VaultError::Filesystem {
+            message: format!("Failed to publish {}: {err}", path.display()),
+            path: path.display().to_string(),
+            permission: "write".to_string(),
+            code: None,
+        };
+        let parent = path
+            .parent()
+            .filter(|p| !p.as_os_str().is_empty())
+            .unwrap_or_else(|| Path::new("."));
+        create_dir_all_secure(parent).map_err(fs_error)?;
+        let (staging, mut file) = stage_owner_only_file(parent).map_err(fs_error)?;
+        let written = file.write_all(content);
+        drop(file);
+        let result = written.and_then(|()| match std::fs::hard_link(&staging, path) {
+            Ok(()) => Ok(true),
+            Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => Ok(false),
+            Err(err) => Err(err),
+        });
+        let _ = std::fs::remove_file(staging);
+        result.map_err(fs_error)
     }
 
     async fn write_file(&self, path: &Path, content: &[u8], mode: u32) -> Result<(), VaultError> {
@@ -786,6 +835,36 @@ mod tests {
     }
 
     // -------------------------------------------------------------------
+    #[tokio::test]
+    async fn exclusive_publication_preserves_complete_winning_bytes() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("nested").join(".key");
+        let first = NativeHostPlatform::new(temp.path().to_path_buf());
+        let second = NativeHostPlatform::new(temp.path().to_path_buf());
+        assert!(
+            first
+                .publish_file_if_absent(&path, b"first candidate")
+                .await
+                .unwrap()
+        );
+        assert!(
+            !second
+                .publish_file_if_absent(&path, b"second candidate")
+                .await
+                .unwrap()
+        );
+        assert_eq!(fs::read(&path).unwrap(), b"first candidate");
+        assert_eq!(fs::read_dir(path.parent().unwrap()).unwrap().count(), 1);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                fs::metadata(path).unwrap().permissions().mode() & 0o777,
+                0o600
+            );
+        }
+    }
+
     // `try_create_lock_file` (issue #322) — real `O_EXCL` semantics, and
     // the genuinely-concurrent revocation-state guarantee it's built to
     // support.

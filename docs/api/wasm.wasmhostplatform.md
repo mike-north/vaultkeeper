@@ -109,6 +109,17 @@ _(Optional)_ Optional interactive human-approval capability (issue \#239). Absen
 </td></tr>
 <tr><td>
 
+[publishFileIfAbsent(path, content)?](./wasm.wasmhostplatform.publishfileifabsent.md)
+
+
+</td><td>
+
+_(Optional)_ Atomically publish complete owner-only file contents. Resolve to false when the destination exists. Required when initializing persistent state.
+
+
+</td></tr>
+<tr><td>
+
 [readFile(path)](./wasm.wasmhostplatform.readfile.md)
 
 

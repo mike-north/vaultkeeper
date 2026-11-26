@@ -36,7 +36,7 @@ import {
   InvalidAlgorithmError,
   InvalidKeyMaterialError,
 } from '../errors.js'
-import { encryptGcm, decryptGcm, getOrCreateWrapKey } from '../util/at-rest.js'
+import { encryptGcm, decryptGcm, getOrCreateWrapKey, readWrapKey } from '../util/at-rest.js'
 import { getDefaultConfigDir } from '../config.js'
 import type { ListableBackend, SigningBackend } from './types.js'
 import type { SigningAlgorithm, SigningPublicKey } from '../types.js'
@@ -175,11 +175,13 @@ export class FileBackend implements ListableBackend, SigningBackend {
     await ensureStorageDir(storageDir)
     const key = await getOrCreateKey(storageDir)
     const entryPath = getEntryPath(storageDir, id)
-    const encrypted = encryptGcm(key, secret)
     try {
+      const encrypted = encryptGcm(key, secret)
       await fs.writeFile(entryPath, encrypted, { mode: 0o600 })
     } catch (err) {
       throw toFilesystemError(err, 'secret file', entryPath, 'write')
+    } finally {
+      key.fill(0)
     }
   }
 
@@ -201,7 +203,7 @@ export class FileBackend implements ListableBackend, SigningBackend {
       throw toFilesystemError(err, 'secret file', entryPath, 'read')
     }
 
-    const key = await getOrCreateKey(storageDir)
+    const key = await readWrapKey(path.join(storageDir, KEY_FILE))
     try {
       return decryptGcm(key, encoded, entryPath)
     } catch (err) {
@@ -209,6 +211,8 @@ export class FileBackend implements ListableBackend, SigningBackend {
         `Failed to decrypt secret: ${err instanceof Error ? err.message : String(err)}`,
         entryPath,
       )
+    } finally {
+      key.fill(0)
     }
   }
 
@@ -324,7 +328,7 @@ export class FileBackend implements ListableBackend, SigningBackend {
       }
       throw toFilesystemError(err, 'signing key', keyPath, 'read')
     }
-    const wrapKey = await getOrCreateKey(this.#storageDir)
+    const wrapKey = await readWrapKey(path.join(this.#storageDir, KEY_FILE))
     try {
       return decryptGcm(wrapKey, encoded)
     } catch (err) {
@@ -332,6 +336,8 @@ export class FileBackend implements ListableBackend, SigningBackend {
         `Failed to decrypt signing key: ${err instanceof Error ? err.message : String(err)}`,
         keyPath,
       )
+    } finally {
+      wrapKey.fill(0)
     }
   }
 
@@ -382,8 +388,8 @@ export class FileBackend implements ListableBackend, SigningBackend {
     const { privateKey } = crypto.generateKeyPairSync('ed25519')
     const pkcs8Pem = privateKey.export({ type: 'pkcs8', format: 'pem' }).toString()
     const wrapKey = await getOrCreateKey(this.#storageDir)
-    const encrypted = encryptGcm(wrapKey, pkcs8Pem)
     try {
+      const encrypted = encryptGcm(wrapKey, pkcs8Pem)
       // wx: fail if the path was created between our probe and here (TOCTOU),
       // so a concurrent enrollment can never be silently overwritten either.
       await fs.writeFile(keyPath, encrypted, { mode: 0o600, flag: 'wx' })
@@ -395,6 +401,8 @@ export class FileBackend implements ListableBackend, SigningBackend {
         )
       }
       throw toFilesystemError(err, 'signing key', keyPath, 'write')
+    } finally {
+      wrapKey.fill(0)
     }
   }
 

@@ -21,11 +21,12 @@
 use std::collections::HashMap;
 use std::path::Path;
 
+use crate::util::persistent_key::{get_or_create_key, read_if_present, read_key};
 use aes_gcm::aead::Aead;
 use aes_gcm::{Aes256Gcm, KeyInit, Nonce};
 use base64ct::{Base64, Encoding};
 use serde::{Deserialize, Serialize};
-use zeroize::Zeroize;
+use zeroize::Zeroizing;
 
 use crate::backend::HostPlatform;
 use crate::errors::VaultError;
@@ -206,54 +207,11 @@ fn decrypt_gcm(key: &[u8], encoded: &str) -> Option<String> {
     String::from_utf8(plaintext).ok()
 }
 
-/// Read the 32-byte wrapping key at `wrap_path`, generating and persisting a
-/// fresh random one (mode `0o600`) when the file does not yet exist **or**
-/// holds a value that is not exactly 32 bytes.
-///
-/// Regenerating on a wrong-length key is safe, not data loss: a wrapping key
-/// of the wrong length cannot decrypt anything it previously encrypted, so
-/// any ciphertext under a corrupt key is already unrecoverable.
-///
-/// A genuine read failure on an *existing, right-length-or-unreadable* key
-/// file (e.g. permission denied) propagates unchanged as the typed
-/// `VaultError` the host produced — only a confirmed-missing file triggers
-/// regeneration, mirroring `FileBackend::get_or_create_key`.
-pub(crate) async fn get_or_create_wrap_key(
-    host: &dyn HostPlatform,
-    wrap_path: &Path,
-) -> Result<Vec<u8>, VaultError> {
-    match host.read_file(wrap_path).await {
-        Ok(data) if data.len() == GCM_KEY_BYTES => Ok(data),
-        Ok(_) => generate_and_write_wrap_key(host, wrap_path).await,
-        Err(read_err) => match host.file_exists(wrap_path).await {
-            Ok(false) => generate_and_write_wrap_key(host, wrap_path).await,
-            Ok(true) | Err(_) => Err(read_err),
-        },
-    }
-}
-
-async fn generate_and_write_wrap_key(
-    host: &dyn HostPlatform,
-    wrap_path: &Path,
-) -> Result<Vec<u8>, VaultError> {
-    let mut key = vec![0u8; GCM_KEY_BYTES];
-    getrandom::fill(&mut key)
-        .map_err(|e| VaultError::Other(format!("Failed to generate wrap key: {e}")))?;
-    // Zeroize on a failed write too — this freshly generated key is real key
-    // material, and an early `?` return would otherwise drop it un-wiped,
-    // leaving it resident in memory after a failed persistence attempt.
-    if let Err(err) = host.write_file(wrap_path, &key, 0o600).await {
-        key.zeroize();
-        return Err(err);
-    }
-    Ok(key)
-}
-
 /// Outcome of attempting to decode the persisted `keys.enc` envelope.
 /// Distinguishes "nothing was ever persisted" ([`RawLoad::Absent`]) from
 /// "something is persisted but did not authenticate/parse"
 /// ([`RawLoad::Corrupt`]) — [`load_key_state`] collapses both into `None`
-/// (safe: a caller just regenerates key material), but the revocation-aware
+/// for callers inspecting key material, but the revocation-aware
 /// loaders below must not make that same collapse, since silently treating
 /// "corrupt" as "no revocations yet" would be a revocation bypass.
 enum RawLoad {
@@ -270,32 +228,18 @@ enum RawLoad {
 async fn try_load_raw(host: &dyn HostPlatform) -> Result<RawLoad, VaultError> {
     let state_path = host.config_dir().join(KEY_STATE_FILE);
 
-    // Same classification `get_or_create_wrap_key` applies to the wrap file:
-    // a read failure only means "absent" when the file genuinely doesn't
-    // exist. A read failure on a file that does exist (permission denied, a
-    // transient I/O error) is not "nothing was ever persisted" — collapsing
-    // it into `Absent` would make every downstream caller treat an
-    // inaccessible-but-present store as if it were a fresh install (silently
-    // regenerating keys in `load_key_state`'s caller, or worse, treating a
-    // revocation store we simply couldn't read as "no revocations" if this
-    // were ever collapsed further). Propagate it as the host's typed error
-    // instead.
-    let envelope_bytes = match host.read_file(&state_path).await {
-        Ok(bytes) => bytes,
-        Err(read_err) => match host.file_exists(&state_path).await {
-            Ok(false) => return Ok(RawLoad::Absent),
-            Ok(true) | Err(_) => return Err(read_err),
-        },
+    let Some(envelope_bytes) = read_if_present(host, &state_path).await? else {
+        return Ok(RawLoad::Absent);
     };
     let Ok(envelope) = String::from_utf8(envelope_bytes) else {
         return Ok(RawLoad::Corrupt);
     };
 
     let wrap_path = host.config_dir().join(KEY_WRAP_FILE);
-    let mut wrap_key = get_or_create_wrap_key(host, &wrap_path).await?;
+    let wrap_key = read_key(host, &wrap_path).await?;
 
     let json = decrypt_gcm(&wrap_key, &envelope);
-    wrap_key.zeroize();
+    drop(wrap_key);
     let Some(json) = json else {
         return Ok(RawLoad::Corrupt);
     };
@@ -318,26 +262,9 @@ fn revocation_from_raw(parsed: &RawKeyState) -> RevocationState {
     }
 }
 
-/// Load persisted key state from the host's config directory, or `None` when
-/// no valid state exists yet (first run, or an unreadable/corrupt `keys.enc`).
-///
-/// Mirrors the TS `loadKeyState` for a genuinely missing or corrupt/tampered
-/// `keys.enc`: both degrade to "no state" rather than propagating, so a
-/// fresh install or a damaged store never wedges startup. This intentionally
-/// diverges from the TS implementation (which collapses *every* read
-/// failure, including permission errors, into "absent") on one point: a read
-/// failure on a `keys.enc` that does exist (e.g. permission denied) is not
-/// "nothing was ever persisted", so it propagates as the host's typed
-/// `VaultError` instead of being swallowed — the same classification
-/// `get_or_create_wrap_key` already applies to the wrap file. A failure to
-/// read (or create) the wrapping key for a reason other than "does not exist
-/// yet" propagates the same way, matching the TS `getOrCreateWrapKey`
-/// contract.
-///
-/// This is a key-*material* loader only — it does not return the co-located
-/// revocation state (see [`load_revocation_for_validation`] and
-/// [`mutate_revocation_state`] for that, which have a deliberately different,
-/// fail-closed contract).
+/// Load persisted token key material. Absent or undecodable state returns
+/// `None`. Filesystem errors and missing or malformed wrapping keys for an
+/// existing record surface as typed errors. Reads never create a wrapping key.
 pub async fn load_key_state(
     host: &dyn HostPlatform,
 ) -> Result<Option<KeyStateSnapshot>, VaultError> {
@@ -371,8 +298,7 @@ pub async fn load_key_state(
 
 /// Load the persisted revocation state for **lease validation** (issue #298).
 /// Deliberately a different contract from [`load_key_state`]'s "degrade
-/// silently to no state": silence there is safe (the caller just
-/// mints/regenerates a key), but silence here would be a revocation bypass —
+/// silently to no state": silence here would be a revocation bypass —
 /// "absence is not empty". Every failure mode a lease validator must treat
 /// identically — a missing envelope, a broken GCM tag / corrupt payload
 /// (modification), or a `revStateGen` lower than `min_rev_state_gen`
@@ -874,6 +800,7 @@ async fn mutate_revocation_state_locked(
         parsed.previous,
         parsed.grace_period_expires_at,
         &revocation,
+        true,
     )
     .await?;
 
@@ -924,9 +851,9 @@ async fn save_key_state_locked(
     host: &dyn HostPlatform,
     snapshot: &KeyStateSnapshot,
 ) -> Result<(), VaultError> {
-    let revocation = match try_load_raw(host).await? {
-        RawLoad::Present(parsed) => revocation_from_raw(&parsed),
-        RawLoad::Absent => RevocationState::default(),
+    let (revocation, replace) = match try_load_raw(host).await? {
+        RawLoad::Present(parsed) => (revocation_from_raw(&parsed), true),
+        RawLoad::Absent => (RevocationState::default(), false),
         RawLoad::Corrupt => {
             let state_path = host.config_dir().join(KEY_STATE_FILE);
             return Err(VaultError::Decryption {
@@ -941,6 +868,39 @@ async fn save_key_state_locked(
         }
     };
 
+    if write_snapshot(host, snapshot, &revocation, replace).await? {
+        return Ok(());
+    }
+    let path = host.config_dir().join(KEY_STATE_FILE);
+    Err(VaultError::Filesystem {
+        message: "Key state was initialized concurrently".to_string(),
+        path: path.display().to_string(),
+        permission: "write".to_string(),
+        code: Some("EEXIST".to_string()),
+    })
+}
+
+pub(crate) async fn initialize_key_state(
+    host: &dyn HostPlatform,
+    snapshot: KeyStateSnapshot,
+) -> Result<KeyStateSnapshot, VaultError> {
+    if write_snapshot(host, &snapshot, &RevocationState::default(), false).await? {
+        return Ok(snapshot);
+    }
+    load_key_state(host)
+        .await?
+        .ok_or_else(|| VaultError::Decryption {
+            message: "Cannot load published key state".to_string(),
+            path: host.config_dir().join(KEY_STATE_FILE).display().to_string(),
+        })
+}
+
+async fn write_snapshot(
+    host: &dyn HostPlatform,
+    snapshot: &KeyStateSnapshot,
+    revocation: &RevocationState,
+    replace: bool,
+) -> Result<bool, VaultError> {
     write_raw_state(
         host,
         serialize_key(&snapshot.current),
@@ -949,7 +909,8 @@ async fn save_key_state_locked(
             (Some(_), Some(expiry)) => Some(expiry),
             _ => None,
         },
-        &revocation,
+        revocation,
+        replace,
     )
     .await
 }
@@ -962,9 +923,14 @@ async fn write_raw_state(
     previous: Option<RawKeyMaterial>,
     grace_period_expires_at: Option<u64>,
     revocation: &RevocationState,
-) -> Result<(), VaultError> {
+    replace: bool,
+) -> Result<bool, VaultError> {
     let wrap_path = host.config_dir().join(KEY_WRAP_FILE);
-    let mut wrap_key = get_or_create_wrap_key(host, &wrap_path).await?;
+    let wrap_key = if replace {
+        read_key(host, &wrap_path).await?
+    } else {
+        get_or_create_key(host, &wrap_path).await?
+    };
 
     let raw = RawKeyState {
         version: 1,
@@ -976,13 +942,21 @@ async fn write_raw_state(
         key_generations: revocation.key_generations.clone(),
     };
 
-    let json = serde_json::to_string(&raw)
-        .map_err(|e| VaultError::Other(format!("Failed to serialize key state: {e}")))?;
+    let json = Zeroizing::new(
+        serde_json::to_string(&raw)
+            .map_err(|e| VaultError::Other(format!("Failed to serialize key state: {e}")))?,
+    );
     let envelope = encrypt_gcm(&wrap_key, &json);
-    wrap_key.zeroize();
+    drop(wrap_key);
     let envelope = envelope?;
 
     let state_path = host.config_dir().join(KEY_STATE_FILE);
+    if !replace {
+        return host
+            .publish_file_if_absent(&state_path, envelope.as_bytes())
+            .await;
+    }
+
     let mut suffix = [0u8; 4];
     getrandom::fill(&mut suffix)
         .map_err(|e| VaultError::Other(format!("Failed to generate temp suffix: {e}")))?;
@@ -995,7 +969,7 @@ async fn write_raw_state(
         .await?;
     host.rename_file(&tmp_path, &state_path).await?;
 
-    Ok(())
+    Ok(true)
 }
 
 // ---------------------------------------------------------------------------
@@ -1194,6 +1168,7 @@ mod tests {
 
     struct TestHost {
         files: Mutex<HashMap<PathBuf, Vec<u8>>>,
+        first_use: Option<tokio::sync::Barrier>,
         config_dir: PathBuf,
         deny_read: Mutex<HashSet<PathBuf>>,
     }
@@ -1202,6 +1177,7 @@ mod tests {
         fn new() -> Self {
             Self {
                 files: Mutex::new(HashMap::new()),
+                first_use: None,
                 config_dir: PathBuf::from("/test/config"),
                 deny_read: Mutex::new(HashSet::new()),
             }
@@ -1250,8 +1226,29 @@ mod tests {
                 .insert(path.to_path_buf(), content.to_vec());
             Ok(())
         }
+        async fn publish_file_if_absent(
+            &self,
+            path: &Path,
+            content: &[u8],
+        ) -> Result<bool, VaultError> {
+            use std::collections::hash_map::Entry;
+            let mut files = self.files.lock().unwrap();
+            if let Entry::Vacant(entry) = files.entry(path.to_path_buf()) {
+                entry.insert(content.to_vec());
+                Ok(true)
+            } else {
+                Ok(false)
+            }
+        }
         async fn file_exists(&self, path: &Path) -> Result<bool, VaultError> {
-            Ok(self.files.lock().unwrap().contains_key(path))
+            let exists = self.files.lock().unwrap().contains_key(path);
+            if !exists
+                && path.file_name().is_some_and(|name| name == KEY_WRAP_FILE)
+                && let Some(gate) = &self.first_use
+            {
+                gate.wait().await;
+            }
+            Ok(exists)
         }
         async fn delete_file(&self, path: &Path) -> Result<(), VaultError> {
             self.files.lock().unwrap().remove(path);
@@ -1328,6 +1325,32 @@ mod tests {
     // -------------------------------------------------------------------
     // Round trip
     // -------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn overlapping_initializers_adopt_the_persisted_token_key() {
+        let host = TestHost {
+            first_use: Some(tokio::sync::Barrier::new(2)),
+            ..TestHost::new()
+        };
+        let candidate = |id, byte| KeyStateSnapshot {
+            current: make_key(id, byte, 1_705_314_600),
+            previous: None,
+            grace_period_expires_at_ms: None,
+        };
+        let (first, second) = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            tokio::join!(
+                initialize_key_state(&host, candidate("first", 1)),
+                initialize_key_state(&host, candidate("second", 2)),
+            )
+        })
+        .await
+        .unwrap();
+        let reopened = load_key_state(&host).await.unwrap().unwrap();
+        for snapshot in [first.unwrap(), second.unwrap()] {
+            assert_eq!(snapshot.current.id, reopened.current.id);
+            assert!(snapshot.current.key == reopened.current.key);
+        }
+    }
 
     #[tokio::test]
     async fn save_then_load_round_trips_current_key() {
@@ -1487,6 +1510,9 @@ mod tests {
     #[tokio::test]
     async fn truncated_store_degrades_to_no_state() {
         let host = TestHost::new();
+        get_or_create_key(&host, &host.config_dir().join(KEY_WRAP_FILE))
+            .await
+            .unwrap();
         let state_path = host.config_dir().join(KEY_STATE_FILE);
         host.write_file(&state_path, b"not-an-envelope", 0o600)
             .await
@@ -1496,7 +1522,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn missing_wrap_file_degrades_to_no_state_but_refuses_to_write_forward() {
+    async fn missing_wrap_file_is_never_recreated() {
         let host = TestHost::new();
         save_key_state(
             &host,
@@ -1514,17 +1540,12 @@ mod tests {
         let wrap_path = host.config_dir().join(KEY_WRAP_FILE);
         host.delete_file(&wrap_path).await.unwrap();
 
-        assert!(load_key_state(&host).await.unwrap().is_none());
-        // A fresh wrap key was generated in its place (not left missing).
-        assert!(host.file_exists(&wrap_path).await.unwrap());
+        assert!(matches!(
+            load_key_state(&host).await,
+            Err(VaultError::Decryption { .. })
+        ));
+        assert!(!host.file_exists(&wrap_path).await.unwrap());
 
-        // The now-undecryptable `keys.enc` is `RawLoad::Corrupt` under the
-        // fresh wrap key, so a save must refuse rather than silently
-        // overwrite it — the same fail-closed contract as a byte-flipped
-        // envelope, since this function cannot distinguish "wrap key lost"
-        // from "ciphertext tampered" at the `RawLoad` level, and both mean
-        // "whatever revocation state might be in there is about to be
-        // silently discarded".
         let fresh = make_key("k-new-bbbb", 0x22, 1_705_314_600);
         let err = save_key_state(
             &host,
@@ -1558,7 +1579,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn wrong_length_wrap_key_is_regenerated_but_save_still_refuses_on_corrupt_store() {
+    async fn wrong_length_wrap_key_is_never_replaced() {
         let host = TestHost::new();
         save_key_state(
             &host,
@@ -1576,16 +1597,12 @@ mod tests {
             .await
             .unwrap();
 
-        assert!(load_key_state(&host).await.unwrap().is_none());
-        // A fresh, correctly-sized wrap key replaced the wrong-length one...
-        assert_eq!(
-            host.read_file(&wrap_path).await.unwrap().len(),
-            GCM_KEY_BYTES
-        );
+        assert!(matches!(
+            load_key_state(&host).await,
+            Err(VaultError::Decryption { .. })
+        ));
+        assert_eq!(host.read_file(&wrap_path).await.unwrap(), [0xab; 7]);
 
-        // ...but `keys.enc` (sealed under the discarded wrong-length key) is
-        // still `RawLoad::Corrupt` under the new one, so save must refuse
-        // rather than panic or silently overwrite it.
         let fresh = make_key("k-new-bbbb", 0x22, 1_705_314_600);
         let err = save_key_state(
             &host,

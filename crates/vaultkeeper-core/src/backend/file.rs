@@ -11,6 +11,7 @@ use crate::backend::signing_store;
 use crate::backend::types::{HostPlatform, ListableBackend, SecretBackend, SigningBackend};
 use crate::errors::VaultError;
 use crate::types::{SigningAlgorithm, SigningPublicKey};
+use crate::util::persistent_key::{get_or_create_key, read_key};
 use aes_gcm::aead::Aead;
 use aes_gcm::{Aes256Gcm, KeyInit, Nonce};
 use base64ct::{Base64, Encoding};
@@ -20,6 +21,7 @@ use std::sync::Arc;
 
 const KEY_FILE: &str = ".key";
 const GCM_IV_BYTES: usize = 12;
+#[cfg(test)]
 const GCM_KEY_BYTES: usize = 32;
 
 /// Encrypted file fallback backend.
@@ -52,38 +54,6 @@ impl FileBackend {
             self.host.write_file(&sentinel, b"", 0o600).await?;
         }
         Ok(())
-    }
-
-    async fn get_or_create_key(&self) -> Result<Vec<u8>, VaultError> {
-        let key_path = self.storage_dir().join(KEY_FILE);
-
-        match self.host.read_file(&key_path).await {
-            Ok(data) if data.len() == GCM_KEY_BYTES => Ok(data),
-            Ok(data) => Err(VaultError::Other(format!(
-                "Key file has wrong length: expected {GCM_KEY_BYTES}, got {}",
-                data.len()
-            ))),
-            Err(read_err) => {
-                // Only create a new key if the key file does not exist.
-                // Transient read failures (permissions, IO errors) should be surfaced.
-                match self.host.file_exists(&key_path).await {
-                    Ok(false) => {
-                        // File doesn't exist — generate a new key
-                        let mut key = vec![0u8; GCM_KEY_BYTES];
-                        getrandom::fill(&mut key).map_err(|e| {
-                            VaultError::Other(format!("Failed to generate key: {e}"))
-                        })?;
-                        self.host.write_file(&key_path, &key, 0o600).await?;
-                        Ok(key)
-                    }
-                    // Whether the exists-probe found the key file or itself
-                    // failed, the definitive signal is the original read
-                    // failure — the probe is only a best-effort disambiguation
-                    // step and a probe failure must not mask or replace it.
-                    Ok(true) | Err(_) => Err(read_err),
-                }
-            }
-        }
     }
 }
 
@@ -198,7 +168,7 @@ impl SecretBackend for FileBackend {
 
     async fn store(&self, id: &str, secret: &str) -> Result<(), VaultError> {
         self.ensure_storage_dir().await?;
-        let key = self.get_or_create_key().await?;
+        let key = get_or_create_key(self.host.as_ref(), &self.storage_dir().join(KEY_FILE)).await?;
         let encrypted = encrypt_gcm(&key, secret)?;
         let entry_path = self.entry_path(id);
         self.host
@@ -240,7 +210,7 @@ impl SecretBackend for FileBackend {
             path: entry_path.display().to_string(),
         })?;
 
-        let key = self.get_or_create_key().await?;
+        let key = read_key(self.host.as_ref(), &self.storage_dir().join(KEY_FILE)).await?;
         decrypt_gcm(&key, &encoded).map_err(|e| VaultError::Decryption {
             message: format!("Failed to decrypt secret: {e}"),
             path: entry_path.display().to_string(),
@@ -402,6 +372,7 @@ mod tests {
     /// stat'ing a parent directory).
     struct TestHost {
         files: Mutex<HashMap<PathBuf, Vec<u8>>>,
+        first_use: Option<tokio::sync::Barrier>,
         config_dir: PathBuf,
         deny_read: Mutex<HashSet<PathBuf>>,
         deny_delete: Mutex<HashSet<PathBuf>>,
@@ -450,6 +421,20 @@ mod tests {
                 .insert(path.to_path_buf(), content.to_vec());
             Ok(())
         }
+        async fn publish_file_if_absent(
+            &self,
+            path: &Path,
+            content: &[u8],
+        ) -> Result<bool, VaultError> {
+            use std::collections::hash_map::Entry;
+            let mut files = self.files.lock().unwrap();
+            if let Entry::Vacant(entry) = files.entry(path.to_path_buf()) {
+                entry.insert(content.to_vec());
+                Ok(true)
+            } else {
+                Ok(false)
+            }
+        }
         async fn file_exists(&self, path: &Path) -> Result<bool, VaultError> {
             if self.deny_exists.lock().unwrap().contains(path) {
                 // `permission` stays within VaultError::Filesystem's
@@ -463,7 +448,14 @@ mod tests {
                     code: None,
                 });
             }
-            Ok(self.files.lock().unwrap().contains_key(path))
+            let exists = self.files.lock().unwrap().contains_key(path);
+            if !exists
+                && path.file_name().is_some_and(|name| name == KEY_FILE)
+                && let Some(gate) = &self.first_use
+            {
+                gate.wait().await;
+            }
+            Ok(exists)
         }
         async fn delete_file(&self, path: &Path) -> Result<(), VaultError> {
             if self.deny_delete.lock().unwrap().contains(path) {
@@ -504,13 +496,49 @@ mod tests {
     }
 
     fn make_test_host() -> Arc<TestHost> {
-        Arc::new(TestHost {
+        Arc::new(test_host(None))
+    }
+
+    fn test_host(first_use: Option<tokio::sync::Barrier>) -> TestHost {
+        TestHost {
+            first_use,
             files: Mutex::new(HashMap::new()),
             config_dir: PathBuf::from("/test/config"),
             deny_read: Mutex::new(HashSet::new()),
             deny_delete: Mutex::new(HashSet::new()),
             deny_exists: Mutex::new(HashSet::new()),
+        }
+    }
+
+    #[tokio::test]
+    async fn overlapping_first_writes_remain_readable_after_reopen() {
+        let host = Arc::new(test_host(Some(tokio::sync::Barrier::new(2))));
+        let first = FileBackend::new(host.clone());
+        let second = FileBackend::new(host.clone());
+        let (one, two) = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            tokio::join!(first.store("first", "one"), second.store("second", "two"))
         })
+        .await
+        .unwrap();
+        one.unwrap();
+        two.unwrap();
+
+        let reopened = FileBackend::new(host.clone());
+        assert_eq!(reopened.retrieve("first").await.unwrap(), "one");
+        assert_eq!(reopened.retrieve("second").await.unwrap(), "two");
+    }
+
+    #[tokio::test]
+    async fn reading_existing_record_does_not_replace_missing_master_key() {
+        let host = make_test_host();
+        let backend = FileBackend::new(host.clone());
+        backend.store("record", "secret").await.unwrap();
+        let path = backend.storage_dir().join(KEY_FILE);
+        host.delete_file(&path).await.unwrap();
+
+        assert!(matches!(backend.retrieve("record").await,
+            Err(VaultError::Decryption { message, .. }) if message.contains("Missing key material")));
+        assert!(!host.file_exists(&path).await.unwrap());
     }
 
     #[tokio::test]
@@ -621,9 +649,11 @@ mod tests {
             .unwrap()
             .insert(key_path.clone(), vec![0u8; GCM_KEY_BYTES]);
         host.deny_read.lock().unwrap().insert(key_path.clone());
-        host.deny_exists.lock().unwrap().insert(key_path);
+        host.deny_exists.lock().unwrap().insert(key_path.clone());
 
-        let err = backend.get_or_create_key().await.unwrap_err();
+        let err = get_or_create_key(backend.host.as_ref(), &key_path)
+            .await
+            .unwrap_err();
         match err {
             VaultError::Filesystem { message, .. } => {
                 assert!(

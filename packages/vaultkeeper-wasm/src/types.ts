@@ -59,6 +59,12 @@ export interface ApprovalContext {
  */
 export interface WasmHostPlatform {
   /**
+   * Atomically publish complete owner-only file contents. Resolve to false
+   * when the destination exists. Required when initializing persistent state.
+   */
+  publishFileIfAbsent?(path: string, content: Uint8Array): Promise<boolean>
+
+  /**
    * @param options - Optional stdin/env/cwd (issue #239). Omitting `options`
    *   (or all of its fields) preserves the exact pre-#239 exec behavior.
    */

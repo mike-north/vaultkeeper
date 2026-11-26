@@ -13,13 +13,15 @@ import { describe, it } from 'node:test'
 import * as assert from 'node:assert/strict'
 import { createServer } from 'node:http'
 import type { AddressInfo } from 'node:net'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdtemp, rm, unlink, stat } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createNodeHost } from '../node-host.js'
 import {
   mapWasmError,
+  DecryptionError,
   FetchError,
+  FilesystemError,
   NotCapableError,
   VaultError,
   AuthorizationDeniedError,
@@ -730,4 +732,109 @@ describe('WasmVaultKeeper handle-based entry points reject a malformed handleId 
       })
     })
   }
+})
+
+describe('persistent keys on the WASM host bridge', () => {
+  it('rejects a malformed key read without publishing replacement state', async () => {
+    await withTempConfigDir(async (dir) => {
+      const { createVaultKeeper } = await import('../../wasm/vaultkeeper_wasm.js')
+      const host = createNodeHost(dir)
+      const statePath = join(dir, 'keys.enc')
+      const malformed = {
+        ...host,
+        readFile: (path: string) =>
+          path === statePath ? Promise.resolve('invalid byte result') : host.readFile(path),
+      }
+
+      await assert.rejects(createVaultKeeper(malformed, { skipDoctor: true }), (err: unknown) => {
+        const mapped = mapWasmError(err)
+        return mapped instanceof FilesystemError && mapped.code === 'EINVAL'
+      })
+      await assert.rejects(stat(join(dir, '.keys.wrap')), { code: 'ENOENT' })
+    })
+  })
+
+  it(
+    'adopts both persisted keys and token state after overlapping first use',
+    { timeout: 5000 },
+    async () => {
+      await withTempConfigDir(async (dir) => {
+        const { createVaultKeeper } = await import('../../wasm/vaultkeeper_wasm.js')
+        const host = createNodeHost(dir)
+        const gates = new Map(
+          ['keys.enc', '.keys.wrap', join('file', '.key')].map((file) => {
+            let release: () => void = () => undefined
+            const promise = new Promise<void>((resolve) => {
+              release = resolve
+            })
+            return [join(dir, file), { promise, release, seen: 0 }]
+          }),
+        )
+        const shared = {
+          ...host,
+          async readFile(path: string): Promise<Uint8Array> {
+            try {
+              return await host.readFile(path)
+            } catch (err) {
+              const gate = gates.get(path)
+              if (
+                gate !== undefined &&
+                err instanceof Error &&
+                'code' in err &&
+                err.code === 'ENOENT'
+              ) {
+                gate.seen++
+                if (gate.seen === 2) gate.release()
+                await gate.promise
+              }
+              throw err
+            }
+          },
+        }
+
+        const options = { skipDoctor: true }
+        const first = createVaultKeeper(shared, options)
+        const second = createVaultKeeper(shared, options)
+        const [one, two] = await Promise.all([first, second])
+        try {
+          const records = ['one', 'two']
+          const tokens = await Promise.all(
+            [one, two].map(async (vault, index) => {
+              const record = records[index] ?? 'unexpected'
+              await vault.store(record, record)
+              return vault.setup(record, record, { skipTrust: true })
+            }),
+          )
+          const reopened = await createVaultKeeper(host, options)
+          try {
+            for (const [index, token] of tokens.entries()) {
+              const record = records[index] ?? 'unexpected'
+              assert.equal(await reopened.retrieve(record), record)
+              const auth = reopened.authorize(token)
+              try {
+                assert.equal(auth.readSecret(), record)
+              } finally {
+                auth.free()
+              }
+            }
+
+            const key = join(dir, 'file', '.key')
+            await unlink(key)
+            await assert.rejects(reopened.retrieve('one'), (err: unknown) => {
+              const mapped = mapWasmError(err)
+              return (
+                mapped instanceof DecryptionError && mapped.message.includes('Missing key material')
+              )
+            })
+            await assert.rejects(stat(key), { code: 'ENOENT' })
+          } finally {
+            reopened.free()
+          }
+        } finally {
+          one.free()
+          two.free()
+        }
+      })
+    },
+  )
 })

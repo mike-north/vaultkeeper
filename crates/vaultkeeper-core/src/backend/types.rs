@@ -139,6 +139,23 @@ pub trait HostPlatform: Send + Sync {
     /// Delete a file. Returns `Ok(())` if the file was deleted.
     async fn delete_file(&self, path: &Path) -> Result<(), VaultError>;
 
+    /// Publish complete bytes with owner-only permissions at an absent path.
+    /// Return `false` when the destination already exists. Implementations
+    /// must make the complete bytes visible atomically without replacement.
+    /// Hosts that cannot provide this guarantee fail closed on initialization.
+    async fn publish_file_if_absent(
+        &self,
+        path: &Path,
+        _content: &[u8],
+    ) -> Result<bool, VaultError> {
+        Err(VaultError::Filesystem {
+            message: "Host does not support exclusive file publication".to_string(),
+            path: path.display().to_string(),
+            permission: "write".to_string(),
+            code: None,
+        })
+    }
+
     /// Replace `to` with `from`, e.g. for write-to-temp-then-rename
     /// persistence (see `keys::storage`). Real hosts (native, wasm) must
     /// implement this with a genuine atomic filesystem rename — on POSIX and

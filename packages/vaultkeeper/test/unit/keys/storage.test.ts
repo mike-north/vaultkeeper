@@ -46,7 +46,7 @@ describe('saveKeyState / loadKeyState round-trip', () => {
     )
   })
 
-  it('returns undefined when no state file exists yet', async () => {
+  it('rejects when no state file exists yet', async () => {
     expect(await loadKeyState(dir)).toBeUndefined()
   })
 
@@ -115,14 +115,14 @@ describe('encryption at rest and file permissions', () => {
   })
 })
 
-describe('corrupt / tampered state degrades safely', () => {
-  it('returns undefined for a non-envelope (garbage) state file', async () => {
+describe('corrupt / tampered state fails closed', () => {
+  it('rejects a non-envelope (garbage) state file', async () => {
     await saveKeyState(dir, { current: makeKey('k-1-aaaa', 0x11) })
     await fs.writeFile(path.join(dir, 'keys.enc'), 'not-an-envelope', 'utf8')
-    expect(await loadKeyState(dir)).toBeUndefined()
+    await expect(loadKeyState(dir)).rejects.toMatchObject({ name: 'DecryptionError' })
   })
 
-  it('returns undefined when the ciphertext fails authentication (tampered)', async () => {
+  it('rejects when the ciphertext fails authentication (tampered)', async () => {
     await saveKeyState(dir, { current: makeKey('k-1-aaaa', 0x11) })
     const statePath = path.join(dir, 'keys.enc')
     const envelope = await fs.readFile(statePath, 'utf8')
@@ -131,29 +131,18 @@ describe('corrupt / tampered state degrades safely', () => {
     const tampered = Buffer.from(ct ?? '', 'base64')
     if (tampered.length > 0) tampered[0] ^= 0xff
     await fs.writeFile(statePath, `${iv ?? ''}:${tag ?? ''}:${tampered.toString('base64')}`, 'utf8')
-    expect(await loadKeyState(dir)).toBeUndefined()
+    await expect(loadKeyState(dir)).rejects.toMatchObject({ name: 'DecryptionError' })
   })
 
-  it('recovers from a corrupt (wrong-length) wrapping key by regenerating it', async () => {
-    // First save establishes both keys.enc and a valid .keys.wrap.
-    await saveKeyState(dir, { current: makeKey('k-old-aaaa', 0x11) })
-
-    // Truncate the wrapping key to a non-32-byte length, as a partial write or
-    // disk corruption would. The old state is now unrecoverable (load degrades
-    // to "no state") — but a subsequent save must not throw "Invalid key
-    // length"; it regenerates the wrap key and persists fresh state.
+  it('leaves an invalid wrapping key unchanged', async () => {
+    const current = makeKey('k-old-aaaa', 0x11)
+    await saveKeyState(dir, { current })
     const wrapPath = path.join(dir, '.keys.wrap')
     await fs.writeFile(wrapPath, Buffer.alloc(7, 0xab), { mode: 0o600 })
 
-    // Load degrades gracefully rather than crashing.
-    expect(await loadKeyState(dir)).toBeUndefined()
-
-    // Save succeeds (no throw) and the freshly wrapped state round-trips.
-    const fresh = makeKey('k-new-bbbb', 0x22)
-    await saveKeyState(dir, { current: fresh })
-    expect((await fs.stat(wrapPath)).size).toBe(32)
-    const loaded = await loadKeyState(dir)
-    expect(loaded?.current.id).toBe('k-new-bbbb')
+    await expect(loadKeyState(dir)).rejects.toMatchObject({ name: 'DecryptionError' })
+    await expect(saveKeyState(dir, { current })).rejects.toMatchObject({ name: 'DecryptionError' })
+    expect(await fs.readFile(wrapPath)).toEqual(Buffer.alloc(7, 0xab))
   })
 })
 

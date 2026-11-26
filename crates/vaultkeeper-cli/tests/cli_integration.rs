@@ -1266,6 +1266,25 @@ mod session_mint {
                 code: None,
             })
         }
+        async fn publish_file_if_absent(
+            &self,
+            path: &Path,
+            content: &[u8],
+        ) -> Result<bool, VaultError> {
+            use std::io::Write;
+            let publish = || -> std::io::Result<bool> {
+                let parent = path.parent().unwrap();
+                std::fs::create_dir_all(parent)?;
+                let mut temp = tempfile::NamedTempFile::new_in(parent)?;
+                temp.write_all(content)?;
+                match temp.persist_noclobber(path) {
+                    Ok(_) => Ok(true),
+                    Err(err) if err.error.kind() == std::io::ErrorKind::AlreadyExists => Ok(false),
+                    Err(err) => Err(err.error),
+                }
+            };
+            publish().map_err(|err| VaultError::Other(err.to_string()))
+        }
         async fn file_exists(&self, path: &Path) -> Result<bool, VaultError> {
             Ok(path.exists())
         }

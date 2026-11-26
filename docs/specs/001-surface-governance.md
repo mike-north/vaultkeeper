@@ -222,6 +222,13 @@ on reflection, recorded to close the question.
   build as an early-warning signal (its failure never gates a PR). The consumer-facing guarantee: the public
   types compile cleanly under every matrix entry. Adding or dropping a supported major is a spec change.
 
+- **L8 — Persistent key initialization.** Wrapping keys, file-store master keys, and initial token state
+  are published as complete owner-only files without replacement. Concurrent initializers adopt the
+  published state. Reads of existing sealed records report missing key material without creating it.
+  Rust `HostPlatform::publish_file_if_absent` and WASM `WasmHostPlatform.publishFileIfAbsent`
+  provide the publication guarantee. Custom hosts must implement the method to initialize new
+  persistent state. An unavailable method causes initialization to fail without publishing a partial file.
+
 ### 2.2 The surface by concept (IS)
 
 The 88 `@public` symbols group into coherent concepts. The owner reviews whether each grouping is complete and
