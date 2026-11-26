@@ -167,7 +167,23 @@ fn write_file_secure_unix(path: &Path, content: &[u8], mode: u32) -> std::io::Re
         if file.metadata()?.permissions().mode() & 0o777 != mode & 0o777 {
             return Err(Error::other("requested permissions were not applied"));
         }
-        file.write_all(content)?;
+        #[cfg(test)]
+        let first_len = if std::env::var_os("VAULTKEEPER_TEST_INTERRUPT_DIR").is_some() {
+            content.len().min(1024)
+        } else {
+            content.len()
+        };
+        #[cfg(not(test))]
+        let first_len = content.len();
+        file.write_all(&content[..first_len])?;
+        // Pause the subprocess with staged bytes before simulating termination.
+        #[cfg(test)]
+        if std::env::var_os("VAULTKEEPER_TEST_INTERRUPT_DIR").is_some() {
+            loop {
+                std::thread::park();
+            }
+        }
+        file.write_all(&content[first_len..])?;
         // Readers holding an older inode can only see the previous bytes.
         fs::rename(&staging, path)
     })();
@@ -656,32 +672,26 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn secure_write_survives_partial_write_and_interruption() {
+    fn secure_write_cleans_up_after_write_failure() {
         use std::os::unix::fs::PermissionsExt;
-        use std::os::unix::process::ExitStatusExt;
         use std::process::Command;
 
-        for interrupted in [false, true] {
+        {
             let dir = tempfile::tempdir().unwrap();
             fs::set_permissions(dir.path(), fs::Permissions::from_mode(0o755)).unwrap();
-            let signal = if interrupted { "-" } else { "" };
             let child = Command::new("/bin/sh")
                 .args([
                     "-c",
                     "umask 000; ulimit -c 0; ulimit -f 1 || exit; trap \"$1\" XFSZ; shift; exec \"$@\"",
                     "vaultkeeper-test",
-                    signal,
+                    "",
                 ])
                 .arg(std::env::current_exe().unwrap())
                 .args(["--exact", "host::tests::secure_write_limited_child"])
                 .env("VAULTKEEPER_TEST_WRITE_DIR", dir.path())
                 .output()
                 .unwrap();
-            if interrupted {
-                assert_eq!(child.status.signal(), Some(libc::SIGXFSZ));
-            } else {
-                assert!(child.status.success(), "{child:?}");
-            }
+            assert!(child.status.success(), "{child:?}");
 
             let existing = dir.path().join("existing-key");
             assert_eq!(fs::read(&existing).unwrap(), b"old fixture");
@@ -696,13 +706,70 @@ mod tests {
                 .map(|entry| entry.unwrap().path())
                 .filter(|path| *path != existing)
                 .collect();
-            assert_eq!(staging.len(), usize::from(interrupted));
-            for path in staging {
-                let metadata = fs::metadata(path).unwrap();
-                assert!((1..16 * 1024).contains(&metadata.len()));
-                assert_eq!(metadata.permissions().mode() & 0o777, 0o600);
-            }
+            assert_eq!(staging.len(), 0);
         }
+    }
+
+    /// An interrupted write must leave any partial staging inode private and
+    /// must not replace the previously published key.
+    #[cfg(unix)]
+    #[test]
+    fn secure_write_interrupted_after_partial_write() {
+        use std::os::unix::fs::PermissionsExt;
+        use std::os::unix::process::ExitStatusExt;
+        use std::process::{Command, Stdio};
+        use std::time::{Duration, Instant};
+
+        let dir = tempfile::tempdir().unwrap();
+        let existing = dir.path().join("existing-key");
+        fs::write(&existing, b"old fixture").unwrap();
+        fs::set_permissions(&existing, fs::Permissions::from_mode(0o600)).unwrap();
+        let mut child = Command::new("/bin/sh")
+            .args(["-c", "umask 000; exec \"$@\"", "vaultkeeper-test"])
+            .arg(std::env::current_exe().unwrap())
+            .args(["--exact", "host::tests::secure_write_interrupted_child"])
+            .env("VAULTKEEPER_TEST_INTERRUPT_DIR", dir.path())
+            .stdout(Stdio::null())
+            .spawn()
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let staging = loop {
+            let staging = fs::read_dir(dir.path())
+                .unwrap()
+                .map(|entry| entry.unwrap().path())
+                .find(|path| *path != existing && fs::metadata(path).is_ok_and(|m| m.len() > 0));
+            if let Some(path) = staging {
+                break Some(path);
+            }
+            if child.try_wait().unwrap().is_some() || Instant::now() >= deadline {
+                break None;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        };
+        child.kill().unwrap();
+        assert_eq!(child.wait().unwrap().signal(), Some(libc::SIGKILL));
+        let staging = staging.expect("child must pause after writing staged bytes");
+        let metadata = fs::metadata(staging).unwrap();
+        assert_eq!(metadata.len(), 1024);
+        assert_eq!(metadata.permissions().mode() & 0o777, 0o600);
+        assert_eq!(fs::read(&existing).unwrap(), b"old fixture");
+        assert_eq!(
+            fs::metadata(existing).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn secure_write_interrupted_child() {
+        let Some(dir) = std::env::var_os("VAULTKEEPER_TEST_INTERRUPT_DIR").map(PathBuf::from)
+        else {
+            return;
+        };
+        let host = NativeHostPlatform::new(dir.clone());
+        host.write_file(&dir.join("existing-key"), &[1; 16 * 1024], 0o600)
+            .await
+            .unwrap();
     }
 
     #[cfg(unix)]
