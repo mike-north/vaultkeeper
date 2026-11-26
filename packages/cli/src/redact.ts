@@ -1,29 +1,38 @@
 import { Transform } from 'node:stream'
 import type { TransformCallback } from 'node:stream'
-import { redactSecrets } from 'vaultkeeper'
+import { REDACTED } from 'vaultkeeper'
 
 /**
  * A Transform stream that replaces all occurrences of a secret value
  * with a replacement string in the piped output.
  *
- * Handles secrets that may be split across chunk boundaries by buffering
- * up to `secret.length - 1` bytes from the end of each chunk. The actual
- * substitution is delegated to `vaultkeeper`'s {@link redactSecrets} so the
- * CLI's streaming redaction and the library's buffered `exec()` redaction
- * share one code path.
+ * Retains only a trailing prefix of the UTF-8 secret across chunk boundaries.
  *
  * @internal
  */
 export class RedactingStream extends Transform {
-  readonly #secret: string
-  readonly #replacement: string
-  #tail: string
+  readonly #secret: Buffer
+  readonly #replacement: Buffer
+  readonly #prefixLengths: number[]
+  #tail: Buffer
 
-  constructor(secret: string, replacement = '[REDACTED]') {
+  constructor(secret: string, replacement = REDACTED) {
     super()
-    this.#secret = secret
-    this.#replacement = replacement
-    this.#tail = ''
+    this.#secret = Buffer.alloc(Buffer.byteLength(secret))
+    this.#secret.write(secret)
+    this.#replacement = Buffer.from(replacement)
+    // The prefix table bounds suffix recognition to linear time, even for
+    // secrets with many overlapping prefixes.
+    this.#prefixLengths = Array.from({ length: this.#secret.length }, () => 0)
+    let prefix = 0
+    for (let i = 1; i < this.#secret.length; i++) {
+      while (prefix > 0 && this.#secret[i] !== this.#secret[prefix]) {
+        prefix = this.#prefixLengths[prefix - 1] ?? 0
+      }
+      if (this.#secret[i] === this.#secret[prefix]) prefix++
+      this.#prefixLengths[i] = prefix
+    }
+    this.#tail = Buffer.alloc(0)
   }
 
   override _transform(chunk: Buffer, _encoding: BufferEncoding, callback: TransformCallback): void {
@@ -33,27 +42,74 @@ export class RedactingStream extends Transform {
       return
     }
 
-    const str = this.#tail + chunk.toString('utf8')
-    const redacted = redactSecrets(str, [this.#secret], this.#replacement)
+    // Keep raw input in private storage. Emitted chunks must survive cleanup.
+    const bytes = Buffer.alloc(this.#tail.length + chunk.length)
+    this.#tail.copy(bytes)
+    chunk.copy(bytes, this.#tail.length)
+    this.#tail.fill(0)
 
-    // Buffer the last (secret.length - 1) chars in case the secret
-    // is split across this chunk and the next one.
-    const bufferSize = this.#secret.length - 1
-    if (redacted.length > bufferSize) {
-      this.#tail = redacted.slice(-bufferSize)
-      this.push(redacted.slice(0, -bufferSize))
-    } else {
-      this.#tail = redacted
+    // Bound each downstream write without accumulating the entire redacted
+    // output, including when replacements are much larger than the secret.
+    const output = Buffer.alloc(16 * 1024)
+    let used = 0
+    const append = (source: Buffer): boolean => {
+      let offset = 0
+      while (offset < source.length) {
+        const count = Math.min(output.length - used, source.length - offset)
+        source.copy(output, used, offset, offset + count)
+        used += count
+        offset += count
+        if (used === output.length) {
+          this.push(Buffer.from(output))
+          used = 0
+          if (this.destroyed) return false
+        }
+      }
+      return true
+    }
+
+    try {
+      let position = 0
+      let match = bytes.indexOf(this.#secret, position)
+      while (match !== -1) {
+        if (!append(bytes.subarray(position, match)) || !append(this.#replacement)) {
+          callback()
+          return
+        }
+        position = match + this.#secret.length
+        match = bytes.indexOf(this.#secret, position)
+      }
+
+      let prefix = 0
+      for (let i = position; i < bytes.length; i++) {
+        while (prefix > 0 && bytes[i] !== this.#secret[prefix]) {
+          prefix = this.#prefixLengths[prefix - 1] ?? 0
+        }
+        if (bytes[i] === this.#secret[prefix]) prefix++
+      }
+      const end = bytes.length - prefix
+      this.#tail = Buffer.alloc(bytes.length - end)
+      bytes.copy(this.#tail, 0, end)
+      if (append(bytes.subarray(position, end)) && used > 0) {
+        this.push(Buffer.from(output.subarray(0, used)))
+      }
+    } finally {
+      bytes.fill(0)
+      output.fill(0)
     }
 
     callback()
   }
 
   override _flush(callback: TransformCallback): void {
-    if (this.#tail.length > 0) {
-      this.push(this.#tail)
-      this.#tail = ''
-    }
-    callback()
+    const tail = Buffer.from(this.#tail)
+    this.#tail.fill(0)
+    callback(null, tail)
+  }
+
+  override _destroy(error: Error | null, callback: (error: Error | null) => void): void {
+    this.#secret.fill(0)
+    this.#tail.fill(0)
+    callback(error)
   }
 }
