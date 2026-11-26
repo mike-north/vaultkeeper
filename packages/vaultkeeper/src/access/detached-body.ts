@@ -125,23 +125,43 @@ export function detachBody(
   return createBody(new DetachedBodySource(transport, body))
 }
 
-/** Clone an unused detached stream, leaving other streams and unusable bodies to native Fetch. */
-export function cloneDetachedBody(
-  stream: ReadableStream<Uint8Array>,
+/** Split an owned input and retire the previous public stream's source association. */
+function forkDetachedBody(
+  previousBody: ReadableStream<Uint8Array>,
+): { source: DetachedBodySource; copy: ReadableStream<Uint8Array> } | undefined {
+  const source = detachedSources.get(previousBody)
+  const copy = source?.fork()
+  if (source === undefined || copy === undefined) {
+    return undefined
+  }
+  detachedSources.delete(previousBody)
+  return { source, copy: createBody(copy) }
+}
+
+/** Give the ordinary clone its own input after native Fetch has moved the original body. */
+export function splitDetachedBody(
+  previousBody: ReadableStream<Uint8Array>,
+  original: ReadableStream<Uint8Array>,
 ): ReadableStream<Uint8Array> | undefined {
-  const source = detachedSources.get(stream)
-  if (source === undefined) {
+  const branches = forkDetachedBody(previousBody)
+  if (branches === undefined) {
     return undefined
   }
-  try {
-    // Fetch validates whether a stream is locked or disturbed without reading it.
-    void new Response(stream)
-  } catch (error) {
-    if (!(error instanceof TypeError)) {
-      throw error
-    }
+  detachedSources.set(original, branches.source)
+  return branches.copy
+}
+
+/** Replace an unused body without invoking older Fetch implementations' native tee. */
+export function replaceDetachedBody(
+  previousBody: ReadableStream<Uint8Array>,
+): { original: ReadableStream<Uint8Array>; copy: ReadableStream<Uint8Array> } | undefined {
+  const branches = forkDetachedBody(previousBody)
+  if (branches === undefined) {
     return undefined
   }
-  const copy = source.fork()
-  return copy === undefined ? undefined : createBody(copy)
+  // Keep any pre-clone body reference locked. Only the new original stream
+  // owns its upstream lifetime after the response switches to it.
+  previousBody.getReader()
+  abandonedBodies.unregister(branches.source)
+  return { original: createBody(branches.source), copy: branches.copy }
 }

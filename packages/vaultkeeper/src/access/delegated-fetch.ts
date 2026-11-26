@@ -10,7 +10,7 @@
 
 import type { FetchRequest } from '../types.js'
 import { FetchError } from '../errors.js'
-import { cloneDetachedBody, detachBody } from './detached-body.js'
+import { detachBody, replaceDetachedBody, splitDetachedBody } from './detached-body.js'
 import { resolvePlaceholders, resolvePlaceholdersInRecord } from './placeholder.js'
 
 /**
@@ -45,6 +45,31 @@ const detachedMetadata = new WeakMap<
   { readonly status: number; readonly redirected: boolean }
 >()
 
+/**
+ * Find the writable body slot on an already-detached, symbol-backed Undici
+ * response. Older native clones register live streams for cancellation when a
+ * Response is collected or keep an extra tee branch alive. Updating the known
+ * slot lets the detached streams own cleanup on those versions.
+ */
+function legacyBodySlot(response: Response, body: ReadableStream<Uint8Array>): object | undefined {
+  const key = Object.getOwnPropertySymbols(response).find(
+    (symbol) => symbol.description === 'state',
+  )
+  if (key === undefined || !Object.hasOwn(new Response(), key)) {
+    return undefined
+  }
+  const state: unknown = Object.getOwnPropertyDescriptor(response, key)?.value
+  if (typeof state !== 'object' || state === null || !('body' in state)) {
+    return undefined
+  }
+  const slot = state.body
+  if (typeof slot !== 'object' || slot === null) {
+    return undefined
+  }
+  const descriptor = Object.getOwnPropertyDescriptor(slot, 'stream')
+  return descriptor?.writable === true && descriptor.value === body ? slot : undefined
+}
+
 /** Clone the receiver's own body and metadata, even when the method is borrowed. */
 function clone(this: Response): Response {
   const metadata = detachedMetadata.get(this)
@@ -53,14 +78,35 @@ function clone(this: Response): Response {
   }
 
   const { status, redirected } = metadata
-  const { body } = this
-  const copy = body === null ? undefined : cloneDetachedBody(body)
-  if (copy === undefined) {
-    // Native clone handles null or unusable bodies and streams already
-    // branched by a direct call to the native prototype method.
-    return preserveResponseMetadata(Response.prototype.clone.call(this), status, redirected)
+  const previousBody = this.body
+  if (previousBody !== null && !previousBody.locked && !this.bodyUsed) {
+    const slot = legacyBodySlot(this, previousBody)
+    if (slot !== undefined) {
+      const branches = replaceDetachedBody(previousBody)
+      if (branches !== undefined) {
+        Object.defineProperty(slot, 'stream', { value: branches.original })
+        return createResponse(branches.copy, status, redirected, this.headers)
+      }
+    }
   }
-  return createResponse(copy, status, redirected, this.headers)
+
+  // Native clone validates the body, locks the previous stream, and replaces
+  // the receiver's internal body. Previously obtained stream references must
+  // no longer be able to read the original branch.
+  const nativeClone = Response.prototype.clone.call(this)
+  const original = this.body
+  const nativeCopy = nativeClone.body
+  if (previousBody !== null && original !== null && nativeCopy !== null) {
+    const copy = splitDetachedBody(previousBody, original)
+    if (copy !== undefined) {
+      // The public copy owns a separate upstream branch. A native tee alone
+      // retains both public branches while either is in use, so it cannot
+      // release an abandoned sibling independently.
+      void nativeCopy.cancel().catch(() => undefined)
+      return createResponse(copy, status, redirected, nativeClone.headers)
+    }
+  }
+  return preserveResponseMetadata(nativeClone, status, redirected)
 }
 
 /** Preserve safe metadata that the constructor cannot represent on instance clones. */

@@ -6,7 +6,7 @@ import type { Server, ServerResponse } from 'node:http'
 import { setImmediate, setTimeout } from 'node:timers/promises'
 import { setFlagsFromString } from 'node:v8'
 import { createContext, Script } from 'node:vm'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { VaultKeeper } from '../../../src/index.js'
 import { VaultError } from '../../../src/errors.js'
 
@@ -134,6 +134,36 @@ describe('VaultKeeper.fetch response metadata', () => {
       expect(copy.statusText).toBe('Receiver status')
       await expect(copy.text()).resolves.toBe('receiver body')
       await expect(response.text()).resolves.toBe('delegated body')
+    } finally {
+      await close(server)
+    }
+  })
+
+  it('locks the pre-clone stream and gives both responses independent body branches', async () => {
+    const expected = 'body shared by native response clones'
+    const server = createServer((_request, response) => {
+      response.writeHead(200).end(expected)
+    })
+    const endpoint = await listen(server)
+
+    try {
+      const { vault, token } = await authorizeFixture('synthetic credential')
+      const { response } = await vault.fetch(token, { url: `${endpoint}/?credential={{secret}}` })
+      const previousBody = response.body
+      if (previousBody === null) {
+        throw new VaultError('Expected a response with a body')
+      }
+
+      const clone = response.clone()
+      expect(previousBody.locked).toBe(true)
+      expect(() => previousBody.getReader()).toThrow(TypeError)
+      expect(response.body).not.toBe(previousBody)
+      expect(response.bodyUsed).toBe(false)
+      expect(clone.bodyUsed).toBe(false)
+      await expect(Promise.all([response.text(), clone.text()])).resolves.toEqual([
+        expected,
+        expected,
+      ])
     } finally {
       await close(server)
     }
@@ -288,6 +318,32 @@ describe('VaultKeeper.fetch response metadata', () => {
       expect(pending.destroyed).toBe(true)
     } finally {
       await close(server)
+    }
+  })
+
+  it('releases the upstream stream after repeated ordinary clones are collected', async () => {
+    // Use an idle byte stream to observe cancellation without socket teardown behavior.
+    const cancel = vi.fn<() => void>()
+    const transport = new Response(new ReadableStream({ type: 'bytes', cancel }))
+    const fetch = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(transport)
+    try {
+      const { vault, token } = await authorizeFixture('synthetic credential')
+      const { response } = await vault.fetch(token, { url: 'https://example.invalid/{{secret}}' })
+      response.clone()
+      response.clone().clone()
+      const body = response.body
+      if (body === null) {
+        throw new VaultError('Expected an unread response body')
+      }
+      await collectGarbage()
+      const settled = await Promise.race([
+        body.cancel().then(() => true),
+        setTimeout(1000, false, { ref: false }),
+      ])
+      expect(settled).toBe(true)
+      expect(cancel).toHaveBeenCalledOnce()
+    } finally {
+      fetch.mockRestore()
     }
   })
 
