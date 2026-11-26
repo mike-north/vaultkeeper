@@ -95,22 +95,37 @@ fn approved_command_satisfies_registry_profile() {
     }});
     let dir = run_test_env(&profile);
     store_secret(&dir, "greeting", "hello");
+    let run = || {
+        Command::new(vk_bin())
+            .env("VAULTKEEPER_CONFIG_DIR", dir.path())
+            .args([
+                "run",
+                "--profile",
+                "uat",
+                "--",
+                "/bin/sh",
+                "-c",
+                "printf %s \"$GREETING\"",
+            ])
+            .output()
+            .unwrap()
+    };
+    let unapproved = run();
+    assert!(!unapproved.status.success());
+    assert!(unapproved.stdout.is_empty());
     let approved = Command::new(vk_bin())
         .env("VAULTKEEPER_CONFIG_DIR", dir.path())
-        .args(["approve", "--path", "/usr/bin/true"])
+        .args(["approve", "--path", "/bin/sh"])
         .output()
         .unwrap();
     assert!(approved.status.success());
-    let output = Command::new(vk_bin())
-        .env("VAULTKEEPER_CONFIG_DIR", dir.path())
-        .args(["run", "--profile", "uat", "--", "/usr/bin/true"])
-        .output()
-        .unwrap();
+    let output = run();
     assert!(
         output.status.success(),
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
+    assert_eq!(output.stdout, b"hello");
 }
 
 // ─── AC1: stdio round trip — byte-exact, both directions ─────────
