@@ -477,6 +477,7 @@ describe('FileBackend', () => {
       mockFs.realpath
         .mockResolvedValueOnce(path.join(configDir, 'file'))
         .mockResolvedValueOnce(legacyDir)
+      mockFs.lstat.mockRejectedValueOnce(Object.assign(new Error('ENOENT'), { code: 'ENOENT' }))
       const permError = Object.assign(new Error('EPERM'), { code: 'EPERM' })
       mockFs.unlink.mockRejectedValueOnce(permError)
 

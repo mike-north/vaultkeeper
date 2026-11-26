@@ -261,6 +261,58 @@ describe('BackendConfig.path plumbing (file backend)', () => {
     await expect(backend.list()).resolves.not.toContain('key')
   })
 
+  it('removes a self-referential current entry', async () => {
+    const backend = new FileBackend(undefined, fakeHome)
+    const currentDir = path.join(fakeHome, 'file')
+    const currentEntry = path.join(currentDir, entryFile('key'))
+    await fs.mkdir(currentDir, { recursive: true })
+    await fs.symlink(entryFile('key'), currentEntry)
+
+    await backend.delete('key')
+    await expect(fs.lstat(currentEntry)).rejects.toMatchObject({ code: 'ENOENT' })
+  })
+
+  it('removes a current link whose target has a non-directory component', async () => {
+    const backend = new FileBackend(undefined, fakeHome)
+    const currentDir = path.join(fakeHome, 'file')
+    const currentEntry = path.join(currentDir, entryFile('key'))
+    await fs.mkdir(currentDir, { recursive: true })
+    await fs.writeFile(path.join(currentDir, 'ordinary-file'), '')
+    await fs.symlink(path.join(currentDir, 'ordinary-file', 'child'), currentEntry)
+
+    await backend.delete('key')
+    await expect(fs.lstat(currentEntry)).rejects.toMatchObject({ code: 'ENOENT' })
+  })
+
+  it('preserves a replacement after deleting a current link to the legacy entry', async () => {
+    const backend = new FileBackend(undefined, fakeHome)
+    const legacyDir = path.join(fakeHome, '.vaultkeeper', 'file')
+    const legacyEntry = path.join(legacyDir, entryFile('key'))
+    await backend.store('other', 'create-current-key')
+    // The legacy ciphertext must be readable via the current key while the
+    // directories retain distinct keys for the replacement test.
+    await backend.store('key', 'retired')
+    await new FileBackend(legacyDir).store('other', 'create-legacy-key')
+    const currentEntry = path.join(fakeHome, 'file', entryFile('key'))
+    await fs.copyFile(currentEntry, legacyEntry)
+    await fs.unlink(currentEntry)
+    await fs.symlink(legacyEntry, currentEntry)
+    await expect(backend.retrieve('key')).resolves.toBe('retired')
+
+    const actualFs = await vi.importActual<typeof fs>('node:fs/promises')
+    vi.mocked(fs.unlink).mockImplementation(async (entryPath) => {
+      await actualFs.unlink(entryPath)
+      if (entryPath === legacyEntry) {
+        await expect(backend.retrieve('key')).rejects.toBeInstanceOf(SecretNotFoundError)
+        await backend.store('key', 'replacement')
+        await expect(backend.retrieve('key')).resolves.toBe('replacement')
+      }
+    })
+
+    await backend.delete('key')
+    await expect(backend.retrieve('key')).resolves.toBe('replacement')
+  })
+
   it('preserves a replacement after deleting a legacy entry with a dangling current link', async () => {
     const backend = new FileBackend(undefined, fakeHome)
     const legacyDir = path.join(fakeHome, '.vaultkeeper', 'file')

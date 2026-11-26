@@ -255,15 +255,20 @@ export class FileBackend implements ListableBackend, SigningBackend {
       const currentPath = getEntryPath(this.#storageDir, id)
       try {
         const entry = await fs.lstat(currentPath)
-        if (entry?.isSymbolicLink()) {
+        if (entry.isSymbolicLink()) {
           try {
             await fs.stat(currentPath)
           } catch (err) {
-            if (!(err instanceof Error && 'code' in err && err.code === 'ENOENT')) {
+            if (
+              !(
+                err instanceof Error &&
+                'code' in err &&
+                (err.code === 'ENOENT' || err.code === 'ELOOP' || err.code === 'ENOTDIR')
+              )
+            ) {
               throw err
             }
-            // A dangling link does not mask the legacy value. Remove it before
-            // the legacy entry so a later store cannot become unreachable.
+            // An unresolved link cannot safely remain across legacy removal.
             await fs.unlink(currentPath)
             deleted = true
             storageDirs.pop()
