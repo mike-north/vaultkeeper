@@ -1,18 +1,18 @@
-//! Select and verify the executable for a protected native `run`. Preserve the
-//! Unix invocation spelling alongside its canonical verification target. The
-//! selected launch path bypasses PATH lookup in the resolved environment.
+//! Select and verify the native executable that receives a protected `run`
+//! environment. Keep the Unix invocation spelling alongside the canonical
+//! verification target so the resolved environment cannot redo PATH lookup.
 
 use std::path::{Path, PathBuf};
 use vaultkeeper_core::backend::HostPlatform;
 use vaultkeeper_core::errors::{ExecutableTrustRequiredReason, VaultError};
 use vaultkeeper_core::identity::TrustOptions;
-use vaultkeeper_core::identity::hash::hash_executable;
+use vaultkeeper_core::identity::hash::hash_bytes;
 use vaultkeeper_core::identity::trust::{VerifiedExecutableIdentity, verify_trust_pending};
 use vaultkeeper_core::profile::{EntrySource, LoadedProfile, MinTrust};
 
 /// The selected invocation path and the canonical target approved for it.
 pub(super) struct VerifiedRunCommand {
-    /// Use this path directly so interpreters receive the selected script name.
+    /// Invoke this selected path directly, without another PATH search.
     pub(super) launch_path: PathBuf,
     /// The target used to establish executable identity.
     canonical_path: PathBuf,
@@ -21,14 +21,16 @@ pub(super) struct VerifiedRunCommand {
 }
 
 impl VerifiedRunCommand {
-    /// Recheck the approved bytes, then confirm that the Unix invocation
-    /// still points to them. Both paths must remain stable through the OS's
-    /// subsequent open and, for scripts, the interpreter's open.
+    /// Confirm that the verified bytes describe a native launch target and
+    /// that the Unix invocation still points to it. Check before resolving
+    /// protected entries and again before spawn. Both paths and the file
+    /// they identify must remain stable through the OS's subsequent open.
     pub(super) async fn check_launch_target(
         &self,
         host: &dyn HostPlatform,
     ) -> Result<(), VaultError> {
-        let current_hash = hash_executable(host, &self.canonical_path).await?;
+        let bytes = host.read_file(&self.canonical_path).await?;
+        let current_hash = hash_bytes(&bytes);
         if current_hash != self.identity.hash() {
             return Err(VaultError::IdentityMismatch {
                 message: "Executable changed while resolving the environment".to_string(),
@@ -37,10 +39,19 @@ impl VerifiedRunCommand {
             });
         }
         #[cfg(unix)]
-        if self.launch_path.canonicalize().ok().as_deref() != Some(self.canonical_path.as_path()) {
-            return Err(VaultError::AuthorizationDenied {
-                message: "Executable path changed while resolving the environment".to_string(),
-            });
+        {
+            if !has_native_executable_header(&bytes) {
+                return Err(VaultError::AuthorizationDenied {
+                    message: "Protected run requires a native executable. Select and approve the native interpreter explicitly to run a script".to_string(),
+                });
+            }
+            if self.launch_path.canonicalize().ok().as_deref()
+                != Some(self.canonical_path.as_path())
+            {
+                return Err(VaultError::AuthorizationDenied {
+                    message: "Executable path changed while resolving the environment".to_string(),
+                });
+            }
         }
         Ok(())
     }
@@ -100,15 +111,81 @@ pub(super) async fn verify_run_command(
         };
         let pending = verify_trust_pending(host, executable, Some(&options)).await?;
         if let Some(identity) = pending.verified_identity() {
-            return Ok(Some(VerifiedRunCommand {
+            let verified = VerifiedRunCommand {
                 launch_path: selected.launch_path,
                 canonical_path: selected.canonical_path.clone(),
                 identity: identity.clone(),
-            }));
+            };
+            #[cfg(unix)]
+            verified.check_launch_target(host).await?;
+            return Ok(Some(verified));
         }
     }
 
     Ok(None)
+}
+
+/// Recognize the executable families used by native Unix builds. Reject
+/// scripts and other file formats because their implicit interpreter would
+/// receive the environment without the identity verified for the launch.
+/// The OS still decides whether a file with a native header can execute.
+#[cfg(unix)]
+fn has_native_executable_header(bytes: &[u8]) -> bool {
+    #[cfg(target_vendor = "apple")]
+    return matches!(
+        bytes.get(..4),
+        // Thin 32/64-bit Mach-O and universal Mach-O, in either byte order.
+        Some(
+            b"\xfe\xed\xfa\xce"
+                | b"\xce\xfa\xed\xfe"
+                | b"\xfe\xed\xfa\xcf"
+                | b"\xcf\xfa\xed\xfe"
+                | b"\xca\xfe\xba\xbe"
+                | b"\xbe\xba\xfe\xca"
+                | b"\xca\xfe\xba\xbf"
+                | b"\xbf\xba\xfe\xca"
+        )
+    );
+
+    #[cfg(not(target_vendor = "apple"))]
+    return has_native_elf_header(bytes);
+}
+
+/// Require the host machine, word size, and byte order so a foreign
+/// executable cannot qualify through a transparent emulation handler.
+/// The kernel still validates and loads the executable itself.
+#[cfg(all(unix, any(not(target_vendor = "apple"), test)))]
+fn has_native_elf_header(bytes: &[u8]) -> bool {
+    // ELF e_machine assignments from the System V ABI and its supplements.
+    let machine = match std::env::consts::ARCH {
+        "x86" => 3,
+        "mips" | "mips64" | "mips32r6" | "mips64r6" => 8,
+        "powerpc" => 20,
+        "powerpc64" => 21,
+        "s390x" => 22,
+        "arm" => 40,
+        "sparc64" => 43,
+        "x86_64" => 62,
+        "aarch64" => 183,
+        "riscv32" | "riscv64" => 243,
+        "loongarch64" => 258,
+        _ => return false,
+    };
+    let (class, header_size) = if cfg!(target_pointer_width = "64") {
+        (2, 64)
+    } else {
+        (1, 52)
+    };
+    let data = if cfg!(target_endian = "little") { 1 } else { 2 };
+    if bytes.len() < header_size || !bytes.starts_with(&[0x7f, b'E', b'L', b'F', class, data, 1]) {
+        return false;
+    }
+
+    // e_type must describe ET_EXEC or ET_DYN (which includes PIE binaries).
+    let file_type = u16::from_ne_bytes([bytes[16], bytes[17]]);
+    let file_machine = u16::from_ne_bytes([bytes[18], bytes[19]]);
+    let version = u32::from_ne_bytes([bytes[20], bytes[21], bytes[22], bytes[23]]);
+    matches!(file_type, 2 | 3) && file_machine == machine && version == 1
 }
 
 /// The path passed to the OS, its absolute spelling for manifest lookup, and
@@ -201,10 +278,30 @@ mod tests {
     use super::*;
     use crate::host::NativeHostPlatform;
     use std::fs;
-    use std::os::unix::fs::{PermissionsExt, symlink};
+    use std::os::unix::fs::symlink;
     use vaultkeeper_core::TrustTier;
+    use vaultkeeper_core::identity::hash::hash_executable;
     use vaultkeeper_core::identity::manifest::{add_trusted_hash, save_manifest};
     use vaultkeeper_core::profile::{ProfileDefaults, load_profile_from_str};
+
+    /// An ELF signature can also identify a file that needs an emulator.
+    #[test]
+    fn native_elf_check_rejects_a_foreign_machine() {
+        // An inert ELF header with the reserved EM_NONE machine identifier.
+        let mut header = [0; 64];
+        header[..4].copy_from_slice(b"\x7fELF");
+        header[4] = if cfg!(target_pointer_width = "64") {
+            2
+        } else {
+            1
+        };
+        header[5] = if cfg!(target_endian = "little") { 1 } else { 2 };
+        header[6] = 1;
+        header[16..18].copy_from_slice(&2_u16.to_ne_bytes());
+        header[20..24].copy_from_slice(&1_u32.to_ne_bytes());
+
+        assert!(!has_native_elf_header(&header));
+    }
 
     /// A verified alias must still name the approved target at launch time.
     #[tokio::test]
@@ -215,8 +312,7 @@ mod tests {
         let replacement = dir.path().join("replacement");
         let alias = dir.path().join("alias");
         for path in [&original, &replacement] {
-            fs::write(path, b"#!/bin/sh\nexit 0\n").unwrap();
-            fs::set_permissions(path, fs::Permissions::from_mode(0o700)).unwrap();
+            fs::copy("/bin/sh", path).unwrap();
         }
         symlink(&original, &alias).unwrap();
         let digest = hash_executable(&host, &original).await.unwrap();

@@ -74,15 +74,21 @@ After the separator, both flags pass unchanged to the child.
 
 For native `run`, protected profile entries and `--set` overlays use verification of the selected child
 executable. The launcher resolves a bare name on the parent's `PATH`, verifies the canonical absolute target
-without recording first encounters, then checks the digest again after materialization. On Unix it also
-checks that the selected invocation path still resolves to the verified target, and launches using that path
-so shebang scripts receive their invocation spelling in `$0`. An empty `PATH` component selects `./NAME`.
-On Windows it launches the canonical path and requires a native `.exe` target. The child environment's
-`PATH` cannot change which executable is selected. If the selected executable lacks sufficient trust for a
-protected entry, including a `--set` entry that inherits an elevated default, `run` exits 1 before launching
-the child. Dry runs describe the plan without verifying the executable or resolving secrets. The executable
-and both paths, including symlinks and parent directories, must stay stable from the final checks until the
-OS opens the executable and, for a script, its interpreter opens it.
+without recording first encounters, then checks the digest again after materialization. On Unix, a protected
+run requires a native executable (Mach-O on macOS and host-architecture ELF on other Unix builds). The
+launcher refuses scripts before materializing protected entries because their implicit interpreter would
+receive the environment without executable verification. To run a script with a protected profile, select
+an approved native interpreter as the command and supply the script as its argument. Its trust decision
+covers the interpreter. Executable verification assumes trusted OS executable loaders and system-level
+format handlers.
+The Unix launcher confirms that the selected invocation path still resolves to the verified target and
+preserves the requested `argv[0]`. An empty `PATH` component selects `./NAME`. On Windows it launches the
+canonical path and requires a native `.exe` target. The child environment's `PATH` cannot change which
+executable is selected. If the selected executable lacks sufficient trust for a protected entry, including
+a `--set` entry that inherits an elevated default, `run` exits 1 before launching the child. Dry runs
+describe the plan without verifying the executable or resolving secrets. The executable and both paths,
+including symlinks and parent directories, must stay stable from the final checks until the OS opens the
+executable.
 
 **In review / designed, not landed** (env-epic-spec.md §4, lease lane #298–#300) — rows tracked here so the
 grammar review covers them before they land:
