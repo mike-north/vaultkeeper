@@ -70,6 +70,7 @@ import {
   ConfigValidationError,
   UnknownBackendTypeError,
   ConfigParseError,
+  LockingNotSupportedError,
 } from '../errors.js'
 
 /** Loose shape of a value produced by the real `vault_error_to_js` bridge. */
@@ -285,6 +286,9 @@ describe('error-taxonomy parity (issue #236)', () => {
     expect('config-parse', ConfigParseError, (err) => {
       assert.equal(err.path, '/config/config.json')
       assert.equal(err.location, 'line 3, column 12')
+    })
+    expect('locking-not-supported', LockingNotSupportedError, (err) => {
+      assert.equal(err.message, 'locking not supported')
     })
 
     // 'vault-error' (VaultError::Other) deliberately stays the base

@@ -33,3 +33,7 @@ serial_test = { workspace = true }
 # name/secret fixture the CLI-level conformance suite already checks,
 # instead of a hand-duplicated approximation.
 vaultkeeper-conformance = { path = "../vaultkeeper-conformance" }
+# StubTool (issue #313): generalizes this file's own ported `TestHost` ykman
+# double onto the shared table-driven fake-CLI engine, as the proof case for
+# the generalization.
+vaultkeeper-stub-tools = { path = "../vaultkeeper-stub-tools" }

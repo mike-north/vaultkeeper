@@ -19,6 +19,7 @@ vaultkeeper is a polyglot monorepo (TypeScript + Rust) providing unified, policy
 - **`vaultkeeper-cli`** — Native CLI binary using clap. Provides `NativeHostPlatform` impl.
 - **`vaultkeeper-wasm`** — wasm-bindgen wrapper over core. Compiled with `wasm-pack --target nodejs`.
 - **`vaultkeeper-conformance`** — Data-driven conformance test definitions. Exports cases as JSON for both Rust and JS test runners.
+- **`vaultkeeper-stub-tools`** — Dev-only, table-driven paired-double/stub-tool framework. Ships five `vk-stub-*` binaries (`vk-stub-ykman`, `vk-stub-secret-tool`, `vk-stub-security`, `vk-stub-op`, `vk-stub-powershell`) that reproduce the argv/stdin/stdout/stderr/exit contract of the real subprocess-driven backends; never a runtime dependency.
 
 ## Package manager
 
@@ -44,7 +45,8 @@ vaultkeeper/
 │   ├── vaultkeeper-core/       (Rust core library)
 │   ├── vaultkeeper-cli/        (Rust native CLI)
 │   ├── vaultkeeper-wasm/       (Rust WASM bindings)
-│   └── vaultkeeper-conformance/ (conformance test data)
+│   ├── vaultkeeper-conformance/ (conformance test data)
+│   └── vaultkeeper-stub-tools/  (dev-only paired-double/stub-tool framework)
 ├── packages/
 │   ├── vaultkeeper/            (TS library)
 │   ├── cli/                    (TS CLI)
@@ -62,19 +64,21 @@ All workspace-level scripts use Nx for dependency-graph-aware execution with cac
 
 ### Workspace-level scripts
 
-| Script                     | Purpose                                              |
-| -------------------------- | ---------------------------------------------------- |
-| `pnpm build`               | Build all TS packages (Nx resolves dependency order) |
-| `pnpm clean`               | Clean all packages                                   |
-| `pnpm test`                | Run all tests across all packages                    |
-| `pnpm test:watch`          | Run tests in watch mode (vitest workspace)           |
-| `pnpm check`               | Run typecheck + lint + API report validation         |
-| `pnpm check:typecheck`     | `tsc --noEmit` in all packages                       |
-| `pnpm check:lint-ts`       | `eslint .` in all packages                           |
-| `pnpm check:api-report`    | Validate API reports                                 |
-| `pnpm generate:api-report` | Update API reports                                   |
-| `pnpm check:api-docs`      | Validate `docs/api/` is not stale (CI-enforced)      |
-| `pnpm generate:api-docs`   | Regenerate `docs/api/` markdown                      |
+| Script                     | Purpose                                                                      |
+| -------------------------- | ---------------------------------------------------------------------------- |
+| `pnpm build`               | Build all TS packages (Nx resolves dependency order)                         |
+| `pnpm clean`               | Clean all packages                                                           |
+| `pnpm test`                | Run all tests across all packages                                            |
+| `pnpm test:watch`          | Run tests in watch mode (vitest workspace)                                   |
+| `pnpm check`               | Run typecheck + lint + API report validation                                 |
+| `pnpm check:typecheck`     | `tsc --noEmit` in all packages                                               |
+| `pnpm check:lint-ts`       | `eslint .` in all packages                                                   |
+| `pnpm check:api-report`    | Validate API reports                                                         |
+| `pnpm generate:api-report` | Update API reports                                                           |
+| `pnpm check:api-docs`      | Validate `docs/api/` is not stale (CI-enforced)                              |
+| `pnpm generate:api-docs`   | Regenerate `docs/api/` markdown                                              |
+| `pnpm check:rust-api`      | Validate `crates/vaultkeeper-core/public-api.txt` is not stale (CI-enforced) |
+| `pnpm generate:rust-api`   | Regenerate `crates/vaultkeeper-core/public-api.txt`                          |
 
 ### Rust builds
 
@@ -272,6 +276,23 @@ Workflow:
 
 `docs/api/` is marked `linguist-generated=true` in `.gitattributes` and listed in `.prettierignore` — **never run Prettier over it**. `@microsoft/api-documenter`'s Markdown output is sensitive to exact blank-line placement (its own renderer, not Prettier's), and Prettier collapses/reflows that structure, corrupting the file. If `docs/api/` needs reformatting, that only ever happens by re-running `pnpm generate:api-docs`, never by hand or via Prettier.
 
+### Rust public-API snapshot (`crates/vaultkeeper-core/public-api.txt`)
+
+`api-report/*.api.md` (API Extractor) covers only the TypeScript packages. `crates/vaultkeeper-core/public-api.txt` is the equivalent committed, diffable listing for `vaultkeeper-core`'s public surface — generated by [`cargo public-api`](https://github.com/cargo-public-api/cargo-public-api), CI-enforced the same way as `check:api-report` (docs/specs/001 §3.1).
+
+Scope: **`vaultkeeper-core` only**. `vaultkeeper-cli` is a binary with no library surface to snapshot. `@vaultkeeper/wasm`'s exported bindings are already covered by two other checks — do not add a fourth: `scripts/wasm-export-fingerprint.mjs` (wired into the `wasm-guards` CI job) asserts the _set_ of wasm exports/imports, and `@vaultkeeper/wasm`'s own `api-report/` covers the _TS_ shape of the wrapper. This Rust listing covers only the native `vaultkeeper-core` crate's public items.
+
+`cargo public-api` builds rustdoc JSON, which requires nightly rustdoc flags — the exact nightly toolchain and `cargo-public-api` version are pinned in `crates/vaultkeeper-core/rust-api-toolchain.env` (same pinning pattern as `crates/vaultkeeper-wasm/wasm-toolchain.env`; a floating nightly would make the gate flaky).
+
+Workflow:
+
+1. Change `vaultkeeper-core`'s public surface (an added/removed/renamed `pub` item, trait, or trait impl anywhere reachable from `lib.rs`'s `pub use`/`pub mod` tree).
+2. Install the pinned toolchain once: `rustup toolchain install <RUST_API_NIGHTLY_TOOLCHAIN>` and `cargo install cargo-public-api --version <CARGO_PUBLIC_API_VERSION> --locked` (read the exact versions from `crates/vaultkeeper-core/rust-api-toolchain.env`).
+3. Run `pnpm generate:rust-api` to regenerate `crates/vaultkeeper-core/public-api.txt`, and commit it.
+4. `pnpm check:rust-api` regenerates into a temp file and diffs it against the committed listing, failing on any drift; this runs as the `rust-public-api` CI job on every push/PR.
+
+**Governance (docs/specs/001 §3.5, normative):** a diff that touches `crates/vaultkeeper-core/public-api.txt` (or `api-report/*.api.md`, or a CLI help snapshot) is _by definition_ a surface change. It requires the corresponding spec section updated in the **same PR** — Part 2 of docs/specs/001 for a library change — and carries explicit owner-level review scrutiny. The mechanical diff proves the surface changed; the spec diff proves the change was designed, not incidental.
+
 ## Conventions
 
 ### Releases are human-gated
@@ -309,7 +330,7 @@ Tokens are compact JWE strings. The TS library uses the `jose` npm package; the 
 - Config JSON uses **camelCase** field names, enforced via `#[serde(rename_all = "camelCase")]`
 - `TrustTier` has two wire forms depending on where it appears. In a JWE token's `tid` claim it is a **string** number (`"1"`, `"2"`, `"3"`) for `jose` compatibility. In `config.json`'s `defaults.trustTier` it is a **bare number** (`3`) — matching the CLI `config init` output, the TS library, and the README. The config reader (both Rust core and TS) accepts either form for backward compatibility (issue #200).
 - VaultClaims fields use serde renames: `use_limit` → JSON `use`, `reference` → JSON `ref`
-- Both CLIs have identical command surfaces and output formats
+- Both CLIs have identical command surfaces and output formats for shared commands, with documented divergences governed by `docs/specs/001-surface-governance.md` (e.g. B9: `run`'s `exec`/`--profile`/`--set`/`--dry-run` fold-in is native-CLI-only for now)
 
 ### Access patterns
 

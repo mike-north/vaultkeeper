@@ -85,7 +85,7 @@ const jwe = await vault.setup('MY_API_KEY', { skipTrust: true })
 // 4. Authorize: decrypt and validate the token
 const { token, vaultResponse } = await vault.authorize(jwe)
 
-// 5. Delegated fetch — secret injected into the request, never returned
+// 5. Delegated fetch — VaultKeeper fills the Authorization header
 const { response } = await vault.fetch(token, {
   url: 'https://api.example.com/data',
   headers: { Authorization: 'Bearer {{secret}}' },
@@ -181,6 +181,10 @@ whose private half never leaves the backend, and signatures are detached-payload
 any JOSE library can verify — see [Signing and verification](#signing-and-verification) below. See
 the `SecretAccessor` and `ExecRequest` types in the package's shipped `.d.ts` for their full
 signatures.
+
+## Delegated fetch redirects
+
+`VaultKeeper.fetch()` rejects HTTP redirects with `FetchError`, including same-origin redirects and requests without placeholders. The error’s `url` field contains the original request template. For other responses, `Response.url` can include substitutions made in the request URL.
 
 ## Multiple secrets in one request
 
@@ -560,7 +564,7 @@ read-only properties for machine-readable context.
 
 | Class                          | When thrown                                                                                                                                                                                           |
 | ------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `FetchError`                   | Delegated `fetch()` failed before a `Response` (malformed URL, network failure) (field: `url`).                                                                                                       |
+| `FetchError`                   | Delegated `fetch()` rejected a malformed URL or redirect, or encountered a transport failure (field: `url`).                                                                                          |
 | `ExecError`                    | `exec()` request was invalid, or the command could not be started (field: `command`).                                                                                                                 |
 | `AccessorConsumedError`        | `SecretAccessor.read()` called after it was already consumed.                                                                                                                                         |
 | `SigningKeyNotFoundError`      | A named signing key does not exist (field: `keyName`); distinct from `SecretNotFoundError` — signing keys occupy their own namespace (see [Signing and verification](#signing-and-verification)).     |

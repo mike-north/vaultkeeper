@@ -42,6 +42,7 @@ export {
   UnknownBackendTypeError,
   ConfigParseError,
   TestDoubleMisuseError,
+  UnreachableError,
 } from './errors.js'
 
 export type {

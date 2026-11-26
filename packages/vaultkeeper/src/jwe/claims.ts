@@ -6,6 +6,7 @@ import type { VaultClaims } from '../types.js'
 import {
   TokenExpiredError,
   TokenRevokedError,
+  UnreachableError,
   UsageLimitExceededError,
   VaultError,
 } from '../errors.js'
@@ -96,6 +97,8 @@ export function clearBlocklist(): void {
  * @throws TokenRevokedError if the token has been blocked
  * @throws UsageLimitExceededError if the usage count has been exhausted
  * @throws VaultError for missing or malformed required fields
+ * @throws UnreachableError if `kty` is present but not a recognized
+ * {@link ClaimsKind}
  */
 export function validateClaims(claims: VaultClaims, usedCount = 0): void {
   // Validate required string fields shared by every claims kind.
@@ -164,8 +167,11 @@ export function validateClaims(claims: VaultClaims, usedCount = 0): void {
       // `kty` present but neither 'secret' nor 'signing-key' — the Rust core
       // rejects this at deserialization (ClaimsKind has no catch-all
       // variant); mirror that fail-closed behavior here rather than
-      // silently treating an unrecognized kind as a secret claim.
-      throw new VaultError(`Invalid token: unrecognized claim kind kty=${String(claims.kty)}`)
+      // silently treating an unrecognized kind as a secret claim. Routed
+      // through UnreachableError (rather than a bare VaultError) so that
+      // adding a new ClaimsKind member without a matching case here becomes
+      // a compile error at this switch, not just a runtime throw.
+      throw new UnreachableError(claims.kty, 'Invalid token: unrecognized claim kind')
     }
   }
 

@@ -1295,9 +1295,11 @@ dependencies = [
  "predicates",
  "serde",
  "serde_json",
+ "serial_test",
  "tempfile",
  "tokio",
  "vaultkeeper-core",
+ "vaultkeeper-stub-tools",
  "zeroize",
 ]
 
@@ -1332,7 +1334,18 @@ dependencies = [
  "tokio",
  "uuid",
  "vaultkeeper-conformance",
+ "vaultkeeper-stub-tools",
  "zeroize",
+]
+
+[[package]]
+name = "vaultkeeper-stub-tools"
+version = "0.4.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "tempfile",
+ "vaultkeeper-conformance",
 ]
 
 [[package]]

@@ -77,7 +77,7 @@ mod help {
     fn lists_all_expected_commands_in_help() {
         let (mut cmd, _dir) = cli_test_env();
         cmd.arg("--help").assert().success().stdout(
-            predicate::str::contains("exec")
+            predicate::str::contains("run")
                 .and(predicate::str::contains("doctor"))
                 .and(predicate::str::contains("approve"))
                 .and(predicate::str::contains("dev-mode"))
@@ -89,6 +89,18 @@ mod help {
                 .and(predicate::str::contains("revoke-key"))
                 .and(predicate::str::contains("session")),
         );
+    }
+
+    /// `exec` is a hidden, deprecated alias (issue #333, ruling B9) — it must
+    /// not appear in `--help`'s documented command list, even though the
+    /// subcommand itself still works (see `run_token` tests).
+    #[test]
+    fn exec_is_hidden_from_help() {
+        let (mut cmd, _dir) = cli_test_env();
+        cmd.arg("--help")
+            .assert()
+            .success()
+            .stdout(predicate::str::contains("exec").not());
     }
 
     #[test]

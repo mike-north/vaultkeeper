@@ -27,3 +27,9 @@ assert_cmd = "2"
 predicates = "3"
 tempfile = "3"
 serde_json = { workspace = true }
+serial_test = { workspace = true }
+# StubTool (issue #313 AC2): spawns the real `vk-stub-secret-tool` binary
+# through `NativeHostPlatform::exec`, exercising a real backend's
+# argv-build/stdin-routing/stdout-parse/error-classify path end to end
+# against it.
+vaultkeeper-stub-tools = { path = "../vaultkeeper-stub-tools" }
