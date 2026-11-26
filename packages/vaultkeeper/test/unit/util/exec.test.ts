@@ -1,12 +1,19 @@
-import { describe, it, expect, vi } from 'vitest'
 import { Buffer } from 'node:buffer'
-import { StringDecoder } from 'node:string_decoder'
-import * as fs from 'node:fs/promises'
+import { spawn } from 'node:child_process'
 import { writeFileSync } from 'node:fs'
+import * as fs from 'node:fs/promises'
 import * as os from 'node:os'
 import * as path from 'node:path'
-import { execCommand, execCommandFull } from '../../../src/util/exec.js'
+import { describe, it, expect, vi } from 'vitest'
 import { PluginNotFoundError, ExecError } from '../../../src/errors.js'
+import { execCommand, execCommandFull } from '../../../src/util/exec.js'
+import { splitUtf8Script, splitUtf8Text } from '../../helpers/split-utf8-fixture.js'
+
+// Keep real child processes while letting the buffer tests observe their pipes.
+vi.mock('node:child_process', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:child_process')>()
+  return { ...actual, spawn: vi.fn(actual.spawn) }
+})
 
 describe('execCommand', () => {
   it('returns trimmed stdout on success', async () => {
@@ -40,42 +47,75 @@ describe('execCommand', () => {
 })
 
 describe('execCommandFull', () => {
-  it('wipes stdout chunks while preserving split UTF-8 characters', async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'vk-exec-utf8-'))
-    const signal = path.join(dir, 'continue')
-    const chunks: Buffer[] = []
-    const original: unknown = Reflect.get(StringDecoder.prototype, 'write')
-    if (typeof original !== 'function') throw new TypeError('Missing decoder')
-    const spy = vi.spyOn(StringDecoder.prototype, 'write').mockImplementation(function (
-      this: StringDecoder,
-      data,
-    ) {
-      if (Buffer.isBuffer(data)) {
-        chunks.push(data)
-        if (data.length === 1 && data[0] === 0xe2) writeFileSync(signal, '')
+  it.each<'stdout' | 'stderr'>(['stdout', 'stderr'])(
+    'wipes raw %s chunks while preserving split UTF-8 characters',
+    async (stream) => {
+      const { spawn: spawnChild } =
+        await vi.importActual<typeof import('node:child_process')>('node:child_process')
+      const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'vk-exec-utf8-'))
+      const signal = path.join(dir, 'continue')
+      const chunks: Buffer[] = []
+      vi.mocked(spawn).mockImplementationOnce((command, args, options) => {
+        const child = spawnChild(command, args, options)
+        // Watch the original pipe buffers before the collector can wipe them.
+        // Release the rest of the character only once its first byte arrived.
+        child[stream]?.on('data', (chunk: Buffer) => {
+          chunks.push(chunk)
+          if (chunks.length === 1) writeFileSync(signal, '')
+        })
+        return child
+      })
+
+      try {
+        const result = await execCommandFull(
+          process.execPath,
+          [
+            '-e',
+            `const fs = require('node:fs')
+const output = process[process.argv[1]]
+output.write(Buffer.from([0xe2]))
+const timer = setInterval(() => {
+  if (fs.existsSync(process.argv[2])) {
+    clearInterval(timer)
+    output.write(Buffer.from([0x82, 0xac]))
+  }
+}, 10)`,
+            stream,
+            signal,
+          ],
+          { timeoutMs: 5000 },
+        )
+        expect(result[stream]).toBe('€')
+        expect(chunks.length).toBeGreaterThanOrEqual(2)
+        expect(chunks.every((chunk) => chunk.every((byte) => byte === 0))).toBe(true)
+      } finally {
+        await fs.rm(dir, { recursive: true, force: true })
       }
-      const decoded: unknown = Reflect.apply(original, this, [data])
-      if (typeof decoded !== 'string') throw new TypeError('Invalid decoded output')
-      return decoded
-    })
-    try {
-      const result = await execCommandFull(
-        process.execPath,
-        [
-          '-e',
-          "const fs = require('fs'); process.stdout.write(Buffer.from([0xe2])); const timer = setInterval(() => { if (fs.existsSync(process.argv[1])) { clearInterval(timer); process.stdout.write(Buffer.from([0x82, 0xac])); } }, 10)",
-          signal,
-        ],
-        { timeoutMs: 5000 },
-      )
-      expect(result.stdout).toBe('€')
-      expect(chunks.length).toBeGreaterThanOrEqual(2)
-      expect(chunks.every((chunk) => chunk.every((byte) => byte === 0))).toBe(true)
-    } finally {
-      spy.mockRestore()
-      await fs.rm(dir, { recursive: true, force: true })
-    }
+    },
+    10_000,
+  )
+
+  it.each<'stdout' | 'stderr'>(['stdout', 'stderr'])(
+    'decodes UTF-8 split across %s chunks',
+    async (stream) => {
+      const result = await execCommandFull(process.execPath, [
+        '-e',
+        splitUtf8Script(),
+        '--',
+        stream,
+      ])
+      expect(result[stream]).toBe(splitUtf8Text)
+    },
+  )
+
+  it('flushes an incomplete UTF-8 sequence at the end of each stream', async () => {
+    const result = await execCommandFull(process.execPath, [
+      '-e',
+      'process.stdout.write(Buffer.from([0xf0])); process.stderr.write(Buffer.from([0xe2, 0x82]))',
+    ])
+    expect(result).toEqual({ stdout: '\ufffd', stderr: '\ufffd', exitCode: 0 })
   })
+
   it('returns full result with stdout, stderr, and exitCode on success', async () => {
     const result = await execCommandFull('echo', ['hello'])
     expect(result.stdout.trim()).toBe('hello')
@@ -92,33 +132,6 @@ describe('execCommandFull', () => {
     const result = await execCommandFull('sh', ['-c', 'echo errout >&2'])
     expect(result.stderr.trim()).toBe('errout')
     expect(result.exitCode).toBe(0)
-  })
-
-  it('wipes stderr chunks after decoding potentially sensitive output', async () => {
-    const original: unknown = Reflect.get(StringDecoder.prototype, 'write')
-    if (typeof original !== 'function') throw new TypeError('Missing decoder')
-    const chunks: Buffer[] = []
-    const spy = vi.spyOn(StringDecoder.prototype, 'write').mockImplementation(function (
-      this: StringDecoder,
-      data,
-    ) {
-      const decoded: unknown = Reflect.apply(original, this, [data])
-      if (typeof decoded !== 'string') throw new TypeError('Invalid decoded output')
-      if (decoded.includes('unique-sensitive-stderr-marker') && Buffer.isBuffer(data))
-        chunks.push(data)
-      return decoded
-    })
-    try {
-      const result = await execCommandFull('sh', [
-        '-c',
-        'printf unique-sensitive-stderr-marker >&2',
-      ])
-      expect(result.stderr).toBe('unique-sensitive-stderr-marker')
-      expect(chunks.length).toBeGreaterThan(0)
-      expect(chunks.every((chunk) => chunk.every((byte) => byte === 0))).toBe(true)
-    } finally {
-      spy.mockRestore()
-    }
   })
 
   it('kills the process and rejects after timeout', async () => {
@@ -152,6 +165,15 @@ describe('execCommandFull', () => {
         stdin: 'x'.repeat(1024 * 1024),
       }),
     ).rejects.toThrow(ExecError)
+  })
+
+  it('preserves the child error status and stderr when its stdin write is interrupted', async () => {
+    const result = await execCommandFull(
+      process.execPath,
+      ['-e', "process.stderr.write('write rejected', () => process.exit(42))"],
+      { stdin: 'x'.repeat(1024 * 1024) },
+    )
+    expect(result).toEqual({ stdout: '', stderr: 'write rejected', exitCode: 42 })
   })
 
   it('wraps ENOENT spawn error in PluginNotFoundError', async () => {

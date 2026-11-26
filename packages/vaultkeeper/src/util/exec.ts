@@ -3,8 +3,8 @@
  */
 
 import { spawn } from 'node:child_process'
-import { StringDecoder } from 'node:string_decoder'
 import { PluginNotFoundError, ExecError } from '../errors.js'
+import { collectUtf8 } from './collect-utf8.js'
 
 /** Options for command execution. */
 export interface ExecCommandOptions {
@@ -55,12 +55,9 @@ export function execCommandFull(
     const proc = spawn(command, args, {
       stdio: [options?.stdin !== undefined ? 'pipe' : 'ignore', 'pipe', 'pipe'],
     })
-    let stdout = ''
-    let stderr = ''
-    // Decoders retain incomplete UTF-8 sequences across pipe chunks.
-    const stdoutDecoder = new StringDecoder('utf8')
-    const stderrDecoder = new StringDecoder('utf8')
-    // A child can close its pipe before consuming the full input.
+    const stdout = collectUtf8(proc.stdout)
+    const stderr = collectUtf8(proc.stderr)
+    // A child can close the pipe before the write completes, even on exit zero.
     let stdinFailed = false
     // Undefined when no timeoutMs was given, or once the timer has fired.
     // Tracked so 'close'/'error' can clear it — otherwise an already-settled
@@ -68,23 +65,6 @@ export function execCommandFull(
     // alive until it fires and calls proc.kill() on an already-exited
     // process (regression: PR #164 review, issue #127).
     let timeoutHandle: ReturnType<typeof setTimeout> | undefined
-
-    proc.stdout?.on('data', (data: Buffer) => {
-      try {
-        stdout += stdoutDecoder.write(data)
-      } finally {
-        data.fill(0)
-      }
-    })
-
-    proc.stderr?.on('data', (data: Buffer) => {
-      // A child may echo stdin, so do not retain its mutable output bytes.
-      try {
-        stderr += stderrDecoder.write(data)
-      } finally {
-        data.fill(0)
-      }
-    })
 
     if (options?.stdin !== undefined && proc.stdin) {
       proc.stdin.on('error', () => {
@@ -99,25 +79,34 @@ export function execCommandFull(
         // reset to undefined so the later 'close'/'error' handler's guard
         // matches reality instead of calling clearTimeout on a stale handle.
         timeoutHandle = undefined
+        stdout.discard()
+        stderr.discard()
         proc.kill('SIGTERM')
         reject(new ExecError(`Command timed out after ${String(options.timeoutMs)}ms`, command))
       }, options.timeoutMs)
     }
 
     proc.on('close', (code) => {
-      stdout += stdoutDecoder.end()
-      stderr += stderrDecoder.end()
       if (timeoutHandle !== undefined) {
         clearTimeout(timeoutHandle)
       }
+      // An explicit child failure carries the exit status and diagnostic output.
       if (stdinFailed && code === 0) {
+        stdout.discard()
+        stderr.discard()
         reject(new ExecError(`Failed to write stdin for '${command}'`, command))
         return
       }
-      resolve({ stdout, stderr, exitCode: code ?? 1 })
+      resolve({
+        stdout: stdout.finish(),
+        stderr: stderr.finish(),
+        exitCode: code ?? 1,
+      })
     })
 
     proc.on('error', (error) => {
+      stdout.discard()
+      stderr.discard()
       if (timeoutHandle !== undefined) {
         clearTimeout(timeoutHandle)
       }
