@@ -1415,6 +1415,41 @@ mod vault_keeper {
     }
 
     #[tokio::test]
+    async fn finite_budget_survives_usage_and_blocklist_pressure() {
+        let (host, mut vault) = dev_vault().await;
+        let opts = vaultkeeper_core::vault::SetupOptions {
+            use_limit: Some(1),
+            skip_trust: Some(true),
+            ..Default::default()
+        };
+        let first = vault
+            .setup(&host, "first", "value", Some(&opts))
+            .await
+            .unwrap();
+        vault.authorize(&first).unwrap();
+        for index in 0..10_000 {
+            let token = vault
+                .setup(&host, &format!("item-{index}"), "value", Some(&opts))
+                .await
+                .unwrap();
+            match vault.authorize(&token) {
+                Ok(_) | Err(VaultError::AuthorizationDenied { .. }) => (),
+                Err(error) => panic!("unexpected authorization failure: {error}"),
+            }
+        }
+        for index in 0..10_001 {
+            vaultkeeper_core::jwe::block_token(&format!("pressure-{index}"));
+        }
+        assert!(
+            matches!(
+                vault.authorize(&first),
+                Err(VaultError::UsageLimitExceeded { .. })
+            ),
+            "exhausted token replayed after pressure"
+        );
+    }
+
+    #[tokio::test]
     async fn authorize_enforces_use_limit() {
         let host = TestHost::with_config();
         let mut vault = VaultKeeper::init(

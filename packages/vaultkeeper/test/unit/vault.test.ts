@@ -456,6 +456,22 @@ describe('VaultKeeper', () => {
       expect(err).toBeInstanceOf(UsageLimitExceededError)
     })
 
+    it('issues usable tokens after a backward clock correction without reviving expired tokens', async () => {
+      vi.useFakeTimers()
+      const start = new Date('2026-01-01T00:00:00Z')
+      vi.setSystemTime(start)
+      const vault = await initVault()
+      const old = await vault.setup('my-secret', { skipTrust: true, ttlMinutes: 1 })
+      vi.setSystemTime(new Date('2026-01-01T00:02:00Z'))
+      await expect(vault.authorize(old)).rejects.toThrow(TokenExpiredError)
+      vi.setSystemTime(start)
+      const fresh = await vault.setup('my-secret', { skipTrust: true, ttlMinutes: 1 })
+      await expect(vault.authorize(fresh)).resolves.toBeDefined()
+      await expect(vault.authorize(old)).rejects.toThrow(TokenExpiredError)
+      vi.setSystemTime(new Date('2026-01-01T00:01:01Z'))
+      await expect(vault.authorize(fresh)).rejects.toThrow(TokenExpiredError)
+    })
+
     it('preserves exhausted live budgets under pressure and reclaims them after expiry', async () => {
       vi.useFakeTimers()
       const start = new Date('2026-01-01T00:00:00Z')
@@ -515,6 +531,21 @@ describe('VaultKeeper', () => {
 
       vi.setSystemTime(start)
       await expect(vault.authorize(exhaustedJwe)).rejects.toThrow(TokenExpiredError)
+    }, 60_000)
+
+    it('denies replay after usage and denial stores both face pressure', async () => {
+      const vault = await initVault()
+      const exhausted = await vault.setup('my-secret', { skipTrust: true, useLimit: 1 })
+      await vault.authorize(exhausted)
+      for (let index = 0; index < 10_000; index++) {
+        const jwe = await vault.setup('my-secret', { skipTrust: true, useLimit: 1 })
+        await vault.authorize(jwe).catch((error: unknown) => {
+          if (!(error instanceof AuthorizationDeniedError)) throw error
+        })
+      }
+      const expiry = Math.floor(Date.now() / 1000) + 3600
+      for (let index = 0; index < 10_001; index++) blockToken(`replay-pressure-${String(index)}`, expiry)
+      await expect(vault.authorize(exhausted)).rejects.toThrow(UsageLimitExceededError)
     }, 60_000)
   })
 

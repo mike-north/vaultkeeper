@@ -267,6 +267,15 @@ pub fn extract_kid(jwe: &str) -> Result<Option<String>, VaultError> {
 /// # Errors
 /// Returns appropriate `VaultError` variant if validation fails.
 pub fn validate_claims(claims: &VaultClaims, current_usage: u64) -> Result<(), VaultError> {
+    validate_claims_at(claims, current_usage, time::now_secs())
+}
+
+/// Validate against the caller's enforcement clock so expiry and reclamation agree.
+pub(crate) fn validate_claims_at(
+    claims: &VaultClaims,
+    current_usage: u64,
+    now_sec: u64,
+) -> Result<(), VaultError> {
     // Validate required string fields shared by every claims kind.
     if claims.jti.trim().is_empty() {
         return Err(VaultError::Other(
@@ -342,7 +351,6 @@ pub fn validate_claims(claims: &VaultClaims, current_usage: u64) -> Result<(), V
     }
 
     // Check expiration
-    let now_sec = time::now_secs();
     if now_sec >= claims.exp {
         return Err(VaultError::TokenExpired {
             message: format!("Token expired at {} (now: {})", claims.exp, now_sec),

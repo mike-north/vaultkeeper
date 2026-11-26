@@ -667,7 +667,7 @@ export class VaultKeeper {
 
     const secretValue = await backend.retrieve(secretName)
 
-    const now = Math.floor(Date.now() / 1000)
+    const now = tokenExpiryTime()
     const claims: VaultClaims = {
       jti: crypto.randomUUID(),
       exp: now + ttlMinutes * 60,
