@@ -11,6 +11,43 @@ import { FetchError } from '../errors.js'
 import { resolvePlaceholders, resolvePlaceholdersInRecord } from './placeholder.js'
 
 /**
+ * Keep Fetch's response alive while the detached response owns its body. Node
+ * can cancel an unread stream when its transport response is collected. A
+ * weak key lets Fetch reclaim abandoned responses and keeps transport metadata
+ * off the public object.
+ */
+const bodyOwners = new WeakMap<Response, Response>()
+
+/**
+ * Fetch's finalizer can no longer cancel the source after clone() locks it.
+ * Detached responses have no transport URL list, so Node may not register
+ * cleanup for their tee branches. Cancel abandoned unread branches so the
+ * source can close once neither branch needs it.
+ */
+const clonedBodies = new FinalizationRegistry<WeakRef<ReadableStream<Uint8Array>>>((bodyRef) => {
+  const body = bodyRef.deref()
+  if (body === undefined || body.locked) {
+    return
+  }
+  try {
+    // The constructor rejects disturbed bodies without reading from the stream.
+    // Cancel only if the branch has never been read or canceled by its caller.
+    void new Response(body).body?.cancel().catch(() => undefined)
+  } catch {
+    // A caller can keep using a disturbed stream after dropping its Response.
+  }
+})
+
+/** Associate an unread tee branch with its detached response until the next clone. */
+function trackClonedBody(response: Response): void {
+  clonedBodies.unregister(response)
+  const body = response.body
+  if (body !== null) {
+    clonedBodies.register(response, new WeakRef(body), response)
+  }
+}
+
+/**
  * Remove any secret material from an underlying error's text before it is
  * surfaced in a thrown message. Network/DNS/TLS errors routinely embed the
  * requested (placeholder-resolved) URL in their own message — e.g.
@@ -37,17 +74,27 @@ function redactSecretMaterial(
 }
 
 /**
- * Retain the followed-redirect signal on a response whose URL list is empty.
- * Clone the detached response with native stream teeing, then carry over the
- * same boolean. Neither response retains the transport's redirect URLs.
+ * Preserve safe metadata that the Response constructor cannot represent. Each
+ * clone carries the same status and redirect flag with native body semantics.
  */
-function markRedirected(response: Response): Response {
-  Object.defineProperties(response, {
-    redirected: { value: true },
-    clone: {
-      value: function clone(this: Response): Response {
-        return markRedirected(Response.prototype.clone.call(this))
-      },
+function preserveResponseMetadata(
+  response: Response,
+  status: number,
+  redirected: boolean,
+): Response {
+  if (response.status !== status) {
+    Object.defineProperty(response, 'status', { value: status })
+  }
+  if (redirected) {
+    Object.defineProperty(response, 'redirected', { value: true })
+  }
+
+  Object.defineProperty(response, 'clone', {
+    value: function clone(this: Response): Response {
+      const copy = Response.prototype.clone.call(this)
+      trackClonedBody(this)
+      trackClonedBody(copy)
+      return preserveResponseMetadata(copy, status, redirected)
     },
   })
   return response
@@ -60,8 +107,15 @@ function markRedirected(response: Response): Response {
  * or credential, including serialized forms that literal redaction would miss.
  */
 function sanitizeResponse(transportResponse: Response): Response {
-  const response = new Response(transportResponse.body, { status: transportResponse.status })
-  return transportResponse.redirected ? markRedirected(response) : response
+  const { body, status, redirected } = transportResponse
+  // Fetch can deliver statuses outside the constructor's range. Use a backing
+  // status that permits a body and has the same `ok` value as those statuses.
+  const constructorStatus = status >= 200 && status <= 599 ? status : 500
+  const response = new Response(body, { status: constructorStatus })
+  if (body !== null) {
+    bodyOwners.set(response, transportResponse)
+  }
+  return preserveResponseMetadata(response, status, redirected)
 }
 
 /**
