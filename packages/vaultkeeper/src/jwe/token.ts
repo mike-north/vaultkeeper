@@ -35,7 +35,14 @@ export async function createToken(
   claims: VaultClaims,
   options?: CreateTokenOptions,
 ): Promise<string> {
-  const plaintext = new TextEncoder().encode(JSON.stringify(claims))
+  // Runtime callers may bypass TypeScript; never coerce an invalid tier into
+  // a valid identity claim (for example, an array containing 1).
+  const tier: unknown = claims.tid
+  if (tier !== 1 && tier !== 2 && tier !== 3) {
+    throw new InvalidTokenError('Invalid trust tier')
+  }
+  // The wire format uses strings; the public TypeScript claims use numbers.
+  const plaintext = new TextEncoder().encode(JSON.stringify({ ...claims, tid: String(tier) }))
 
   const header: { alg: typeof ALGORITHM; enc: typeof ENCRYPTION; kid?: string } = {
     alg: ALGORITHM,
@@ -97,7 +104,9 @@ function parseVaultClaims(raw: unknown): VaultClaims | undefined {
   if (typeof sub !== 'string') return undefined
   if (typeof exe !== 'string') return undefined
   if (use !== null && typeof use !== 'number') return undefined
-  if (tid !== 1 && tid !== 2 && tid !== 3) return undefined
+  // Accept tokens issued by older TypeScript versions as well as canonical strings.
+  const tier = tid === '1' ? 1 : tid === '2' ? 2 : tid === '3' ? 3 : tid
+  if (tier !== 1 && tier !== 2 && tier !== 3) return undefined
   if (bkd !== undefined && typeof bkd !== 'string') return undefined
   if (val !== undefined && typeof val !== 'string') return undefined
   if (typeof ref !== 'string') return undefined
@@ -113,7 +122,7 @@ function parseVaultClaims(raw: unknown): VaultClaims | undefined {
     sub,
     exe,
     use: use ?? null,
-    tid,
+    tid: tier,
     bkd,
     val,
     ref,
