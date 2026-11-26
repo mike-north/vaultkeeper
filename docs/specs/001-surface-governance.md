@@ -73,6 +73,9 @@ Native `run` does not yet verify the receiving executable, so it exits 1 for
 raw or lease entries requiring elevated trust, including `--set` entries
 inheriting an elevated default. Dry runs describe the plan without resolving.
 
+For `run` and `exec`, `--help` and `-h` before the `--` separator show Vaultkeeper help.
+After the separator, both flags pass unchanged to the child.
+
 **In review / designed, not landed** (env-epic-spec.md §4, lease lane #298–#300) — rows tracked here so the
 grammar review covers them before they land:
 
@@ -216,6 +219,10 @@ SHA-256 hex digest; Dev-tier leases retain the `dev` sentinel.
   only through a one-time `SecretAccessor.read()`, a signing key never egresses (sign happens backend-side),
   and passing the wrong token kind to `getSecret`/`sign` is a typed refusal. This opacity is a load-bearing
   security property, not an ergonomic detail — no future API may add a token accessor that returns claims.
+  A TypeScript capability redeemed from a JWE retains its deadline. At or after that deadline,
+  `getSecret` and an outstanding accessor's first `read` refuse with `TokenExpiredError` before
+  releasing plaintext. Delegated `fetch` and `exec` refuse with the same error before dispatch
+  if any supplied capability has expired.
 - **L3 — Typed failures only.** Every thrown error is a subclass of `VaultError`. Plain `Error` is never
   thrown across the public boundary; new failure modes add a `VaultError` subclass, exported from `index.ts`.
 - **L4 — Minimal runtime dependency.** The `vaultkeeper` TS library's only runtime dependency is `jose`;
