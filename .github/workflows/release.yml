@@ -112,12 +112,15 @@ jobs:
       pull-requests: write
       id-token: write
     outputs:
+      source: ${{ steps.release-state.outputs.source }}
       core-missing: ${{ steps.release-state.outputs.core-missing }}
       cli-missing: ${{ steps.release-state.outputs.cli-missing }}
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 2
+          ref: ${{ github.sha }}
+          # The original push base and npm source can both precede the tip's parent.
+          fetch-depth: 0
 
       - uses: pnpm/action-setup@v4
 
@@ -152,17 +155,20 @@ jobs:
       - name: Determine crates release state
         id: release-state
         env:
+          PUSH_BEFORE: ${{ github.event.before }}
           PUBLISHED_PACKAGES: ${{ steps.changesets.outputs.publishedPackages }}
         run: node scripts/release-reconciliation.mjs >> "$GITHUB_OUTPUT"
 
   publish-crates:
     name: Publish to crates.io
     needs: [rust, ci, release]
-    if: needs.release.outputs.core-missing == 'true' || needs.release.outputs.cli-missing == 'true'
+    if: needs.release.outputs.source != '' && (needs.release.outputs.core-missing == 'true' || needs.release.outputs.cli-missing == 'true')
     runs-on: ubuntu-latest
     environment: crates-publish
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.release.outputs.source }}
 
       - uses: dtolnay/rust-toolchain@stable
 
