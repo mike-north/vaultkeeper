@@ -1,4 +1,10 @@
-/** Tie the transport to the lifetime of the public body and its native tee branches. */
+/** Tie the transport to the lifetime of the public body, its readers, and its clones. */
+
+/** The hidden input branch and its exclusive reader until it closes or is split. */
+interface IUpstreamBranch {
+  readonly stream: ReadableStream<Uint8Array>
+  readonly reader: ReadableStreamDefaultReader<Uint8Array>
+}
 
 /**
  * Owns the Fetch response while the detached stream can read from it. A
@@ -6,32 +12,47 @@
  */
 class DetachedBodySource {
   private reading = false
-  private finished = false
+  private upstream: IUpstreamBranch | undefined
 
   constructor(
     // Fetch can cancel an unread body if its response is collected.
     private transport: Response | undefined,
-    private readonly reader: ReadableStreamDefaultReader<Uint8Array>,
-  ) {}
+    stream: ReadableStream<Uint8Array>,
+  ) {
+    this.upstream = { stream, reader: stream.getReader() }
+  }
+
+  /** Split the hidden input so each public branch has an independent lifetime. */
+  fork(): DetachedBodySource | undefined {
+    const upstream = this.upstream
+    if (upstream === undefined) {
+      return undefined
+    }
+    upstream.reader.releaseLock()
+    const [original, copy] = upstream.stream.tee()
+    this.upstream = { stream: original, reader: original.getReader() }
+    return new DetachedBodySource(this.transport, copy)
+  }
 
   /** Forward one chunk on demand without rooting the public stream from the transport. */
   pull(controllerRef: WeakRef<ReadableByteStreamController>): void {
-    if (this.finished || this.reading) {
+    const upstream = this.upstream
+    if (upstream === undefined || this.reading) {
       return
     }
     this.reading = true
-    void this.reader
+    void upstream.reader
       .read()
       .then((result) => {
         this.reading = false
         const controller = controllerRef.deref()
-        if (this.finished || controller === undefined) {
+        if (this.upstream === undefined || controller === undefined) {
           return
         }
         if (result.done) {
           controller.close()
           controller.byobRequest?.respond(0)
-          this.finish()
+          this.finish(upstream.reader)
         } else if (result.value.byteLength !== 0) {
           // The byte stream transfers the buffer on enqueue. The source can
           // share its chunk's backing buffer with other views.
@@ -41,7 +62,7 @@ class DetachedBodySource {
         }
       })
       .catch(async (error: unknown) => {
-        if (!this.finished) {
+        if (this.upstream !== undefined) {
           // Forward transport errors and byte-controller errors through the
           // reader, including EOF in the middle of a typed-array element.
           controllerRef.deref()?.error(error)
@@ -52,18 +73,19 @@ class DetachedBodySource {
 
   /** Cancel the upstream read when callers explicitly cancel or abandon the body graph. */
   async cancel(reason?: unknown): Promise<void> {
-    if (!this.finished) {
-      const canceled = this.reader.cancel(reason)
-      this.finish()
+    if (this.upstream !== undefined) {
+      const { reader } = this.upstream
+      const canceled = reader.cancel(reason)
+      this.finish(reader)
       await canceled
     }
   }
 
   /** Detach upstream ownership when no more bytes can be read. */
-  private finish(): void {
-    this.finished = true
+  private finish(reader: ReadableStreamDefaultReader<Uint8Array>): void {
+    this.upstream = undefined
     abandonedBodies.unregister(this)
-    this.reader.releaseLock()
+    reader.releaseLock()
     this.transport = undefined
   }
 }
@@ -73,15 +95,14 @@ const abandonedBodies = new FinalizationRegistry<DetachedBodySource>((source) =>
   void source.cancel().catch(() => undefined)
 })
 
+/** Look up the source only for streams owned by this module. */
+const detachedSources = new WeakMap<ReadableStream<Uint8Array>, DetachedBodySource>()
+
 /**
- * Connect a native Response body to an independent, demand-driven byte stream.
- * Native cloning keeps this stream reachable as long as a tee branch needs it.
+ * Expose a demand-driven byte stream whose source never roots the public stream.
+ * A live native tee or reader still keeps the public stream reachable.
  */
-export function detachBody(
-  transport: Response,
-  body: ReadableStream<Uint8Array>,
-): ReadableStream<Uint8Array> {
-  const source = new DetachedBodySource(transport, body.getReader())
+function createBody(source: DetachedBodySource): ReadableStream<Uint8Array> {
   const stream = new ReadableStream({
     type: 'bytes',
     // A pending pull promise would hold the public controller alive from the
@@ -93,6 +114,36 @@ export function detachBody(
       return source.cancel(reason)
     },
   })
+  detachedSources.set(stream, source)
   abandonedBodies.register(stream, source, source)
   return stream
+}
+
+/** Separate a transport body from response metadata while retaining the upstream response for reads. */
+export function detachBody(
+  transport: Response,
+  body: ReadableStream<Uint8Array>,
+): ReadableStream<Uint8Array> {
+  return createBody(new DetachedBodySource(transport, body))
+}
+
+/** Clone an unused detached stream, leaving other streams and unusable bodies to native Fetch. */
+export function cloneDetachedBody(
+  stream: ReadableStream<Uint8Array>,
+): ReadableStream<Uint8Array> | undefined {
+  const source = detachedSources.get(stream)
+  if (source === undefined) {
+    return undefined
+  }
+  try {
+    // Fetch validates whether a stream is locked or disturbed without reading it.
+    void new Response(stream)
+  } catch (error) {
+    if (!(error instanceof TypeError)) {
+      throw error
+    }
+    return undefined
+  }
+  const copy = source.fork()
+  return copy === undefined ? undefined : createBody(copy)
 }

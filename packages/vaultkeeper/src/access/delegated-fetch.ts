@@ -10,36 +10,8 @@
 
 import type { FetchRequest } from '../types.js'
 import { FetchError } from '../errors.js'
-import { detachBody } from './detached-body.js'
+import { cloneDetachedBody, detachBody } from './detached-body.js'
 import { resolvePlaceholders, resolvePlaceholdersInRecord } from './placeholder.js'
-
-/**
- * When an ordinary clone is abandoned, release its unread tee branch even if
- * another branch is still alive and waiting for its cancellation to finish.
- * The detached body separately handles an entirely abandoned stream graph.
- */
-const clonedBodies = new FinalizationRegistry<WeakRef<ReadableStream<Uint8Array>>>((bodyRef) => {
-  const body = bodyRef.deref()
-  if (body === undefined || body.locked) {
-    return
-  }
-  try {
-    // The constructor rejects disturbed bodies without reading from the stream.
-    // Cancel only if the branch has never been read or canceled by its caller.
-    void new Response(body).body?.cancel().catch(() => undefined)
-  } catch {
-    // A caller can keep using a disturbed stream after dropping its Response.
-  }
-})
-
-/** Associate an unread tee branch with its detached response until the next clone. */
-function trackClonedBody(response: Response): void {
-  clonedBodies.unregister(response)
-  const body = response.body
-  if (body !== null) {
-    clonedBodies.register(response, new WeakRef(body), response)
-  }
-}
 
 /**
  * Remove any secret material from an underlying error's text before it is
@@ -69,7 +41,8 @@ function redactSecretMaterial(
 
 /**
  * Preserve safe metadata that the Response constructor cannot represent.
- * Instance clones carry that metadata and track abandoned tee branches.
+ * Instance clones carry that metadata and keep each body branch independent of
+ * the Response object's lifetime.
  */
 function preserveResponseMetadata(
   response: Response,
@@ -85,13 +58,33 @@ function preserveResponseMetadata(
 
   Object.defineProperty(response, 'clone', {
     value: function clone(this: Response): Response {
-      const copy = Response.prototype.clone.call(this)
-      trackClonedBody(this)
-      trackClonedBody(copy)
-      return preserveResponseMetadata(copy, status, redirected)
+      const { body } = this
+      const copy = body === null ? undefined : cloneDetachedBody(body)
+      if (copy === undefined) {
+        // Preserve native behavior for null or unusable bodies and streams
+        // already branched by a direct call to the native prototype method.
+        return preserveResponseMetadata(Response.prototype.clone.call(this), status, redirected)
+      }
+      return createResponse(copy, status, redirected, this.headers)
     },
   })
   return response
+}
+
+/** Build a native Response from safe metadata and a public body branch. */
+function createResponse(
+  body: ReadableStream<Uint8Array> | null,
+  status: number,
+  redirected: boolean,
+  headers?: Headers,
+): Response {
+  // Fetch can deliver statuses outside the constructor's range. Use a backing
+  // status that permits a body and has the same `ok` value as those statuses.
+  const init: ResponseInit = {
+    status: status >= 200 && status <= 599 ? status : 500,
+    ...(headers === undefined ? {} : { headers }),
+  }
+  return preserveResponseMetadata(new Response(body, init), status, redirected)
 }
 
 /**
@@ -102,13 +95,11 @@ function preserveResponseMetadata(
  */
 function sanitizeResponse(transportResponse: Response): Response {
   const { body, status, redirected } = transportResponse
-  // Fetch can deliver statuses outside the constructor's range. Use a backing
-  // status that permits a body and has the same `ok` value as those statuses.
-  const constructorStatus = status >= 200 && status <= 599 ? status : 500
-  const response = new Response(body === null ? null : detachBody(transportResponse, body), {
-    status: constructorStatus,
-  })
-  return preserveResponseMetadata(response, status, redirected)
+  return createResponse(
+    body === null ? null : detachBody(transportResponse, body),
+    status,
+    redirected,
+  )
 }
 
 /**

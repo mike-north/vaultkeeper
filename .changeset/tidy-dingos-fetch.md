@@ -6,4 +6,4 @@ Keep substituted credentials out of delegated fetch response metadata. The respo
 
 Delayed body reads remain available, and responses retain statuses that native Fetch accepts outside the `Response` constructor's range.
 
-Abandoning all readers and native clones of an unread response allows Node to release its connection.
+A retained body stream stays readable after its response is collected, even after `response.clone()`. Abandoning all readers and clones of an unread response allows Node to release its connection.

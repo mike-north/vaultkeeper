@@ -188,13 +188,56 @@ describe('VaultKeeper.fetch response metadata', () => {
       const { response } = await vault.fetch(token, { url: `${endpoint}/?credential={{secret}}` })
       // Cancellation of a tee branch waits until the other branch is released.
       response.clone()
-      await collectGarbage()
-      if (pending === undefined || response.body === null) {
+      const body = response.body
+      if (pending === undefined || body === null) {
         throw new VaultError('Expected a stalled response with an unread body')
       }
+      // Collection can trigger a close before an explicit cancellation settles.
       const closed = once(pending, 'close', { signal: AbortSignal.timeout(1000) })
-      await Promise.all([closed, response.body.cancel()])
+      await Promise.all([closed, collectGarbage().then(() => body.cancel())])
       expect(pending.destroyed).toBe(true)
+    } finally {
+      await close(server)
+    }
+  })
+
+  it('keeps a retained body readable after its ordinary-cloned response is collected', async () => {
+    const expected = 'body owned by a retained stream and its sibling clone'
+    let pending: ServerResponse | undefined
+    const server = createServer((_request, response) => {
+      pending = response
+      response.writeHead(200, { 'Content-Length': Buffer.byteLength(expected) }).flushHeaders()
+    })
+    const endpoint = await listen(server)
+
+    try {
+      const { vault, token } = await authorizeFixture('synthetic credential')
+
+      /** Retain the unlocked body and the clone without retaining the original response. */
+      async function openBranches(): Promise<{
+        body: ReadableStream<Uint8Array>
+        clone: Response
+        responseRef: WeakRef<Response>
+      }> {
+        const { response } = await vault.fetch(token, { url: `${endpoint}/?credential={{secret}}` })
+        const clone = response.clone()
+        if (response.body === null) {
+          throw new VaultError('Expected the original response to keep its clone branch')
+        }
+        return { body: response.body, clone, responseRef: new WeakRef(response) }
+      }
+
+      const { body, clone, responseRef } = await openBranches()
+      await collectGarbage()
+      expect(responseRef.deref()).toBeUndefined()
+      if (pending === undefined) {
+        throw new VaultError('Expected a response waiting to send its body')
+      }
+      pending.end(expected)
+      await expect(Promise.all([new Response(body).text(), clone.text()])).resolves.toEqual([
+        expected,
+        expected,
+      ])
     } finally {
       await close(server)
     }
