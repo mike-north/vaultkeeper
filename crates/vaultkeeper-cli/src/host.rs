@@ -280,9 +280,9 @@ impl HostPlatform for NativeHostPlatform {
         // `Path::exists()` swallows every error (including EACCES) and
         // reports `false`, which would let a permission failure masquerade
         // as "does not exist" for callers (like FileBackend::retrieve) that
-        // rely on this to distinguish the two. Use `metadata` directly so
+        // rely on this to distinguish the two. Use `symlink_metadata` so
         // only a genuine ENOENT-equivalent maps to `Ok(false)`.
-        match std::fs::metadata(path) {
+        match std::fs::symlink_metadata(path) {
             Ok(_) => Ok(true),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(false),
             Err(e) => Err(VaultError::Filesystem {
@@ -479,6 +479,16 @@ mod tests {
         let present = dir.path().join("present.txt");
         fs::write(&present, b"hi").unwrap();
         assert!(host.file_exists(&present).await.unwrap());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn file_exists_recognizes_dangling_symlink() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("dangling");
+        std::os::unix::fs::symlink("missing", &path).unwrap();
+        let host = NativeHostPlatform::new(dir.path().to_path_buf());
+        assert!(host.file_exists(&path).await.unwrap());
     }
 
     /// Regression test for PR #135 review feedback: `Path::exists()`

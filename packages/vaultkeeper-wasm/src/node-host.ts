@@ -8,7 +8,7 @@
 import { randomUUID } from 'node:crypto'
 import { execFile } from 'node:child_process'
 import {
-  access,
+  lstat,
   mkdir,
   link,
   open,
@@ -147,7 +147,7 @@ export function createNodeHost(configDirOverride?: string): WasmHostPlatform {
 
     async fileExists(path: string): Promise<boolean> {
       try {
-        await access(path)
+        await lstat(path)
         return true
       } catch (err) {
         // Mirror the native host's `file_exists` (crates/vaultkeeper-cli/src/host.rs):

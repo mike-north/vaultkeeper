@@ -228,6 +228,9 @@ on reflection, recorded to close the question.
   Rust `HostPlatform::publish_file_if_absent` and WASM `WasmHostPlatform.publishFileIfAbsent`
   provide the publication guarantee. Custom hosts must implement the method to initialize new
   persistent state. An unavailable method causes initialization to fail without publishing a partial file.
+  Existence checks recognize directory entries including dangling symlinks, so an unreadable occupied
+  state path does not create key material. WASM publishers borrow the content until their promise settles;
+  hosts that retain it must copy it before settlement.
 
 ### 2.2 The surface by concept (IS)
 

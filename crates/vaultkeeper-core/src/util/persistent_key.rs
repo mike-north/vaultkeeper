@@ -12,14 +12,13 @@ pub(crate) async fn read_if_present(
 ) -> Result<Option<Vec<u8>>, VaultError> {
     match host.read_file(path).await {
         Ok(bytes) => Ok(Some(bytes)),
-        Err(VaultError::Filesystem {
-            code: Some(code), ..
-        }) if code == "ENOENT" => Ok(None),
-        Err(err @ VaultError::Filesystem { code: Some(_), .. }) => Err(err),
+        Err(err) if matches!(&err, VaultError::Filesystem { code: Some(code), .. } if code != "ENOENT") => {
+            Err(err)
+        }
         Err(original) => match host.file_exists(path).await {
             Ok(false) => Ok(None),
-            // A host without errno codes can observe publication between the
-            // failed read and the existence check.
+            // A concurrent publisher can fill the path between the failed
+            // read and the existence check.
             Ok(true) => host.read_file(path).await.map(Some).map_err(|_| original),
             Err(_) => Err(original),
         },

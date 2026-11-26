@@ -611,6 +611,20 @@ mod argument_validation {
 mod rotate_key {
     use super::*;
 
+    #[cfg(unix)]
+    #[test]
+    fn dangling_state_symlink_does_not_create_a_wrapping_key() {
+        let (mut cmd, dir) = cli_test_env();
+        let state = dir.path().join("keys.enc");
+        std::os::unix::fs::symlink("missing-target", &state).unwrap();
+        cmd.arg("rotate-key").assert().failure();
+        assert_eq!(
+            fs::read_link(state).unwrap(),
+            std::path::Path::new("missing-target")
+        );
+        assert!(!dir.path().join(".keys.wrap").exists());
+    }
+
     #[test]
     fn corrupt_non_utf8_state_does_not_create_a_wrapping_key() {
         let (mut cmd, dir) = cli_test_env();

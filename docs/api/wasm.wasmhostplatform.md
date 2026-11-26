@@ -65,6 +65,8 @@ Description
 
 </td><td>
 
+Whether the directory entry exists, including a dangling symlink.
+
 
 </td></tr>
 <tr><td>
@@ -114,7 +116,7 @@ _(Optional)_ Optional interactive human-approval capability (issue \#239). Absen
 
 </td><td>
 
-_(Optional)_ Atomically publish complete owner-only file contents. Resolve to false when the destination exists. Required when initializing persistent state.
+_(Optional)_ Atomically publish complete owner-only file contents. Resolve to false when the destination exists. Required when initializing persistent state. The content is borrowed until the returned promise settles and may be cleared afterward. Copy it before retaining it beyond settlement.
 
 
 </td></tr>

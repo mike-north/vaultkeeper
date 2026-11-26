@@ -4,7 +4,7 @@
 
 ## WasmHostPlatform.publishFileIfAbsent() method
 
-Atomically publish complete owner-only file contents. Resolve to false when the destination exists. Required when initializing persistent state.
+Atomically publish complete owner-only file contents. Resolve to false when the destination exists. Required when initializing persistent state. The content is borrowed until the returned promise settles and may be cleared afterward. Copy it before retaining it beyond settlement.
 
 **Signature:**
 

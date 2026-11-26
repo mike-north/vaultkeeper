@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import * as fs from 'node:fs/promises'
+import { platform } from 'node:os'
 import { toFilesystemError } from '../errors.js'
 
 export function hasErrorCode(error: unknown, code: string): boolean {
@@ -23,6 +24,8 @@ export async function publishFile(
 
   try {
     try {
+      // The process umask must not strip the owner's access to key material.
+      if (platform() !== 'win32') await file.chmod(0o600)
       await file.writeFile(content)
     } finally {
       await file.close()

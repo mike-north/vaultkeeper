@@ -13,7 +13,7 @@ import { describe, it } from 'node:test'
 import * as assert from 'node:assert/strict'
 import { createServer } from 'node:http'
 import type { AddressInfo } from 'node:net'
-import { mkdtemp, rm, unlink, stat } from 'node:fs/promises'
+import { mkdtemp, rm, unlink, stat, symlink, readlink, lstat } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { runInNewContext } from 'node:vm'
@@ -737,6 +737,43 @@ describe('WasmVaultKeeper handle-based entry points reject a malformed handleId 
 })
 
 describe('persistent keys on the WASM host bridge', () => {
+  it('preserves a dangling state symlink without creating a wrapping key', async () => {
+    if (process.platform === 'win32') return
+    await withTempConfigDir(async (dir) => {
+      const { createVaultKeeper } = await import('../../wasm/vaultkeeper_wasm.js')
+      const state = join(dir, 'keys.enc')
+      await symlink('missing-target', state)
+      await assert.rejects(createVaultKeeper(createNodeHost(dir), { skipDoctor: true }))
+      assert.equal(await readlink(state), 'missing-target')
+      await assert.rejects(lstat(join(dir, '.keys.wrap')), { code: 'ENOENT' })
+    })
+  })
+
+  it('reopens when a custom publisher copies borrowed content', async () => {
+    await withTempConfigDir(async (dir) => {
+      const { createVaultKeeper } = await import('../../wasm/vaultkeeper_wasm.js')
+      const host = createNodeHost(dir)
+      const files = new Map<string, Uint8Array>()
+      const custom = {
+        ...host,
+        publishFileIfAbsent(path: string, content: Uint8Array): Promise<boolean> {
+          if (files.has(path)) return Promise.resolve(false)
+          files.set(path, Uint8Array.from(content))
+          return Promise.resolve(true)
+        },
+        async readFile(path: string): Promise<Uint8Array> {
+          const bytes = files.get(path)
+          return bytes === undefined ? host.readFile(path) : Uint8Array.from(bytes)
+        },
+      }
+      const first = await createVaultKeeper(custom, { skipDoctor: true })
+      first.free()
+      const reopened = await createVaultKeeper(custom, { skipDoctor: true })
+      reopened.free()
+      assert.ok(files.has(join(dir, '.keys.wrap')))
+      assert.ok(files.has(join(dir, 'keys.enc')))
+    })
+  })
   it('publishes owner-readable files under a restrictive umask', async () => {
     if (process.platform === 'win32') return
     await withTempConfigDir(async (dir) => {

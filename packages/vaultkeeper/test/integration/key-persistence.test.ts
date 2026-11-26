@@ -17,13 +17,18 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import * as fs from 'node:fs/promises'
 import * as os from 'node:os'
 import * as path from 'node:path'
+import { execFile } from 'node:child_process'
+import { promisify } from 'node:util'
+import { fileURLToPath } from 'node:url'
 import { VaultKeeper } from '../../src/vault.js'
 import { registerBuiltinBackends } from '../../src/backend/register-builtins.js'
 import { DecryptionError, KeyRevokedError, RotationInProgressError } from '../../src/errors.js'
+import { publishFile } from '../../src/util/publish-file.js'
 
 vi.mock('node:fs/promises', async (original) => ({
   ...(await original<typeof fs>()),
 }))
+vi.mock('node:os', async (original) => ({ ...(await original<typeof os>()) }))
 
 /** Hold both operations after the real filesystem reports absence. */
 async function overlapMissingReads(paths: string[]): Promise<void> {
@@ -142,6 +147,57 @@ describe('revoked-key error accuracy (criterion 4)', () => {
 })
 
 describe('overlapping first use', () => {
+  it('does not change POSIX permissions on Windows', async () => {
+    vi.spyOn(os, 'platform').mockReturnValue('win32')
+    const real = await vi.importActual<typeof fs>('node:fs/promises')
+    let chmodCalled = false
+    vi.spyOn(fs, 'open').mockImplementation(async (...args) => {
+      const handle = await real.open(...args)
+      vi.spyOn(handle, 'chmod').mockImplementation(() => {
+        chmodCalled = true
+        return Promise.resolve()
+      })
+      return handle
+    })
+    await publishFile(path.join(configDir, 'test-file'), 'content', 'test file')
+    expect(chmodCalled).toBe(false)
+  })
+  it.skipIf(process.platform === 'win32')('reopens owner-readable files under a restrictive umask', async () => {
+    await fs.mkdir(path.join(configDir, 'file'))
+    await fs.writeFile(path.join(configDir, 'config.json'), JSON.stringify({
+      version: 1,
+      backends: [{ type: 'file', enabled: true, path: path.join(configDir, 'file') }],
+      keyRotation: { gracePeriodDays: 7 },
+      defaults: { ttlMinutes: 60, trustTier: 3 },
+    }))
+    const fixture = fileURLToPath(new URL('../../scripts/restrictive-umask-test.mjs', import.meta.url))
+    await promisify(execFile)(process.execPath, [fixture, configDir])
+  })
+  it.skipIf(process.platform === 'win32')('preserves a dangling state symlink without creating a wrapping key', async () => {
+    const state = path.join(configDir, 'keys.enc')
+    await fs.symlink('missing-target', state)
+    await expect(newProcess()).rejects.toMatchObject({ name: 'FilesystemError' })
+    expect(await fs.readlink(state)).toBe('missing-target')
+    await expect(fs.lstat(path.join(configDir, '.keys.wrap'))).rejects.toMatchObject({ code: 'ENOENT' })
+  })
+
+  it('adopts state published between a missing read and the existence probe', async () => {
+    await newProcess()
+    const state = path.join(configDir, 'keys.enc')
+    const real = await vi.importActual<typeof fs>('node:fs/promises')
+    let missed = false
+    vi.spyOn(fs, 'readFile').mockImplementation(async (file, options) => {
+      if (file === state && !missed) {
+        missed = true
+        const error = new Error('simulated missing read')
+        Object.assign(error, { code: 'ENOENT' })
+        throw error
+      }
+      return real.readFile(file, options)
+    })
+    await expect(newProcess()).resolves.toBeInstanceOf(VaultKeeper)
+    expect(missed).toBe(true)
+  })
   it('reopens both records and authorizes both tokens after concurrent first writes', async () => {
     await overlapMissingReads([
       path.join(configDir, 'keys.enc'),

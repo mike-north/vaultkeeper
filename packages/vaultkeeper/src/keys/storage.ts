@@ -107,8 +107,24 @@ export async function loadKeyState(configDir: string): Promise<KeyStateSnapshot 
   try {
     envelope = await fs.readFile(statePath, 'utf8')
   } catch (err) {
-    if (hasErrorCode(err, 'ENOENT')) return undefined
-    throw toFilesystemError(err, 'key state file', statePath, 'read')
+    if (hasErrorCode(err, 'ENOENT')) {
+      try {
+        // A dangling symlink occupies the destination even though reading it
+        // reports ENOENT; it must not trigger creation of a wrapping key.
+        await fs.lstat(statePath)
+      } catch (probeError) {
+        if (hasErrorCode(probeError, 'ENOENT')) return undefined
+        throw toFilesystemError(probeError, 'key state file', statePath, 'read')
+      }
+      // A concurrent publisher may have filled the path after the first read.
+      try {
+        envelope = await fs.readFile(statePath, 'utf8')
+      } catch (retryError) {
+        throw toFilesystemError(retryError, 'key state file', statePath, 'read')
+      }
+    } else {
+      throw toFilesystemError(err, 'key state file', statePath, 'read')
+    }
   }
 
   const wrapKey = await readWrapKey(path.join(configDir, KEY_WRAP_FILE))

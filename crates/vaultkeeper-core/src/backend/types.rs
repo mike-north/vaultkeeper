@@ -133,7 +133,7 @@ pub trait HostPlatform: Send + Sync {
     /// On non-Unix platforms the mode hint may be ignored.
     async fn write_file(&self, path: &Path, content: &[u8], mode: u32) -> Result<(), VaultError>;
 
-    /// Check if a file exists.
+    /// Check whether a directory entry exists, including a dangling symlink.
     async fn file_exists(&self, path: &Path) -> Result<bool, VaultError>;
 
     /// Delete a file. Returns `Ok(())` if the file was deleted.
