@@ -228,6 +228,61 @@ describe('BackendConfig.path plumbing (file backend)', () => {
     await expect(backend.retrieve('rotated-key')).rejects.toBeInstanceOf(SecretNotFoundError)
   })
 
+  it('preserves a replacement stored after a legacy-only deletion becomes visible', async () => {
+    const backend = new FileBackend(undefined, fakeHome)
+    const legacy = new FileBackend(path.join(fakeHome, '.vaultkeeper', 'file'))
+    await fs.mkdir(path.join(fakeHome, 'file'), { recursive: true })
+    await legacy.store('key', 'retired')
+    const actualFs = await vi.importActual<typeof fs>('node:fs/promises')
+    vi.mocked(fs.unlink).mockImplementationOnce(async (entryPath) => {
+      await actualFs.unlink(entryPath)
+      await expect(new FileBackend(undefined, fakeHome).retrieve('key')).rejects.toBeInstanceOf(
+        SecretNotFoundError,
+      )
+      await new FileBackend(undefined, fakeHome).store('key', 'replacement')
+    })
+
+    await backend.delete('key')
+    await expect(new FileBackend(undefined, fakeHome).retrieve('key')).resolves.toBe('replacement')
+  })
+
+  it('removes a dangling current entry along with the legacy copy', async () => {
+    const backend = new FileBackend(undefined, fakeHome)
+    const legacy = new FileBackend(path.join(fakeHome, '.vaultkeeper', 'file'))
+    await legacy.store('key', 'retired')
+    const currentDir = path.join(fakeHome, 'file')
+    await fs.mkdir(currentDir, { recursive: true })
+    await fs.symlink(path.join(currentDir, 'missing'), path.join(currentDir, entryFile('key')))
+
+    await backend.delete('key')
+    await expect(fs.lstat(path.join(currentDir, entryFile('key')))).rejects.toMatchObject({
+      code: 'ENOENT',
+    })
+    await expect(backend.list()).resolves.not.toContain('key')
+  })
+
+  it('preserves a replacement after deleting a legacy entry with a dangling current link', async () => {
+    const backend = new FileBackend(undefined, fakeHome)
+    const legacyDir = path.join(fakeHome, '.vaultkeeper', 'file')
+    await new FileBackend(legacyDir).store('key', 'retired')
+    const currentDir = path.join(fakeHome, 'file')
+    await fs.mkdir(currentDir, { recursive: true })
+    await fs.symlink(path.join(currentDir, 'missing'), path.join(currentDir, entryFile('key')))
+    const actualFs = await vi.importActual<typeof fs>('node:fs/promises')
+    vi.mocked(fs.unlink).mockImplementation(async (entryPath) => {
+      await actualFs.unlink(entryPath)
+      if (entryPath === path.join(legacyDir, entryFile('key'))) {
+        await expect(new FileBackend(undefined, fakeHome).retrieve('key')).rejects.toBeInstanceOf(
+          SecretNotFoundError,
+        )
+        await new FileBackend(undefined, fakeHome).store('key', 'replacement')
+      }
+    })
+
+    await backend.delete('key')
+    await expect(new FileBackend(undefined, fakeHome).retrieve('key')).resolves.toBe('replacement')
+  })
+
   it('preserves the current value when the legacy unlink fails and permits a retry', async () => {
     const backend = new FileBackend(undefined, fakeHome)
     const legacyDir = path.join(fakeHome, '.vaultkeeper', 'file')

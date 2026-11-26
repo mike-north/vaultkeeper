@@ -244,17 +244,43 @@ export class FileBackend implements ListableBackend, SigningBackend {
 
   async delete(id: string): Promise<void> {
     const storageDirs = [this.#storageDir]
+    let deleted = false
     // Aliases share one entry. A second unlink could erase a concurrent replacement.
     if (
       this.#legacyStorageDir !== undefined &&
       !(await sameStorageDirectory(this.#storageDir, this.#legacyStorageDir))
     ) {
+      // If the current entry is absent, removing the legacy entry makes the
+      // deletion visible. Do not subsequently unlink a newly stored entry.
+      const currentPath = getEntryPath(this.#storageDir, id)
+      try {
+        const entry = await fs.lstat(currentPath)
+        if (entry?.isSymbolicLink()) {
+          try {
+            await fs.stat(currentPath)
+          } catch (err) {
+            if (!(err instanceof Error && 'code' in err && err.code === 'ENOENT')) {
+              throw err
+            }
+            // A dangling link does not mask the legacy value. Remove it before
+            // the legacy entry so a later store cannot become unreachable.
+            await fs.unlink(currentPath)
+            deleted = true
+            storageDirs.pop()
+          }
+        }
+      } catch (err) {
+        if (err instanceof Error && 'code' in err && err.code === 'ENOENT') {
+          storageDirs.pop()
+        } else {
+          throw toFilesystemError(err, 'secret file', currentPath, 'delete')
+        }
+      }
       // Keep the current entry in place until the retired copy is gone. This
       // protects readers between unlinks and when the legacy unlink fails.
       storageDirs.unshift(this.#legacyStorageDir)
     }
 
-    let deleted = false
     for (const storageDir of storageDirs) {
       const entryPath = getEntryPath(storageDir, id)
       try {

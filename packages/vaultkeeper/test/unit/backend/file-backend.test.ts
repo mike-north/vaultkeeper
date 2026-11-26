@@ -9,6 +9,8 @@ vi.mock('node:fs/promises', () => ({
   readFile: vi.fn(),
   readdir: vi.fn(),
   realpath: vi.fn(),
+  lstat: vi.fn(),
+  stat: vi.fn(),
   writeFile: vi.fn(),
 }))
 
