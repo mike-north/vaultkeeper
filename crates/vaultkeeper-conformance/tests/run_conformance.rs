@@ -31,7 +31,9 @@ fn vaultkeeper_bin() -> std::path::PathBuf {
 /// The test executable's depth below that directory depends on Cargo's
 /// layout: historically `target/debug/deps/<test>`, but rustc 1.100 places it
 /// under `target/debug/build/<pkg>/<hash>/out/<test>`. The profile directory
-/// is the nearest ancestor holding Cargo's `.fingerprint` directory. The walk
+/// is the nearest ancestor holding Cargo's `.cargo-lock` file, which both
+/// layouts keep at the profile root (unlike `.fingerprint`, which rustc 1.100
+/// moves under `build/<pkg>/<hash>/fingerprint`). The walk
 /// stops there and never looks further up, so a stray `vaultkeeper` binary
 /// higher in the tree (e.g. at the checkout root) can't stand in for the one
 /// this workspace built.
@@ -39,7 +41,7 @@ fn profile_dir_binary(exe: &std::path::Path, name: &str) -> std::path::PathBuf {
     let profile_dir = exe
         .ancestors()
         .skip(1)
-        .find(|dir| dir.join(".fingerprint").is_dir())
+        .find(|dir| dir.join(".cargo-lock").is_file())
         // No Cargo profile marker found: keep the historical two-level guess.
         .or_else(|| exe.parent().and_then(|p| p.parent()))
         .expect("can't locate the cargo profile directory");
@@ -235,7 +237,8 @@ mod profile_dir_binary_tests {
     /// Lays out `<root>/target/debug` as a Cargo profile dir and returns it.
     fn profile_dir(root: &std::path::Path) -> std::path::PathBuf {
         let profile = root.join("target").join("debug");
-        fs::create_dir_all(profile.join(".fingerprint")).unwrap();
+        fs::create_dir_all(&profile).unwrap();
+        fs::write(profile.join(".cargo-lock"), b"").unwrap();
         profile
     }
 
