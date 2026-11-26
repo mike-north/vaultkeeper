@@ -69,6 +69,9 @@ range. "Secrets" = does a secret value transit this command, and by what channel
 | `session mint` | `PROFILE` | `--entry <e>` | — | **JWE lease → stdout** | lease (capability, not secret) | 0 / 1 |
 | `session revoke` | — | `--jti <j>` \| `--key <k>` (xor) | — | confirmation | — | 0 / 1 |
 
+For `run` and `exec`, `--help` and `-h` before the `--` separator show Vaultkeeper help.
+After the separator, both flags pass unchanged to the child.
+
 **In review / designed, not landed** (env-epic-spec.md §4, lease lane #298–#300) — rows tracked here so the
 grammar review covers them before they land:
 
