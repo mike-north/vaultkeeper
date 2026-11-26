@@ -18,16 +18,26 @@ fn vaultkeeper_bin() -> std::path::PathBuf {
     if let Ok(path) = std::env::var("CARGO_BIN_EXE_vaultkeeper") {
         return std::path::PathBuf::from(path);
     }
-    // Fall back to finding it relative to target dir
-    let mut path = std::env::current_exe()
-        .expect("can't find current exe")
-        .parent()
-        .expect("no parent dir")
-        .parent()
-        .expect("no grandparent dir")
-        .to_path_buf();
-    path.push(format!("vaultkeeper{}", std::env::consts::EXE_SUFFIX));
-    path
+    // Fall back to finding it in the profile dir (e.g. `target/debug`). The
+    // test executable's depth below that dir depends on Cargo's layout:
+    // historically `target/debug/deps/<test>`, but newer toolchains place it
+    // under `target/debug/build/<pkg>/<hash>/deps/<test>`. Walk up the
+    // ancestors and take the first one that holds the binary rather than
+    // assuming a fixed depth.
+    let exe = std::env::current_exe().expect("can't find current exe");
+    let name = format!("vaultkeeper{}", std::env::consts::EXE_SUFFIX);
+    exe.ancestors()
+        .skip(1)
+        .map(|dir| dir.join(&name))
+        .find(|candidate| candidate.is_file())
+        // Keep the historical guess as the reported path when nothing is found,
+        // so the "binary not found" assertion message stays meaningful.
+        .unwrap_or_else(|| {
+            exe.parent()
+                .and_then(|p| p.parent())
+                .expect("no grandparent dir")
+                .join(&name)
+        })
 }
 
 /// Default config JSON matching the TypeScript CLI's test config.
