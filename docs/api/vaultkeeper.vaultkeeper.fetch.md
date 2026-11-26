@@ -8,7 +8,7 @@ Execute a delegated HTTP fetch, injecting secrets from the token(s).
 
 \*\*Single token:\*\* every `{{secret}}` placeholder in `request.url`<!-- -->, `request.headers`<!-- -->, and `request.body` is replaced with the secret value.
 
-\*\*Token map ([SecretTokenMap](./vaultkeeper.secrettokenmap.md)<!-- -->):\*\* every `{{secret:name}}` placeholder is replaced with the secret from the corresponding named token.
+\*\*Token map ([SecretTokenMap](./vaultkeeper.secrettokenmap.md)<!-- -->):\*\* every `{{secret:name}}` placeholder is replaced with the secret from the corresponding named token. The map must contain at least one token.
 
 The delegation covers only the requested URL. Fetch redirect statuses (301, 302, 303, 307, and 308) reject with [FetchError](./vaultkeeper.fetcherror.md)<!-- -->, including same-origin redirects and requests without placeholders.
 
@@ -81,7 +81,7 @@ The `Response` from the underlying `fetch()` call, together with the vault metad
 
 ## Exceptions
 
-{<!-- -->AuthorizationDeniedError<!-- -->} If any token is invalid or was not created by this vault instance.
+{<!-- -->AuthorizationDeniedError<!-- -->} If the token map is empty, or any token is invalid or was not created by this vault instance.
 
 {<!-- -->VaultError<!-- -->} If a named placeholder references an unknown secret name.
 

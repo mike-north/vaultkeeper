@@ -741,7 +741,8 @@ export class VaultKeeper {
    * `request.headers`, and `request.body` is replaced with the secret value.
    *
    * **Token map ({@link SecretTokenMap}):** every `{{secret:name}}` placeholder
-   * is replaced with the secret from the corresponding named token.
+   * is replaced with the secret from the corresponding named token. The map
+   * must contain at least one token.
    *
    * The delegation covers only the requested URL. Fetch redirect statuses
    * (301, 302, 303, 307, and 308) reject with {@link FetchError}, including
@@ -753,8 +754,8 @@ export class VaultKeeper {
    * @returns The `Response` from the underlying `fetch()` call, together with
    *   the vault metadata (`vaultResponse`). `Response.url` can include
    * substitutions made in the request URL.
-   * @throws {AuthorizationDeniedError} If any token is invalid or was not
-   *   created by this vault instance.
+   * @throws {AuthorizationDeniedError} If the token map is empty, or any token
+   *   is invalid or was not created by this vault instance.
    * @throws {VaultError} If a named placeholder references an unknown
    *   secret name.
    * @throws {FetchError} If the URL is malformed, the server sends a Fetch
@@ -779,7 +780,8 @@ export class VaultKeeper {
    * is replaced with the secret value.
    *
    * **Token map ({@link SecretTokenMap}):** every `{{secret:name}}` placeholder
-   * is replaced with the secret from the corresponding named token.
+   * is replaced with the secret from the corresponding named token. The map
+   * must contain at least one token.
    *
    * Secret placeholders are not supported in `request.command` or
    * `request.args` — process arguments are visible to other processes via
@@ -798,8 +800,8 @@ export class VaultKeeper {
    *   `redact: false` to opt out of output redaction.
    * @returns The command result (`stdout`, `stderr`, `exitCode`) together with
    *   the vault metadata (`vaultResponse`).
-   * @throws {AuthorizationDeniedError} If any token is invalid or was not
-   *   created by this vault instance.
+   * @throws {AuthorizationDeniedError} If the token map is empty, or any token
+   *   is invalid or was not created by this vault instance.
    * @throws {ExecError} If the command cannot be started (e.g. ENOENT),
    *   a placeholder references an unknown secret name, or a secret
    *   placeholder appears in the `command` or `args` field.
