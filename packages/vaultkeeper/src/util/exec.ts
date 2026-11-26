@@ -3,6 +3,7 @@
  */
 
 import { spawn } from 'node:child_process'
+import { StringDecoder } from 'node:string_decoder'
 import { PluginNotFoundError, ExecError } from '../errors.js'
 
 /** Options for command execution. */
@@ -56,6 +57,9 @@ export function execCommandFull(
     })
     let stdout = ''
     let stderr = ''
+    // Decoders retain incomplete UTF-8 sequences across pipe chunks.
+    const stdoutDecoder = new StringDecoder('utf8')
+    const stderrDecoder = new StringDecoder('utf8')
     // A child can close its pipe before consuming the full input.
     let stdinFailed = false
     // Undefined when no timeoutMs was given, or once the timer has fired.
@@ -65,14 +69,18 @@ export function execCommandFull(
     // process (regression: PR #164 review, issue #127).
     let timeoutHandle: ReturnType<typeof setTimeout> | undefined
 
-    proc.stdout?.setEncoding('utf8').on('data', (data: string) => {
-      stdout += data
+    proc.stdout?.on('data', (data: Buffer) => {
+      try {
+        stdout += stdoutDecoder.write(data)
+      } finally {
+        data.fill(0)
+      }
     })
 
     proc.stderr?.on('data', (data: Buffer) => {
       // A child may echo stdin, so do not retain its mutable output bytes.
       try {
-        stderr += data.toString()
+        stderr += stderrDecoder.write(data)
       } finally {
         data.fill(0)
       }
@@ -97,6 +105,8 @@ export function execCommandFull(
     }
 
     proc.on('close', (code) => {
+      stdout += stdoutDecoder.end()
+      stderr += stderrDecoder.end()
       if (timeoutHandle !== undefined) {
         clearTimeout(timeoutHandle)
       }

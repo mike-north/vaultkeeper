@@ -1,6 +1,8 @@
 import { describe, it, expect, vi } from 'vitest'
 import { Buffer } from 'node:buffer'
+import { StringDecoder } from 'node:string_decoder'
 import * as fs from 'node:fs/promises'
+import { writeFileSync } from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
 import { execCommand, execCommandFull } from '../../../src/util/exec.js'
@@ -38,6 +40,42 @@ describe('execCommand', () => {
 })
 
 describe('execCommandFull', () => {
+  it('wipes stdout chunks while preserving split UTF-8 characters', async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'vk-exec-utf8-'))
+    const signal = path.join(dir, 'continue')
+    const chunks: Buffer[] = []
+    const original: unknown = Reflect.get(StringDecoder.prototype, 'write')
+    if (typeof original !== 'function') throw new TypeError('Missing decoder')
+    const spy = vi.spyOn(StringDecoder.prototype, 'write').mockImplementation(function (
+      this: StringDecoder,
+      data,
+    ) {
+      if (Buffer.isBuffer(data)) {
+        chunks.push(data)
+        if (data.length === 1 && data[0] === 0xe2) writeFileSync(signal, '')
+      }
+      const decoded: unknown = Reflect.apply(original, this, [data])
+      if (typeof decoded !== 'string') throw new TypeError('Invalid decoded output')
+      return decoded
+    })
+    try {
+      const result = await execCommandFull(
+        process.execPath,
+        [
+          '-e',
+          "const fs = require('fs'); process.stdout.write(Buffer.from([0xe2])); const timer = setInterval(() => { if (fs.existsSync(process.argv[1])) { clearInterval(timer); process.stdout.write(Buffer.from([0x82, 0xac])); } }, 10)",
+          signal,
+        ],
+        { timeoutMs: 5000 },
+      )
+      expect(result.stdout).toBe('€')
+      expect(chunks.length).toBeGreaterThanOrEqual(2)
+      expect(chunks.every((chunk) => chunk.every((byte) => byte === 0))).toBe(true)
+    } finally {
+      spy.mockRestore()
+      await fs.rm(dir, { recursive: true, force: true })
+    }
+  })
   it('returns full result with stdout, stderr, and exitCode on success', async () => {
     const result = await execCommandFull('echo', ['hello'])
     expect(result.stdout.trim()).toBe('hello')
@@ -57,19 +95,24 @@ describe('execCommandFull', () => {
   })
 
   it('wipes stderr chunks after decoding potentially sensitive output', async () => {
-    const prototype: unknown = Object.getPrototypeOf(Buffer.alloc(0))
-    if (typeof prototype !== 'object' || prototype === null) throw new TypeError('Missing prototype')
-    const original: unknown = Reflect.get(prototype, 'toString')
+    const original: unknown = Reflect.get(StringDecoder.prototype, 'write')
     if (typeof original !== 'function') throw new TypeError('Missing decoder')
     const chunks: Buffer[] = []
-    const spy = vi.spyOn(prototype, 'toString').mockImplementation(function (this: Buffer) {
-      const decoded: unknown = Reflect.apply(original, this, [])
+    const spy = vi.spyOn(StringDecoder.prototype, 'write').mockImplementation(function (
+      this: StringDecoder,
+      data,
+    ) {
+      const decoded: unknown = Reflect.apply(original, this, [data])
       if (typeof decoded !== 'string') throw new TypeError('Invalid decoded output')
-      if (decoded.includes('unique-sensitive-stderr-marker')) chunks.push(this)
+      if (decoded.includes('unique-sensitive-stderr-marker') && Buffer.isBuffer(data))
+        chunks.push(data)
       return decoded
     })
     try {
-      const result = await execCommandFull('sh', ['-c', 'printf unique-sensitive-stderr-marker >&2'])
+      const result = await execCommandFull('sh', [
+        '-c',
+        'printf unique-sensitive-stderr-marker >&2',
+      ])
       expect(result.stderr).toBe('unique-sensitive-stderr-marker')
       expect(chunks.length).toBeGreaterThan(0)
       expect(chunks.every((chunk) => chunk.every((byte) => byte === 0))).toBe(true)
