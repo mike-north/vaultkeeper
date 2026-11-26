@@ -871,6 +871,28 @@ describe('@vaultkeeper/wasm setup() executable-trust verification (issue #166)',
     })
   })
 
+  it('preserves independent first-use approvals when setups overlap', async () => {
+    await withTempDir(async (dir) => {
+      const vault = await createTestVault(dir)
+      try {
+        const executables = await Promise.all(
+          Array.from({ length: 8 }, (_, i) =>
+            writeFakeExecutable(dir, `app-${String(i)}`, `app ${String(i)}`),
+          ),
+        )
+
+        await Promise.all(
+          executables.map((exe) => vault.setup('s', 'v', { executablePath: exe.path })),
+        )
+        for (const exe of executables) {
+          assert.deepEqual(await readApprovedHashes(dir, exe.path), [exe.hash])
+        }
+      } finally {
+        vault.dispose()
+      }
+    })
+  })
+
   it('a matching hash on a later setup passes and binds the same hash', async () => {
     await withTempDir(async (dir) => {
       const vault = await createTestVault(dir)

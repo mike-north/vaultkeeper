@@ -2,8 +2,10 @@
  * Trust manifest management — load, save, and query approved executable hashes.
  */
 
+import { randomUUID } from 'node:crypto'
 import * as fs from 'node:fs/promises'
 import * as path from 'node:path'
+import { lockTrustManifest } from '../../../vaultkeeper-wasm/host/trust-lock.js'
 import { FilesystemError, toFilesystemError } from '../errors.js'
 import type { TrustManifest, TrustManifestEntry } from './types.js'
 
@@ -95,29 +97,78 @@ export async function loadManifest(configDir: string): Promise<TrustManifest> {
 }
 
 /**
+ * Read, conditionally update, and publish a manifest under one process-shared lock.
+ * Returning undefined leaves the manifest unchanged.
+ * @internal
+ */
+export async function updateManifest(
+  configDir: string,
+  update: (current: TrustManifest) => TrustManifest | undefined,
+): Promise<TrustManifest> {
+  return withManifestLock(configDir, async (dir) => {
+    const current = await loadManifest(dir)
+    const updated = update(current)
+    if (updated === undefined) return current
+    await publishManifest(dir, updated)
+    return updated
+  })
+}
+
+async function withManifestLock<T>(
+  configDir: string,
+  operation: (dir: string) => Promise<T>,
+): Promise<T> {
+  const dir = path.resolve(configDir)
+  try {
+    await fs.mkdir(dir, { recursive: true })
+  } catch (err) {
+    throw toFilesystemError(err, 'trust-manifest directory', configDir, 'create')
+  }
+  const lockPath = path.join(dir, MANIFEST_FILENAME + '.lock')
+  let release: () => void
+  try {
+    release = await lockTrustManifest(lockPath)
+  } catch (err) {
+    throw toFilesystemError(err, 'trust manifest', lockPath, 'lock')
+  }
+
+  try {
+    return await operation(dir)
+  } finally {
+    release()
+  }
+}
+
+/**
  * Persist `manifest` to `configDir`, creating the directory if necessary.
  * @throws {@link FilesystemError} If the directory cannot be created or the
  *   manifest file cannot be written.
  * @internal
  */
 export async function saveManifest(configDir: string, manifest: TrustManifest): Promise<void> {
+  await withManifestLock(configDir, (dir) => publishManifest(dir, manifest))
+}
+
+async function publishManifest(configDir: string, manifest: TrustManifest): Promise<void> {
   const manifestPath = path.join(configDir, MANIFEST_FILENAME)
-  // Split try/catches so each failure blames the path and operation that
-  // actually failed: a shared catch would report a config-dir mkdir EACCES
-  // as a failed manifest *write* at manifestPath (issue #228 audit).
+  const raw: RawManifest = { version: 1, entries: Object.fromEntries(manifest) }
+  const temporaryPath = manifestPath + '.' + randomUUID() + '.tmp'
+  let written = false
   try {
-    await fs.mkdir(configDir, { recursive: true })
+    await fs.writeFile(temporaryPath, JSON.stringify(raw, null, 2), {
+      flag: 'wx',
+      encoding: 'utf8',
+      mode: 0o600,
+    })
+    written = true
+    await fs.rename(temporaryPath, manifestPath)
   } catch (err) {
-    throw toFilesystemError(err, 'trust-manifest directory', configDir, 'create')
-  }
-  const entries: Record<string, TrustManifestEntry> = {}
-  for (const [namespace, entry] of manifest) {
-    entries[namespace] = entry
-  }
-  const raw: RawManifest = { version: 1, entries }
-  try {
-    await fs.writeFile(manifestPath, JSON.stringify(raw, null, 2), 'utf8')
-  } catch (err) {
+    if (
+      written ||
+      !(typeof err === 'object' && err !== null && 'code' in err && err.code === 'EEXIST')
+    ) {
+      await fs.unlink(temporaryPath).catch(() => undefined)
+    }
     const detail = err instanceof Error ? err.message : String(err)
     throw new FilesystemError(
       `Cannot write trust manifest at ${manifestPath}: ${detail}`,

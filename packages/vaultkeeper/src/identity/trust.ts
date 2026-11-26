@@ -14,7 +14,7 @@
  */
 
 import { hashExecutable } from './hash.js'
-import { loadManifest, saveManifest, addTrustedHash, isTrusted } from './manifest.js'
+import { loadManifest, updateManifest, addTrustedHash, isTrusted } from './manifest.js'
 import { IdentityMismatchError } from '../errors.js'
 import type { TrustVerificationResult, TrustOptions, PendingTrust } from './types.js'
 
@@ -166,8 +166,7 @@ export async function verifyTrustPending(
  * persisting a snapshot captured back in {@link verifyTrustPending} (#209):
  *
  * - Already trusted (e.g. a concurrent commit for the same executable landed
- *   first) — a no-op; skipping the redundant `saveManifest` avoids
- *   unnecessary I/O and shrinks the window for a last-writer-wins race.
+ *   first) — a no-op; skipping publication avoids unnecessary writes.
  * - The namespace has approved hashes that do **not** include the staged one
  *   — a concurrent process recorded a *different* executable for this
  *   namespace in the window since verification. Merging anyway would
@@ -187,21 +186,19 @@ export async function commitTrust(pending: PendingTrust): Promise<void> {
     return
   }
   const { namespace, hash } = pending.pendingWrite
-  const current = await loadManifest(pending.configDir)
-  const existing = current.get(namespace)
-  if (existing?.hashes.includes(hash) === true) {
-    return
-  }
-  if (existing !== undefined && existing.hashes.length > 0) {
-    const previousHash = existing.hashes.at(-1) ?? hash
-    throw new IdentityMismatchError(
-      'Executable hash changed — re-approval required',
-      previousHash,
-      hash,
-    )
-  }
-  const merged = addTrustedHash(current, namespace, hash)
-  await saveManifest(pending.configDir, merged)
+  await updateManifest(pending.configDir, (current) => {
+    const existing = current.get(namespace)
+    if (existing?.hashes.includes(hash) === true) return undefined
+    if (existing !== undefined && existing.hashes.length > 0) {
+      const previousHash = existing.hashes.at(-1) ?? hash
+      throw new IdentityMismatchError(
+        'Executable hash changed — re-approval required',
+        previousHash,
+        hash,
+      )
+    }
+    return addTrustedHash(current, namespace, hash)
+  })
 }
 
 /**

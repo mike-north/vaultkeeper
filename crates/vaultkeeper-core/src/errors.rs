@@ -320,21 +320,11 @@ pub enum VaultError {
         mode: String,
     },
 
-    // --- Cross-process exclusive locking (issue #322) ---
-    /// [`crate::backend::HostPlatform::try_create_lock_file`] is not
-    /// implemented by the active host platform.
+    /// The active host does not implement the requested exclusive lock.
     ///
-    /// Deliberately its own variant rather than [`VaultError::Other`]: this
-    /// is a well-known, expected condition (every `HostPlatform`
-    /// implementation other than `NativeHostPlatform` is currently in this
-    /// state) that `keys::storage::acquire_lock` must be able to detect
-    /// unambiguously to fall back to the pre-existing sequential-ordering-
-    /// only guarantee. Matching on `Other(_)` instead would silently
-    /// downgrade *any* other `Other`-shaped failure from
-    /// `try_create_lock_file` (a bug, a future call site's mistake) into
-    /// "proceed unlocked" as well — the trait method's default impl returns
-    /// this variant specifically so callers can match on it by type instead
-    /// of pattern-matching a string message.
+    /// Trust-manifest updates require a lock and return this error when one
+    /// is unavailable. Revocation-state storage retains its documented
+    /// sequential-ordering guarantee on hosts without lock-file creation.
     #[error("{message}")]
     LockingNotSupported { message: String },
 

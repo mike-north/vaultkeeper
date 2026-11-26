@@ -89,6 +89,17 @@ Perform an HTTP request through the host's networking stack (issue \#239). [crea
 </td></tr>
 <tr><td>
 
+[lockTrustManifest(lockPath)?](./wasm.wasmhostplatform.locktrustmanifest.md)
+
+
+</td><td>
+
+_(Optional)_ Acquire exclusive access to the trust manifest at the supplied lock path. Return a synchronous release function. Hosts sharing a config directory must use the same interprocess protocol. The default Node host coordinates with both CLIs and the TypeScript SDK.
+
+
+</td></tr>
+<tr><td>
+
 [platform()](./wasm.wasmhostplatform.platform.md)
 
 

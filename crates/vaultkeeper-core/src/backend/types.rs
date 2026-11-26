@@ -216,6 +216,25 @@ pub trait HostPlatform: Send + Sync {
         })
     }
 
+    /// Acquire the exclusive trust-manifest lock for this config directory.
+    ///
+    /// `path` names the lock and `nonce` uniquely identifies this acquisition
+    /// for protocols that store an owner marker.
+    ///
+    /// The returned guard must hold the lock until dropped, including on
+    /// error or cancellation. Hosts sharing a config directory must use
+    /// the same interprocess locking protocol and atomic manifest rename.
+    /// Hosts without this capability cannot publish new trust approvals.
+    async fn lock_trust_manifest(
+        &self,
+        _path: &Path,
+        _nonce: &str,
+    ) -> Result<Box<dyn Send>, VaultError> {
+        Err(VaultError::LockingNotSupported {
+            message: "Trust manifest locking is not supported by this host platform".to_string(),
+        })
+    }
+
     /// Get platform type.
     fn platform(&self) -> Platform;
 

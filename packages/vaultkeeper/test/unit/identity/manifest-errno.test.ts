@@ -1,10 +1,16 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import * as path from 'node:path'
 
+vi.mock('../../../../vaultkeeper-wasm/host/trust-lock.js', () => ({
+  lockTrustManifest: vi.fn(() => Promise.resolve(() => undefined)),
+}))
+
 vi.mock('node:fs/promises', () => ({
   readFile: vi.fn(),
-  writeFile: vi.fn(),
   mkdir: vi.fn(),
+  writeFile: vi.fn(),
+  unlink: vi.fn().mockResolvedValue(undefined),
+  rename: vi.fn(),
 }))
 
 import * as fs from 'node:fs/promises'
@@ -74,8 +80,19 @@ describe('saveManifest (errno propagation)', () => {
     vi.clearAllMocks()
   })
 
+  it('reports a directory creation failure at the config directory', async () => {
+    const error = fsError('EACCES', 'permission denied')
+    mockFs.mkdir.mockRejectedValueOnce(error)
+    await expect(saveManifest('/fake', new Map())).rejects.toMatchObject({
+      path: '/fake',
+      permission: 'create',
+      code: 'EACCES',
+      cause: error,
+    })
+    expect(mockFs.writeFile).not.toHaveBeenCalled()
+  })
+
   it('should preserve the errno code and cause on a write failure', async () => {
-    mockFs.mkdir.mockResolvedValueOnce(undefined)
     const noSpaceError = fsError('ENOSPC', 'no space left on device')
     mockFs.writeFile.mockRejectedValueOnce(noSpaceError)
 
@@ -92,5 +109,21 @@ describe('saveManifest (errno propagation)', () => {
       expect(caught.code).toBe('ENOSPC')
       expect(caught.cause).toBe(noSpaceError)
     }
+  })
+
+  it('cleans up the unpublished file and preserves the rename failure', async () => {
+    const renameError = fsError('EACCES', 'permission denied')
+    mockFs.writeFile.mockResolvedValueOnce(undefined)
+    mockFs.rename.mockRejectedValueOnce(renameError)
+
+    await expect(saveManifest('/fake', new Map())).rejects.toMatchObject({
+      path: path.join('/fake', 'trust-manifest.json'),
+      permission: 'write',
+      code: 'EACCES',
+      cause: renameError,
+    })
+    const temporaryPath = mockFs.rename.mock.calls[0]?.[0]
+    expect(temporaryPath).toBeDefined()
+    expect(mockFs.unlink).toHaveBeenCalledWith(temporaryPath)
   })
 })

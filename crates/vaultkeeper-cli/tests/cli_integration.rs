@@ -681,6 +681,66 @@ mod approve {
     }
 
     #[test]
+    fn concurrent_approvals_recover_a_dead_owner_and_keep_every_hash() {
+        use std::process::{Command as Process, Stdio};
+
+        let (_, dir) = cli_test_env();
+        let binary = assert_cmd::cargo::cargo_bin("vaultkeeper");
+        let mut owner = Process::new(&binary)
+            .arg("--version")
+            .stdout(Stdio::null())
+            .spawn()
+            .unwrap();
+        let marker = format!("{}-00000000-0000-4000-8000-000000000000", owner.id());
+        assert!(owner.wait().unwrap().success());
+        let lock = dir.path().join("trust-manifest.json.lock");
+        fs::create_dir(&lock).unwrap();
+        fs::write(lock.join(marker), []).unwrap();
+
+        let approvals: Vec<_> = (0..12)
+            .map(|i| {
+                let executable = dir.path().join(format!("script-{i}"));
+                fs::write(&executable, format!("content-{i}")).unwrap();
+                let child = Process::new(&binary)
+                    .env("VAULTKEEPER_CONFIG_DIR", dir.path())
+                    .args(["approve", "--path"])
+                    .arg(&executable)
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::piped())
+                    .spawn()
+                    .unwrap();
+                (child, executable)
+            })
+            .collect();
+
+        let manifest_path = dir.path().join("trust-manifest.json");
+        let mut executables = Vec::new();
+        for (child, executable) in approvals {
+            let outcome = child.wait_with_output().unwrap();
+            assert!(
+                outcome.status.success(),
+                "{}",
+                String::from_utf8_lossy(&outcome.stderr)
+            );
+            executables.push(executable);
+        }
+        let manifest: serde_json::Value =
+            serde_json::from_slice(&fs::read(manifest_path).unwrap()).unwrap();
+        let entries = manifest["entries"].as_object().unwrap();
+        assert_eq!(entries.len(), executables.len());
+        for executable in executables {
+            assert_eq!(
+                entries[executable.to_str().unwrap()]["hashes"]
+                    .as_array()
+                    .unwrap()
+                    .len(),
+                1
+            );
+        }
+        assert!(!lock.exists());
+    }
+
+    #[test]
     fn approve_fails_for_nonexistent_file() {
         let (mut cmd, _dir) = cli_test_env();
         cmd.args(["approve", "--path", "/nonexistent/script.sh"])

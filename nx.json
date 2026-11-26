@@ -10,7 +10,8 @@
     ],
     "sharedGlobals": [
       "{workspaceRoot}/tsconfig.base.json",
-      "{workspaceRoot}/eslint.config.ts"
+      "{workspaceRoot}/eslint.config.ts",
+      "{workspaceRoot}/packages/vaultkeeper-wasm/host/trust-lock.js"
     ]
   },
   "targetDefaults": {

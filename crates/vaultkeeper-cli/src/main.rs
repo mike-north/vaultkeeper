@@ -1129,21 +1129,11 @@ async fn cmd_approve(path: &str) -> i32 {
         }
     };
 
-    // Load and update the trust manifest
-    let manifest = match vaultkeeper_core::identity::manifest::load_manifest(host.as_ref()).await {
-        Ok(m) => m,
-        Err(e) => {
-            eprintln!("Error: Failed to load trust manifest: {e}");
-            return 1;
-        }
-    };
-
-    let updated = vaultkeeper_core::identity::manifest::add_trusted_hash(&manifest, path, &hash);
-
     if let Err(e) =
-        vaultkeeper_core::identity::manifest::save_manifest(host.as_ref(), &updated).await
+        vaultkeeper_core::identity::manifest::approve_manifest_hash(host.as_ref(), path, &hash)
+            .await
     {
-        eprintln!("Error: Failed to save trust manifest: {e}");
+        eprintln!("Error: Failed to approve executable: {e}");
         return 1;
     }
 

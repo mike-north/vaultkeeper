@@ -1,5 +1,7 @@
 //! Native host platform implementation using std::process and std::fs.
 
+mod trust_lock;
+
 use std::path::{Path, PathBuf};
 use vaultkeeper_core::backend::{ExecOptions, ExecOutput, HostPlatform, Platform};
 use vaultkeeper_core::errors::VaultError;
@@ -294,6 +296,14 @@ impl HostPlatform for NativeHostPlatform {
     /// `O_EXCL` on Unix and `CREATE_NEW` on Windows — both atomically fail
     /// with "already exists" rather than racing a separate exists-check
     /// against a subsequent create.
+    async fn lock_trust_manifest(
+        &self,
+        path: &Path,
+        nonce: &str,
+    ) -> Result<Box<dyn Send>, VaultError> {
+        Ok(Box::new(trust_lock::acquire(path, nonce).await?))
+    }
+
     async fn try_create_lock_file(&self, path: &Path, content: &[u8]) -> Result<(), VaultError> {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent).map_err(|e| VaultError::Filesystem {

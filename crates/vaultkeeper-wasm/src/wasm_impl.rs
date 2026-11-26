@@ -30,6 +30,7 @@ use vaultkeeper_core::{ClaimsKind, ExecutableTrustRequiredReason, VaultClaims, V
 /// - `writeFile(path, content, mode)` → `Promise<void>`
 /// - `fileExists(path)` → `Promise<boolean>`
 /// - `deleteFile(path)` → `Promise<void>`
+/// - `lockTrustManifest?(lockPath)` → `Promise<() => void>` (issue #389)
 /// - `renameFile(from, to)` → `Promise<void>`
 /// - `listDir(path)` → `Promise<string[]>`
 /// - `platform()` → `string` ("darwin"|"linux"|"win32")
@@ -38,7 +39,10 @@ use vaultkeeper_core::{ClaimsKind, ExecutableTrustRequiredReason, VaultClaims, V
 /// - `promptApproval?(context)` → `Promise<boolean>` (issue #239, optional —
 ///   absent means fail closed, never an automatic allow)
 ///
-/// # Locking contract (issue #322)
+/// New trust approvals require `lockTrustManifest`. The Node host supplies
+/// an interprocess lock shared with the native CLI and TypeScript SDK.
+///
+/// # Revocation-state locking contract (issue #322)
 ///
 /// This bridge deliberately does **not** implement
 /// `HostPlatform::try_create_lock_file` — there is no `createLockFile`/
@@ -300,6 +304,14 @@ fn validate_handle_id_shape(handle_id: &str) -> Result<(), JsValue> {
     })
 }
 
+struct JsTrustLock(Function);
+
+impl Drop for JsTrustLock {
+    fn drop(&mut self) {
+        let _ = self.0.call0(&JsValue::UNDEFINED);
+    }
+}
+
 #[async_trait::async_trait(?Send)]
 impl HostPlatform for JsHostPlatform {
     async fn exec(
@@ -409,6 +421,27 @@ impl HostPlatform for JsHostPlatform {
             .map_err(|e| fs_rejection_to_vault_error(&e, path, "write"))?;
 
         Ok(())
+    }
+
+    async fn lock_trust_manifest(
+        &self,
+        path: &Path,
+        _nonce: &str,
+    ) -> Result<Box<dyn Send>, VaultError> {
+        let lock = get_method(&self.host, "lockTrustManifest").map_err(|_| {
+            VaultError::LockingNotSupported {
+                message: "Trust manifest locking is not supported by this WASM host".to_string(),
+            }
+        })?;
+        let promise = lock
+            .call1(&self.host, &JsValue::from_str(&path.to_string_lossy()))
+            .map_err(|e| fs_rejection_to_vault_error(&e, path, "lock"))?;
+        let release = JsFuture::from(Promise::from(promise))
+            .await
+            .map_err(|e| fs_rejection_to_vault_error(&e, path, "lock"))?
+            .dyn_into::<Function>()
+            .map_err(|_| js_err("lockTrustManifest must return a release function"))?;
+        Ok(Box::new(JsTrustLock(release)))
     }
 
     async fn file_exists(&self, path: &Path) -> Result<bool, VaultError> {

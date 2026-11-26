@@ -71,6 +71,16 @@ export interface WasmHostPlatform {
   writeFile(path: string, content: Uint8Array, mode: number): Promise<void>
   fileExists(path: string): Promise<boolean>
   deleteFile(path: string): Promise<void>
+  /**
+   * Acquire exclusive access to the trust manifest at the supplied lock path.
+   * Return a synchronous release function. Hosts sharing a config directory
+   * must use the same interprocess protocol. The default Node host coordinates
+   * with both CLIs and the TypeScript SDK.
+   *
+   * @remarks
+   * A host without this capability cannot publish new trust approvals.
+   */
+  lockTrustManifest?(lockPath: string): Promise<() => void>
   renameFile(from: string, to: string): Promise<void>
   listDir(path: string): Promise<string[]>
   platform(): string
