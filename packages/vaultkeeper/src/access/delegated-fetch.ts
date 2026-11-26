@@ -50,7 +50,9 @@ export async function delegatedFetch(
   secrets: string | Record<string, string>,
   request: FetchRequest,
 ): Promise<Response> {
-  const url = resolvePlaceholders(request.url, secrets)
+  // Diagnostics must identify the request sent by this call, even if the caller reuses the template.
+  const urlTemplate = request.url
+  const url = resolvePlaceholders(urlTemplate, secrets)
   const headers =
     request.headers !== undefined
       ? resolvePlaceholdersInRecord(request.headers, secrets)
@@ -77,12 +79,12 @@ export async function delegatedFetch(
     // The underlying error's message can embed the placeholder-resolved URL
     // (with the injected secret) — e.g. `getaddrinfo ENOTFOUND <secret-host>`.
     // Redact the resolved URL and every secret value before including it, and
-    // report the unresolved template (`request.url`), never the resolved `url`,
+    // report the dispatched request's unresolved template, never the resolved `url`,
     // so no secret is echoed into the thrown message or the `url` field. The
     // original error is deliberately not attached as `cause`: its message
     // cannot be redacted in place and would reintroduce the leak.
     const secretValues = typeof secrets === 'string' ? [secrets] : Object.values(secrets)
-    const detail = redactSecretMaterial(rawDetail, url, request.url, secretValues)
-    throw new FetchError(`Fetch failed for ${request.url}: ${detail}`, request.url)
+    const detail = redactSecretMaterial(rawDetail, url, urlTemplate, secretValues)
+    throw new FetchError(`Fetch failed for ${urlTemplate}: ${detail}`, urlTemplate)
   }
 }

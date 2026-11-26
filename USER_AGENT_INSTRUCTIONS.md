@@ -96,7 +96,7 @@ if (vaultResponse.rotatedJwt !== undefined) {
 
 ### Step 4 — Access (one of three patterns)
 
-Use the `CapabilityToken` with one of the access methods described in section 5. The raw secret never appears in any method's return value.
+Use the `CapabilityToken` with one of the access methods described in section 5. For delegated fetch, `Response.url` can include secret substitutions made in the request URL.
 
 ---
 

@@ -118,6 +118,37 @@ describe('VaultKeeper.fetch redirects', () => {
     }
   })
 
+  it('reports the dispatched URL template if the caller reuses the request before a redirect fails', async () => {
+    const { vault, token } = await createDelegation()
+    const paths: (string | undefined)[] = []
+    const origin = createServer((request, response) => {
+      paths.push(request.url)
+      if (request.url !== '/final') {
+        response.writeHead(302, { Location: '/final' })
+      }
+      response.end()
+    })
+
+    try {
+      const baseUrl = await listen(origin)
+      const url = `${baseUrl}/token/{{secret}}`
+      const request = { url }
+      const result = vault.fetch(token, request).catch((error: unknown) => error)
+      // The caller can reuse the request object while the dispatched request is in flight.
+      request.url = `${baseUrl}/later-request`
+      const outcome = await result
+
+      expect(paths).toEqual([`/token/${syntheticSecret}`])
+      expect(outcome).toBeInstanceOf(FetchError)
+      expect(outcome).toMatchObject({ url })
+      expect(String(outcome)).toContain(`Fetch failed for ${url}:`)
+      expect(String(outcome)).not.toContain(request.url)
+      expect(String(outcome)).not.toContain(syntheticSecret)
+    } finally {
+      await close(origin)
+    }
+  })
+
   it('rejects redirects without placeholders and returns ordinary HTTP responses', async () => {
     const { vault, token } = await createDelegation()
     const paths: (string | undefined)[] = []
