@@ -536,18 +536,16 @@ export class DecryptionError extends VaultError {
 }
 
 /**
- * Thrown when a delegated `fetch()` call fails before a `Response` can be
- * produced — for example the URL is malformed or the underlying network
- * request fails (DNS failure, connection refused, TLS error).
+ * Thrown when delegated `fetch()` rejects without returning a `Response`.
+ * This includes malformed URLs, Fetch redirects, and transport failures.
  *
  * @public
  */
 export class FetchError extends VaultError {
   /**
-   * The unresolved URL template that fetch failed to request, with
-   * `{{secret}}`/`{{secret:name}}` placeholders left intact. The
-   * placeholder-resolved URL is deliberately never stored here, so an
-   * injected secret is never exposed.
+   * The original request URL template, with `{{secret}}` and
+   * `{{secret:name}}` placeholders intact. It identifies the request without
+   * disclosing URL substitutions, even if the server received the request.
    */
   readonly url: string
 
