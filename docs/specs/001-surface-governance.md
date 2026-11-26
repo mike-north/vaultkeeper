@@ -76,6 +76,19 @@ inheriting an elevated default. Dry runs describe the plan without resolving.
 For `run` and `exec`, `--help` and `-h` before the `--` separator show Vaultkeeper help.
 After the separator, both flags pass unchanged to the child.
 
+**Finite-use JWE admission (issue #381).** Native `run --token` and its `exec` alias share one
+persistent budget per token ID and config directory. Each admission spends one use before
+the CLI can read its secret, including when the child subsequently fails to launch. Concurrent native
+invocations reserve uses atomically, and exhaustion is a typed operational failure. The launcher checks
+the persisted key state and token expiry after acquiring the per-token usage lock. Native `rotate-key`
+and `revoke-key` are ordered against the key-state check and durable usage commit. If the token's
+encryption key was revoked before that check, the launcher refuses the token without spending a use.
+A key still in rotation grace remains eligible for tokens that name it in their protected header.
+Unlimited tokens and `--dry-run` do not use the ledger. Keep the ledger with the keys in a trusted
+config tree.
+The TypeScript CLI uses the SDK's process-local accounting. Each TypeScript invocation starts with
+the full token budget, including when it shares key material with the native CLI.
+
 **In review / designed, not landed** (env-epic-spec.md §4, lease lane #298–#300) — rows tracked here so the
 grammar review covers them before they land:
 

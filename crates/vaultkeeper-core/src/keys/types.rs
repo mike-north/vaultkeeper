@@ -1,6 +1,7 @@
 //! Key management types.
 
 use std::collections::HashMap;
+use zeroize::Zeroize;
 
 /// A cryptographic key with metadata.
 #[derive(Debug, Clone)]
@@ -16,8 +17,8 @@ pub struct KeyMaterial {
 
 impl Drop for KeyMaterial {
     fn drop(&mut self) {
-        // Zero the key material on drop.
-        self.key.iter_mut().for_each(|b| *b = 0);
+        // Retain the wipe under optimization when the allocation is released.
+        self.key.zeroize();
     }
 }
 
