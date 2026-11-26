@@ -40,6 +40,7 @@ import {
   CapabilityToken,
   createCapabilityToken,
   createSigningCapabilityToken,
+  requireSigningCapabilityClaims,
   validateCapabilityToken,
   isSigningClaims,
 } from './identity/session.js'
@@ -331,13 +332,13 @@ interface UsageRecord {
 const usageCounts = new Map<string, UsageRecord>()
 const USAGE_MAP_MAX_SIZE = 10_000
 
-/** Last second at which expired budgets were reclaimed under pressure. */
-let lastUsageSweep: number | undefined
+/** Lower bound on tracked deadlines, so denied admissions skip scans until reclamation is possible. */
+let nextUsageExpiry = Number.POSITIVE_INFINITY
 
 /** Clears process-local finite-use accounting for test isolation. @internal */
 export function clearUsageCounts(): void {
   usageCounts.clear()
-  lastUsageSweep = undefined
+  nextUsageExpiry = Number.POSITIVE_INFINITY
 }
 
 /**
@@ -667,7 +668,8 @@ export class VaultKeeper {
 
     const secretValue = await backend.retrieve(secretName)
 
-    const now = tokenExpiryTime()
+    // Keep minted issue times at whole-second precision, as in native tokens.
+    const now = Math.floor(tokenExpiryTime())
     const claims: VaultClaims = {
       jti: crypto.randomUUID(),
       exp: now + ttlMinutes * 60,
@@ -702,8 +704,9 @@ export class VaultKeeper {
    * accounting for up to 10,000 finite-use tokens. A tracked budget is retained
    * through expiry. At capacity, a first finite-use authorization requires
    * an expired entry to reclaim. Unlimited-use tokens need no entry.
-   * Expiry uses the latest wall-clock second observed by token enforcement,
-   * so a backward clock adjustment cannot make an expired token valid again.
+   * JWE redemption and capability use share an expiry clock that advances with
+   * elapsed time during a backward wall-clock adjustment. Expired tokens stay
+   * expired, and newly issued tokens continue to age.
    * Each process maintains its own accounting.
    *
    * @param jwe - Compact JWE string from setup()
@@ -736,13 +739,15 @@ export class VaultKeeper {
 
     if (claims.use !== null) {
       if (usage === undefined && usageCounts.size >= USAGE_MAP_MAX_SIZE) {
-        if (lastUsageSweep !== now) {
+        if (nextUsageExpiry <= now) {
+          nextUsageExpiry = Number.POSITIVE_INFINITY
           for (const [trackedJti, record] of usageCounts) {
             if (record.expiresAt <= now) {
               usageCounts.delete(trackedJti)
+            } else {
+              nextUsageExpiry = Math.min(nextUsageExpiry, record.expiresAt)
             }
           }
-          lastUsageSweep = now
         }
         if (usageCounts.size >= USAGE_MAP_MAX_SIZE) {
           throw new AuthorizationDeniedError(
@@ -751,10 +756,9 @@ export class VaultKeeper {
         }
       }
 
-      usageCounts.set(jti, {
-        count: currentCount + 1,
-        expiresAt: Math.max(usage?.expiresAt ?? claims.exp, claims.exp),
-      })
+      const expiresAt = Math.max(usage?.expiresAt ?? claims.exp, claims.exp)
+      usageCounts.set(jti, { count: currentCount + 1, expiresAt })
+      nextUsageExpiry = Math.min(nextUsageExpiry, expiresAt)
     }
 
     return { token: createCapabilityToken(claims), vaultResponse }
@@ -781,6 +785,8 @@ export class VaultKeeper {
    * substitutions made in the request URL.
    * @throws {AuthorizationDeniedError} If any token is invalid or was not
    *   created by this vault instance.
+   * @throws {TokenExpiredError} If any token reaches its JWE deadline before
+   *   dispatch.
    * @throws {VaultError} If a named placeholder references an unknown
    *   secret name.
    * @throws {FetchError} If the URL is malformed, the server sends a Fetch
@@ -790,8 +796,8 @@ export class VaultKeeper {
     token: CapabilityToken | SecretTokenMap,
     request: FetchRequest,
   ): Promise<{ response: Response; vaultResponse: VaultResponse }> {
-    const secrets = VaultKeeper.#resolveSecrets(token)
-    const response = await delegatedFetch(secrets, request)
+    const { secrets, beforeDispatch } = VaultKeeper.#resolveSecrets(token)
+    const response = await delegatedFetch(secrets, request, beforeDispatch)
     return {
       response,
       vaultResponse: { keyStatus: 'current' },
@@ -826,6 +832,8 @@ export class VaultKeeper {
    *   the vault metadata (`vaultResponse`).
    * @throws {AuthorizationDeniedError} If any token is invalid or was not
    *   created by this vault instance.
+   * @throws {TokenExpiredError} If any token reaches its JWE deadline before
+   *   dispatch.
    * @throws {ExecError} If the command cannot be started (e.g. ENOENT),
    *   a placeholder references an unknown secret name, or a secret
    *   placeholder appears in the `command` or `args` field.
@@ -834,8 +842,8 @@ export class VaultKeeper {
     token: CapabilityToken | SecretTokenMap,
     request: ExecRequest,
   ): Promise<{ result: ExecResult; vaultResponse: VaultResponse }> {
-    const secrets = VaultKeeper.#resolveSecrets(token)
-    const result = await delegatedExec(secrets, request)
+    const { secrets, beforeDispatch } = VaultKeeper.#resolveSecrets(token)
+    const result = await delegatedExec(secrets, request, beforeDispatch)
     return {
       result,
       vaultResponse: { keyStatus: 'current' },
@@ -846,16 +854,27 @@ export class VaultKeeper {
    * Create a controlled-direct `SecretAccessor` from a capability token.
    *
    * The accessor wraps the secret in a single-use, auto-zeroing `Buffer`. The
-   * secret is accessible only through the `read()` callback and is zeroed
-   * immediately after the callback returns.
+   * secret is accessible only through the `read()` callback while the JWE
+   * is live and is zeroed immediately after the callback returns.
    *
    * @param token - A `CapabilityToken` obtained from `authorize()`.
    * @returns A `SecretAccessor` that can be read exactly once.
    * @throws {AuthorizationDeniedError} If `token` is invalid or was not created
    *   by this vault instance, or if it is a signing-key token — a signing key
    *   carries no secret and cannot be read through `getSecret()` (use `sign()`).
+   * @throws {TokenExpiredError} If the token has reached its JWE deadline.
    */
   getSecret(token: CapabilityToken): SecretAccessor {
+    VaultKeeper.#requireReadableSecret(token)
+    return createSecretAccessor(
+      () => VaultKeeper.#requireReadableSecret(token),
+      () => {
+        validateCapabilityToken(token)
+      },
+    )
+  }
+
+  static #requireReadableSecret(token: CapabilityToken): string {
     const claims = validateCapabilityToken(token)
     // Defense in depth: a signing-key token carries no secret and must never be
     // read through the secret-access path.
@@ -885,7 +904,7 @@ export class VaultKeeper {
           'it is malformed or was not minted as a secret token.',
       )
     }
-    return createSecretAccessor(claims.val)
+    return claims.val
   }
 
   /**
@@ -988,13 +1007,7 @@ export class VaultKeeper {
     request: SignRequest,
     options?: PresenceRequirementOptions,
   ): Promise<{ result: SignResult; vaultResponse: VaultResponse }> {
-    const claims = validateCapabilityToken(token)
-    if (!isSigningClaims(claims)) {
-      throw new AuthorizationDeniedError(
-        'sign() requires a signing-key capability token from authorizeSigningKey() — ' +
-          'an ordinary secret token cannot be used to sign.',
-      )
-    }
+    const claims = requireSigningCapabilityClaims(token)
     const backend = this.#requireSigningBackend()
     await this.#enforcePresenceRequirement(backend, 'sign', options?.requirePresencePerUse)
     const jws = await createDetachedJws(claims.kid, request.payload, (data) =>
@@ -1269,9 +1282,31 @@ export class VaultKeeper {
   // Private helpers
   // ---------------------------------------------------------------------------
 
-  static #resolveSecrets(token: CapabilityToken | SecretTokenMap): string | Record<string, string> {
+  /** Snapshot the authorized secrets and retain their leases for the dispatch boundary. */
+  static #resolveSecrets(token: CapabilityToken | SecretTokenMap): {
+    secrets: string | Record<string, string>
+    beforeDispatch: () => void
+  } {
+    const capabilities: CapabilityToken[] = []
+    const beforeDispatch = () => {
+      const nowSec = tokenExpiryTime()
+      let earliest: { token: CapabilityToken; deadline: number } | undefined
+      for (const capability of capabilities) {
+        const claims = validateCapabilityToken(capability, nowSec)
+        if ('exp' in claims && (earliest === undefined || claims.exp < earliest.deadline)) {
+          earliest = { token: capability, deadline: claims.exp }
+        }
+      }
+      // The full walk catches leases already observed expired during request preparation.
+      // Resample through the earliest lease afterward so the walk cannot outlive its clock sample.
+      if (earliest !== undefined) {
+        validateCapabilityToken(earliest.token)
+      }
+    }
+
     if (token instanceof CapabilityToken) {
-      return VaultKeeper.#requireSecretValue(token)
+      capabilities.push(token)
+      return { secrets: VaultKeeper.#requireSecretValue(token), beforeDispatch }
     }
     const result: Record<string, string> = {}
     for (const [name, t] of Object.entries(token)) {
@@ -1281,8 +1316,9 @@ export class VaultKeeper {
         )
       }
       result[name] = VaultKeeper.#requireSecretValue(t)
+      capabilities.push(t)
     }
-    return result
+    return { secrets: result, beforeDispatch }
   }
 
   /**

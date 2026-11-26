@@ -18,7 +18,7 @@ const BLOCKLIST_SWEEP_THRESHOLD = 10_000
 /** Process-local denial records, keyed by JTI and retained through expiry. */
 const blocklist = new Map<string, number>()
 
-/** Last second at which expired denials were reclaimed under pressure. */
+/** Whole second of the last pressure sweep, limiting full scans under load. */
 let lastBlocklistSweep: number | undefined
 
 /**
@@ -31,13 +31,14 @@ let lastBlocklistSweep: number | undefined
  */
 export function blockToken(jti: string, expiresAt = Number.POSITIVE_INFINITY): void {
   const now = tokenExpiryTime()
-  if (blocklist.size >= BLOCKLIST_SWEEP_THRESHOLD && lastBlocklistSweep !== now) {
+  const sweepSecond = Math.floor(now)
+  if (blocklist.size >= BLOCKLIST_SWEEP_THRESHOLD && lastBlocklistSweep !== sweepSecond) {
     for (const [blockedJti, expiry] of blocklist) {
       if (expiry <= now) {
         blocklist.delete(blockedJti)
       }
     }
-    lastBlocklistSweep = now
+    lastBlocklistSweep = sweepSecond
   }
   if (expiresAt > now) {
     blocklist.set(jti, Math.max(blocklist.get(jti) ?? expiresAt, expiresAt))
@@ -69,6 +70,22 @@ export function isBlocked(jti: string, now = tokenExpiryTime()): boolean {
 export function clearBlocklist(): void {
   blocklist.clear()
   lastBlocklistSweep = undefined
+}
+
+/**
+ * Check the inclusive JWE cutoff against the caller's clock snapshot, including
+ * fractional NumericDates. Keep whole-second diagnostics for whole-second deadlines.
+ * @internal
+ */
+export function getTokenExpiryError(exp: number, nowSec: number): TokenExpiredError | undefined {
+  if (nowSec >= exp) {
+    const reportedNow = Number.isInteger(exp) ? Math.floor(nowSec) : nowSec
+    return new TokenExpiredError(
+      `Token expired at ${String(exp)} (now: ${String(reportedNow)})`,
+      false,
+    )
+  }
+  return undefined
 }
 
 /**
@@ -183,12 +200,9 @@ export function validateClaims(claims: VaultClaims, usedCount = 0, now = tokenEx
     throw new VaultError('Invalid token: iat must not be after exp')
   }
 
-  // Check expiration
-  if (now >= claims.exp) {
-    throw new TokenExpiredError(
-      `Token expired at ${String(claims.exp)} (now: ${String(now)})`,
-      false,
-    )
+  const expiryError = getTokenExpiryError(claims.exp, now)
+  if (expiryError !== undefined) {
+    throw expiryError
   }
 
   // Check blocklist

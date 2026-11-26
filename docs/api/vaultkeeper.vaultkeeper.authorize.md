@@ -63,5 +63,5 @@ Object containing an opaque [CapabilityToken](./vaultkeeper.capabilitytoken.md) 
 
 ## Remarks
 
-Vault instances using the same loaded TypeScript module share in-memory accounting for up to 10,000 finite-use tokens. A tracked budget is retained through expiry. At capacity, a first finite-use authorization requires an expired entry to reclaim. Unlimited-use tokens need no entry. Expiry uses the latest wall-clock second observed by token enforcement, so a backward clock adjustment cannot make an expired token valid again. Each process maintains its own accounting.
+Vault instances using the same loaded TypeScript module share in-memory accounting for up to 10,000 finite-use tokens. A tracked budget is retained through expiry. At capacity, a first finite-use authorization requires an expired entry to reclaim. Unlimited-use tokens need no entry. JWE redemption and capability use share an expiry clock that advances with elapsed time during a backward wall-clock adjustment. Expired tokens stay expired, and newly issued tokens continue to age. Each process maintains its own accounting.
 

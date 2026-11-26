@@ -145,9 +145,9 @@ use std::fmt;
 
 use zeroize::Zeroizing;
 
+use super::expiry_clock::ExpiryClock;
 use crate::errors::VaultError;
 use crate::types::{SigningClaims, VaultClaims};
-use crate::util::time::now_secs;
 
 /// Maximum number of live entries [`HandleTable`] (both the handle map and
 /// the legacy JTI usage-count map) will retain. When their cap is reached, the oldest
@@ -344,22 +344,16 @@ pub struct HandleTable {
     usage_order: VecDeque<String>,
     /// Finite token budgets retained until their expiry, independently of handles.
     finite_usage: HashMap<String, (u64, u64)>,
-    /// Prevent reclaimed budgets becoming valid after a backward clock adjustment.
-    finite_clock: u64,
+    /// Keep JWE issuance, validation, and handle expiry on the same time base.
+    expiry_clock: ExpiryClock,
     /// Avoid repeating a full expiry sweep within the same observed second.
     finite_last_sweep: Option<u64>,
 }
 
 impl HandleTable {
-    /// Mint against the same expiry horizon used by this instance's enforcement.
-    pub(crate) fn issuance_time(&self) -> u64 {
-        self.finite_clock.max(now_secs())
-    }
-
-    /// Observe expiry monotonically before validating or reclaiming a budget.
-    pub(crate) fn finite_time(&mut self) -> u64 {
-        self.finite_clock = self.finite_clock.max(now_secs());
-        self.finite_clock
+    /// Observe the shared clock before minting, validating, or reclaiming authority.
+    pub(crate) fn expiry_time(&self) -> u64 {
+        self.expiry_clock.read()
     }
 
     /// Count successful finite-use authorizations for this vault instance.
@@ -497,7 +491,9 @@ impl HandleTable {
     fn ensure_live(&mut self, id: &HandleId) -> Result<(), VaultError> {
         let expired = match self.entries.get(id) {
             None => return Err(unknown_handle_error(id)),
-            Some(entry) => entry.expires_at.is_some_and(|exp| now_secs() >= exp),
+            Some(entry) => entry
+                .expires_at
+                .is_some_and(|exp| self.expiry_time() >= exp),
         };
         if expired {
             self.entries.remove(id);
@@ -576,7 +572,7 @@ impl HandleTable {
     /// memory more eagerly than "next access" do so (e.g. a CLI daemon
     /// loop's periodic tick).
     pub fn sweep_expired(&mut self) -> usize {
-        let now = now_secs();
+        let now = self.expiry_time();
         // A `HashSet` membership test (below) is O(1); the previous
         // `Vec<HandleId>` + `Vec::contains` inside `entry_order.retain(...)`
         // made this O(n^2) in the number of expired entries.
@@ -613,6 +609,7 @@ impl HandleTable {
 mod tests {
     use super::*;
     use crate::types::TrustTier;
+    use crate::util::time::{now_millis, now_secs};
 
     fn secret_claims(jti: &str, val: &str) -> VaultClaims {
         VaultClaims {
@@ -933,6 +930,20 @@ mod tests {
         assert_eq!(table.len(), HANDLE_TABLE_MAX_SIZE);
         let err = table.resolve_secret_claims(&first).unwrap_err();
         assert!(matches!(err, VaultError::AuthorizationDenied { .. }));
+    }
+
+    #[test]
+    fn handle_read_respects_an_expiry_already_observed_by_token_enforcement() {
+        let mut table = HandleTable::new();
+        let wall = now_secs();
+        let id = table.insert_secret(secret_claims("jti-old", "secret"), Some(wall + 60));
+        // The wall reading has been corrected back below the observed deadline.
+        table.expiry_clock.read_with(|| (now_millis() + 120_000, 0));
+
+        assert!(matches!(
+            table.read_secret(&id),
+            Err(VaultError::TokenExpired { .. })
+        ));
     }
 
     #[test]

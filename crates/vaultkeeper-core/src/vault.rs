@@ -615,7 +615,7 @@ impl VaultKeeper {
             .unwrap_or("file")
             .to_string();
 
-        let now = self.handle_table.issuance_time();
+        let now = self.handle_table.expiry_time();
 
         let token = build_and_mint_claims(
             &self.key_manager,
@@ -850,7 +850,7 @@ impl VaultKeeper {
             .max(revocation.rev_state_gen);
         let kgen = revocation.min_generation_for(key_name);
 
-        let now = self.handle_table.issuance_time();
+        let now = self.handle_table.expiry_time();
         let ttl_seconds = options
             .ttl_seconds
             .min(crate::profile::SIGNING_LEASE_MAX_TTL_SECONDS);
@@ -1072,7 +1072,7 @@ impl VaultKeeper {
             return Err(wrong_claims_kind_error("secret token", "signing-key lease"));
         }
 
-        let now = self.handle_table.finite_time();
+        let now = self.handle_table.expiry_time();
         let current_usage = self.handle_table.finite_usage(&claims.jti);
         validate_claims_at(&claims, current_usage, now)?;
 
@@ -1211,7 +1211,7 @@ impl VaultKeeper {
             return Err(wrong_claims_kind_error("signing-key lease", "secret token"));
         }
 
-        let now = self.handle_table.finite_time();
+        let now = self.handle_table.expiry_time();
         let current_usage = self.handle_table.finite_usage(&claims.jti);
         validate_claims_at(&claims, current_usage, now)?;
 

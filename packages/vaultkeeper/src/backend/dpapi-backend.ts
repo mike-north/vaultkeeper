@@ -10,7 +10,7 @@ import * as fs from 'node:fs/promises'
 import * as path from 'node:path'
 import * as os from 'node:os'
 import { execCommand, execCommandFull } from '../util/exec.js'
-import { SecretNotFoundError, toFilesystemError } from '../errors.js'
+import { DecryptionError, SecretNotFoundError, toFilesystemError } from '../errors.js'
 import type { ListableBackend } from './types.js'
 
 /**
@@ -118,15 +118,33 @@ export class DpapiBackend implements ListableBackend {
     }
 
     const script = [
+      "$ErrorActionPreference = 'Stop'",
       'Add-Type -AssemblyName System.Security',
       `$encrypted = [System.IO.File]::ReadAllBytes(${JSON.stringify(entryPath)})`,
       '$entropy = $null',
       '$scope = [System.Security.Cryptography.DataProtectionScope]::CurrentUser',
       '$bytes = [System.Security.Cryptography.ProtectedData]::Unprotect($encrypted, $entropy, $scope)',
-      'Write-Output ([System.Text.Encoding]::UTF8.GetString($bytes))',
+      'try { Write-Output ([System.Convert]::ToBase64String($bytes)) } finally { [Array]::Clear($bytes, 0, $bytes.Length) }',
     ].join('; ')
 
-    return execCommand('powershell', ['-NoProfile', '-Command', script])
+    // execCommand trims PowerShell's output framing. Keep the plaintext out
+    // of that channel so significant leading/trailing whitespace survives.
+    const encoded = await execCommand('powershell', ['-NoProfile', '-Command', script])
+    const secretBuf = Buffer.from(encoded, 'base64')
+    try {
+      if (secretBuf.toString('base64') !== encoded) {
+        throw new DecryptionError('DPAPI decrypt output was not valid base64', entryPath)
+      }
+
+      // Preserve a leading BOM when it is part of the credential.
+      try {
+        return new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(secretBuf)
+      } catch {
+        throw new DecryptionError('Decrypted DPAPI entry was not valid UTF-8', entryPath)
+      }
+    } finally {
+      secretBuf.fill(0)
+    }
   }
 
   async delete(id: string): Promise<void> {

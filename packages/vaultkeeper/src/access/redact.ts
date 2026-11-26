@@ -1,12 +1,4 @@
-/**
- * Secret redaction for captured process output.
- *
- * The single source of truth for how an injected secret value is scrubbed from
- * text. Both the library's delegated `exec()` (which buffers full output) and
- * the CLI's streaming `RedactingStream` (which redacts live) route their
- * substitution through {@link redactSecrets}, so the redaction behavior can
- * never drift between the two surfaces.
- */
+/** Secret redaction for buffered text output. */
 
 /**
  * The token substituted for a redacted secret value.

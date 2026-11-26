@@ -84,6 +84,30 @@ describe('blockToken / isBlocked', () => {
     }).toThrow(TokenExpiredError)
   })
 
+  it('reclaims a denial at a fractional deadline without reviving the claims after rollback', () => {
+    vi.useFakeTimers()
+    const start = 1_700_000_000_000
+    const claims = makeValidClaims({ iat: start / 1000, exp: start / 1000 + 0.5 })
+    vi.setSystemTime(start)
+    blockToken(claims.jti, claims.exp)
+
+    vi.setSystemTime(start + 499)
+    expect(() => {
+      validateClaims(claims)
+    }).toThrow(TokenRevokedError)
+
+    vi.setSystemTime(start + 500)
+    expect(isBlocked(claims.jti)).toBe(false)
+    expect(() => {
+      validateClaims(claims)
+    }).toThrow(TokenExpiredError)
+
+    vi.setSystemTime(start + 499)
+    expect(() => {
+      validateClaims(claims)
+    }).toThrow(TokenExpiredError)
+  })
+
   it('clearBlocklist removes all blocked JTIs', () => {
     blockToken('jti-a')
     blockToken('jti-b')
@@ -166,6 +190,18 @@ describe('validateClaims', () => {
       expect(() => {
         validateClaims(claims)
       }).toThrow(TokenExpiredError)
+    })
+
+    it('preserves whole-second diagnostics for whole-second deadlines', () => {
+      const clock = vi.spyOn(Date, 'now').mockReturnValue(1_700_000_000_500)
+      try {
+        const claims = makeValidClaims({ iat: 1_699_999_940, exp: 1_700_000_000 })
+        expect(() => {
+          validateClaims(claims)
+        }).toThrow('Token expired at 1700000000 (now: 1700000000)')
+      } finally {
+        clock.mockRestore()
+      }
     })
 
     it('TokenExpiredError has canRefresh=false', () => {

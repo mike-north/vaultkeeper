@@ -1,17 +1,23 @@
-/** The latest epoch second observed by this module's token enforcement. */
-let latestSecond = Number.NEGATIVE_INFINITY
+/** Wall time and the matching monotonic reading, both in milliseconds. */
+let anchor: { wallMs: number; steadyMs: number } | undefined
 
 /**
- * Read the authorization clock in epoch seconds. Once observed, an instant
- * remains past even if the system clock is corrected backwards. Discarding
- * state at this instant therefore cannot make an expired token usable again.
+ * Read the shared JWE expiry clock in epoch seconds, including fractions.
+ * Elapsed monotonic time carries the clock forward while wall time is behind.
+ * Expired state can be reclaimed safely, and new tokens still age normally.
  */
 export function tokenExpiryTime(): number {
-  latestSecond = Math.max(latestSecond, Math.floor(Date.now() / 1000))
-  return latestSecond
+  const wallMs = Date.now()
+  const steadyMs = performance.now()
+  const projectedMs =
+    anchor === undefined ? wallMs : anchor.wallMs + Math.floor(steadyMs - anchor.steadyMs)
+  if (wallMs >= projectedMs) {
+    anchor = { wallMs, steadyMs }
+  }
+  return Math.max(wallMs, projectedMs) / 1000
 }
 
 /** Reset the clock between tests after discarding their enforcement state. @internal */
 export function resetTokenExpiryClockForTests(): void {
-  latestSecond = Number.NEGATIVE_INFINITY
+  anchor = undefined
 }
