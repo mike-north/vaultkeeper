@@ -72,6 +72,13 @@ range. "Secrets" = does a secret value transit this command, and by what channel
 For `run` and `exec`, `--help` and `-h` before the `--` separator show Vaultkeeper help.
 After the separator, both flags pass unchanged to the child.
 
+For native `run`, protected profile entries and `--set` overlays use verification of the selected child
+executable. The launcher resolves a bare name on the parent's `PATH`, verifies the canonical absolute target
+without recording first encounters, then checks the digest again after materialization. It launches that path
+directly, so the child environment's `PATH` cannot change which executable is selected. The executable and
+its parent path components must stay stable from the final digest check until the OS opens it. On Windows,
+protected runs require a native `.exe` target.
+
 **In review / designed, not landed** (env-epic-spec.md §4, lease lane #298–#300) — rows tracked here so the
 grammar review covers them before they land:
 
@@ -245,6 +252,14 @@ whether membership is intentional.
   exactly one of `executablePath`/`skipTrust` — a craft high point, keep as the pattern), `SetupOptionsBase`,
   `approveExecutable`, `checkExecutableTrust`, `setDevelopmentMode`, `ExecutableTrustStatus`,
   `ExecutableTrustRequiredError`, `IdentityMismatchError`.
+- **Native profile materialization:** `resolve_profile` checks each secret-backed entry's `minTrust`
+  before reading that entry, for both plaintext and lease materialization. For `registry` or `sigstore`,
+  `ResolveOptions::executable_identity` borrows opaque `VerifiedExecutableIdentity` evidence from
+  `verify_trust_pending`. A dev bypass, first observation, or registry conflict supplies no evidence.
+  An absent or weaker decision fails with `ExecutableTrustRequired`. A protected lease carries the verified
+  digest in `exe` and the entry's requested tier in `tid`. An `unverified` lease carries `"dev"` in `exe`.
+  Earlier entries may already have been read when a later entry fails. The resolver discards and zeroizes
+  those values and returns no environment. The host owns verification and launching the verified target.
 - **Secrets & access tokens:** `store`, `delete`, `secretExists`, `authorize`, `getSecret`, `CapabilityToken`,
   `SecretAccessor`, `SecretTokenMap`, `AccessorConsumedError`, `SecretNotFoundError`.
 - **Delegated access patterns:** `fetch`; the delegated-launch verb **aligns to `run`** (CLI ubiquitous

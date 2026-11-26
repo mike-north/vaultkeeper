@@ -128,6 +128,52 @@ fn approved_command_satisfies_registry_profile() {
     assert_eq!(output.stdout, b"hello");
 }
 
+/// A bare command uses the approved target found on the parent's PATH.
+#[test]
+fn path_lookup_accepts_an_approved_executable_through_a_symlink() {
+    use std::os::unix::fs::symlink;
+
+    let profile = serde_json::json!({"version": 1, "name": "uat", "entries": {
+        "GREETING": {"secret": "greeting", "materialize": "secret", "minTrust": "registry"}
+    }});
+    let dir = run_test_env(&profile);
+    store_secret(&dir, "greeting", "hello");
+    let skipped = dir.path().join("skipped");
+    let bin = dir.path().join("bin");
+    fs::create_dir(&skipped).unwrap();
+    fs::create_dir(&bin).unwrap();
+    fs::write(skipped.join("uat-shell"), b"non-executable file").unwrap();
+    symlink("/bin/sh", bin.join("uat-shell")).unwrap();
+
+    let approved = Command::new(vk_bin())
+        .env("VAULTKEEPER_CONFIG_DIR", dir.path())
+        .args(["approve", "--path", "/bin/sh"])
+        .output()
+        .unwrap();
+    assert!(approved.status.success());
+
+    let output = Command::new(vk_bin())
+        .env("VAULTKEEPER_CONFIG_DIR", dir.path())
+        .env("PATH", std::env::join_paths([skipped, bin]).unwrap())
+        .args([
+            "run",
+            "--profile",
+            "uat",
+            "--",
+            "uat-shell",
+            "-c",
+            "printf %s \"$GREETING\"",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(output.stdout, b"hello");
+}
+
 // ─── AC1: stdio round trip — byte-exact, both directions ─────────
 
 #[test]
