@@ -51,7 +51,7 @@ async fn acquire_at(path: &Path, nonce: &str) -> io::Result<TrustLock> {
     let owner = format!("{}-{nonce}", std::process::id());
     let candidate = path.with_extension(format!("lock.{owner}"));
     if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
+        super::create_dir_all_secure(parent)?;
     }
     fs::create_dir(&candidate)?;
     let candidate = Candidate(candidate, owner);

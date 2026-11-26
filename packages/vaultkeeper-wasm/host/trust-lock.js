@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { rmdirSync, unlinkSync } from 'node:fs'
-import { mkdir, readdir, rename, rmdir, unlink, writeFile } from 'node:fs/promises'
-import { join, resolve } from 'node:path'
+import { mkdir, readdir, realpath, rename, rmdir, unlink, writeFile } from 'node:fs/promises'
+import { basename, dirname, join } from 'node:path'
 import { performance } from 'node:perf_hooks'
 import { kill, pid as currentPid, platform } from 'node:process'
 import { setTimeout } from 'node:timers/promises'
@@ -66,7 +66,9 @@ async function recover(lock) {
  * @returns {Promise<() => void>}
  */
 export async function lockTrustManifest(lockPath) {
-  const lock = resolve(lockPath)
+  // Resolve the parent through the filesystem before normalizing the final
+  // name: lexical resolution changes the meaning of symlink/.. paths.
+  const lock = join(await realpath(dirname(lockPath)), basename(lockPath))
   const owner = `${String(currentPid)}-${randomUUID()}`
   const candidate = lock + '.' + owner
   const marker = join(lock, owner)

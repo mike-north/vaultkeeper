@@ -664,6 +664,30 @@ mod revoke_key {
 mod approve {
     use super::*;
 
+    #[cfg(unix)]
+    #[test]
+    fn approve_creates_private_config_directories() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let executable = dir.path().join("executable");
+        fs::write(&executable, "executable").unwrap();
+        let parent = dir.path().join("new-parent");
+        let config = parent.join("config");
+        let mut cmd = Command::cargo_bin("vaultkeeper").unwrap();
+        cmd.env("VAULTKEEPER_CONFIG_DIR", &config)
+            .args(["approve", "--path"])
+            .arg(&executable)
+            .assert()
+            .success();
+        for path in [parent, config] {
+            assert_eq!(
+                fs::metadata(path).unwrap().permissions().mode() & 0o777,
+                0o700
+            );
+        }
+    }
+
     #[test]
     fn approve_succeeds_with_existing_file() {
         let (_, dir) = cli_test_env();

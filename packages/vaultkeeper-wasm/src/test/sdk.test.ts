@@ -12,7 +12,9 @@
 
 import { describe, it } from 'node:test'
 import * as assert from 'node:assert/strict'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdir, mkdtemp, rm, symlink } from 'node:fs/promises'
+import { setTimeout } from 'node:timers/promises'
+import { lockTrustManifest } from '../../host/trust-lock.js'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { chmod, readFile, writeFile } from 'node:fs/promises'
@@ -127,6 +129,39 @@ async function readApprovedHashes(configDir: string, namespace: string): Promise
 }
 
 describe('@vaultkeeper/wasm SDK', () => {
+  it(
+    'waits for the actual manifest lock when the config path traverses a symlink',
+    { skip: process.platform === 'win32' },
+    async () => {
+      await withTempDir(async (dir) => {
+        const real = join(dir, 'real')
+        await mkdir(join(real, 'nested'), { recursive: true })
+        await mkdir(join(real, 'config'))
+        await mkdir(join(dir, 'config'))
+        await symlink(join(real, 'nested'), join(dir, 'link'))
+        const vault = await VaultKeeper.create({ skipDoctor: true }, `${dir}/link/../config`)
+        const executable = await writeFakeExecutable(dir, 'executable', 'executable')
+        const release = await lockTrustManifest(join(real, 'config', 'trust-manifest.json.lock'))
+        let completed = false
+        const setup = vault
+          .setup('secret', 'value', { executablePath: executable.path })
+          .then(() => {
+            completed = true
+          })
+        try {
+          await setTimeout(200)
+          assert.equal(completed, false, 'setup must wait for the canonical manifest lock')
+        } finally {
+          release()
+          await setup
+          vault.dispose()
+        }
+        assert.deepEqual(await readApprovedHashes(join(real, 'config'), executable.path), [
+          executable.hash,
+        ])
+      })
+    },
+  )
   it('creates a VaultKeeper instance', async () => {
     await withTempDir(async (dir) => {
       const vault = await createTestVault(dir)
