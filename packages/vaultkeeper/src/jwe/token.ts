@@ -79,6 +79,52 @@ function isLeasePresence(value: unknown): value is LeasePresence {
 }
 
 /**
+ * Check the original top-level tier token before JSON number rounding can hide
+ * a fractional value. JSON validity is established by JSON.parse first. The
+ * tokenizer also distinguishes escaped property names and nested values; Rust
+ * rejects duplicate claim fields, so duplicate tier fields fail closed here.
+ */
+function hasValidTierSpelling(json: string): boolean {
+  const tokens =
+    json.match(
+      /"(?:\\.|[^"\\])*"|-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?|true|false|null|[{}[\],:]/g,
+    ) ?? []
+  let depth = 0
+  let key: unknown
+  let expectingKey = false
+  let expectingValue = false
+  let seenTier = false
+  for (const token of tokens) {
+    if (depth === 1 && expectingKey && token.startsWith('"')) {
+      key = JSON.parse(token)
+      expectingKey = false
+      continue
+    }
+    if (depth === 1 && token === ':') {
+      expectingValue = true
+      continue
+    }
+    if (depth === 1 && expectingValue) {
+      if (key === 'tid') {
+        if (seenTier) return false
+        seenTier = true
+        if (!token.startsWith('"') && token !== '1' && token !== '2' && token !== '3') return false
+      }
+      expectingValue = false
+    }
+    if (token === '{' || token === '[') {
+      depth++
+      if (depth === 1 && token === '{') expectingKey = true
+    } else if (token === '}' || token === ']') {
+      depth--
+    } else if (depth === 1 && token === ',') {
+      expectingKey = true
+    }
+  }
+  return true
+}
+
+/**
  * Parses a raw JSON payload object into VaultClaims, validating that all required fields
  * are present and of the correct types. Returns `undefined` if validation fails.
  *
@@ -153,10 +199,15 @@ export async function decryptToken(key: Uint8Array, jwe: string): Promise<VaultC
   }
 
   let parsed: unknown
+  const json = new TextDecoder().decode(plaintext)
   try {
-    parsed = JSON.parse(new TextDecoder().decode(plaintext))
+    parsed = JSON.parse(json)
   } catch {
     throw new InvalidTokenError('JWE payload is not valid JSON')
+  }
+
+  if (!hasValidTierSpelling(json)) {
+    throw new InvalidTokenError('JWE payload does not match VaultClaims schema')
   }
 
   const claims = parseVaultClaims(parsed)
