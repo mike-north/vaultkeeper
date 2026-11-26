@@ -1,4 +1,5 @@
-//! macOS Keychain backend, driven via the `security(1)` CLI.
+//! macOS Keychain backend, using `security(1)` for lookup and creation and
+//! the native Security framework for update-only replacements.
 //!
 //! Ports the TypeScript `KeychainBackend`
 //! (`packages/vaultkeeper/src/backend/keychain-backend.ts`) into
@@ -10,16 +11,16 @@
 //!
 //! # Store transport and replacement
 //!
-//! Each write sends a single command over `security -i` stdin. Base64 keeps
-//! the credential on one line. Quoting preserves literal service names
-//! and paths. Line breaks and NULs cannot be represented safely in the
-//! interactive stream, and the command must fit the tool's input buffer.
+//! Writes send the base64 credential exclusively over stdin. Creating an item
+//! uses one `security -i` command. Its service name is quoted literally and
+//! must be free of line breaks and NULs; the full command must fit the tool's
+//! input buffer.
 //!
 //! A metadata lookup finds the first matching item using the same search
-//! order as retrieval. For an existing item, `add-generic-password -U`
-//! updates it in its owning keychain. If the update is rejected, the tool's
-//! fallback add is subject to the duplicate check in that same keychain.
-//! New items use a regular add in the default keychain.
+//! order as retrieval. Replacement opens only the owning keychain and
+//! modifies an existing item reference. If the lookup becomes stale, no
+//! item can be added there or in the default keychain. A confirmed miss
+//! uses a regular add in the default keychain.
 
 use crate::backend::types::{ExecOptions, HostPlatform, ListableBackend, Platform, SecretBackend};
 use crate::errors::VaultError;
@@ -38,6 +39,15 @@ const SERVICE_PREFIX: &str = "vaultkeeper:";
 /// Low byte of errSecItemNotFound in the process exit code.
 const ITEM_NOT_FOUND_EXIT: i32 = 44;
 
+/// The system JXA runner loads the Security framework without a build-time dependency.
+const UPDATE_COMMAND: &str = "/usr/bin/osascript";
+
+/// Keep in sync with the script embedded in the TypeScript Keychain backend.
+const UPDATE_SCRIPT: &str = include_str!("keychain-update.js");
+
+/// The complete OSStatus for a locked keychain that would require user interaction.
+const UPDATE_LOCKED_STATUS: &str = "-25308";
+
 /// Reserve two bytes for the newline and NUL in security's 4096-byte input buffer.
 const MAX_INTERACTIVE_COMMAND_BYTES: usize = 4094;
 
@@ -51,8 +61,19 @@ fn check_command_size(bytes: usize) -> Result<(), VaultError> {
     Ok(())
 }
 
-/// macOS Keychain secret backend, driven entirely through `security(1)`
-/// subprocess calls via [`HostPlatform::exec`].
+/// Reserves the entire command before copying the credential so no unwiped
+/// allocation can be released during growth. The script is wiped on drop.
+fn interactive_script(prefix: &str, encoded: &str, suffix: &str) -> Zeroizing<String> {
+    let mut script = Zeroizing::new(String::with_capacity(
+        prefix.len() + encoded.len() + suffix.len(),
+    ));
+    script.push_str(prefix);
+    script.push_str(encoded);
+    script.push_str(suffix);
+    script
+}
+
+/// macOS Keychain secret backend, driven through [`HostPlatform::exec`].
 ///
 /// Only meaningfully available on Darwin (macOS) with the `security` CLI on
 /// PATH.
@@ -135,13 +156,17 @@ impl KeychainBackend {
         quoted
     }
 
+    /// Report locked writes uniformly across both subprocess transports.
+    fn locked_write_error() -> VaultError {
+        VaultError::BackendLocked {
+            message: "macOS Keychain is locked and cannot be written non-interactively".to_owned(),
+            interactive: true,
+        }
+    }
+
     fn write_error(message: &str, stderr: &[u8]) -> VaultError {
         if Self::is_locked_keychain_error(stderr) {
-            VaultError::BackendLocked {
-                message: "macOS Keychain is locked and cannot be written non-interactively"
-                    .to_owned(),
-                interactive: true,
-            }
+            Self::locked_write_error()
         } else {
             VaultError::Exec {
                 message: message.to_owned(),
@@ -198,6 +223,103 @@ impl KeychainBackend {
                 &output.stderr,
             )),
         }
+    }
+
+    /// Update only the matching item in the keychain that owned it at lookup time.
+    async fn update_existing(
+        &self,
+        path: &str,
+        service: &str,
+        secret: &str,
+        encoded_bytes: usize,
+    ) -> Result<(), VaultError> {
+        // The native API takes a UInt32 byte count, independent of the security CLI line limit.
+        let size = u32::try_from(encoded_bytes)
+            .map_err(|_| VaultError::Exec {
+                message: "macOS Keychain replacement exceeds the native size limit".to_owned(),
+                command: UPDATE_COMMAND.to_owned(),
+            })?
+            .to_string();
+        let encoded = Zeroizing::new(Base64::encode_string(secret.as_bytes()));
+        let mut output = self
+            .host
+            .exec(
+                UPDATE_COMMAND,
+                &[
+                    "-l",
+                    "JavaScript",
+                    "-e",
+                    UPDATE_SCRIPT,
+                    "--",
+                    path,
+                    service,
+                    ACCOUNT,
+                    &size,
+                ],
+                ExecOptions {
+                    stdin: Some(encoded.as_bytes()),
+                    ..Default::default()
+                },
+            )
+            .await?;
+        // osascript prints the full status; a successful process alone proves only that the helper ran.
+        let status = std::str::from_utf8(&output.stdout).ok().map(str::trim);
+        let result = match (output.exit_code, status) {
+            (0, Some("0")) => Ok(()),
+            (0, Some(UPDATE_LOCKED_STATUS)) => Err(Self::locked_write_error()),
+            _ => Err(VaultError::Exec {
+                message: "macOS Keychain replacement failed".to_owned(),
+                command: UPDATE_COMMAND.to_owned(),
+            }),
+        };
+        output.stdout.zeroize();
+        output.stderr.zeroize();
+        result
+    }
+
+    /// Add a new item after a confirmed miss. The default keychain rejects duplicate creates.
+    async fn add_new(
+        &self,
+        service: &str,
+        secret: &str,
+        encoded_bytes: usize,
+    ) -> Result<(), VaultError> {
+        let service_token = Self::quote_for_interactive_stream(service);
+        let prefix = format!("add-generic-password -a \"{ACCOUNT}\" -s {service_token} -w \"");
+        let suffix = "\"\n";
+        check_command_size(prefix.len() + encoded_bytes + suffix.len() - 1)?;
+        let encoded = Zeroizing::new(Base64::encode_string(secret.as_bytes()));
+        let script = interactive_script(&prefix, &encoded, suffix);
+        let mut output = self
+            .host
+            .exec(
+                "security",
+                &["-i"],
+                ExecOptions {
+                    stdin: Some(script.as_bytes()),
+                    ..Default::default()
+                },
+            )
+            .await?;
+        // Interactive mode reports a full OSStatus even when the process exit code wraps to zero.
+        let status = b"add-generic-password: returned ";
+        let result = if output.exit_code != 0
+            || output
+                .stderr
+                .windows(status.len())
+                .any(|bytes| bytes == status)
+            || Self::is_locked_keychain_error(&output.stderr)
+        {
+            Err(Self::write_error(
+                "macOS Keychain write failed",
+                &output.stderr,
+            ))
+        } else {
+            Ok(())
+        };
+        output.stdout.zeroize();
+        output.stderr.zeroize();
+        result
     }
 
     /// Parse a `security dump-keychain` attribute line for the
@@ -290,52 +412,15 @@ impl SecretBackend for KeychainBackend {
         Self::reject_multiline_id(id)?;
         let service = Self::service_name(id);
         let encoded_bytes = secret.len().div_ceil(3).saturating_mul(4);
-        check_command_size(service.len().saturating_add(encoded_bytes))?;
-        let target = self.store_target(&service).await?;
-        let service_token = Self::quote_for_interactive_stream(&service);
-        let (update_flag, keychain) = match target {
-            Some(path) => (
-                " -U",
-                format!(" {}", Self::quote_for_interactive_stream(&path)),
-            ),
-            None => ("", String::new()),
-        };
-        let prefix =
-            format!("add-generic-password{update_flag} -a \"{ACCOUNT}\" -s {service_token} -w \"");
-        let suffix = format!("\"{keychain}\n");
-        check_command_size(prefix.len() + encoded_bytes + suffix.len() - 1)?;
-        let encoded = Zeroizing::new(Base64::encode_string(secret.as_bytes()));
-        let script = Zeroizing::new(format!("{prefix}{}{suffix}", encoded.as_str()));
-        let mut output = self
-            .host
-            .exec(
-                "security",
-                &["-i"],
-                ExecOptions {
-                    stdin: Some(script.as_bytes()),
-                    ..Default::default()
-                },
-            )
-            .await?;
-        // Interactive mode reports a full OSStatus even when the process exit code wraps to zero.
-        let status = b"add-generic-password: returned ";
-        let result = if output.exit_code != 0
-            || output
-                .stderr
-                .windows(status.len())
-                .any(|bytes| bytes == status)
-            || Self::is_locked_keychain_error(&output.stderr)
-        {
-            Err(Self::write_error(
-                "macOS Keychain write failed",
-                &output.stderr,
-            ))
-        } else {
-            Ok(())
-        };
-        output.stdout.zeroize();
-        output.stderr.zeroize();
-        result
+        // Bound service metadata before giving it to either subprocess.
+        check_command_size(service.len())?;
+        match self.store_target(&service).await? {
+            Some(path) => {
+                self.update_existing(&path, &service, secret, encoded_bytes)
+                    .await
+            }
+            None => self.add_new(&service, secret, encoded_bytes).await,
+        }
     }
 
     async fn retrieve(&self, id: &str) -> Result<String, VaultError> {
@@ -480,6 +565,21 @@ mod tests {
     /// A non-default keychain printed in security's hex format.
     const TEST_KEYCHAIN_PATH: &str = "/test/team clés.keychain-db";
 
+    #[test]
+    fn interactive_script_reserves_space_for_the_suffix_before_appending_the_credential() {
+        let prefix = "add-generic-password -a \"vaultkeeper\" -s \"vaultkeeper:test\" -w \"";
+        let suffix = "\"\n";
+        let encoded = "QUFB".repeat(512);
+        let script = interactive_script(prefix, &encoded, suffix);
+
+        // The old formatter grew an already credential-bearing allocation when adding the suffix.
+        assert_eq!(
+            script.capacity(),
+            prefix.len() + encoded.len() + suffix.len()
+        );
+        assert_eq!(script.as_str(), format!("{prefix}{encoded}{suffix}"));
+    }
+
     /// In-memory Keychain with invocation tracking and failure injection.
     struct TestHost {
         config_dir: PathBuf,
@@ -487,6 +587,7 @@ mod tests {
         entries: Mutex<std::collections::HashMap<String, String>>,
         calls: Mutex<Vec<RecordedExec>>,
         reject_writes: std::sync::atomic::AtomicBool,
+        owner_unavailable: std::sync::atomic::AtomicBool,
         shadow_item: std::sync::atomic::AtomicBool,
         list_keychains_unavailable: bool,
         platform: Platform,
@@ -499,6 +600,7 @@ mod tests {
                 entries: Mutex::new(std::collections::HashMap::new()),
                 calls: Mutex::new(Vec::new()),
                 reject_writes: false.into(),
+                owner_unavailable: false.into(),
                 shadow_item: false.into(),
                 list_keychains_unavailable: false,
                 platform: Platform::Darwin,
@@ -570,7 +672,16 @@ mod tests {
                         let target = tokens.get(7 + offset).map(String::as_str);
                         let mut entries = self.entries.lock().unwrap();
                         let exists = entries.contains_key(&service);
-                        if self
+                        if update
+                            && self
+                                .owner_unavailable
+                                .load(std::sync::atomic::Ordering::Relaxed)
+                        {
+                            // The explicit target can disappear between lookup and -U's add.
+                            self.shadow_item
+                                .store(true, std::sync::atomic::Ordering::Relaxed);
+                            last_exit_code = 0;
+                        } else if self
                             .reject_writes
                             .load(std::sync::atomic::Ordering::Relaxed)
                         {
@@ -601,6 +712,44 @@ mod tests {
                 exit_code: last_exit_code,
             }
         }
+
+        /// Model the runner's full OSStatus protocol and its update-only item reference.
+        fn run_update(&self, args: &[&str], stdin: &[u8]) -> ExecOutput {
+            use std::sync::atomic::Ordering::Relaxed;
+
+            let [
+                "-l",
+                "JavaScript",
+                "-e",
+                UPDATE_SCRIPT,
+                "--",
+                TEST_KEYCHAIN_PATH,
+                service,
+                ACCOUNT,
+                size,
+            ] = args
+            else {
+                panic!("unexpected update runner arguments");
+            };
+            assert_eq!(size.parse::<usize>().unwrap(), stdin.len());
+            let mut entries = self.entries.lock().unwrap();
+            let status = match entries.get_mut(*service) {
+                Some(value) if !self.owner_unavailable.load(Relaxed) => {
+                    if self.reject_writes.load(Relaxed) {
+                        "-25293\n"
+                    } else {
+                        *value = std::str::from_utf8(stdin).unwrap().to_owned();
+                        "0\n"
+                    }
+                }
+                _ => "-25300\n",
+            };
+            ExecOutput {
+                stdout: status.as_bytes().to_vec(),
+                stderr: Vec::new(),
+                exit_code: 0,
+            }
+        }
     }
 
     #[async_trait::async_trait]
@@ -616,6 +765,10 @@ mod tests {
                 args: args.iter().map(|s| s.to_string()).collect(),
                 stdin: options.stdin.map(|s| s.to_vec()),
             });
+
+            if cmd == UPDATE_COMMAND {
+                return Ok(self.run_update(args, options.stdin.expect("replacement on stdin")));
+            }
 
             match args.first().copied() {
                 Some("list-keychains") => {
@@ -809,20 +962,54 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn oversized_replacements_preserve_the_prior_credential() {
+    async fn store_does_not_create_a_default_keychain_copy_if_the_owner_disappears() {
+        use std::sync::atomic::Ordering::Relaxed;
+
+        let host = TestHost::new();
+        let backend = KeychainBackend::new(host.clone());
+        let prior = "still-valid-🔐\ncredential";
+        backend.store("id", prior).await.unwrap();
+        host.owner_unavailable.store(true, Relaxed);
+
+        assert!(matches!(
+            backend.store("id", "replacement").await,
+            Err(VaultError::Exec { .. })
+        ));
+        host.owner_unavailable.store(false, Relaxed);
+        assert_eq!(backend.retrieve("id").await.unwrap(), prior);
+        assert!(!host.shadow_item.load(Relaxed));
+    }
+
+    #[tokio::test]
+    async fn oversized_creates_fail_after_lookup_and_before_writing() {
         let host = TestHost::new();
         let backend = KeychainBackend::new(host.clone());
         backend.store("id", "prior").await.unwrap();
         assert!(matches!(
-            backend.store("id", &"🔐".repeat(1024)).await,
+            backend.store("new-id", &"🔐".repeat(1024)).await,
             Err(VaultError::Exec { .. })
         ));
         assert!(matches!(
             backend.store(&"a".repeat(300_000), "value").await,
             Err(VaultError::Exec { .. })
         ));
-        assert_eq!(host.calls.lock().unwrap().len(), 2);
+        {
+            let calls = host.calls.lock().unwrap();
+            assert_eq!(calls.len(), 3);
+            assert_eq!(calls[2].args[0], "find-generic-password");
+            assert_eq!(calls[2].args[4], "vaultkeeper:new-id");
+        }
         assert_eq!(backend.retrieve("id").await.unwrap(), "prior");
+    }
+
+    #[tokio::test]
+    async fn replacement_can_exceed_the_interactive_create_limit() {
+        let backend = KeychainBackend::new(TestHost::new());
+        backend.store("id", "prior").await.unwrap();
+        let replacement = "🔐".repeat(1024);
+
+        backend.store("id", &replacement).await.unwrap();
+        assert_eq!(backend.retrieve("id").await.unwrap(), replacement);
     }
 
     #[tokio::test]
@@ -1624,6 +1811,7 @@ mod tests {
             entries: Mutex::new(std::collections::HashMap::new()),
             calls: Mutex::new(Vec::new()),
             reject_writes: false.into(),
+            owner_unavailable: false.into(),
             shadow_item: false.into(),
             list_keychains_unavailable: false,
             platform: Platform::Linux,
@@ -1646,6 +1834,7 @@ mod tests {
             entries: Mutex::new(std::collections::HashMap::new()),
             calls: Mutex::new(Vec::new()),
             reject_writes: false.into(),
+            owner_unavailable: false.into(),
             shadow_item: false.into(),
             list_keychains_unavailable: true,
             platform: Platform::Darwin,

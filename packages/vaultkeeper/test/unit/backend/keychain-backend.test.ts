@@ -8,6 +8,7 @@ vi.mock('../../../src/util/exec.js', () => ({
 
 import { execCommand, execCommandFull } from '../../../src/util/exec.js'
 import { KeychainBackend } from '../../../src/backend/keychain-backend.js'
+import { KEYCHAIN_UPDATE_SCRIPT } from '../../../src/backend/keychain-update.js'
 import { ExecError, SecretNotFoundError } from '../../../src/errors.js'
 
 const mockExecCommand = vi.mocked(execCommand)
@@ -24,7 +25,8 @@ function mockKeychain() {
   let entry: string | undefined
   let shadow: string | undefined
   let rejected = false
-  mockExecCommandFull.mockImplementation((_cmd, args, options) => {
+  let ownerUnavailable = false
+  mockExecCommandFull.mockImplementation((cmd, args, options) => {
     if (args[0] === 'find-generic-password') {
       return Promise.resolve(
         entry === undefined
@@ -36,12 +38,36 @@ function mockKeychain() {
       entry = undefined
       return Promise.resolve(makeResult(0))
     }
+    if (cmd === '/usr/bin/osascript') {
+      const value = options?.stdin
+      const [, , , script, , target, service, account, size] = args
+      if (
+        script !== KEYCHAIN_UPDATE_SCRIPT ||
+        target !== path ||
+        service !== 'vaultkeeper:my-secret' ||
+        account !== 'vaultkeeper' ||
+        value === undefined ||
+        String(value.length) !== size
+      ) {
+        return Promise.resolve(makeResult(2))
+      }
+      // The runner exits zero after reporting a native status, even if the item disappeared.
+      if (ownerUnavailable || entry === undefined) return Promise.resolve(makeResult(0, '-25300\n'))
+      if (rejected) return Promise.resolve(makeResult(0, '-25293\n'))
+      entry = value
+      return Promise.resolve(makeResult(0, '0\n'))
+    }
     const write =
       /^add-generic-password (-U )?-a "vaultkeeper" -s "vaultkeeper:my-secret" -w "([^"]*)"(?: "([^"]+)")?\n$/.exec(
         options?.stdin ?? '',
       )
     if (args[0] !== '-i' || write === null) return Promise.resolve(makeResult(2))
     const [, update, value, target] = write
+    if (ownerUnavailable && update !== undefined) {
+      // An explicit target does not prevent Apple's fallback add redirecting to the default.
+      shadow = value
+      return Promise.resolve(makeResult(0))
+    }
     if (rejected && update !== undefined && target !== path) {
       // security can report success after a fallback add in the default keychain.
       shadow = value
@@ -62,6 +88,9 @@ function mockKeychain() {
   return {
     rejectWrites: () => {
       rejected = true
+    },
+    setOwnerUnavailable: (unavailable: boolean) => {
+      ownerUnavailable = unavailable
     },
     hasShadow: () => shadow !== undefined,
   }
@@ -122,6 +151,18 @@ describe('KeychainBackend', () => {
       expect(keychain.hasShadow()).toBe(false)
     })
 
+    it('fails without a default-keychain copy if the owner disappears after lookup', async () => {
+      const keychain = mockKeychain()
+      const prior = 'still-valid-🔐\ncredential'
+      await backend.store('my-secret', prior)
+      keychain.setOwnerUnavailable(true)
+
+      await expect(backend.store('my-secret', 'replacement')).rejects.toThrow(ExecError)
+      keychain.setOwnerUnavailable(false)
+      await expect(backend.retrieve('my-secret')).resolves.toBe(prior)
+      expect(keychain.hasShadow()).toBe(false)
+    })
+
     it('returns only the successful replacement and keeps the write off argv', async () => {
       mockKeychain()
       await backend.store('my-secret', 'prior')
@@ -133,9 +174,35 @@ describe('KeychainBackend', () => {
         'find-generic-password',
         '-i',
         'find-generic-password',
-        '-i',
+        '-l',
         'find-generic-password',
       ])
+      const encoded = Buffer.from(replacement).toString('base64')
+      expect(mockExecCommandFull).toHaveBeenNthCalledWith(
+        4,
+        '/usr/bin/osascript',
+        [
+          '-l',
+          'JavaScript',
+          '-e',
+          KEYCHAIN_UPDATE_SCRIPT,
+          '--',
+          '/test/team clés.keychain-db',
+          'vaultkeeper:my-secret',
+          'vaultkeeper',
+          String(encoded.length),
+        ],
+        { stdin: encoded },
+      )
+    })
+
+    it('replaces an existing credential larger than the interactive create limit', async () => {
+      mockKeychain()
+      await backend.store('my-secret', 'prior')
+      const replacement = '🔐'.repeat(1024)
+
+      await backend.store('my-secret', replacement)
+      await expect(backend.retrieve('my-secret')).resolves.toBe(replacement)
     })
 
     it('preserves the winning credential when two creates see an empty keychain', async () => {
@@ -174,10 +241,21 @@ describe('KeychainBackend', () => {
       },
     )
 
-    it('rejects oversized input before the lookup', async () => {
-      await expect(backend.store('my-secret', '🔐'.repeat(1024))).rejects.toThrow(/line limit/i)
+    it('rejects oversized service metadata before the lookup', async () => {
       await expect(backend.store('a'.repeat(300_000), 'value')).rejects.toThrow(/line limit/i)
       expect(mockExecCommandFull).not.toHaveBeenCalled()
+    })
+
+    it('rejects an oversized creation after lookup and before writing', async () => {
+      mockExecCommandFull.mockResolvedValueOnce(makeResult(44))
+      await expect(backend.store('my-secret', '🔐'.repeat(1024))).rejects.toThrow(/line limit/i)
+      expect(mockExecCommandFull).toHaveBeenCalledExactlyOnceWith('security', [
+        'find-generic-password',
+        '-a',
+        'vaultkeeper',
+        '-s',
+        'vaultkeeper:my-secret',
+      ])
     })
 
     it('rejects a command enlarged by escaping before the write', async () => {

@@ -3,12 +3,14 @@
  *
  * @remarks
  * Stores secrets as base64-encoded generic passwords in the macOS Keychain
- * using the `security` CLI tool. Service name format: `vaultkeeper:<id>`.
+ * using the `security` CLI for lookup and creation, and the native Security
+ * framework for update-only replacements. Service name format: `vaultkeeper:<id>`.
  */
 
-import { isUtf8 } from 'node:buffer'
+import { constants as bufferConstants, isUtf8 } from 'node:buffer'
 import { execCommandFull } from '../util/exec.js'
 import { BackendLockedError, ExecError, SecretNotFoundError } from '../errors.js'
+import { KEYCHAIN_UPDATE_SCRIPT } from './keychain-update.js'
 import type { ListableBackend } from './types.js'
 
 const ACCOUNT = 'vaultkeeper'
@@ -16,6 +18,12 @@ const SERVICE_PREFIX = 'vaultkeeper:'
 
 /** Low byte of errSecItemNotFound in the process exit code. */
 const ITEM_NOT_FOUND_EXIT = 44
+
+/** The system JXA runner loads the Security framework without a bundled binary. */
+const UPDATE_COMMAND = '/usr/bin/osascript'
+
+/** The full OSStatus for a locked keychain that would require user interaction. */
+const UPDATE_LOCKED_STATUS = '-25308'
 
 /** Reserve two bytes for the newline and NUL in security's 4096-byte input buffer. */
 const MAX_INTERACTIVE_COMMAND_BYTES = 4094
@@ -51,12 +59,21 @@ function checkKeychainLocked(stderr: string): void {
   }
 }
 
+/** Encode the shared on-disk representation while wiping the temporary UTF-8 bytes. */
+function encodeKeychainValue(secret: string): string {
+  const raw = Buffer.from(secret, 'utf8')
+  try {
+    return raw.toString('base64')
+  } finally {
+    raw.fill(0)
+  }
+}
+
 /**
  * macOS Keychain secret backend.
  *
  * @remarks
- * Only available on Darwin (macOS). Uses `security` CLI to store/retrieve
- * generic passwords. Secrets are base64-encoded before storage.
+ * Only available on Darwin (macOS). Stores base64-encoded generic passwords.
  *
  * @internal
  */
@@ -82,8 +99,8 @@ export class KeychainBackend implements ListableBackend {
       throw new ExecError('Keychain store requires an ID without line breaks or NUL', 'security')
     }
     const service = `${SERVICE_PREFIX}${id}`
-    const encodedBytes = Math.ceil(Buffer.byteLength(secret) / 3) * 4
-    checkCommandSize(Buffer.byteLength(service) + encodedBytes)
+    // Bound service metadata before giving it to either subprocess.
+    checkCommandSize(Buffer.byteLength(service))
     const lookup = await execCommandFull('security', [
       'find-generic-password',
       '-a',
@@ -99,27 +116,64 @@ export class KeychainBackend implements ListableBackend {
     ) {
       throw new ExecError('Failed to locate the macOS Keychain item', 'security')
     }
-    // Scope -U to the owning keychain, including its fallback add. A
-    // regular add for a missing item lets Keychain reject concurrent duplicates.
-    const target = lookup.exitCode === 0 ? keychainPath(lookup.stdout) : undefined
-    if (lookup.exitCode === 0 && target === undefined) {
-      throw new ExecError('Failed to identify the keychain containing the item', 'security')
+    const encodedBytes = Math.ceil(Buffer.byteLength(secret) / 3) * 4
+    if (lookup.exitCode === 0) {
+      const target = keychainPath(lookup.stdout)
+      if (target === undefined) {
+        throw new ExecError('Failed to identify the keychain containing the item', 'security')
+      }
+      await this.updateExisting(target, service, secret, encodedBytes)
+    } else {
+      await this.addNew(service, secret, encodedBytes)
     }
-    const updateFlag = target === undefined ? '' : ' -U'
-    const keychain = target === undefined ? '' : ` ${quoteKeychainArgument(target)}`
-    const prefix = `add-generic-password${updateFlag} -a "${ACCOUNT}" -s ${quoteKeychainArgument(service)} -w "`
-    const suffix = `"${keychain}\n`
+  }
+
+  /** Update only the matching item in the keychain that owned it at lookup time. */
+  private async updateExisting(
+    target: string,
+    service: string,
+    secret: string,
+    encodedBytes: number,
+  ): Promise<void> {
+    // Node's encoded string limit is below the native UInt32 payload limit.
+    if (encodedBytes > bufferConstants.MAX_STRING_LENGTH) {
+      throw new ExecError('macOS Keychain replacement is too large to encode', UPDATE_COMMAND)
+    }
+    const result = await execCommandFull(
+      UPDATE_COMMAND,
+      [
+        '-l',
+        'JavaScript',
+        '-e',
+        KEYCHAIN_UPDATE_SCRIPT,
+        '--',
+        target,
+        service,
+        ACCOUNT,
+        String(encodedBytes),
+      ],
+      { stdin: encodeKeychainValue(secret) },
+    )
+    // The helper returns the full OSStatus on stdout. The process exit status describes the runner.
+    const status = result.stdout.trim()
+    if (result.exitCode === 0 && status === UPDATE_LOCKED_STATUS) {
+      throw new BackendLockedError('macOS Keychain is locked', true)
+    }
+    if (result.exitCode !== 0 || status !== '0') {
+      throw new ExecError('macOS Keychain replacement failed', UPDATE_COMMAND)
+    }
+  }
+
+  /** Add a new item after a confirmed miss. The default keychain rejects duplicate creates. */
+  private async addNew(service: string, secret: string, encodedBytes: number): Promise<void> {
+    const prefix = `add-generic-password -a "${ACCOUNT}" -s ${quoteKeychainArgument(service)} -w "`
+    const suffix = '"\n'
     checkCommandSize(Buffer.byteLength(prefix) + encodedBytes + Buffer.byteLength(suffix) - 1)
-    const raw = Buffer.from(secret, 'utf8')
-    let encoded: string
-    try {
-      encoded = raw.toString('base64')
-    } finally {
-      raw.fill(0)
-    }
     // Even an empty password has an explicit token. Keep the script on
     // stdin and exclude the tool's potentially sensitive output from errors.
-    const result = await execCommandFull('security', ['-i'], { stdin: prefix + encoded + suffix })
+    const result = await execCommandFull('security', ['-i'], {
+      stdin: `${prefix}${encodeKeychainValue(secret)}${suffix}`,
+    })
     checkKeychainLocked(result.stderr)
     if (result.exitCode !== 0 || result.stderr.includes('add-generic-password: returned ')) {
       throw new ExecError('macOS Keychain write failed', 'security')
