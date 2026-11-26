@@ -120,7 +120,7 @@ Decrypt a JWE, validate claims, verify executable identity, and return an opaque
 
 Mint a signing-key capability token for the key named `name`<!-- -->.
 
-The returned token carries only `{ kid, backendRef, keyType: 'signing-key' }` — never any key material — and is accepted only by [VaultKeeper.sign()](./vaultkeeper.vaultkeeper.sign.md)<!-- -->. Passing it to `getSecret`<!-- -->/`fetch`<!-- -->/`exec` is rejected.
+The returned token carries only `{ kid, backendRef, keyType: 'signing-key' }` — never any key material — and is accepted only by this vault instance's [VaultKeeper.sign()](./vaultkeeper.vaultkeeper.sign.md) method. Passing it to `getSecret`<!-- -->/`fetch`<!-- -->/`exec` is rejected.
 
 
 </td></tr>
