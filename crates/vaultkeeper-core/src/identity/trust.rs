@@ -8,7 +8,9 @@
 //! If the hash changes on a subsequent call a `tofu_conflict` is signalled.
 
 use super::hash::hash_executable;
-use super::manifest::{add_trusted_hash, is_trusted, load_manifest, save_manifest};
+use super::manifest::{
+    add_trusted_hash, is_trusted, load_manifest, lock_manifest, publish_manifest,
+};
 use super::types::{IdentityInfo, TrustOptions, TrustVerificationResult};
 use crate::backend::HostPlatform;
 use crate::errors::VaultError;
@@ -68,8 +70,7 @@ impl PendingTrust {
     /// #209):
     ///
     /// - Already trusted (e.g. a concurrent commit for the same executable
-    ///   landed first) — a no-op; skipping the redundant `save_manifest` avoids
-    ///   unnecessary I/O and shrinks the window for a last-writer-wins race.
+    ///   landed first) — a no-op that skips publishing an unchanged manifest.
     /// - The namespace has approved hashes that do **not** include the staged
     ///   one — a concurrent process recorded a *different* executable for this
     ///   namespace in the window since verification. Merging anyway would
@@ -81,6 +82,7 @@ impl PendingTrust {
     ///   before.
     pub async fn commit(&self, host: &dyn HostPlatform) -> Result<(), VaultError> {
         if let Some((namespace, hash)) = &self.pending_write {
+            let _lock = lock_manifest(host).await?;
             let current = load_manifest(host).await?;
             match current.get(namespace) {
                 Some(existing) if existing.hashes.iter().any(|h| h == hash) => {
@@ -101,7 +103,7 @@ impl PendingTrust {
                 _ => {}
             }
             let merged = add_trusted_hash(&current, namespace, hash);
-            save_manifest(host, &merged).await?;
+            publish_manifest(host, &merged).await?;
         }
         Ok(())
     }
@@ -251,11 +253,13 @@ async fn try_sigstore(_exec_path: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use super::super::manifest::save_manifest;
     use super::*;
     use crate::backend::{ExecOptions, ExecOutput, Platform};
     use async_trait::async_trait;
     use std::collections::HashMap;
     use std::path::{Path, PathBuf};
+    use std::sync::Arc;
     use std::sync::Mutex;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -266,6 +270,7 @@ mod tests {
         /// Number of `write_file` calls observed, for tests asserting a redundant
         /// save was skipped rather than merely idempotent.
         write_count: AtomicUsize,
+        trust_lock: Arc<tokio::sync::Mutex<()>>,
     }
 
     impl MockHost {
@@ -274,6 +279,7 @@ mod tests {
                 files: Mutex::new(HashMap::new()),
                 config_dir: PathBuf::from("/mock/config"),
                 write_count: AtomicUsize::new(0),
+                trust_lock: Arc::new(tokio::sync::Mutex::new(())),
             }
         }
 
@@ -319,6 +325,9 @@ mod tests {
             content: &[u8],
             _mode: u32,
         ) -> Result<(), VaultError> {
+            // Force overlapping commit attempts to yield before publication,
+            // even on a single-threaded runtime with memory-only I/O.
+            tokio::task::yield_now().await;
             self.write_count.fetch_add(1, Ordering::SeqCst);
             self.files
                 .lock()
@@ -337,6 +346,23 @@ mod tests {
                 .unwrap()
                 .remove(path)
                 .ok_or_else(|| VaultError::Other(format!("Not found: {}", path.display())))?;
+            Ok(())
+        }
+
+        async fn lock_trust_manifest(
+            &self,
+            _path: &Path,
+            _nonce: &str,
+        ) -> Result<Box<dyn Send>, VaultError> {
+            Ok(Box::new(self.trust_lock.clone().lock_owned().await))
+        }
+
+        async fn rename_file(&self, from: &Path, to: &Path) -> Result<(), VaultError> {
+            let mut files = self.files.lock().unwrap();
+            let content = files
+                .remove(from)
+                .ok_or_else(|| VaultError::Other(format!("Not found: {}", from.display())))?;
+            files.insert(to.to_path_buf(), content);
             Ok(())
         }
 
@@ -361,6 +387,44 @@ mod tests {
         fn config_dir(&self) -> &Path {
             &self.config_dir
         }
+    }
+
+    #[tokio::test]
+    async fn overlapping_independent_commits_both_survive() {
+        let host = MockHost::new();
+        host.add_file("/first", b"first");
+        host.add_file("/second", b"second");
+        let first = verify_trust_pending(&host, "/first", None).await.unwrap();
+        let second = verify_trust_pending(&host, "/second", None).await.unwrap();
+        assert!(first.pending_write.is_some() && second.pending_write.is_some());
+
+        let (first_commit, second_commit) = tokio::join!(first.commit(&host), second.commit(&host));
+        first_commit.unwrap();
+        second_commit.unwrap();
+
+        let manifest = load_manifest(&host).await.unwrap();
+        assert!(is_trusted(&manifest, "/first", &first.identity.hash));
+        assert!(is_trusted(&manifest, "/second", &second.identity.hash));
+    }
+
+    #[tokio::test]
+    async fn overlapping_conflicting_commits_have_one_winner() {
+        let host = MockHost::new();
+        host.add_file("/same", b"first");
+        let first = verify_trust_pending(&host, "/same", None).await.unwrap();
+        host.add_file("/same", b"second");
+        let second = verify_trust_pending(&host, "/same", None).await.unwrap();
+        assert!(first.pending_write.is_some() && second.pending_write.is_some());
+
+        let (first_commit, second_commit) = tokio::join!(first.commit(&host), second.commit(&host));
+        let winner_hash = match (first_commit, second_commit) {
+            (Ok(()), Err(VaultError::IdentityMismatch { .. })) => first.identity.hash,
+            (Err(VaultError::IdentityMismatch { .. }), Ok(())) => second.identity.hash,
+            results => panic!("Expected one commit and one mismatch, got {results:?}"),
+        };
+
+        let manifest = load_manifest(&host).await.unwrap();
+        assert_eq!(manifest["/same"].hashes, vec![winner_hash]);
     }
 
     #[tokio::test]

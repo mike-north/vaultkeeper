@@ -238,6 +238,18 @@ whether membership is intentional.
   exactly one of `executablePath`/`skipTrust` — a craft high point, keep as the pattern), `SetupOptionsBase`,
   `approveExecutable`, `checkExecutableTrust`, `setDevelopmentMode`, `ExecutableTrustStatus`,
   `ExecutableTrustRequiredError`, `IdentityMismatchError`.
+  Trust-manifest mutations serialize the read, approval check, and atomic publication
+  across the native CLI, TypeScript SDK and CLI, and Node WASM SDK (issue #389).
+  A second first-use commit succeeds idempotently for the same hash and fails
+  with an identity mismatch for a different hash in the same namespace.
+  Explicit approval appends the hash while retaining previously approved hashes.
+  Rust hosts implement `HostPlatform::lock_trust_manifest` and atomically rename
+  files. `identity::manifest::approve_manifest_hash` is the Rust entry point
+  for explicit approval. Custom WASM hosts implement the optional
+  `WasmHostPlatform.lockTrustManifest` method and return a synchronous
+  release function. They must coordinate with all writers sharing their config
+  directory. Hosts without locking return a locking-not-supported error when
+  publishing a new approval.
 - **Secrets & access tokens:** `store`, `delete`, `secretExists`, `authorize`, `getSecret`, `CapabilityToken`,
   `SecretAccessor`, `SecretTokenMap`, `AccessorConsumedError`, `SecretNotFoundError`.
 - **Delegated access patterns:** `fetch`; the delegated-launch verb **aligns to `run`** (CLI ubiquitous

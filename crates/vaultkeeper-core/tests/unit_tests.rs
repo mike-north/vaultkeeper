@@ -757,12 +757,13 @@ mod vault_keeper {
     use super::*;
     use std::collections::HashMap;
     use std::path::{Path, PathBuf};
-    use std::sync::Mutex;
+    use std::sync::{Arc, Mutex};
 
     /// A test host that provides config from memory.
     struct TestHost {
         files: Mutex<HashMap<PathBuf, Vec<u8>>>,
         config_dir: PathBuf,
+        trust_lock: Arc<tokio::sync::Mutex<()>>,
     }
 
     impl TestHost {
@@ -783,6 +784,7 @@ mod vault_keeper {
             Self {
                 files: Mutex::new(files),
                 config_dir,
+                trust_lock: Arc::default(),
             }
         }
 
@@ -830,6 +832,13 @@ mod vault_keeper {
                 .unwrap()
                 .insert(path.to_path_buf(), content.to_vec());
             Ok(())
+        }
+        async fn lock_trust_manifest(
+            &self,
+            _path: &Path,
+            _nonce: &str,
+        ) -> Result<Box<dyn Send>, VaultError> {
+            Ok(Box::new(self.trust_lock.clone().lock_owned().await))
         }
         async fn file_exists(&self, path: &Path) -> Result<bool, VaultError> {
             Ok(self.files.lock().unwrap().contains_key(path))

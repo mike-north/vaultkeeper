@@ -34,7 +34,7 @@ import type {
 import { createToken, decryptToken, extractKid, validateClaims, blockToken } from './jwe/index.js'
 import { verifyTrustPending, commitTrust } from './identity/trust.js'
 import { hashExecutable } from './identity/hash.js'
-import { loadManifest, saveManifest, addTrustedHash, isTrusted } from './identity/manifest.js'
+import { loadManifest, updateManifest, addTrustedHash, isTrusted } from './identity/manifest.js'
 import {
   CapabilityToken,
   createCapabilityToken,
@@ -1184,9 +1184,9 @@ export class VaultKeeper {
   async approveExecutable(executablePath: string): Promise<ExecutableTrustStatus> {
     const resolved = path.resolve(executablePath)
     const hash = await hashExecutable(resolved)
-    const manifest = await loadManifest(this.#configDir)
-    const updated = addTrustedHash(manifest, resolved, hash)
-    await saveManifest(this.#configDir, updated)
+    const updated = await updateManifest(this.#configDir, (current) =>
+      addTrustedHash(current, resolved, hash),
+    )
     return {
       trusted: true,
       hash,

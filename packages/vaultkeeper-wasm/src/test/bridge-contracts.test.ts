@@ -13,7 +13,7 @@ import { describe, it } from 'node:test'
 import * as assert from 'node:assert/strict'
 import { createServer } from 'node:http'
 import type { AddressInfo } from 'node:net'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createNodeHost } from '../node-host.js'
@@ -23,6 +23,7 @@ import {
   NotCapableError,
   VaultError,
   AuthorizationDeniedError,
+  LockingNotSupportedError,
 } from '../errors.js'
 import type { HostSecretBackend } from '../types.js'
 
@@ -730,4 +731,37 @@ describe('WasmVaultKeeper handle-based entry points reject a malformed handleId 
       })
     })
   }
+})
+
+describe('trust manifest locking', () => {
+  it('a host without locking rejects new approvals and allows previously trusted hashes', async () => {
+    await withTempConfigDir(async (dir) => {
+      const bindings = await import('../../wasm/vaultkeeper_wasm.js')
+      const host = createNodeHost(dir)
+      const executablePath = join(dir, 'app')
+      await writeFile(executablePath, 'executable')
+      const options = { executablePath }
+
+      const unlockedHost = { ...host }
+      delete unlockedHost.lockTrustManifest
+      const unlocked = await bindings.createVaultKeeper(unlockedHost, { skipDoctor: true })
+      try {
+        await assert.rejects(
+          () => unlocked.setup('s', 'v', options),
+          (error: unknown) => mapWasmError(error) instanceof LockingNotSupportedError,
+        )
+        await assert.rejects(readFile(join(dir, 'trust-manifest.json')), { code: 'ENOENT' })
+
+        const locked = await bindings.createVaultKeeper(host, { skipDoctor: true })
+        try {
+          await locked.setup('s', 'v', options)
+        } finally {
+          locked.free()
+        }
+        await unlocked.setup('s', 'v', options)
+      } finally {
+        unlocked.free()
+      }
+    })
+  })
 })

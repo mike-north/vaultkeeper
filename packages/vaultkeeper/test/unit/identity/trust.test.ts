@@ -442,3 +442,39 @@ describe('verifyTrust — Sigstore skipping', () => {
     })
   })
 })
+
+describe('overlapping first-use commits', () => {
+  async function stage(namespace: string, executable: string) {
+    const execPath = await createTempBinary(tempDir, executable, executable)
+    return verifyTrustPending(execPath, { configDir: tempDir, namespace, skipSigstore: true })
+  }
+
+  it('persists independent approvals, including the __proto__ namespace', async () => {
+    const namespaces = ['__proto__', ...Array.from({ length: 11 }, (_, i) => `tool-${String(i)}`)]
+    const staged = await Promise.all(
+      namespaces.map((namespace, i) => stage(namespace, `exe-${String(i)}`)),
+    )
+    await Promise.all(staged.map(commitTrust))
+
+    const manifest = await loadManifest(tempDir)
+    expect(manifest.size).toBe(namespaces.length)
+    for (const [i, namespace] of namespaces.entries()) {
+      expect(manifest.get(namespace)?.hashes).toEqual([staged[i]?.identity.hash])
+    }
+  })
+
+  it('rejects one of two different hashes staged against an empty namespace', async () => {
+    const first = await stage('same', 'first')
+    const second = await stage('same', 'second')
+    const outcomes = await Promise.allSettled([commitTrust(first), commitTrust(second)])
+    const successful = outcomes.flatMap((result, index) =>
+      result.status === 'fulfilled' ? [index] : [],
+    )
+    expect(successful).toHaveLength(1)
+    for (const result of outcomes) {
+      if (result.status === 'rejected') expect(result.reason).toBeInstanceOf(IdentityMismatchError)
+    }
+    const winningHash = successful[0] === 0 ? first.identity.hash : second.identity.hash
+    expect((await loadManifest(tempDir)).get('same')?.hashes).toEqual([winningHash])
+  })
+})

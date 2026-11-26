@@ -664,6 +664,30 @@ mod revoke_key {
 mod approve {
     use super::*;
 
+    #[cfg(unix)]
+    #[test]
+    fn approve_creates_private_config_directories() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let executable = dir.path().join("executable");
+        fs::write(&executable, "executable").unwrap();
+        let parent = dir.path().join("new-parent");
+        let config = parent.join("config");
+        let mut cmd = Command::cargo_bin("vaultkeeper").unwrap();
+        cmd.env("VAULTKEEPER_CONFIG_DIR", &config)
+            .args(["approve", "--path"])
+            .arg(&executable)
+            .assert()
+            .success();
+        for path in [parent, config] {
+            assert_eq!(
+                fs::metadata(path).unwrap().permissions().mode() & 0o777,
+                0o700
+            );
+        }
+    }
+
     #[test]
     fn approve_succeeds_with_existing_file() {
         let (_, dir) = cli_test_env();
@@ -678,6 +702,66 @@ mod approve {
             .assert()
             .success()
             .stdout(predicate::str::contains("Approved"));
+    }
+
+    #[test]
+    fn concurrent_approvals_recover_a_dead_owner_and_keep_every_hash() {
+        use std::process::{Command as Process, Stdio};
+
+        let (_, dir) = cli_test_env();
+        let binary = assert_cmd::cargo::cargo_bin("vaultkeeper");
+        let mut owner = Process::new(&binary)
+            .arg("--version")
+            .stdout(Stdio::null())
+            .spawn()
+            .unwrap();
+        let marker = format!("{}-00000000-0000-4000-8000-000000000000", owner.id());
+        assert!(owner.wait().unwrap().success());
+        let lock = dir.path().join("trust-manifest.json.lock");
+        fs::create_dir(&lock).unwrap();
+        fs::write(lock.join(marker), []).unwrap();
+
+        let approvals: Vec<_> = (0..12)
+            .map(|i| {
+                let executable = dir.path().join(format!("script-{i}"));
+                fs::write(&executable, format!("content-{i}")).unwrap();
+                let child = Process::new(&binary)
+                    .env("VAULTKEEPER_CONFIG_DIR", dir.path())
+                    .args(["approve", "--path"])
+                    .arg(&executable)
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::piped())
+                    .spawn()
+                    .unwrap();
+                (child, executable)
+            })
+            .collect();
+
+        let manifest_path = dir.path().join("trust-manifest.json");
+        let mut executables = Vec::new();
+        for (child, executable) in approvals {
+            let outcome = child.wait_with_output().unwrap();
+            assert!(
+                outcome.status.success(),
+                "{}",
+                String::from_utf8_lossy(&outcome.stderr)
+            );
+            executables.push(executable);
+        }
+        let manifest: serde_json::Value =
+            serde_json::from_slice(&fs::read(manifest_path).unwrap()).unwrap();
+        let entries = manifest["entries"].as_object().unwrap();
+        assert_eq!(entries.len(), executables.len());
+        for executable in executables {
+            assert_eq!(
+                entries[executable.to_str().unwrap()]["hashes"]
+                    .as_array()
+                    .unwrap()
+                    .len(),
+                1
+            );
+        }
+        assert!(!lock.exists());
     }
 
     #[test]

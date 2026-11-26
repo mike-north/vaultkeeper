@@ -134,6 +134,26 @@ describe('VaultKeeper.approveExecutable', () => {
     expect(entries[path.resolve(exe)]).toEqual({ hashes: [expectedHash], trustTier: 3 })
   })
 
+  it('keeps both hashes when explicit approvals overlap', async () => {
+    const vault = await createVault()
+    const exe = await writeExecutable('deploy.sh', 'old payload')
+    await vault.approveExecutable(exe)
+    await fs.writeFile(exe, 'new payload')
+    const other = await writeExecutable('other.sh', 'other payload')
+
+    await Promise.all([vault.approveExecutable(exe), vault.approveExecutable(other)])
+
+    const entries = await readManifestEntries()
+    expect(entries[path.resolve(exe)]).toEqual({
+      hashes: [sha256Hex('old payload'), sha256Hex('new payload')],
+      trustTier: 3,
+    })
+    expect(entries[path.resolve(other)]).toEqual({
+      hashes: [sha256Hex('other payload')],
+      trustTier: 3,
+    })
+  })
+
   // Criterion 2: approving a nonexistent path throws, naming the path.
   it('throws a FilesystemError naming the missing path', async () => {
     const missing = path.join(scratchDir, 'does-not-exist.sh')

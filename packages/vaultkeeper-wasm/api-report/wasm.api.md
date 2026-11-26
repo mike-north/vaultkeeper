@@ -449,6 +449,7 @@ export interface WasmHostPlatform {
     httpFetch(request: HttpFetchRequest): Promise<HttpFetchResponse>;
     // (undocumented)
     listDir(path: string): Promise<string[]>;
+    lockTrustManifest?(lockPath: string): Promise<() => void>;
     // (undocumented)
     platform(): string;
     promptApproval?(context: ApprovalContext): Promise<boolean>;

@@ -29,9 +29,8 @@ struct RawEntry {
 pub async fn load_manifest(host: &dyn HostPlatform) -> Result<TrustManifest, VaultError> {
     let manifest_path = host.config_dir().join(MANIFEST_FILENAME);
 
-    match host.file_exists(&manifest_path).await {
-        Ok(true) => {}
-        _ => return Ok(HashMap::new()),
+    if !host.file_exists(&manifest_path).await? {
+        return Ok(HashMap::new());
     }
 
     let content = host.read_file(&manifest_path).await?;
@@ -65,6 +64,31 @@ pub async fn save_manifest(
     host: &dyn HostPlatform,
     manifest: &TrustManifest,
 ) -> Result<(), VaultError> {
+    let _lock = lock_manifest(host).await?;
+    publish_manifest(host, manifest).await
+}
+
+/// Record an explicit approval while preserving previously approved hashes.
+pub async fn approve_manifest_hash(
+    host: &dyn HostPlatform,
+    namespace: &str,
+    hash: &str,
+) -> Result<(), VaultError> {
+    let _lock = lock_manifest(host).await?;
+    let manifest = load_manifest(host).await?;
+    publish_manifest(host, &add_trusted_hash(&manifest, namespace, hash)).await
+}
+
+pub(super) async fn lock_manifest(host: &dyn HostPlatform) -> Result<Box<dyn Send>, VaultError> {
+    let lock_path = host.config_dir().join("trust-manifest.json.lock");
+    host.lock_trust_manifest(&lock_path, &uuid::Uuid::new_v4().to_string())
+        .await
+}
+
+pub(super) async fn publish_manifest(
+    host: &dyn HostPlatform,
+    manifest: &TrustManifest,
+) -> Result<(), VaultError> {
     let mut entries = HashMap::new();
     for (namespace, entry) in manifest {
         entries.insert(
@@ -85,8 +109,17 @@ pub async fn save_manifest(
         .map_err(|e| VaultError::Other(format!("Failed to serialize trust manifest: {e}")))?;
 
     let manifest_path = host.config_dir().join(MANIFEST_FILENAME);
-    host.write_file(&manifest_path, json.as_bytes(), 0o600)
-        .await
+    let temporary_path = manifest_path.with_extension(format!("json.{}.tmp", uuid::Uuid::new_v4()));
+    let result = async {
+        host.write_file(&temporary_path, json.as_bytes(), 0o600)
+            .await?;
+        host.rename_file(&temporary_path, &manifest_path).await
+    }
+    .await;
+    if result.is_err() {
+        let _ = host.delete_file(&temporary_path).await;
+    }
+    result
 }
 
 /// Return a new manifest with `hash` added under `namespace`.

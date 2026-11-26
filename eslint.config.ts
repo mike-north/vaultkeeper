@@ -15,6 +15,7 @@ export default tseslint.config(
           './packages/*/tsconfig.json',
           './packages/*/tsconfig.test.json',
           './crates/tsconfig.json',
+          './packages/vaultkeeper-wasm/tsconfig.host.json',
         ],
         tsconfigRootDir: import.meta.dirname,
       },

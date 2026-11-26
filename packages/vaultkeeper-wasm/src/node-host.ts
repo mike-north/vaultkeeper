@@ -18,6 +18,7 @@ import {
 } from 'node:fs/promises'
 import { homedir, platform as osPlatform } from 'node:os'
 import { dirname, join } from 'node:path'
+import { lockTrustManifest } from '../host/trust-lock.js'
 import type { ExecOptions, HttpFetchRequest, HttpFetchResponse, WasmHostPlatform } from './types.js'
 
 /**
@@ -165,6 +166,19 @@ export function createNodeHost(configDirOverride?: string): WasmHostPlatform {
       }
     },
 
+    async lockTrustManifest(lockPath: string): Promise<() => void> {
+      const dir = dirname(lockPath)
+      try {
+        await mkdir(dir, { recursive: true })
+      } catch (err) {
+        throw toHostFilesystemError(err, dir)
+      }
+      try {
+        return await lockTrustManifest(lockPath)
+      } catch (err) {
+        throw toHostFilesystemError(err, lockPath)
+      }
+    },
     async renameFile(from: string, to: string): Promise<void> {
       try {
         await rename(from, to)
