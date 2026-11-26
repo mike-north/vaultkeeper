@@ -18,16 +18,34 @@ fn vaultkeeper_bin() -> std::path::PathBuf {
     if let Ok(path) = std::env::var("CARGO_BIN_EXE_vaultkeeper") {
         return std::path::PathBuf::from(path);
     }
-    // Fall back to finding it relative to target dir
-    let mut path = std::env::current_exe()
-        .expect("can't find current exe")
-        .parent()
-        .expect("no parent dir")
-        .parent()
-        .expect("no grandparent dir")
-        .to_path_buf();
-    path.push(format!("vaultkeeper{}", std::env::consts::EXE_SUFFIX));
-    path
+    let exe = std::env::current_exe().expect("can't find current exe");
+    profile_dir_binary(
+        &exe,
+        &format!("vaultkeeper{}", std::env::consts::EXE_SUFFIX),
+    )
+}
+
+/// Resolve `name` inside the Cargo profile directory (e.g. `target/debug`)
+/// that holds the running test executable `exe`.
+///
+/// The test executable's depth below that directory depends on Cargo's
+/// layout: historically `target/debug/deps/<test>`, but rustc 1.100 places it
+/// under `target/debug/build/<pkg>/<hash>/out/<test>`. The profile directory
+/// is the nearest ancestor holding Cargo's `.cargo-lock` file, which both
+/// layouts keep at the profile root (unlike `.fingerprint`, which rustc 1.100
+/// moves under `build/<pkg>/<hash>/fingerprint`). The walk
+/// stops there and never looks further up, so a stray `vaultkeeper` binary
+/// higher in the tree (e.g. at the checkout root) can't stand in for the one
+/// this workspace built.
+fn profile_dir_binary(exe: &std::path::Path, name: &str) -> std::path::PathBuf {
+    let profile_dir = exe
+        .ancestors()
+        .skip(1)
+        .find(|dir| dir.join(".cargo-lock").is_file())
+        // No Cargo profile marker found: keep the historical two-level guess.
+        .or_else(|| exe.parent().and_then(|p| p.parent()))
+        .expect("can't locate the cargo profile directory");
+    profile_dir.join(name)
 }
 
 /// Default config JSON matching the TypeScript CLI's test config.
@@ -207,6 +225,68 @@ fn check_output(
             stderr.chars().take(300).collect::<String>(),
             exit_code
         ))
+    }
+}
+
+#[cfg(test)]
+mod profile_dir_binary_tests {
+    use super::profile_dir_binary;
+    use std::fs;
+    use tempfile::TempDir;
+
+    /// Lays out `<root>/target/debug` as a Cargo profile dir and returns it.
+    fn profile_dir(root: &std::path::Path) -> std::path::PathBuf {
+        let profile = root.join("target").join("debug");
+        fs::create_dir_all(&profile).unwrap();
+        fs::write(profile.join(".cargo-lock"), b"").unwrap();
+        profile
+    }
+
+    #[test]
+    fn resolves_the_profile_dir_from_the_rustc_1_100_build_layout() {
+        let root = TempDir::new().unwrap();
+        let profile = profile_dir(root.path());
+        let exe = profile
+            .join("build")
+            .join("vaultkeeper-conformance")
+            .join("0123abcd")
+            .join("out")
+            .join("run_conformance-0123abcd");
+        assert_eq!(
+            profile_dir_binary(&exe, "vaultkeeper"),
+            profile.join("vaultkeeper")
+        );
+    }
+
+    #[test]
+    fn resolves_the_profile_dir_from_the_legacy_deps_layout() {
+        let root = TempDir::new().unwrap();
+        let profile = profile_dir(root.path());
+        let exe = profile.join("deps").join("run_conformance-0123abcd");
+        assert_eq!(
+            profile_dir_binary(&exe, "vaultkeeper"),
+            profile.join("vaultkeeper")
+        );
+    }
+
+    // Regression test: an earlier version walked every ancestor and took the
+    // first `vaultkeeper` it found, so with the profile binary missing a
+    // binary at the checkout root (e.g. a symlink to another checkout's CLI)
+    // was silently used instead. The lookup must stay in the profile dir.
+    #[test]
+    fn ignores_a_binary_above_the_profile_dir_when_the_profile_binary_is_missing() {
+        let root = TempDir::new().unwrap();
+        let profile = profile_dir(root.path());
+        fs::write(root.path().join("vaultkeeper"), b"not the workspace build").unwrap();
+        let exe = profile
+            .join("build")
+            .join("vaultkeeper-conformance")
+            .join("0123abcd")
+            .join("out")
+            .join("run_conformance-0123abcd");
+        let resolved = profile_dir_binary(&exe, "vaultkeeper");
+        assert_eq!(resolved, profile.join("vaultkeeper"));
+        assert!(!resolved.exists());
     }
 }
 
