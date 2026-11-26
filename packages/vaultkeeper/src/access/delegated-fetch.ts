@@ -2,7 +2,8 @@
  * Delegated HTTP fetch access pattern.
  *
  * Replaces `{{secret}}` or `{{secret:name}}` placeholders in the request
- * URL, headers, and body with actual secret values, then executes the fetch.
+ * URL, headers, and body with actual secret values. The returned response
+ * exposes the body stream and safe status information without transport text.
  */
 
 import type { FetchRequest } from '../types.js'
@@ -36,12 +37,40 @@ function redactSecretMaterial(
 }
 
 /**
+ * Retain the followed-redirect signal on a response whose URL list is empty.
+ * Clone the detached response with native stream teeing, then carry over the
+ * same boolean. Neither response retains the transport's redirect URLs.
+ */
+function markRedirected(response: Response): Response {
+  Object.defineProperties(response, {
+    redirected: { value: true },
+    clone: {
+      value: function clone(this: Response): Response {
+        return markRedirected(Response.prototype.clone.call(this))
+      },
+    },
+  })
+  return response
+}
+
+/**
+ * Detach the response from the transport so callers can consume the original
+ * body stream without receiving metadata that can contain injected credentials.
+ * Any response header name or value and the reason phrase can reflect a URL
+ * or credential, including serialized forms that literal redaction would miss.
+ */
+function sanitizeResponse(transportResponse: Response): Response {
+  const response = new Response(transportResponse.body, { status: transportResponse.status })
+  return transportResponse.redirected ? markRedirected(response) : response
+}
+
+/**
  * Execute a delegated HTTP fetch with secrets injected into the request.
  *
  * @param secrets - A single secret string (replaces `{{secret}}`) or a
  *   name-to-value map (replaces `{{secret:name}}`)
  * @param request - The fetch request template with placeholders
- * @returns The fetch Response
+ * @returns A detached response carrying the body stream, numeric status, and redirect flag.
  * @throws {FetchError} If the URL is malformed or the underlying network
  *   request fails (e.g. DNS failure, connection refused, TLS error).
  * @internal
@@ -69,7 +98,7 @@ export async function delegatedFetch(
   }
 
   try {
-    return await fetch(url, init)
+    return sanitizeResponse(await fetch(url, init))
   } catch (error) {
     const rawDetail = error instanceof Error ? error.message : String(error)
     // The underlying error's message can embed the placeholder-resolved URL

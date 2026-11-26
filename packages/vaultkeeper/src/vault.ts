@@ -743,13 +743,19 @@ export class VaultKeeper {
    * **Token map ({@link SecretTokenMap}):** every `{{secret:name}}` placeholder
    * is replaced with the secret from the corresponding named token.
    *
-   * The raw secret is never exposed in the return value.
+   * The response and its clones expose the server's body stream, `status`,
+   * `ok`, and `redirected`. The response has type `default`, empty strings
+   * for `url` and `statusText`, and initially empty `headers` to keep
+   * reflected credentials out of metadata.
+   * The body is streamed as received and may contain data the server echoes.
+   * Consumers can use `text()`, `json()`, `arrayBuffer()`, and `blob()`.
+   * `blob()` initially has no media type, and `formData()` requires a
+   * caller-supplied `Content-Type`.
    *
    * @param token - A single `CapabilityToken` or a `SecretTokenMap` mapping
    *   names to tokens obtained from `authorize()`.
    * @param request - The fetch request template with placeholders.
-   * @returns The `Response` from the underlying `fetch()` call, together with
-   *   the vault metadata (`vaultResponse`).
+   * @returns A detached `Response` and the vault metadata (`vaultResponse`).
    * @throws {AuthorizationDeniedError} If any token is invalid or was not
    *   created by this vault instance.
    * @throws {VaultError} If a named placeholder references an unknown

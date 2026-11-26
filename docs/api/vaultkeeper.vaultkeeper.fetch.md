@@ -10,7 +10,7 @@ Execute a delegated HTTP fetch, injecting secrets from the token(s).
 
 \*\*Token map ([SecretTokenMap](./vaultkeeper.secrettokenmap.md)<!-- -->):\*\* every `{{secret:name}}` placeholder is replaced with the secret from the corresponding named token.
 
-The raw secret is never exposed in the return value.
+The response and its clones expose the server's body stream, `status`<!-- -->, `ok`<!-- -->, and `redirected`<!-- -->. The response has type `default`<!-- -->, empty strings for `url` and `statusText`<!-- -->, and initially empty `headers` to keep reflected credentials out of metadata. The body is streamed as received and may contain data the server echoes. Consumers can use `text()`<!-- -->, `json()`<!-- -->, `arrayBuffer()`<!-- -->, and `blob()`<!-- -->. `blob()` initially has no media type, and `formData()` requires a caller-supplied `Content-Type`<!-- -->.
 
 **Signature:**
 
@@ -77,7 +77,7 @@ The fetch request template with placeholders.
 
 Promise&lt;{ response: Response; vaultResponse: [VaultResponse](./vaultkeeper.vaultresponse.md)<!-- -->; }&gt;
 
-The `Response` from the underlying `fetch()` call, together with the vault metadata (`vaultResponse`<!-- -->).
+A detached `Response` and the vault metadata (`vaultResponse`<!-- -->).
 
 ## Exceptions
 

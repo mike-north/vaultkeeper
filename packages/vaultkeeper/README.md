@@ -85,7 +85,7 @@ const jwe = await vault.setup('MY_API_KEY', { skipTrust: true })
 // 4. Authorize: decrypt and validate the token
 const { token, vaultResponse } = await vault.authorize(jwe)
 
-// 5. Delegated fetch — secret injected into the request, never returned
+// 5. Delegated fetch — inject the secret and strip transport response metadata
 const { response } = await vault.fetch(token, {
   url: 'https://api.example.com/data',
   headers: { Authorization: 'Bearer {{secret}}' },
