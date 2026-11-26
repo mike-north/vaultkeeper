@@ -75,9 +75,11 @@ After the separator, both flags pass unchanged to the child.
 For native `run`, protected profile entries and `--set` overlays use verification of the selected child
 executable. The launcher resolves a bare name on the parent's `PATH`, verifies the canonical absolute target
 without recording first encounters, then checks the digest again after materialization. It launches that path
-directly, so the child environment's `PATH` cannot change which executable is selected. The executable and
-its parent path components must stay stable from the final digest check until the OS opens it. On Windows,
-protected runs require a native `.exe` target.
+directly, so the child environment's `PATH` cannot change which executable is selected. If the selected
+executable lacks sufficient trust for a protected entry, including a `--set` entry that inherits an elevated
+default, `run` exits 1 before launching the child. Dry runs describe the plan without verifying the
+executable or resolving secrets. The executable and its parent path components must stay stable from the
+final digest check until the OS opens it. On Windows, protected runs require a native `.exe` target.
 
 **In review / designed, not landed** (env-epic-spec.md §4, lease lane #298–#300) — rows tracked here so the
 grammar review covers them before they land:
@@ -256,8 +258,9 @@ whether membership is intentional.
   before reading that entry, for both plaintext and lease materialization. For `registry` or `sigstore`,
   `ResolveOptions::executable_identity` borrows opaque `VerifiedExecutableIdentity` evidence from
   `verify_trust_pending`. A dev bypass, first observation, or registry conflict supplies no evidence.
-  An absent or weaker decision fails with `ExecutableTrustRequired`. A protected lease carries the verified
-  digest in `exe` and the entry's requested tier in `tid`. An `unverified` lease carries `"dev"` in `exe`.
+  Missing evidence, an insufficient tier, or a malformed digest fails with `ExecutableTrustRequired`.
+  A protected lease carries the verified lowercase SHA-256 hex digest in `exe` and the entry's requested
+  tier in `tid`. An `unverified` lease carries `"dev"` in `exe`.
   Earlier entries may already have been read when a later entry fails. The resolver discards and zeroizes
   those values and returns no environment. The host owns verification and launching the verified target.
 - **Secrets & access tokens:** `store`, `delete`, `secretExists`, `authorize`, `getSecret`, `CapabilityToken`,
@@ -272,6 +275,10 @@ whether membership is intentional.
 - **Signing & leases:** `createSigningKey`, `authorizeSigningKey`, `sign`, `exportPublicKey`,
   `VaultKeeper.verify`, `SigningAlgorithm`, `SigningPublicKey`, `SignRequest`, `SignResult`, `VerifyRequest`,
   `SigningBackend`, `isSigningBackend`, and the signing error family.
+  TypeScript in-process capabilities from `authorize` and `authorizeSigningKey` are bound to the
+  issuing `VaultKeeper` instance, including when instances share configuration or backend storage.
+  A different instance rejects them with `AuthorizationDeniedError` before backend selection or
+  delegated work. For `fetch` and `exec`, the issuer requirement applies to every token in a map.
 - **Backends & registry:** `SecretBackend`, `ListableBackend`, `PresenceCapableBackend`, `BackendRegistry`,
   `BackendConfig`, `BackendFactory`, `BackendSetupFactory`, `BackendCapabilities`, `getBackendCapabilities`,
   `isListableBackend`, `isPresenceCapableBackend`, `defaultBackendType`, `platformNativeBackendType`,

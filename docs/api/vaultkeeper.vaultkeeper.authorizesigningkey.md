@@ -6,7 +6,7 @@
 
 Mint a signing-key capability token for the key named `name`<!-- -->.
 
-The returned token carries only `{ kid, backendRef, keyType: 'signing-key' }` — never any key material — and is accepted only by [VaultKeeper.sign()](./vaultkeeper.vaultkeeper.sign.md)<!-- -->. Passing it to `getSecret`<!-- -->/`fetch`<!-- -->/`exec` is rejected.
+The returned token carries only `{ kid, backendRef, keyType: 'signing-key' }` — never any key material — and is accepted only by this vault instance's [VaultKeeper.sign()](./vaultkeeper.vaultkeeper.sign.md) method. Passing it to `getSecret`<!-- -->/`fetch`<!-- -->/`exec` is rejected.
 
 **Signature:**
 
@@ -54,7 +54,7 @@ Caller-facing signing key name. Must not contain `':'`<!-- -->.
 
 Promise&lt;[CapabilityToken](./vaultkeeper.capabilitytoken.md)<!-- -->&gt;
 
-An opaque [CapabilityToken](./vaultkeeper.capabilitytoken.md) usable with `sign()`<!-- -->.
+An opaque [CapabilityToken](./vaultkeeper.capabilitytoken.md) usable with `sign()` on this instance.
 
 ## Exceptions
 

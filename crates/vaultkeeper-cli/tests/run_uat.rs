@@ -143,11 +143,18 @@ fn path_lookup_accepts_an_approved_executable_through_a_symlink() {
     fs::create_dir(&skipped).unwrap();
     fs::create_dir(&bin).unwrap();
     fs::write(skipped.join("uat-shell"), b"non-executable file").unwrap();
-    symlink("/bin/sh", bin.join("uat-shell")).unwrap();
+    // Exercise an intermediate symlink even when the system shell is a
+    // regular file. OS installations differ in how they expose /bin/sh.
+    let shell_alias = dir.path().join("shell-alias");
+    symlink("/bin/sh", &shell_alias).unwrap();
+    symlink(&shell_alias, bin.join("uat-shell")).unwrap();
 
+    // A bare PATH alias can use approval for its canonical launch target.
+    let approved_target = shell_alias.canonicalize().unwrap();
     let approved = Command::new(vk_bin())
         .env("VAULTKEEPER_CONFIG_DIR", dir.path())
-        .args(["approve", "--path", "/bin/sh"])
+        .args(["approve", "--path"])
+        .arg(approved_target)
         .output()
         .unwrap();
     assert!(approved.status.success());
@@ -172,6 +179,37 @@ fn path_lookup_accepts_an_approved_executable_through_a_symlink() {
         String::from_utf8_lossy(&output.stderr)
     );
     assert_eq!(output.stdout, b"hello");
+}
+
+#[test]
+fn elevated_default_set_refuses_before_launching_child() {
+    let dir = run_test_env(&empty_profile());
+    store_secret(&dir, "greeting", "example-value");
+    let config_path = dir.path().join("config.json");
+    let mut config: serde_json::Value =
+        serde_json::from_slice(&fs::read(&config_path).unwrap()).unwrap();
+    config["defaults"]["trustTier"] = serde_json::json!(2);
+    fs::write(config_path, serde_json::to_vec(&config).unwrap()).unwrap();
+    let marker = dir.path().join("child-started");
+    let output = Command::new(vk_bin())
+        .env("VAULTKEEPER_CONFIG_DIR", dir.path())
+        .args([
+            "run",
+            "--profile",
+            "uat",
+            "--set",
+            "GREETING=greeting",
+            "--",
+            "touch",
+        ])
+        .arg(&marker)
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("GREETING"), "{stderr}");
+    assert!(stderr.contains("executable identity"), "{stderr}");
+    assert!(!marker.exists(), "refusal must precede child launch");
 }
 
 // ─── AC1: stdio round trip — byte-exact, both directions ─────────

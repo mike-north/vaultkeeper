@@ -110,11 +110,10 @@ pub struct ResolveOptions<'a> {
     /// The active key manager, used to mint a `materialize: "lease"` entry's
     /// JWE with the same current key `VaultKeeper::setup()` would use.
     pub key_manager: &'a KeyManager,
-    /// A verified executable identity decision produced by the trust verifier
-    /// for the resolving executable. Entries whose `minTrust` resolves above
-    /// `Dev` require this typed identity and fail closed if the verified tier
-    /// does not meet the entry's requirement. `Dev`-tier entries deliberately
-    /// keep the `"dev"` sentinel and do not require executable verification.
+    /// Evidence issued by the trust verifier for the executable receiving the
+    /// environment. The caller must use the evidence for that same executable.
+    /// Protected entries require a lowercase SHA-256 hex digest and a verified
+    /// tier that meets `minTrust`. Dev-tier leases retain the `"dev"` sentinel.
     pub executable_identity: Option<&'a VerifiedExecutableIdentity>,
 }
 
@@ -244,19 +243,37 @@ fn enforce_min_trust<'a>(
         });
     };
 
-    if MinTrust::from_trust_tier(identity.trust_tier()) >= required {
-        Ok(Some(identity))
-    } else {
-        Err(VaultError::ExecutableTrustRequired {
+    let verified_tier = MinTrust::from_trust_tier(identity.trust_tier());
+    if verified_tier < required {
+        return Err(VaultError::ExecutableTrustRequired {
             message: format!(
                 "Profile entry \"{name}\" requires minTrust \"{}\" but the executable \
                  verified at \"{}\".",
                 required.as_str(),
-                MinTrust::from_trust_tier(identity.trust_tier()).as_str(),
+                verified_tier.as_str(),
             ),
             reason: crate::errors::ExecutableTrustRequiredReason::MissingChoice,
-        })
+        });
     }
+
+    // The digest is also the protected lease's `exe` claim. Validate its
+    // representation for both modes before either can access plaintext.
+    let digest = identity.hash();
+    if digest.len() != 64
+        || !digest
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return Err(VaultError::ExecutableTrustRequired {
+            message: format!(
+                "Profile entry \"{name}\" requires a verified executable identity with a \
+                 lowercase SHA-256 hex digest."
+            ),
+            reason: crate::errors::ExecutableTrustRequiredReason::MissingChoice,
+        });
+    }
+
+    Ok(Some(identity))
 }
 
 /// Hard cap (seconds) on the effective TTL a `materialize: "lease"` entry can
@@ -365,6 +382,10 @@ mod tests {
     use assert_matches::assert_matches;
     use std::sync::Mutex;
 
+    /// A lowercase SHA-256 digest for successful stub-provenance decisions.
+    const SIGSTORE_DIGEST: &str =
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+
     fn defaults() -> ProfileDefaults {
         ProfileDefaults {
             ttl_seconds: 3600,
@@ -424,7 +445,7 @@ mod tests {
         ])
         .await;
         let km = key_manager();
-        let pending = sigstore_decision("verified-caller-hash");
+        let pending = sigstore_decision(SIGSTORE_DIGEST);
         let opts = ResolveOptions {
             backend: &backend,
             key_manager: &km,
@@ -449,7 +470,7 @@ mod tests {
         assert_eq!(claims.sub, "prod-db-password");
         assert_eq!(claims.val.as_deref(), Some("s3cr3t-db-pw"));
         assert_eq!(claims.tid, TrustTier::Sigstore);
-        assert_eq!(claims.exe, "verified-caller-hash");
+        assert_eq!(claims.exe, SIGSTORE_DIGEST);
         assert_eq!(claims.use_limit, Some(5));
         assert_eq!(claims.exp, claims.iat + 900);
     }
@@ -826,6 +847,95 @@ mod tests {
 
     // --- Item 5: exe/tid trust seam ---
 
+    /// A dev sentinel or any malformed digest must fail before plaintext is
+    /// retrieved, even if a verifier were to attach a sufficient tier.
+    #[tokio::test]
+    async fn malformed_verified_digest_is_refused_before_retrieve() {
+        let raw = r#"{"version":1,"name":"p","entries":{"K":{"secret":"s","materialize":"secret","minTrust":"sigstore"}}}"#;
+        let lease = r#"{"version":1,"name":"p","entries":{"K":{"secret":"s","materialize":"lease","minTrust":"sigstore"}}}"#;
+        let backend = SpyBackend::new();
+        backend.store("s", "v").await.unwrap();
+        let km = key_manager();
+        let short = &SIGSTORE_DIGEST[1..];
+        let long = format!("{SIGSTORE_DIGEST}0");
+        let uppercase = SIGSTORE_DIGEST.to_ascii_uppercase();
+        let non_hex = format!("g{}", &SIGSTORE_DIGEST[1..]);
+        for digest in ["dev", short, &long, &uppercase, &non_hex] {
+            let pending = sigstore_decision(digest);
+            let opts = ResolveOptions {
+                backend: &backend,
+                key_manager: &km,
+                executable_identity: pending.verified_identity(),
+            };
+            for json in [raw, lease] {
+                let profile = load_profile_from_str(json, &defaults()).unwrap();
+                assert_matches!(
+                    resolve_profile(&profile, &opts).await,
+                    Err(VaultError::ExecutableTrustRequired { .. })
+                );
+                assert!(backend.retrieve_calls().is_empty(), "{digest}");
+            }
+        }
+    }
+
+    /// Changing a bypass decision's reporting fields cannot grant either
+    /// plaintext or a lease under a protected policy.
+    #[tokio::test]
+    async fn dev_bypass_with_edited_diagnostics_cannot_resolve_protected_entries() {
+        let raw = r#"{"version":1,"name":"p","entries":{"K":{"secret":"s","materialize":"secret","minTrust":"sigstore"}}}"#;
+        let lease = r#"{"version":1,"name":"p","entries":{"K":{"secret":"s","materialize":"lease","minTrust":"sigstore"}}}"#;
+        let backend = SpyBackend::new();
+        backend.store("s", "v").await.unwrap();
+        let km = key_manager();
+        let host = MockHost::new();
+        let mut pending = verify_trust_pending(&host, "dev", None).await.unwrap();
+        pending.identity.trust_tier = TrustTier::Sigstore;
+        pending.identity.hash = SIGSTORE_DIGEST.to_string();
+        pending.identity.verified = true;
+        let opts = ResolveOptions {
+            backend: &backend,
+            key_manager: &km,
+            executable_identity: pending.verified_identity(),
+        };
+        for json in [raw, lease] {
+            let profile = load_profile_from_str(json, &defaults()).unwrap();
+            assert_matches!(
+                resolve_profile(&profile, &opts).await,
+                Err(VaultError::ExecutableTrustRequired { .. })
+            );
+            assert!(backend.retrieve_calls().is_empty());
+        }
+    }
+
+    /// The same verified provenance can release plaintext and mint a lease
+    /// whose digest and tier describe the protected executable.
+    #[tokio::test]
+    async fn sigstore_identity_resolves_plaintext_and_binds_the_lease() {
+        let json = r#"{
+            "version": 1, "name": "p",
+            "entries": {
+                "RAW": { "secret": "s", "materialize": "secret", "minTrust": "sigstore" },
+                "LEASE": { "secret": "s", "materialize": "lease", "minTrust": "sigstore" }
+            }
+        }"#;
+        let profile = load_profile_from_str(json, &defaults()).unwrap();
+        let backend = seeded_backend(&[("s", "v")]).await;
+        let km = key_manager();
+        let pending = sigstore_decision(SIGSTORE_DIGEST);
+        let opts = ResolveOptions {
+            backend: &backend,
+            key_manager: &km,
+            executable_identity: pending.verified_identity(),
+        };
+
+        let resolved = resolve_profile(&profile, &opts).await.unwrap();
+        assert_eq!(resolved.get("RAW").unwrap(), "v");
+        let current_key = km.get_current_key().unwrap();
+        let claims = decrypt_token(&current_key.key, resolved.get("LEASE").unwrap()).unwrap();
+        assert_eq!(claims.tid, TrustTier::Sigstore);
+        assert_eq!(claims.exe, SIGSTORE_DIGEST);
+    }
+
     #[tokio::test]
     async fn sigstore_tier_lease_without_executable_identity_is_refused() {
         let json = r#"{
@@ -890,7 +1000,11 @@ mod tests {
         };
 
         let err = resolve_profile(&profile, &opts).await.unwrap_err();
-        assert_matches!(err, VaultError::ExecutableTrustRequired { .. });
+        assert_matches!(
+            err,
+            VaultError::ExecutableTrustRequired { ref message, .. }
+                if message.contains("TOKEN") && message.contains("executable identity")
+        );
         assert!(
             backend.retrieve_calls().is_empty(),
             "retrieve must never be attempted before minTrust is enforced"
@@ -985,7 +1099,7 @@ mod tests {
         let profile = load_profile_from_str(json, &defaults()).unwrap();
         let backend = seeded_backend(&[("s", "v")]).await;
         let km = key_manager();
-        let pending = sigstore_decision("verified-hash");
+        let pending = sigstore_decision(SIGSTORE_DIGEST);
         let opts = ResolveOptions {
             backend: &backend,
             key_manager: &km,
@@ -1014,7 +1128,7 @@ mod tests {
         let profile = load_profile_from_str(json, &defaults()).unwrap();
         let backend = seeded_backend(&[("a", "va"), ("b", "vb"), ("c", "vc")]).await;
         let km = key_manager();
-        let pending = sigstore_decision("verified-hash");
+        let pending = sigstore_decision(SIGSTORE_DIGEST);
         let opts = ResolveOptions {
             backend: &backend,
             key_manager: &km,
@@ -1026,7 +1140,7 @@ mod tests {
 
         let reg_claims = decrypt_token(&current_key.key, resolved.get("REG").unwrap()).unwrap();
         assert_eq!(reg_claims.tid, TrustTier::Tofu);
-        assert_eq!(reg_claims.exe, "verified-hash");
+        assert_eq!(reg_claims.exe, SIGSTORE_DIGEST);
 
         let unv_claims = decrypt_token(&current_key.key, resolved.get("UNV").unwrap()).unwrap();
         assert_eq!(unv_claims.tid, TrustTier::Dev);
