@@ -448,7 +448,7 @@ To use the native Linux credential store instead, install `secret-tool` (`sudo a
 
 ### Delegated fetch
 
-The secret is substituted for every `{{secret}}` placeholder in `url`, `headers`, and `body` before the request is sent. The returned response and its clones preserve `status`, `ok`, `redirected`, and the body stream. They start with empty `url`, `statusText`, and `headers` so response metadata cannot echo the substituted URL or credentials. The body is streamed as received and may contain data the server echoes. `blob()` initially has no media type, and `formData()` requires a caller-supplied `Content-Type`.
+The secret is substituted for every `{{secret}}` placeholder in `url`, `headers`, and `body` before the request is sent. `VaultKeeper.fetch()` rejects HTTP redirects with `FetchError`, including same-origin redirects and requests without placeholders. The returned response and its clones preserve `status`, `ok`, `redirected`, and the body stream. They start with empty `url`, `statusText`, and `headers` so response metadata cannot echo the substituted URL or credentials. The body is streamed as received and may contain data the server echoes. `blob()` initially has no media type, and `formData()` requires a caller-supplied `Content-Type`.
 
 ```ts
 const { response } = await vault.fetch(token, {

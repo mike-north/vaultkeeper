@@ -182,6 +182,10 @@ any JOSE library can verify — see [Signing and verification](#signing-and-veri
 the `SecretAccessor` and `ExecRequest` types in the package's shipped `.d.ts` for their full
 signatures.
 
+## Delegated fetch redirects
+
+`VaultKeeper.fetch()` rejects HTTP redirects with `FetchError`, including same-origin redirects and requests without placeholders. The error’s `url` field contains the original request template. Returned responses have empty `url`, `statusText`, and headers; the server can echo secrets in the body.
+
 ## Multiple secrets in one request
 
 `fetch()` and `exec()` accept either a single `CapabilityToken` or a `SecretTokenMap`
@@ -560,7 +564,7 @@ read-only properties for machine-readable context.
 
 | Class                          | When thrown                                                                                                                                                                                           |
 | ------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `FetchError`                   | Delegated `fetch()` failed before a `Response` (malformed URL, network failure) (field: `url`).                                                                                                       |
+| `FetchError`                   | Delegated `fetch()` rejected a malformed URL or redirect, or encountered a transport failure (field: `url`).                                                                                          |
 | `ExecError`                    | `exec()` request was invalid, or the command could not be started (field: `command`).                                                                                                                 |
 | `AccessorConsumedError`        | `SecretAccessor.read()` called after it was already consumed.                                                                                                                                         |
 | `SigningKeyNotFoundError`      | A named signing key does not exist (field: `keyName`); distinct from `SecretNotFoundError` — signing keys occupy their own namespace (see [Signing and verification](#signing-and-verification)).     |

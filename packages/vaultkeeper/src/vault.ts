@@ -743,6 +743,10 @@ export class VaultKeeper {
    * **Token map ({@link SecretTokenMap}):** every `{{secret:name}}` placeholder
    * is replaced with the secret from the corresponding named token.
    *
+   * The delegation covers only the requested URL. Fetch redirect statuses
+   * (301, 302, 303, 307, and 308) reject with {@link FetchError}, including
+   * same-origin redirects and requests without placeholders.
+   *
    * The response and its clones expose the server's body stream, `status`,
    * `ok`, and `redirected`. The response has type `default`, empty strings
    * for `url` and `statusText`, and initially empty `headers` to keep
@@ -760,8 +764,8 @@ export class VaultKeeper {
    *   created by this vault instance.
    * @throws {VaultError} If a named placeholder references an unknown
    *   secret name.
-   * @throws {FetchError} If the URL is malformed or the underlying network
-   *   request fails.
+   * @throws {FetchError} If the URL is malformed, the server sends a Fetch
+   *   redirect, or the underlying network request fails.
    */
   async fetch(
     token: CapabilityToken | SecretTokenMap,

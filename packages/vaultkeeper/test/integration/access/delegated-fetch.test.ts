@@ -63,10 +63,7 @@ async function collectGarbage(): Promise<void> {
 }
 
 describe('VaultKeeper.fetch response metadata', () => {
-  it.concurrent.each([
-    { route: 'direct', redirects: false },
-    { route: 'redirected', redirects: true },
-  ])('hides reflected metadata on a $route request', async ({ redirects }) => {
+  it('hides reflected metadata on a direct request', async () => {
     // A space and non-ASCII text force URL serialization to differ from the injected value.
     const secret = 'synthetic café credential'
     const credentialPath = `?credential=${encodeURIComponent(secret)}`
@@ -74,11 +71,6 @@ describe('VaultKeeper.fetch response metadata', () => {
     const server = createServer((request, response) => {
       const url = request.url ?? ''
       paths.push(url)
-      if (url.startsWith('/redirect?')) {
-        response.writeHead(302, { Location: url.replace('/redirect?', '/result?') }).end()
-        return
-      }
-
       // The body is independent of the request URI. Metadata can still reflect it.
       response.writeHead(201, url, {
         'Content-Type': 'application/json',
@@ -93,21 +85,17 @@ describe('VaultKeeper.fetch response metadata', () => {
     try {
       const { vault, token } = await authorizeFixture(secret)
       const { response, vaultResponse } = await vault.fetch(token, {
-        url: `${endpoint}/${redirects ? 'redirect' : 'result'}?credential={{secret}}`,
+        url: `${endpoint}/result?credential={{secret}}`,
       })
 
-      expect(paths).toEqual(
-        redirects
-          ? [`/redirect${credentialPath}`, `/result${credentialPath}`]
-          : [`/result${credentialPath}`],
-      )
+      expect(paths).toEqual([`/result${credentialPath}`])
       expect(vaultResponse.keyStatus).toBe('current')
       const clone = response.clone()
       const reclone = clone.clone()
       for (const result of [response, clone, reclone]) {
         expect(result).toBeInstanceOf(Response)
         expect(result.url).toBe('')
-        expect(result.redirected).toBe(redirects)
+        expect(result.redirected).toBe(false)
         expect(result.statusText).toBe('')
         expect([...result.headers]).toEqual([])
         expect(result.type).toBe('default')
@@ -179,15 +167,11 @@ describe('VaultKeeper.fetch response metadata', () => {
   })
 
   it.concurrent.each([599, 600, 700, 999])(
-    'preserves transport status %i and its body after following a redirect',
+    'preserves transport status %i and its body',
     async (status) => {
       const expected = 'body for a status accepted by native Fetch'
       const server = createServer((request, response) => {
         const url = request.url ?? ''
-        if (url.startsWith('/redirect?')) {
-          response.writeHead(302, { Location: url.replace('/redirect?', '/result?') }).end()
-          return
-        }
         response.writeHead(status, url, { 'Content-Location': url }).end(expected)
       })
       const endpoint = await listen(server)
@@ -195,13 +179,13 @@ describe('VaultKeeper.fetch response metadata', () => {
       try {
         const { vault, token } = await authorizeFixture('synthetic credential')
         const { response } = await vault.fetch(token, {
-          url: `${endpoint}/redirect?credential={{secret}}`,
+          url: `${endpoint}/result?credential={{secret}}`,
         })
         const clone = response.clone()
         for (const result of [response, clone, clone.clone()]) {
           expect(result.status).toBe(status)
           expect(result.ok).toBe(false)
-          expect(result.redirected).toBe(true)
+          expect(result.redirected).toBe(false)
           expect(result.url).toBe('')
           expect(result.statusText).toBe('')
           expect([...result.headers]).toEqual([])

@@ -320,6 +320,22 @@ describe('delegatedFetch', () => {
       expect(url).toBe('https://example.com/token/{{secret}}')
     })
 
+    it('redacts a transport diagnostic with the dispatched URL template after request reuse', async () => {
+      const secret = 'synthetic-secret'
+      const url = 'https://example.com/token/{{secret}}'
+      const resolvedUrl = `https://example.com/token/${secret}`
+      mockFetch.mockRejectedValueOnce(new Error(`Transport rejected ${resolvedUrl}`))
+      const request: FetchRequest = { url }
+
+      const result = delegatedFetch(secret, request)
+      request.url = 'https://example.com/later-request'
+
+      await expect(result).rejects.toMatchObject({
+        url,
+        message: `Fetch failed for ${url}: Transport rejected ${url}`,
+      })
+    })
+
     it('redacts a named injected secret from the FetchError message', async () => {
       const secret = 'named-secret-value'
       mockFetch.mockRejectedValue(new Error(`ECONNREFUSED https://example.com/${secret}/resource`))
