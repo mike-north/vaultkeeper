@@ -1,7 +1,8 @@
 //! Encrypted file fallback backend.
 //!
 //! Stores secrets encrypted with AES-256-GCM. Each secret is stored as an
-//! individual encrypted file under `<config_dir>/file/`. A randomly generated
+//! individual encrypted file under the configured directory, or `<config_dir>/file/`
+//! by default. A randomly generated
 //! 32-byte key stored in a protected file is used for encryption.
 //!
 //! Encrypted file format (all parts base64-encoded, colon-separated):
@@ -28,16 +29,37 @@ const GCM_KEY_BYTES: usize = 32;
 /// Not as secure as OS-native keystores, but provides a portable fallback.
 pub struct FileBackend {
     host: Arc<dyn HostPlatform>,
+    storage_dir: Option<PathBuf>,
 }
 
 impl FileBackend {
     /// Create a new FileBackend using the given host for I/O.
     pub fn new(host: Arc<dyn HostPlatform>) -> Self {
-        Self { host }
+        Self {
+            host,
+            storage_dir: None,
+        }
+    }
+
+    /// Construct the file backend using its entry in the resolved configuration.
+    ///
+    /// The first enabled file entry supplies the secret storage directory;
+    /// without one, the ordinary default directory is used. Signing keys have
+    /// their own separate storage and are not affected by this setting.
+    pub fn from_config(host: Arc<dyn HostPlatform>, config: &crate::types::VaultConfig) -> Self {
+        let storage_dir = config
+            .backends
+            .iter()
+            .find(|backend| backend.enabled && backend.backend_type == "file")
+            .and_then(|backend| backend.path.as_ref())
+            .map(PathBuf::from);
+        Self { host, storage_dir }
     }
 
     fn storage_dir(&self) -> PathBuf {
-        self.host.config_dir().join("file")
+        self.storage_dir
+            .clone()
+            .unwrap_or_else(|| self.host.config_dir().join("file"))
     }
 
     fn entry_path(&self, id: &str) -> PathBuf {

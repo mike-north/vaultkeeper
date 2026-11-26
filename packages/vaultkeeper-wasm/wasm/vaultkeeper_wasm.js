@@ -288,8 +288,7 @@ class WasmVaultKeeper {
     /**
      * Store a secret via the file backend.
      *
-     * FileBackend is stateless (holds only a host reference), so creating it
-     * per-call avoids lifetime complexity without performance cost.
+     * The resolved configuration selects the file store for every operation.
      * @param {string} id
      * @param {string} secret
      * @returns {Promise<void>}

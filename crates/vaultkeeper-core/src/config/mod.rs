@@ -75,6 +75,17 @@ pub fn validate_config(config: &VaultConfig) -> Result<(), VaultError> {
                 "backends[{i}].type must be a non-empty string"
             )));
         }
+        // A blank directory must not silently select the working directory.
+        if backend.backend_type == "file"
+            && backend
+                .path
+                .as_ref()
+                .is_some_and(|path| path.trim().is_empty())
+        {
+            return Err(VaultError::Other(format!(
+                "backends[{i}].path must be a non-empty string"
+            )));
+        }
     }
 
     if config.key_rotation.grace_period_days == 0 {

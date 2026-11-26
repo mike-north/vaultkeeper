@@ -316,6 +316,18 @@ fn print_help() {
     Cli::command().print_help().ok();
 }
 
+/// Load the file backend's storage location before operations that do not
+/// otherwise initialize a vault. Invalid parsed configuration is rejected.
+async fn configured_file_backend(host: &Arc<NativeHostPlatform>) -> Result<FileBackend, i32> {
+    let config = vaultkeeper_core::config::load_config(host.as_ref())
+        .await
+        .map_err(|e| {
+            eprintln!("Error: {e}");
+            1
+        })?;
+    Ok(FileBackend::from_config(host.clone(), &config))
+}
+
 async fn cmd_store(name: &str, require_presence_per_use: bool) -> i32 {
     // Read secret from stdin
     let mut secret = String::new();
@@ -331,7 +343,10 @@ async fn cmd_store(name: &str, require_presence_per_use: bool) -> i32 {
     }
 
     let host = make_host();
-    let backend = FileBackend::new(host.clone());
+    let backend = match configured_file_backend(&host).await {
+        Ok(backend) => backend,
+        Err(code) => return code,
+    };
 
     // Non-bypassable presence gate (issue #242): refuses before the backend is
     // ever touched when the flag is set and the active backend can't force a
@@ -358,7 +373,10 @@ async fn cmd_store(name: &str, require_presence_per_use: bool) -> i32 {
 
 async fn cmd_delete(name: &str, require_presence_per_use: bool) -> i32 {
     let host = make_host();
-    let backend = FileBackend::new(host);
+    let backend = match configured_file_backend(&host).await {
+        Ok(backend) => backend,
+        Err(code) => return code,
+    };
 
     // Non-bypassable presence gate (issue #242): see cmd_store.
     if let Err(e) = enforce_presence_requirement(
@@ -619,7 +637,7 @@ async fn cmd_run_profile(
         }
     };
 
-    let backend = FileBackend::new(host.clone());
+    let backend = FileBackend::from_config(host.clone(), &cfg);
 
     // The file-only degradation notice — stderr only, never stdout, and
     // emitted *before* resolution so it is visible even if resolution then
@@ -790,7 +808,7 @@ async fn cmd_run_token(
             stderr_diag(&format!("Error: {e}"));
             return 1;
         }
-        let backend = FileBackend::new(host.clone());
+        let backend = FileBackend::from_config(host.clone(), &cfg);
 
         let active_backend_type = cfg
             .backends
@@ -1571,7 +1589,7 @@ async fn cmd_session_mint(profile: &str, entry: &str) -> i32 {
         Err(code) => return code,
     };
 
-    let backend = FileBackend::new(host.clone());
+    let backend = FileBackend::from_config(host.clone(), vault.config());
     let interactive = io::stderr().is_terminal();
 
     let options = MintLeaseOptions {

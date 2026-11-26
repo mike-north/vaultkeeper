@@ -224,6 +224,11 @@ on reflection, recorded to close the question.
 
 ### 2.2 The surface by concept (IS)
 
+The Rust `FileBackend::from_config` constructor selects the first enabled
+file backend's configured path for encrypted secret storage, falling back to
+the host's default file directory when no path is configured. Signing keys
+remain in their separate signing store.
+
 The 88 `@public` symbols group into coherent concepts. The owner reviews whether each grouping is complete and
 whether membership is intentional.
 

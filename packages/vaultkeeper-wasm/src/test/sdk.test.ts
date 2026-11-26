@@ -217,6 +217,27 @@ describe('@vaultkeeper/wasm SDK', () => {
     })
   })
 
+  it('uses the configured file directory for storage, retrieval, and deletion', async () => {
+    await withTempDir(async (dir) => {
+      const storage = join(dir, 'isolated')
+      const config = {
+        version: 1,
+        backends: [{ type: 'file', enabled: true, path: storage }],
+        keyRotation: { gracePeriodDays: 7 },
+        defaults: { ttlMinutes: 60, trustTier: 3 },
+      }
+      await writeFile(join(dir, 'config.json'), JSON.stringify(config))
+      const vault = await VaultKeeper.create({ skipDoctor: true }, dir)
+      await vault.store('isolated', 'value')
+      assert.equal(await vault.retrieve('isolated'), 'value')
+      await readFile(join(storage, '69736f6c61746564.enc'))
+      await assert.rejects(() => readFile(join(dir, 'file', '.key')), { code: 'ENOENT' })
+      await vault.delete('isolated')
+      await assert.rejects(() => vault.retrieve('isolated'), SecretNotFoundError)
+      vault.dispose()
+    })
+  })
+
   it('rotate key', async () => {
     await withTempDir(async (dir) => {
       const vault = await createTestVault(dir)

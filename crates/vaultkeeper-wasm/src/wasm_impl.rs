@@ -1465,10 +1465,9 @@ impl WasmVaultKeeper {
 
     /// Store a secret via the file backend.
     ///
-    /// FileBackend is stateless (holds only a host reference), so creating it
-    /// per-call avoids lifetime complexity without performance cost.
+    /// The resolved configuration selects the file store for every operation.
     pub async fn store(&self, id: &str, secret: &str) -> Result<(), JsValue> {
-        let backend = FileBackend::new(self.host.clone());
+        let backend = FileBackend::from_config(self.host.clone(), self.vault.config());
         backend
             .store(id, secret)
             .await
@@ -1477,7 +1476,7 @@ impl WasmVaultKeeper {
 
     /// Retrieve a secret via the file backend.
     pub async fn retrieve(&self, id: &str) -> Result<String, JsValue> {
-        let backend = FileBackend::new(self.host.clone());
+        let backend = FileBackend::from_config(self.host.clone(), self.vault.config());
         backend
             .retrieve(id)
             .await
@@ -1486,7 +1485,7 @@ impl WasmVaultKeeper {
 
     /// Delete a secret via the file backend.
     pub async fn delete(&self, id: &str) -> Result<(), JsValue> {
-        let backend = FileBackend::new(self.host.clone());
+        let backend = FileBackend::from_config(self.host.clone(), self.vault.config());
         backend.delete(id).await.map_err(|e| vault_error_to_js(&e))
     }
 }

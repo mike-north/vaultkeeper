@@ -87,6 +87,40 @@ fn empty_profile() -> serde_json::Value {
     serde_json::json!({ "version": 1, "name": "uat", "entries": {} })
 }
 
+/// Profile resolution reads the configured store, leaving the default untouched.
+#[test]
+fn configured_file_path_is_used_for_profile_retrieval() {
+    let dir = run_test_env(&single_secret_profile());
+    let config = serde_json::json!({
+        "version": 1,
+        "backends": [{ "type": "file", "enabled": true, "path": dir.path().join("isolated") }],
+        "keyRotation": { "gracePeriodDays": 7 },
+        "defaults": { "ttlMinutes": 60, "trustTier": 3 }
+    });
+    fs::write(dir.path().join("config.json"), config.to_string()).unwrap();
+    store_secret(&dir, "greeting", "configured-value");
+    let output = Command::new(vk_bin())
+        .env("VAULTKEEPER_CONFIG_DIR", dir.path())
+        .args([
+            "run",
+            "--profile",
+            "uat",
+            "--",
+            "sh",
+            "-c",
+            "printf %s \"$GREETING\"",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(output.stdout, b"configured-value");
+    assert!(!dir.path().join("file").exists());
+}
+
 // ─── AC1: stdio round trip — byte-exact, both directions ─────────
 
 #[test]
