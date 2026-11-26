@@ -884,6 +884,17 @@ pub(crate) async fn initialize_key_state(
     host: &dyn HostPlatform,
     snapshot: KeyStateSnapshot,
 ) -> Result<KeyStateSnapshot, VaultError> {
+    // An existing unreadable record is not an invitation to create a new wrap key.
+    // A concurrent winner may have appeared since the caller's initial read.
+    let state_path = host.config_dir().join(KEY_STATE_FILE);
+    if read_if_present(host, &state_path).await?.is_some() {
+        return load_key_state(host)
+            .await?
+            .ok_or_else(|| VaultError::Decryption {
+                message: "Cannot load published key state".to_string(),
+                path: state_path.display().to_string(),
+            });
+    }
     if write_snapshot(host, &snapshot, &RevocationState::default(), false).await? {
         return Ok(snapshot);
     }

@@ -612,6 +612,56 @@ mod rotate_key {
     use super::*;
 
     #[test]
+    fn corrupt_non_utf8_state_does_not_create_a_wrapping_key() {
+        let (mut cmd, dir) = cli_test_env();
+        let state = dir.path().join("keys.enc");
+        fs::write(&state, [0xff]).unwrap();
+        cmd.arg("rotate-key").assert().failure();
+        assert_eq!(fs::read(state).unwrap(), [0xff]);
+        assert!(!dir.path().join(".keys.wrap").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn restrictive_umask_keeps_published_keys_readable() {
+        use std::os::unix::fs::PermissionsExt;
+        let (_, dir) = cli_test_env();
+        fs::create_dir(dir.path().join("file")).unwrap();
+        let binary = env!("CARGO_BIN_EXE_vaultkeeper");
+        for args in ["store --name first", "store --name second", "rotate-key"] {
+            let mut cmd = std::process::Command::new("sh");
+            let status = cmd
+                .arg("-c")
+                .arg(format!("umask 400; exec \"$1\" {args}"))
+                .arg("sh")
+                .arg(binary)
+                .env("VAULTKEEPER_CONFIG_DIR", dir.path())
+                .stdin(std::process::Stdio::piped())
+                .spawn()
+                .unwrap();
+            use std::io::Write;
+            let mut child = status;
+            child
+                .stdin
+                .take()
+                .unwrap()
+                .write_all(b"test secret\n")
+                .unwrap();
+            assert!(child.wait().unwrap().success());
+        }
+        for path in ["file/.key", ".keys.wrap", "keys.enc"] {
+            assert_eq!(
+                fs::metadata(dir.path().join(path))
+                    .unwrap()
+                    .permissions()
+                    .mode()
+                    & 0o777,
+                0o600
+            );
+        }
+    }
+
+    #[test]
     fn rotate_key_succeeds_with_valid_config() {
         let (mut cmd, _dir) = cli_test_env();
         cmd.arg("rotate-key")

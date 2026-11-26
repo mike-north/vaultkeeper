@@ -53,7 +53,18 @@ fn stage_owner_only_file(parent: &Path) -> std::io::Result<(PathBuf, std::fs::Fi
         let sequence = SEQUENCE.fetch_add(1, Ordering::Relaxed);
         let staging = parent.join(format!(".vk-publish-{}-{sequence}.tmp", std::process::id()));
         match options.open(&staging) {
-            Ok(file) => return Ok((staging, file)),
+            Ok(file) => {
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    // Restore owner access filtered by umask before publishing any bytes.
+                    if let Err(err) = file.set_permissions(std::fs::Permissions::from_mode(0o600)) {
+                        let _ = std::fs::remove_file(&staging);
+                        return Err(err);
+                    }
+                }
+                return Ok((staging, file));
+            }
             Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => continue,
             Err(err) => return Err(err),
         }

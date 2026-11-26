@@ -46,7 +46,7 @@ describe('saveKeyState / loadKeyState round-trip', () => {
     )
   })
 
-  it('rejects when no state file exists yet', async () => {
+  it('returns undefined when no state file exists yet', async () => {
     expect(await loadKeyState(dir)).toBeUndefined()
   })
 

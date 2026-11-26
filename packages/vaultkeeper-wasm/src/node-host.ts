@@ -176,6 +176,8 @@ export function createNodeHost(configDirOverride?: string): WasmHostPlatform {
         const file = await open(staging, 'wx', 0o600)
         try {
           try {
+            // Restore owner access removed by umask before any bytes are published.
+            if (osPlatform() !== 'win32') await file.chmod(0o600)
             await file.writeFile(content)
           } finally {
             await file.close()

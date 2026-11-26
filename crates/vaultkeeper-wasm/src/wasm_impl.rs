@@ -3,7 +3,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use js_sys::{Function, Promise, Reflect, Uint8Array};
+use js_sys::{Function, Object, Promise, Reflect, Symbol, Uint8Array};
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::JsFuture;
 use zeroize::Zeroizing;
@@ -18,6 +18,23 @@ use vaultkeeper_core::errors::{
 use vaultkeeper_core::jwe::validate_claims;
 use vaultkeeper_core::vault::{SetupOptions, VaultKeeperOptions};
 use vaultkeeper_core::{ClaimsKind, ExecutableTrustRequiredReason, VaultClaims, VaultError};
+
+// The intrinsic typed-array brand getter works across realms and cannot be
+// fooled by an object's own Symbol.toStringTag or a different view type.
+fn is_uint8_array(value: &JsValue) -> bool {
+    let array = Uint8Array::new_with_length(0);
+    let prototype = Object::get_prototype_of(&array);
+    let typed_array_prototype = Object::get_prototype_of(&prototype);
+    let descriptor =
+        Object::get_own_property_descriptor(&typed_array_prototype, &Symbol::to_string_tag());
+    Reflect::get(&descriptor, &JsValue::from_str("get"))
+        .ok()
+        .and_then(|v| v.dyn_into::<Function>().ok())
+        .and_then(|f| f.call0(value).ok())
+        .and_then(|v| v.as_string())
+        .as_deref()
+        == Some("Uint8Array")
+}
 
 // ─── JsHostPlatform ──────────────────────────────────────────────
 
@@ -389,15 +406,16 @@ impl HostPlatform for JsHostPlatform {
             .await
             .map_err(|e| fs_rejection_to_vault_error(&e, path, "read"))?;
 
-        result
-            .dyn_into::<Uint8Array>()
-            .map(|bytes| bytes.to_vec())
-            .map_err(|_| VaultError::Filesystem {
+        if is_uint8_array(&result) {
+            Ok(Uint8Array::new(&result).to_vec())
+        } else {
+            Err(VaultError::Filesystem {
                 message: "readFile() result is not a Uint8Array".to_string(),
                 path: path.display().to_string(),
                 permission: "read".to_string(),
                 code: Some("EINVAL".to_string()),
             })
+        }
     }
 
     async fn write_file(&self, path: &Path, content: &[u8], mode: u32) -> Result<(), VaultError> {

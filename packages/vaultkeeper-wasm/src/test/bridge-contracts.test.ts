@@ -16,6 +16,8 @@ import type { AddressInfo } from 'node:net'
 import { mkdtemp, rm, unlink, stat } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { runInNewContext } from 'node:vm'
+import { types } from 'node:util'
 import { createNodeHost } from '../node-host.js'
 import {
   mapWasmError,
@@ -735,6 +737,43 @@ describe('WasmVaultKeeper handle-based entry points reject a malformed handleId 
 })
 
 describe('persistent keys on the WASM host bridge', () => {
+  it('publishes owner-readable files under a restrictive umask', async () => {
+    if (process.platform === 'win32') return
+    await withTempConfigDir(async (dir) => {
+      const host = createNodeHost(dir)
+      assert.ok(typeof host.publishFileIfAbsent === 'function')
+      const path = join(dir, 'key')
+      const previous = process.umask(0o400)
+      try {
+        assert.equal(await host.publishFileIfAbsent(path, new Uint8Array([1])), true)
+        assert.equal((await stat(path)).mode & 0o777, 0o600)
+        assert.deepEqual(await host.readFile(path), new Uint8Array([1]))
+      } finally {
+        process.umask(previous)
+      }
+    })
+  })
+  it('accepts a Uint8Array from another realm when reopening state', async () => {
+    await withTempConfigDir(async (dir) => {
+      const { createVaultKeeper } = await import('../../wasm/vaultkeeper_wasm.js')
+      const host = createNodeHost(dir)
+      const first = await createVaultKeeper(host, { skipDoctor: true })
+      first.free()
+      const crossRealm = {
+        ...host,
+        async readFile(path: string): Promise<Uint8Array> {
+          const bytes = await host.readFile(path)
+          const result: unknown = runInNewContext('new Uint8Array(values)', {
+            values: Array.from(bytes),
+          })
+          assert.ok(types.isUint8Array(result))
+          return result
+        },
+      }
+      const reopened = await createVaultKeeper(crossRealm, { skipDoctor: true })
+      reopened.free()
+    })
+  })
   it('rejects a malformed key read without publishing replacement state', async () => {
     await withTempConfigDir(async (dir) => {
       const { createVaultKeeper } = await import('../../wasm/vaultkeeper_wasm.js')
