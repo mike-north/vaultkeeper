@@ -85,5 +85,7 @@ The command result (`stdout`<!-- -->, `stderr`<!-- -->, `exitCode`<!-- -->) toge
 
 {<!-- -->AuthorizationDeniedError<!-- -->} If the token map is empty, or any token is invalid or was not created by this vault instance.
 
+{<!-- -->TokenExpiredError<!-- -->} If any token reaches its JWE deadline before dispatch.
+
 {<!-- -->ExecError<!-- -->} If the command cannot be started (e.g. ENOENT), a placeholder references an unknown secret name, or a secret placeholder appears in the `command` or `args` field.
 
