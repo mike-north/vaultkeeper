@@ -69,12 +69,26 @@ range. "Secrets" = does a secret value transit this command, and by what channel
 | `session mint` | `PROFILE` | `--entry <e>` | — | **JWE lease → stdout** | lease (capability, not secret) | 0 / 1 |
 | `session revoke` | — | `--jti <j>` \| `--key <k>` (xor) | — | confirmation | — | 0 / 1 |
 
-Native `run` does not yet verify the receiving executable, so it exits 1 for
-raw or lease entries requiring elevated trust, including `--set` entries
-inheriting an elevated default. Dry runs describe the plan without resolving.
-
 For `run` and `exec`, `--help` and `-h` before the `--` separator show Vaultkeeper help.
 After the separator, both flags pass unchanged to the child.
+
+For native `run`, protected profile entries and `--set` overlays use verification of the selected child
+executable. The launcher resolves a bare name on the parent's `PATH`, verifies the canonical absolute target
+without recording first encounters, then checks the digest again after materialization. On Unix, a protected
+run requires a native executable (Mach-O on macOS and host-architecture ELF on other Unix builds). The
+launcher refuses scripts before materializing protected entries because their implicit interpreter would
+receive the environment without executable verification. To run a script with a protected profile, select
+an approved native interpreter as the command and supply the script as its argument. Its trust decision
+covers the interpreter. Executable verification assumes trusted OS executable loaders and system-level
+format handlers.
+The Unix launcher confirms that the selected invocation path still resolves to the verified target and
+preserves the requested `argv[0]`. An empty `PATH` component selects `./NAME`. On Windows it launches the
+canonical path and requires a native `.exe` target. The child environment's `PATH` cannot change which
+executable is selected. If the selected executable lacks sufficient trust for a protected entry, including
+a `--set` entry that inherits an elevated default, `run` exits 1 before launching the child. Dry runs
+describe the plan without verifying the executable or resolving secrets. The executable and both paths,
+including symlinks and parent directories, must stay stable from the final checks until the OS opens the
+executable.
 
 **In review / designed, not landed** (env-epic-spec.md §4, lease lane #298–#300) — rows tracked here so the
 grammar review covers them before they land:
@@ -203,13 +217,6 @@ on reflection, recorded to close the question.
 
 ## Part 2 — Library Surface
 
-Rust profile resolution requires caller-supplied verified executable identity
-at least as strong as an entry's `minTrust` before retrieving an elevated-trust
-raw secret or lease. `ResolveOptions::executable_identity` carries the identity
-and achieved tier; the caller must authenticate the evidence and ensure it
-applies to the receiving executable. Elevated identities carry a lowercase
-SHA-256 hex digest; Dev-tier leases retain the `dev` sentinel.
-
 ### 2.1 Organizing principles (SHOULD BE, normative)
 
 - **L1 — Everything through `index.ts`.** The public API is exactly the re-exports of `src/index.ts`; a
@@ -256,6 +263,15 @@ whether membership is intentional.
   exactly one of `executablePath`/`skipTrust` — a craft high point, keep as the pattern), `SetupOptionsBase`,
   `approveExecutable`, `checkExecutableTrust`, `setDevelopmentMode`, `ExecutableTrustStatus`,
   `ExecutableTrustRequiredError`, `IdentityMismatchError`.
+- **Native profile materialization:** `resolve_profile` checks each secret-backed entry's `minTrust`
+  before reading that entry, for both plaintext and lease materialization. For `registry` or `sigstore`,
+  `ResolveOptions::executable_identity` borrows opaque `VerifiedExecutableIdentity` evidence from
+  `verify_trust_pending`. A dev bypass, first observation, or registry conflict supplies no evidence.
+  Missing evidence, an insufficient tier, or a malformed digest fails with `ExecutableTrustRequired`.
+  A protected lease carries the verified lowercase SHA-256 hex digest in `exe` and the entry's requested
+  tier in `tid`. An `unverified` lease carries `"dev"` in `exe`.
+  Earlier entries may already have been read when a later entry fails. The resolver discards and zeroizes
+  those values and returns no environment. The host owns verification and launching the verified target.
 - **Secrets & access tokens:** `store`, `delete`, `secretExists`, `authorize`, `getSecret`, `CapabilityToken`,
   `SecretAccessor`, `SecretTokenMap`, `AccessorConsumedError`, `SecretNotFoundError`.
 - **Delegated access patterns:** `fetch`; the delegated-launch verb **aligns to `run`** (CLI ubiquitous

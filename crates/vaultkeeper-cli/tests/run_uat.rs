@@ -87,6 +87,221 @@ fn empty_profile() -> serde_json::Value {
     serde_json::json!({ "version": 1, "name": "uat", "entries": {} })
 }
 
+/// An approved executable satisfies a registry requirement on plaintext reads.
+#[test]
+fn approved_command_satisfies_registry_profile() {
+    let profile = serde_json::json!({"version": 1, "name": "uat", "entries": {
+        "GREETING": {"secret": "greeting", "materialize": "secret", "minTrust": "registry"}
+    }});
+    let dir = run_test_env(&profile);
+    store_secret(&dir, "greeting", "hello");
+    let run = || {
+        Command::new(vk_bin())
+            .env("VAULTKEEPER_CONFIG_DIR", dir.path())
+            .args([
+                "run",
+                "--profile",
+                "uat",
+                "--",
+                "/bin/sh",
+                "-c",
+                "printf %s \"$GREETING\"",
+            ])
+            .output()
+            .unwrap()
+    };
+    let unapproved = run();
+    assert!(!unapproved.status.success());
+    assert!(unapproved.stdout.is_empty());
+    let approved = Command::new(vk_bin())
+        .env("VAULTKEEPER_CONFIG_DIR", dir.path())
+        .args(["approve", "--path", "/bin/sh"])
+        .output()
+        .unwrap();
+    assert!(approved.status.success());
+    let output = run();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(output.stdout, b"hello");
+}
+
+/// A bare command uses the approved target found on the parent's PATH.
+#[test]
+fn path_lookup_accepts_an_approved_executable_through_a_symlink() {
+    use std::os::unix::fs::symlink;
+
+    let profile = serde_json::json!({"version": 1, "name": "uat", "entries": {
+        "GREETING": {"secret": "greeting", "materialize": "secret", "minTrust": "registry"}
+    }});
+    let dir = run_test_env(&profile);
+    store_secret(&dir, "greeting", "hello");
+    let skipped = dir.path().join("skipped");
+    let bin = dir.path().join("bin");
+    fs::create_dir(&skipped).unwrap();
+    fs::create_dir(&bin).unwrap();
+    fs::write(skipped.join("uat-shell"), b"non-executable file").unwrap();
+    // Exercise an intermediate symlink even when the system shell is a
+    // regular file. OS installations differ in how they expose /bin/sh.
+    let shell_alias = dir.path().join("shell-alias");
+    symlink("/bin/sh", &shell_alias).unwrap();
+    symlink(&shell_alias, bin.join("uat-shell")).unwrap();
+
+    // A bare PATH alias can use approval for its canonical launch target.
+    let approved_target = shell_alias.canonicalize().unwrap();
+    let approved = Command::new(vk_bin())
+        .env("VAULTKEEPER_CONFIG_DIR", dir.path())
+        .args(["approve", "--path"])
+        .arg(approved_target)
+        .output()
+        .unwrap();
+    assert!(approved.status.success());
+
+    let output = Command::new(vk_bin())
+        .env("VAULTKEEPER_CONFIG_DIR", dir.path())
+        .env("PATH", std::env::join_paths([skipped, bin]).unwrap())
+        .args([
+            "run",
+            "--profile",
+            "uat",
+            "--",
+            "uat-shell",
+            "-c",
+            "printf %s \"$GREETING\"",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(output.stdout, b"hello");
+}
+
+/// Approval of a file does not authorize an implicit interpreter to receive
+/// protected entries. Exercise a PATH-based shebang, a fixed shebang, and
+/// plain text that some launchers would hand to a fallback shell.
+#[test]
+fn protected_run_refuses_approved_non_native_targets() {
+    use std::os::unix::fs::{PermissionsExt, symlink};
+
+    let profile = serde_json::json!({"version": 1, "name": "uat", "entries": {
+        "GREETING": {"secret": "greeting", "materialize": "secret", "minTrust": "registry"},
+        "PATH": {"secret": "child-path", "materialize": "secret", "minTrust": "registry"}
+    }});
+    let dir = run_test_env(&profile);
+    store_secret(&dir, "greeting", "fixture-value");
+    store_secret(&dir, "child-path", "/bin:/usr/bin");
+
+    for (name, contents) in [
+        ("path-script", "#!/usr/bin/env sh\nprintf 'started\\n'\n"),
+        ("fixed-script", "#!/bin/sh\nprintf 'started\\n'\n"),
+        ("plain-text", "printf 'started\\n'\n"),
+    ] {
+        let target = dir.path().join(name);
+        let alias = dir.path().join(format!("{name}-alias"));
+        fs::write(&target, contents).unwrap();
+        fs::set_permissions(&target, fs::Permissions::from_mode(0o700)).unwrap();
+        symlink(&target, &alias).unwrap();
+
+        let approval = Command::new(vk_bin())
+            .env("VAULTKEEPER_CONFIG_DIR", dir.path())
+            .args(["approve", "--path"])
+            .arg(target.canonicalize().unwrap())
+            .output()
+            .unwrap();
+        assert!(approval.status.success());
+
+        let output = Command::new(vk_bin())
+            .env("VAULTKEEPER_CONFIG_DIR", dir.path())
+            .args(["run", "--profile", "uat", "--"])
+            .arg(alias)
+            .output()
+            .unwrap();
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert_eq!(output.status.code(), Some(1), "{name}: {stderr}");
+        assert!(output.stdout.is_empty(), "{name} must never start");
+        assert!(
+            stderr.contains("requires a native executable"),
+            "{name}: {stderr}"
+        );
+    }
+}
+
+/// Protected native launches preserve argv[0] and select the approved alias
+/// from the parent PATH even when the profile supplies a different child PATH.
+#[test]
+fn approved_native_alias_preserves_argv0_with_an_injected_path() {
+    use std::os::unix::fs::{PermissionsExt, symlink};
+    use std::path::Path;
+
+    let profile = serde_json::json!({"version": 1, "name": "uat", "entries": {
+        "GREETING": {"secret": "greeting", "materialize": "secret", "minTrust": "registry"},
+        "PATH": {"secret": "child-path", "materialize": "secret", "minTrust": "registry"}
+    }});
+    let dir = run_test_env(&profile);
+    store_secret(&dir, "greeting", "hello");
+    let bin = dir.path().join("bin");
+    let shadow = dir.path().join("shadow");
+    fs::create_dir(&bin).unwrap();
+    fs::create_dir(&shadow).unwrap();
+    store_secret(&dir, "child-path", shadow.to_str().unwrap());
+
+    let target = dir.path().join("fixture-command");
+    symlink("/bin/sh", &target).unwrap();
+    let alias = bin.join("fixture-alias");
+    symlink(&target, &alias).unwrap();
+
+    // The injected PATH contains a different executable with the same name.
+    let shadow_command = shadow.join("fixture-alias");
+    fs::write(&shadow_command, b"#!/bin/sh\nexit 99\n").unwrap();
+    fs::set_permissions(&shadow_command, fs::Permissions::from_mode(0o700)).unwrap();
+
+    let approved = Command::new(vk_bin())
+        .env("VAULTKEEPER_CONFIG_DIR", dir.path())
+        .args(["approve", "--path"])
+        .arg(target.canonicalize().unwrap())
+        .output()
+        .unwrap();
+    assert!(approved.status.success());
+
+    for (cwd, parent_path, command) in [
+        (dir.path(), bin.as_path(), "fixture-alias"),
+        (dir.path(), Path::new("bin"), "fixture-alias"),
+        (dir.path(), bin.as_path(), "./bin/fixture-alias"),
+        (bin.as_path(), Path::new(""), "fixture-alias"),
+    ] {
+        let output = Command::new(vk_bin())
+            .current_dir(cwd)
+            .env("VAULTKEEPER_CONFIG_DIR", dir.path())
+            .env("PATH", parent_path)
+            .args([
+                "run",
+                "--profile",
+                "uat",
+                "--",
+                command,
+                "-c",
+                "printf '%s\\n' \"$0\" \"$GREETING\"",
+            ])
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{command}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(
+            String::from_utf8(output.stdout).unwrap(),
+            format!("{command}\nhello\n"),
+            "native invocation for {command} with PATH={parent_path:?}"
+        );
+    }
+}
+
 #[test]
 fn elevated_default_set_refuses_before_launching_child() {
     let dir = run_test_env(&empty_profile());

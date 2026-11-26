@@ -15,6 +15,28 @@ use crate::errors::VaultError;
 use crate::types::TrustTier;
 use std::path::Path;
 
+/// Evidence that the verifier established a registry match or Sigstore
+/// provenance for an executable digest. Only this module issues the evidence;
+/// callers are responsible for supplying a trusted host and using the same
+/// executable when they act on the decision.
+#[derive(Debug, Clone)]
+pub struct VerifiedExecutableIdentity {
+    hash: String,
+    trust_tier: TrustTier,
+}
+
+impl VerifiedExecutableIdentity {
+    /// The SHA-256 hex digest that the verification applied to.
+    pub fn hash(&self) -> &str {
+        &self.hash
+    }
+
+    /// The tier the verifier established for this digest.
+    pub fn trust_tier(&self) -> TrustTier {
+        self.trust_tier
+    }
+}
+
 /// A trust decision computed by [`verify_trust_pending`] whose persistence
 /// side effect (recording the hash in the TOFU manifest) has **not** yet been
 /// applied.
@@ -27,7 +49,7 @@ use std::path::Path;
 /// TOFU record persisted for an operation that ultimately failed).
 #[derive(Debug, Clone)]
 pub struct PendingTrust {
-    /// The computed identity information.
+    /// Descriptive identity information for diagnostics and existing callers.
     pub identity: IdentityInfo,
     /// True when TOFU detected a hash change (re-approval required). No manifest
     /// write is pending in this case.
@@ -38,6 +60,8 @@ pub struct PendingTrust {
     /// the namespace that the current hash no longer matches (most-recent last).
     /// Empty otherwise.
     pub approved_hashes: Vec<String>,
+    /// Authoritative evidence, kept separate from mutable diagnostics.
+    verified_identity: Option<VerifiedExecutableIdentity>,
     /// The namespace/hash entry staged for [`PendingTrust::commit`] to merge into
     /// the on-disk manifest, or `None` when this decision records nothing (a
     /// registry match, the dev bypass, or a TOFU conflict).
@@ -51,6 +75,35 @@ pub struct PendingTrust {
 }
 
 impl PendingTrust {
+    /// Evidence issued by a positive verification. A dev bypass, first
+    /// observation, or registry conflict never yields evidence. Mutating the
+    /// public diagnostic fields cannot alter this decision.
+    pub fn verified_identity(&self) -> Option<&VerifiedExecutableIdentity> {
+        self.verified_identity.as_ref()
+    }
+
+    /// Keep the descriptive fields and the verifier-issued evidence in sync
+    /// at issuance, while preserving the verifier's deferred-write contract.
+    fn verified(
+        hash: String,
+        trust_tier: TrustTier,
+        reason: &str,
+        pending_write: Option<(String, String)>,
+    ) -> Self {
+        Self {
+            identity: IdentityInfo {
+                hash: hash.clone(),
+                trust_tier,
+                verified: true,
+            },
+            tofu_conflict: false,
+            reason: reason.to_string(),
+            approved_hashes: Vec::new(),
+            verified_identity: Some(VerifiedExecutableIdentity { hash, trust_tier }),
+            pending_write,
+        }
+    }
+
     /// Persist the pending trust-manifest write, if any — staged by a Tier-1
     /// (Sigstore) approval or a Tier-3 (TOFU first-encounter) recording. A
     /// no-op when there is nothing to record.
@@ -135,6 +188,7 @@ pub async fn verify_trust_pending(
             tofu_conflict: false,
             reason: "Dev mode — hash verification skipped".to_string(),
             approved_hashes: Vec::new(),
+            verified_identity: None,
             pending_write: None,
         });
     }
@@ -154,33 +208,23 @@ pub async fn verify_trust_pending(
     if !skip_sigstore {
         let sigstore_verified = try_sigstore(exec_path).await;
         if sigstore_verified {
-            return Ok(PendingTrust {
-                identity: IdentityInfo {
-                    hash: current_hash.clone(),
-                    trust_tier: TrustTier::Sigstore,
-                    verified: true,
-                },
-                tofu_conflict: false,
-                reason: "Sigstore bundle verified".to_string(),
-                approved_hashes: Vec::new(),
-                pending_write: Some((namespace.to_string(), current_hash)),
-            });
+            return Ok(PendingTrust::verified(
+                current_hash.clone(),
+                TrustTier::Sigstore,
+                "Sigstore bundle verified",
+                Some((namespace.to_string(), current_hash)),
+            ));
         }
     }
 
     // --- Tier 2: Registry (manifest) ---
     if is_trusted(&manifest, namespace, &current_hash) {
-        return Ok(PendingTrust {
-            identity: IdentityInfo {
-                hash: current_hash,
-                trust_tier: TrustTier::Tofu,
-                verified: true,
-            },
-            tofu_conflict: false,
-            reason: "Hash found in trust manifest".to_string(),
-            approved_hashes: Vec::new(),
-            pending_write: None,
-        });
+        return Ok(PendingTrust::verified(
+            current_hash,
+            TrustTier::Tofu,
+            "Hash found in trust manifest",
+            None,
+        ));
     }
 
     // --- TOFU check ---
@@ -199,6 +243,7 @@ pub async fn verify_trust_pending(
             reason: "Hash changed from a previously approved value — re-approval required"
                 .to_string(),
             approved_hashes: existing.hashes.clone(),
+            verified_identity: None,
             pending_write: None,
         });
     }
@@ -213,6 +258,7 @@ pub async fn verify_trust_pending(
         tofu_conflict: false,
         reason: "First encounter — hash recorded via TOFU".to_string(),
         approved_hashes: Vec::new(),
+        verified_identity: None,
         pending_write: Some((namespace.to_string(), current_hash)),
     })
 }
@@ -250,7 +296,7 @@ async fn try_sigstore(_exec_path: &str) -> bool {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::backend::{ExecOptions, ExecOutput, Platform};
     use async_trait::async_trait;
@@ -260,7 +306,7 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     /// A mock HostPlatform that stores files in memory.
-    struct MockHost {
+    pub(crate) struct MockHost {
         files: Mutex<HashMap<PathBuf, Vec<u8>>>,
         config_dir: PathBuf,
         /// Number of `write_file` calls observed, for tests asserting a redundant
@@ -269,7 +315,7 @@ mod tests {
     }
 
     impl MockHost {
-        fn new() -> Self {
+        pub(crate) fn new() -> Self {
             Self {
                 files: Mutex::new(HashMap::new()),
                 config_dir: PathBuf::from("/mock/config"),
@@ -277,7 +323,7 @@ mod tests {
             }
         }
 
-        fn add_file(&self, path: &str, content: &[u8]) {
+        pub(crate) fn add_file(&self, path: &str, content: &[u8]) {
             self.files
                 .lock()
                 .unwrap()
@@ -363,9 +409,25 @@ mod tests {
         }
     }
 
+    /// Supply the decision a successful Sigstore verifier would issue so the
+    /// resolver can exercise tier ordering while `try_sigstore` is a stub.
+    pub(crate) fn sigstore_decision(hash: &str) -> PendingTrust {
+        PendingTrust::verified(
+            hash.to_string(),
+            TrustTier::Sigstore,
+            "test provenance",
+            None,
+        )
+    }
+
     #[tokio::test]
     async fn dev_mode_bypass() {
         let host = MockHost::new();
+        let mut pending = verify_trust_pending(&host, "dev", None).await.unwrap();
+        pending.identity.verified = true;
+        pending.identity.trust_tier = TrustTier::Sigstore;
+        assert!(pending.verified_identity().is_none());
+
         let result = verify_trust(&host, "dev", None).await.unwrap();
         assert_eq!(result.identity.hash, "dev");
         assert_eq!(result.identity.trust_tier, TrustTier::Dev);
@@ -477,6 +539,7 @@ mod tests {
             .unwrap();
         assert!(!pending.tofu_conflict);
         assert!(pending.reason.contains("First encounter"));
+        assert!(pending.verified_identity().is_none());
 
         // Verify phase wrote nothing: the manifest is still empty on disk.
         let before = load_manifest(&host).await.unwrap();
@@ -516,6 +579,7 @@ mod tests {
             .await
             .unwrap();
         assert!(conflict.tofu_conflict);
+        assert!(conflict.verified_identity().is_none());
         assert_eq!(conflict.approved_hashes, vec![original_hash.clone()]);
         assert_ne!(conflict.identity.hash, original_hash);
 

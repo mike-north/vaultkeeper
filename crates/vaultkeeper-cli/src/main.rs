@@ -3,9 +3,11 @@
 //! Matches the command surface and output format of the TypeScript CLI.
 
 mod host;
+mod run_trust;
 
 use clap::{ArgGroup, Parser, Subcommand};
 use host::NativeHostPlatform;
+use run_trust::{VerifiedRunCommand, verify_run_command};
 use std::io::{self, IsTerminal, Read};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -400,6 +402,7 @@ async fn cmd_exec(token: &str, command: &[String]) -> i32 {
          `vaultkeeper run --token <jwe> -- <command>` instead.",
     );
     cmd_run_token(
+        make_host(),
         token,
         DEFAULT_TOKEN_VAR,
         Vec::new(),
@@ -510,7 +513,7 @@ async fn cmd_run(
             .await
         }
         RunSource::Token { token, as_var } => {
-            cmd_run_token(&token, &as_var, set_entries, dry_run, command).await
+            cmd_run_token(make_host(), &token, &as_var, set_entries, dry_run, command).await
         }
     }
 }
@@ -628,17 +631,17 @@ async fn cmd_run_profile(
         stderr_diag(FILE_ONLY_DEGRADATION_NOTICE);
     }
 
+    let verified = match verify_run_command(host.as_ref(), &plan.profile, &command[0]).await {
+        Ok(verified) => verified,
+        Err(e) => {
+            stderr_diag(&format!("Error: {e}"));
+            return 1;
+        }
+    };
     let resolve_options = ResolveOptions {
         backend: &backend,
         key_manager: vault.key_manager(),
-        // `run` does not yet perform executable-trust verification of the
-        // launched command (that would require resolving `command[0]` to a
-        // real file path — via `$PATH` — and hashing it, mirroring
-        // `VaultKeeper::setup`'s `executable_path`/TOFU flow). Until that
-        // lands, raw and lease entries requiring `sigstore`/`registry`,
-        // including `--set` entries inheriting that default, are refused by
-        // `resolve_profile` before retrieving the secret.
-        executable_identity: None,
+        executable_identity: verified.as_ref().map(|command| &command.identity),
     };
 
     let resolved = match resolve_profile(&plan.profile, &resolve_options).await {
@@ -649,7 +652,13 @@ async fn cmd_run_profile(
         }
     };
 
-    launch_and_wait(&command, Zeroizing::new(ResolvedEnvMap(resolved))).await
+    launch_and_wait(
+        host.as_ref(),
+        &command,
+        verified.as_ref(),
+        Zeroizing::new(ResolvedEnvMap(resolved)),
+    )
+    .await
 }
 
 /// `run --token`/`exec` — redeem an already-minted JWE directly (never mints,
@@ -662,6 +671,7 @@ async fn cmd_run_profile(
 /// --token` never mints a lease, so there is nothing for that flag to
 /// refuse (unlike [`cmd_run_profile`], which fails closed on it).
 async fn cmd_run_token(
+    host: Arc<NativeHostPlatform>,
     token: &str,
     as_var: &str,
     set_entries: Vec<vaultkeeper_core::run::SetEntry>,
@@ -672,8 +682,6 @@ async fn cmd_run_token(
         stderr_diag(&format!("Error: {e}"));
         return 1;
     }
-
-    let host = make_host();
 
     if dry_run {
         // Plan-only: --set entries still need config defaults to render their
@@ -767,6 +775,7 @@ async fn cmd_run_token(
     // why the wrapper is needed at all).
     let mut env = Zeroizing::new(ResolvedEnvMap(std::collections::HashMap::new()));
     env.insert(as_var.to_string(), secret.to_string());
+    let mut verified = None;
 
     if !set_entries.is_empty() {
         let cfg = match vaultkeeper_core::config::load_config(host.as_ref()).await {
@@ -800,10 +809,17 @@ async fn cmd_run_token(
             stderr_diag(FILE_ONLY_DEGRADATION_NOTICE);
         }
 
+        verified = match verify_run_command(host.as_ref(), &plan.profile, &command[0]).await {
+            Ok(verified) => verified,
+            Err(e) => {
+                stderr_diag(&format!("Error: {e}"));
+                return 1;
+            }
+        };
         let resolve_options = ResolveOptions {
             backend: &backend,
             key_manager: vault.key_manager(),
-            executable_identity: None,
+            executable_identity: verified.as_ref().map(|command| &command.identity),
         };
         let resolved = match resolve_profile(&plan.profile, &resolve_options).await {
             Ok(r) => r,
@@ -818,7 +834,7 @@ async fn cmd_run_token(
         }
     }
 
-    launch_and_wait(&command, env).await
+    launch_and_wait(host.as_ref(), &command, verified.as_ref(), env).await
 }
 
 /// Launch `command` with `env` injected, full stdio inheritance (never
@@ -863,8 +879,20 @@ async fn cmd_run_token(
 /// future refactor holding onto it, a panic unwind path, or a debug print)
 /// — not a claim that every copy of the plaintext is scrubbed from this
 /// process's heap for the child's lifetime.
-async fn launch_and_wait(command: &[String], mut env: Zeroizing<ResolvedEnvMap>) -> i32 {
+async fn launch_and_wait(
+    host: &dyn HostPlatform,
+    command: &[String],
+    verified: Option<&VerifiedRunCommand>,
+    mut env: Zeroizing<ResolvedEnvMap>,
+) -> i32 {
     use std::process::Stdio;
+
+    if let Some(verified) = verified
+        && let Err(e) = verified.check_launch_target(host).await
+    {
+        stderr_diag(&format!("Error: {e}"));
+        return 1;
+    }
 
     #[cfg(unix)]
     let signal_guard = match SignalGuard::install() {
@@ -875,7 +903,16 @@ async fn launch_and_wait(command: &[String], mut env: Zeroizing<ResolvedEnvMap>)
         }
     };
 
-    let mut cmd = tokio::process::Command::new(&command[0]);
+    let mut cmd = match verified {
+        Some(verified) => {
+            let mut cmd = tokio::process::Command::new(&verified.launch_path);
+            // Preserve the requested argv[0] for native multicall binaries.
+            #[cfg(unix)]
+            cmd.arg0(&command[0]);
+            cmd
+        }
+        None => tokio::process::Command::new(&command[0]),
+    };
     cmd.args(&command[1..]);
     cmd.envs(env.iter().map(|(k, v)| (k.as_str(), v.as_str())));
     // Fd inheritance, not piping: the child gets the wrapper's real stdin/
@@ -1816,6 +1853,90 @@ async fn cmd_profile_lint(name: Option<String>, profile_file: Option<String>) ->
 mod tests {
     use super::ResolvedEnvMap;
     use zeroize::Zeroize;
+
+    /// A registry-gated token overlay uses the child's approval, even when the
+    /// primary token itself has already authorized successfully at Dev tier.
+    /// Exercise the real launcher in-process so the lease stays out of argv.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn registry_token_overlay_requires_and_accepts_child_approval() {
+        use super::*;
+        use vaultkeeper_core::identity::{hash, manifest};
+        use vaultkeeper_core::vault::{SetupOptions, VaultKeeperOptions};
+
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("config.json"),
+            br#"{"version":1,"backends":[{"type":"file","enabled":true}],
+                "keyRotation":{"gracePeriodDays":7},"defaults":{"ttlMinutes":60,"trustTier":2}}"#,
+        )
+        .unwrap();
+        let host = Arc::new(NativeHostPlatform::new(dir.path().to_path_buf()));
+        let vault = vaultkeeper_core::VaultKeeper::init(
+            host.as_ref(),
+            Some(VaultKeeperOptions {
+                skip_doctor: true,
+                ..Default::default()
+            }),
+        )
+        .await
+        .unwrap();
+        let token = Zeroizing::new(
+            vault
+                .setup(
+                    host.as_ref(),
+                    "token-fixture",
+                    "primary",
+                    Some(&SetupOptions {
+                        skip_trust: Some(true),
+                        ..Default::default()
+                    }),
+                )
+                .await
+                .unwrap(),
+        );
+        FileBackend::new(host.clone())
+            .store("overlay", "additional")
+            .await
+            .unwrap();
+        let output = dir.path().join("result");
+        let shell = "/bin/sh";
+        let run = || {
+            cmd_run_token(
+                host.clone(),
+                token.as_str(),
+                DEFAULT_TOKEN_VAR,
+                vec![parse_set_flag("EXTRA=overlay").unwrap()],
+                false,
+                vec![
+                    shell.to_string(),
+                    "-c".to_string(),
+                    "printf '%s:%s' \"$VAULTKEEPER_SECRET\" \"$EXTRA\" > \"$1\"".to_string(),
+                    "sh".to_string(),
+                    output.to_str().unwrap().to_string(),
+                ],
+            )
+        };
+
+        assert_eq!(run().await, 1);
+        assert!(!output.exists());
+        let before = manifest::load_manifest(host.as_ref()).await.unwrap();
+        assert!(
+            before.is_empty(),
+            "refusal must not auto-approve the executable"
+        );
+
+        let digest = hash::hash_executable(host.as_ref(), Path::new(shell))
+            .await
+            .unwrap();
+        let approved = manifest::add_trusted_hash(&before, shell, &digest);
+        manifest::save_manifest(host.as_ref(), &approved)
+            .await
+            .unwrap();
+
+        assert_eq!(run().await, 0);
+        assert_eq!(std::fs::read(output).unwrap(), b"primary:additional");
+    }
 
     // `launch_and_wait` wraps its resolved env in `Zeroizing<ResolvedEnvMap>`
     // specifically so every exit path — not just the happy path after a
