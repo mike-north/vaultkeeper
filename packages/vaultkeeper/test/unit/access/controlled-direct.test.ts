@@ -1,6 +1,6 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import { createSecretAccessor } from '../../../src/access/controlled-direct.js'
-import { AccessorConsumedError } from '../../../src/errors.js'
+import { AccessorConsumedError, TokenExpiredError } from '../../../src/errors.js'
 import type { SecretAccessor } from '../../../src/types.js'
 
 // Symbol used by Node.js for custom inspect
@@ -14,7 +14,7 @@ function getProperty(obj: SecretAccessor, key: string | symbol): unknown {
 describe('createSecretAccessor', () => {
   describe('read() basic behavior', () => {
     it('calls the callback with a Buffer containing the secret', () => {
-      const accessor = createSecretAccessor('my-secret')
+      const accessor = createSecretAccessor(() => 'my-secret')
       let received: Buffer | undefined
 
       accessor.read((buf) => {
@@ -26,7 +26,7 @@ describe('createSecretAccessor', () => {
     })
 
     it('zeros the buffer after callback returns', () => {
-      const accessor = createSecretAccessor('abc')
+      const accessor = createSecretAccessor(() => 'abc')
       let capturedBuf: Buffer | undefined
 
       accessor.read((buf) => {
@@ -39,7 +39,7 @@ describe('createSecretAccessor', () => {
     })
 
     it('zeros the buffer even if callback throws', () => {
-      const accessor = createSecretAccessor('secret')
+      const accessor = createSecretAccessor(() => 'secret')
       let capturedBuf: Buffer | undefined
 
       expect(() => {
@@ -53,24 +53,45 @@ describe('createSecretAccessor', () => {
     })
   })
 
+  it('zeros the prepared buffer when expiry prevents release', () => {
+    const fill = vi.spyOn(Buffer.prototype, 'fill')
+    try {
+      const release = vi.fn<(buf: Buffer) => void>()
+      const accessor = createSecretAccessor(
+        () => 'secret',
+        () => {
+          throw new TokenExpiredError('Test lease expired', false)
+        },
+      )
+
+      expect(() => {
+        accessor.read(release)
+      }).toThrow(TokenExpiredError)
+      expect(release).not.toHaveBeenCalled()
+      expect(fill).toHaveBeenCalledWith(0)
+    } finally {
+      fill.mockRestore()
+    }
+  })
+
   // Regression for #168: read() must pass the callback's return value through,
   // so the natural idiom `const v = accessor.read(buf => buf.toString())` yields
   // the derived value instead of silently returning undefined.
   describe('read() return value (issue #168)', () => {
     it('returns the value the callback returns', () => {
-      const accessor = createSecretAccessor('hunter2')
+      const accessor = createSecretAccessor(() => 'hunter2')
       const value = accessor.read((buf) => buf.toString('utf8'))
       expect(value).toBe('hunter2')
     })
 
     it('supports deriving a non-string value (e.g. a length) from the secret', () => {
-      const accessor = createSecretAccessor('hunter2')
+      const accessor = createSecretAccessor(() => 'hunter2')
       const length = accessor.read((buf) => buf.length)
       expect(length).toBe(7)
     })
 
     it('still zeros the buffer after returning a derived value', () => {
-      const accessor = createSecretAccessor('secret')
+      const accessor = createSecretAccessor(() => 'secret')
       let capturedBuf: Buffer | undefined
       const value = accessor.read((buf) => {
         capturedBuf = buf
@@ -84,7 +105,7 @@ describe('createSecretAccessor', () => {
 
   describe('double-read prevention', () => {
     it('throws a descriptive domain error (not TypeError) on second call to read()', () => {
-      const accessor = createSecretAccessor('secret')
+      const accessor = createSecretAccessor(() => 'secret')
 
       accessor.read(() => {
         // first call: ok
@@ -101,7 +122,7 @@ describe('createSecretAccessor', () => {
     })
 
     it('second read() throws AccessorConsumedError (not TypeError or plain Error)', () => {
-      const accessor = createSecretAccessor('secret')
+      const accessor = createSecretAccessor(() => 'secret')
 
       accessor.read(() => {
         // consume
@@ -121,7 +142,7 @@ describe('createSecretAccessor', () => {
     })
 
     it('accessor is still accessible via property get after read() is called', () => {
-      const accessor = createSecretAccessor('secret')
+      const accessor = createSecretAccessor(() => 'secret')
 
       accessor.read(() => {
         // consume
@@ -132,7 +153,7 @@ describe('createSecretAccessor', () => {
     })
 
     it('accessor remains usable after await if read() has not been called', async () => {
-      const accessor = createSecretAccessor('secret')
+      const accessor = createSecretAccessor(() => 'secret')
 
       // Await a microtask — accessor must still be usable because read() was not called.
       await Promise.resolve()
@@ -149,7 +170,7 @@ describe('createSecretAccessor', () => {
 
   describe('custom inspect', () => {
     it('returns [SecretAccessor] from the custom inspect symbol', () => {
-      const accessor = createSecretAccessor('secret')
+      const accessor = createSecretAccessor(() => 'secret')
 
       const inspectFn = getProperty(accessor, INSPECT_CUSTOM)
       expect(typeof inspectFn).toBe('function')
@@ -164,7 +185,7 @@ describe('createSecretAccessor', () => {
 
   describe('proxy trap behaviors', () => {
     it('set trap: cannot overwrite read property', () => {
-      const accessor = createSecretAccessor('secret')
+      const accessor = createSecretAccessor(() => 'secret')
 
       // Reflect.set returns false when the trap returns false
       const result = Reflect.set(accessor, 'read', () => undefined)
@@ -175,17 +196,17 @@ describe('createSecretAccessor', () => {
     })
 
     it('has trap: returns true for "read" key', () => {
-      const accessor = createSecretAccessor('secret')
+      const accessor = createSecretAccessor(() => 'secret')
       expect('read' in accessor).toBe(true)
     })
 
     it('has trap: returns false for unknown keys', () => {
-      const accessor = createSecretAccessor('secret')
+      const accessor = createSecretAccessor(() => 'secret')
       expect('unknownKey' in accessor).toBe(false)
     })
 
     it('deleteProperty trap: cannot delete read', () => {
-      const accessor = createSecretAccessor('secret')
+      const accessor = createSecretAccessor(() => 'secret')
 
       // Reflect.deleteProperty returns false when the trap returns false
       const deleted = Reflect.deleteProperty(accessor, 'read')
@@ -196,28 +217,28 @@ describe('createSecretAccessor', () => {
     })
 
     it('getPrototypeOf trap: returns null', () => {
-      const accessor = createSecretAccessor('secret')
+      const accessor = createSecretAccessor(() => 'secret')
       const proto: unknown = Object.getPrototypeOf(accessor)
       expect(proto).toBeNull()
     })
 
     it('isExtensible trap: returns false', () => {
-      const accessor = createSecretAccessor('secret')
+      const accessor = createSecretAccessor(() => 'secret')
       expect(Object.isExtensible(accessor)).toBe(false)
     })
 
     it('preventExtensions trap: returns true (already not extensible)', () => {
-      const accessor = createSecretAccessor('secret')
+      const accessor = createSecretAccessor(() => 'secret')
       expect(() => Object.preventExtensions(accessor)).not.toThrow()
     })
 
     it('ownKeys trap: includes "read"', () => {
-      const accessor = createSecretAccessor('secret')
+      const accessor = createSecretAccessor(() => 'secret')
       expect(Reflect.ownKeys(accessor)).toContain('read')
     })
 
     it('getOwnPropertyDescriptor trap: returns descriptor for "read"', () => {
-      const accessor = createSecretAccessor('secret')
+      const accessor = createSecretAccessor(() => 'secret')
       const desc = Object.getOwnPropertyDescriptor(accessor, 'read')
       expect(desc).toBeDefined()
       expect(desc?.configurable).toBe(true)
@@ -225,19 +246,19 @@ describe('createSecretAccessor', () => {
     })
 
     it('getOwnPropertyDescriptor trap: returns undefined for unknown key', () => {
-      const accessor = createSecretAccessor('secret')
+      const accessor = createSecretAccessor(() => 'secret')
       const desc = Object.getOwnPropertyDescriptor(accessor, 'unknownKey')
       expect(desc).toBeUndefined()
     })
 
     it('defineProperty trap: returns false', () => {
-      const accessor = createSecretAccessor('secret')
+      const accessor = createSecretAccessor(() => 'secret')
       const result = Reflect.defineProperty(accessor, 'newProp', { value: 42 })
       expect(result).toBe(false)
     })
 
     it('setPrototypeOf trap: returns false', () => {
-      const accessor = createSecretAccessor('secret')
+      const accessor = createSecretAccessor(() => 'secret')
       const result = Reflect.setPrototypeOf(accessor, {})
       expect(result).toBe(false)
     })
@@ -246,7 +267,7 @@ describe('createSecretAccessor', () => {
   describe('proxy remains accessible after read() is consumed', () => {
     /** Helper: create an accessor and consume it via read(). */
     function makeConsumedAccessor(): SecretAccessor {
-      const accessor = createSecretAccessor('s')
+      const accessor = createSecretAccessor(() => 's')
       accessor.read(() => {
         // consume
       })
