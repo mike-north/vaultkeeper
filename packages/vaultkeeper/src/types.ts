@@ -341,7 +341,9 @@ export interface SecretAccessor {
    * @param callback - Function that receives the secret buffer and returns a
    *   caller-derived value.
    * @returns Whatever the callback returns.
-   * @throws {Error} If the accessor has already been consumed.
+   * @throws {AccessorConsumedError} If the accessor has already been consumed.
+   * @throws {TokenExpiredError} If the authorizing JWE has reached its deadline
+   *   before the callback receives the secret.
    */
   read<T>(callback: (buf: Buffer) => T): T
 }

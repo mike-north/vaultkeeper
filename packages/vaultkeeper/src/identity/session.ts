@@ -1,13 +1,14 @@
 /**
  * Capability token management.
  *
- * The module-private `WeakMap` binds each token to its claims and issuer for
- * its lifetime. The token object exposes neither, and claim lookup requires
- * the issuing vault's private identity.
+ * The module-private `WeakMap` binds each token to its issuer for its lifetime.
+ * Claim lookup requires the issuing vault's private identity. A JWE capability
+ * drops its claims once expiry is observed, retaining the issuer and deadline.
  */
 
 import type { VaultClaims, SigningClaims } from './types.js'
-import { AuthorizationDeniedError } from '../errors.js'
+import { AuthorizationDeniedError, TokenExpiredError } from '../errors.js'
+import { getTokenExpiryError } from '../jwe/claims.js'
 
 /**
  * The claims a capability token can wrap: either an ordinary secret's
@@ -50,14 +51,27 @@ export class CapabilityToken {
   }
 }
 
-/** Claims paired with the unique identity of the vault authorized to resolve them. */
-interface StoredCapability {
-  readonly claims: StoredClaims
-  readonly owner: symbol
-}
+/** Issuer-bound authority and the data retained at each stage of its lifetime. */
+type CapabilityEntry = { readonly owner: symbol } & (
+  | { readonly kind: 'jwe'; readonly claims: VaultClaims; readonly deadline: number }
+  | { readonly kind: 'signing'; readonly claims: SigningClaims }
+  | { readonly kind: 'expired'; readonly deadline: number }
+)
 
 /** Token identity controls the lifetime of the private authorization record. */
-const claimsStore = new WeakMap<CapabilityToken, StoredCapability>()
+const claimsStore = new WeakMap<CapabilityToken, CapabilityEntry>()
+
+/** Require the issuer before inspecting the token's kind, deadline, or claims. */
+function requireCapabilityEntry(token: CapabilityToken, owner: symbol): CapabilityEntry {
+  const entry = claimsStore.get(token)
+  if (entry === undefined) {
+    throw new AuthorizationDeniedError('Invalid or unrecognized capability token')
+  }
+  if (entry.owner !== owner) {
+    throw new AuthorizationDeniedError('Capability token was issued by another vault instance')
+  }
+  return entry
+}
 
 /**
  * Create a capability token that wraps secret `claims`.
@@ -69,7 +83,7 @@ const claimsStore = new WeakMap<CapabilityToken, StoredCapability>()
  */
 export function createCapabilityToken(claims: VaultClaims, owner: symbol): CapabilityToken {
   const token = new CapabilityToken()
-  claimsStore.set(token, { claims, owner })
+  claimsStore.set(token, { kind: 'jwe', owner, claims, deadline: claims.exp })
   return token
 }
 
@@ -88,28 +102,64 @@ export function createSigningCapabilityToken(
   owner: symbol,
 ): CapabilityToken {
   const token = new CapabilityToken()
-  claimsStore.set(token, { claims, owner })
+  claimsStore.set(token, { kind: 'signing', owner, claims })
   return token
 }
 
 /**
- * Retrieve the claims only after matching the token to the consuming vault.
+ * Retrieve live claims for the vault that issued the token.
  *
  * @param token - The opaque capability presented for use.
  * @param owner - The consuming vault's private identity.
- * @throws {AuthorizationDeniedError} If the token has no claims entry or its
+ * @param nowSec - The clock sample in epoch seconds for this expiry check.
+ * @throws {AuthorizationDeniedError} If the token has no entry or its
  *   issuer differs from the consuming vault.
+ * @throws {TokenExpiredError} If the JWE deadline has been reached.
  * @internal
  */
-export function validateCapabilityToken(token: CapabilityToken, owner: symbol): StoredClaims {
-  const stored = claimsStore.get(token)
-  if (stored === undefined) {
-    throw new AuthorizationDeniedError('Invalid or unrecognized capability token')
+export function validateCapabilityToken(
+  token: CapabilityToken,
+  owner: symbol,
+  nowSec = Date.now() / 1000,
+): StoredClaims {
+  const entry = requireCapabilityEntry(token, owner)
+  if (entry.kind === 'signing') {
+    return entry.claims
   }
-  if (stored.owner !== owner) {
-    throw new AuthorizationDeniedError('Capability token was issued by another vault instance')
+  if (entry.kind === 'expired') {
+    throw new TokenExpiredError(`Token expired at ${String(entry.deadline)}`, false)
   }
-  return stored.claims
+  const expiryError = getTokenExpiryError(entry.deadline, nowSec)
+  if (expiryError !== undefined) {
+    // Drop the claims and prevent a backwards clock correction from reviving them.
+    claimsStore.set(token, { kind: 'expired', owner: entry.owner, deadline: entry.deadline })
+    throw expiryError
+  }
+  return entry.claims
+}
+
+/**
+ * Resolve the backend key reference carried by an in-memory signing capability.
+ * Signing rejects JWE-backed capabilities by kind, even after their claims have
+ * been cleared on expiry. Only secret access evaluates their JWE deadlines.
+ * @param token - The opaque capability presented for signing.
+ * @param owner - The consuming vault's private identity.
+ * @throws {AuthorizationDeniedError} If the token is invalid, belongs to another
+ *   vault, or does not carry a signing key.
+ * @internal
+ */
+export function requireSigningCapabilityClaims(
+  token: CapabilityToken,
+  owner: symbol,
+): SigningClaims {
+  const entry = requireCapabilityEntry(token, owner)
+  if (entry.kind !== 'signing' || !isSigningClaims(entry.claims)) {
+    throw new AuthorizationDeniedError(
+      'sign() requires a signing-key capability token from authorizeSigningKey() — ' +
+        'an ordinary secret token cannot be used to sign.',
+    )
+  }
+  return entry.claims
 }
 
 /**
