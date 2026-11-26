@@ -62,6 +62,15 @@ type CapabilityEntry =
 
 const claimsStore = new WeakMap<CapabilityToken, CapabilityEntry>()
 
+/** Resolve a minted token, including a record of expiry after its claims are cleared. */
+function requireCapabilityEntry(token: CapabilityToken): CapabilityEntry {
+  const entry = claimsStore.get(token)
+  if (entry === undefined) {
+    throw new AuthorizationDeniedError('Invalid or unrecognized capability token')
+  }
+  return entry
+}
+
 /**
  * Create a capability token that wraps secret `claims`.
  * The claims are stored in a module-private `WeakMap` and cannot be reached
@@ -100,10 +109,7 @@ export function validateCapabilityToken(
   token: CapabilityToken,
   nowSec = Date.now() / 1000,
 ): StoredClaims {
-  const entry = claimsStore.get(token)
-  if (entry === undefined) {
-    throw new AuthorizationDeniedError('Invalid or unrecognized capability token')
-  }
+  const entry = requireCapabilityEntry(token)
   if (entry.kind === 'signing') {
     return entry.claims
   }
@@ -115,6 +121,24 @@ export function validateCapabilityToken(
     // Drop the claims and prevent a backwards clock correction from reviving them.
     claimsStore.set(token, { kind: 'expired', deadline: entry.deadline })
     throw expiryError
+  }
+  return entry.claims
+}
+
+/**
+ * Resolve the backend key reference carried by an in-memory signing capability.
+ * Signing rejects JWE-backed capabilities by kind, even after their claims have
+ * been cleared on expiry. Only secret access evaluates their JWE deadlines.
+ * @throws {AuthorizationDeniedError} if the token is invalid or does not carry a signing key.
+ * @internal
+ */
+export function requireSigningCapabilityClaims(token: CapabilityToken): SigningClaims {
+  const entry = requireCapabilityEntry(token)
+  if (entry.kind !== 'signing' || !isSigningClaims(entry.claims)) {
+    throw new AuthorizationDeniedError(
+      'sign() requires a signing-key capability token from authorizeSigningKey() — ' +
+        'an ordinary secret token cannot be used to sign.',
+    )
   }
   return entry.claims
 }

@@ -515,6 +515,20 @@ describe('VaultKeeper', () => {
       expect(result.exitCode).toBe(0)
     })
 
+    it('sign() rejects a secret capability at its deadline and after expiry is recorded', async () => {
+      const { vault, token } = await authorizeLease()
+      const request = { payload: 'test-data' }
+
+      vi.setSystemTime(expiresAt)
+      await expect(vault.sign(token, request)).rejects.toBeInstanceOf(AuthorizationDeniedError)
+
+      // Secret access still detects expiry and retains that denial across clock corrections.
+      expect(() => vault.getSecret(token)).toThrow(TokenExpiredError)
+      vi.setSystemTime(expiresAt - 1)
+      await expect(vault.sign(token, request)).rejects.toBeInstanceOf(AuthorizationDeniedError)
+      expect(() => vault.getSecret(token)).toThrow(TokenExpiredError)
+    })
+
     it.each([0, 1])('denies a delayed operation at expiry plus %d ms', async (offset) => {
       const { vault, token } = await authorizeLease()
       const accessor = vault.getSecret(token)

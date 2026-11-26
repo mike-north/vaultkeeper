@@ -39,6 +39,7 @@ import {
   CapabilityToken,
   createCapabilityToken,
   createSigningCapabilityToken,
+  requireSigningCapabilityClaims,
   validateCapabilityToken,
   isSigningClaims,
 } from './identity/session.js'
@@ -974,13 +975,7 @@ export class VaultKeeper {
     request: SignRequest,
     options?: PresenceRequirementOptions,
   ): Promise<{ result: SignResult; vaultResponse: VaultResponse }> {
-    const claims = validateCapabilityToken(token)
-    if (!isSigningClaims(claims)) {
-      throw new AuthorizationDeniedError(
-        'sign() requires a signing-key capability token from authorizeSigningKey() — ' +
-          'an ordinary secret token cannot be used to sign.',
-      )
-    }
+    const claims = requireSigningCapabilityClaims(token)
     const backend = this.#requireSigningBackend()
     await this.#enforcePresenceRequirement(backend, 'sign', options?.requirePresencePerUse)
     const jws = await createDetachedJws(claims.kid, request.payload, (data) =>
