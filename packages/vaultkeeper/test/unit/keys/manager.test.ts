@@ -345,6 +345,42 @@ describe('KeyManager.revokeKey', () => {
 // ---------------------------------------------------------------------------
 
 describe('KeyManager.snapshot / hydrate', () => {
+  it('zeroes the displaced current key when persisted state is replaced', async () => {
+    const mgr = await makeInitializedManager()
+    const displaced = mgr.getCurrentKey().key
+    const replacement = mgr.generateKey()
+    mgr.hydrate({ current: replacement })
+    expect(displaced.every((byte) => byte === 0)).toBe(true)
+    expect(replacement.key.some((byte) => byte !== 0)).toBe(true)
+  })
+
+  it('zeroes an incoming previous key that expires before hydration', () => {
+    const mgr = makeManager()
+    const current = mgr.generateKey()
+    const previous = mgr.generateKey()
+    mgr.hydrate({ current, previous, gracePeriodExpiresAt: Date.now() - 1 })
+    expect(previous.key.every((byte) => byte === 0)).toBe(true)
+    expect(current.key.some((byte) => byte !== 0)).toBe(true)
+  })
+
+  it('zeroes displaced keys while preserving buffers retained by the new snapshot', async () => {
+    const mgr = await makeInitializedManager()
+    const previous = mgr.getCurrentKey().key
+    mgr.rotateKey(60_000)
+    const current = mgr.getCurrentKey().key
+    const replacement = makeManager().generateKey()
+
+    mgr.hydrate({
+      current: replacement,
+      previous: mgr.getCurrentKey(),
+      gracePeriodExpiresAt: Date.now() + 60_000,
+    })
+
+    expect(previous.every((byte) => byte === 0)).toBe(true)
+    expect(current.some((byte) => byte !== 0)).toBe(true)
+    expect(mgr.getPreviousKey()?.key).toBe(current)
+  })
+
   it('round-trips the current key into a fresh manager', async () => {
     const mgr = await makeInitializedManager()
     const current = mgr.getCurrentKey()

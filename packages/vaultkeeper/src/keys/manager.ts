@@ -60,10 +60,26 @@ export class KeyManager {
     this.#timersEnabled = timersEnabled
     this.#clearGracePeriodTimer()
 
-    if (
+    const retainPrevious =
       snapshot.previous !== undefined &&
       snapshot.gracePeriodExpiresAt !== undefined &&
       Date.now() < snapshot.gracePeriodExpiresAt
+    // Snapshots may share buffers with the existing state. Wipe only buffers
+    // that will no longer be owned by this manager after hydration.
+    for (const material of [this.#state?.current, this.#state?.previous, snapshot.previous]) {
+      if (
+        material !== undefined &&
+        material.key !== snapshot.current.key &&
+        (!retainPrevious || material.key !== snapshot.previous?.key)
+      ) {
+        material.key.fill(0)
+      }
+    }
+
+    if (
+      retainPrevious &&
+      snapshot.previous !== undefined &&
+      snapshot.gracePeriodExpiresAt !== undefined
     ) {
       this.#state = { current: snapshot.current, previous: snapshot.previous }
       this.#gracePeriodExpiresAt = snapshot.gracePeriodExpiresAt
