@@ -1254,6 +1254,7 @@ mod tests {
         files: Mutex<HashMap<PathBuf, Vec<u8>>>,
         config_dir: PathBuf,
         deny_read: Mutex<HashSet<PathBuf>>,
+        restore_on_stage: bool,
     }
 
     impl TestHost {
@@ -1262,6 +1263,7 @@ mod tests {
                 files: Mutex::new(HashMap::new()),
                 config_dir: PathBuf::from("/test/config"),
                 deny_read: Mutex::new(HashSet::new()),
+                restore_on_stage: false,
             }
         }
     }
@@ -1302,10 +1304,14 @@ mod tests {
             content: &[u8],
             _mode: u32,
         ) -> Result<(), VaultError> {
-            self.files
-                .lock()
-                .unwrap()
-                .insert(path.to_path_buf(), content.to_vec());
+            let mut files = self.files.lock().unwrap();
+            files.insert(path.to_path_buf(), content.to_vec());
+            if self.restore_on_stage && path.extension().is_some_and(|ext| ext == "tmp") {
+                files.insert(
+                    self.config_dir.join(KEY_STATE_FILE),
+                    b"restored snapshot".to_vec(),
+                );
+            }
             Ok(())
         }
         async fn file_exists(&self, path: &Path) -> Result<bool, VaultError> {
@@ -1356,6 +1362,20 @@ mod tests {
         fn config_dir(&self) -> &Path {
             &self.config_dir
         }
+    }
+
+    #[tokio::test]
+    async fn bootstrap_preserves_snapshot_restored_during_staging() {
+        let mut host = TestHost::new();
+        host.restore_on_stage = true;
+        let mut manager = crate::keys::KeyManager::new();
+        assert!(initialize_key_state(&host, &mut manager).await.is_err());
+        assert_eq!(
+            host.read_file(&host.config_dir.join(KEY_STATE_FILE))
+                .await
+                .unwrap(),
+            b"restored snapshot"
+        );
     }
 
     fn make_key(id: &str, byte: u8, created_at: u64) -> KeyMaterial {

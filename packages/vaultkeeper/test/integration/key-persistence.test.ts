@@ -198,4 +198,12 @@ describe('key state recovery (issue #383)', () => {
       expect((await vault.authorize(jwe)).vaultResponse.keyStatus).toBe('current')
     }
   })
+
+  it('recovers an abandoned native-format lock during bootstrap', async () => {
+    const lockPath = path.join(configDir, 'keys.enc.lock')
+    await fs.writeFile(lockPath, '0')
+    await newProcess()
+    await expect(fs.stat(path.join(configDir, 'keys.enc'))).resolves.toBeDefined()
+    await expect(fs.stat(lockPath)).rejects.toMatchObject({ code: 'ENOENT' })
+  })
 })

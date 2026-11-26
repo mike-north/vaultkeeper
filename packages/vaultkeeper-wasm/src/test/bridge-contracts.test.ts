@@ -733,6 +733,24 @@ describe('WasmVaultKeeper handle-based entry points reject a malformed handleId 
 })
 
 describe('persisted key state (issue #383)', () => {
+  it('preserves a snapshot published while bootstrap stages its first snapshot', async () => {
+    await withTempConfigDir(async (dir) => {
+      const bindings = await loadHandleBindings()
+      const host = createNodeHost(dir)
+      const write = host.writeFile.bind(host)
+      const statePath = join(dir, 'keys.enc')
+      const restored = Buffer.from('restored snapshot')
+      host.writeFile = async (path, content, mode) => {
+        await write(path, content, mode)
+        if (path.includes('keys.') && path.endsWith('.tmp')) {
+          await writeFile(statePath, restored, { mode: 0o600 })
+        }
+      }
+      await assert.rejects(bindings.createVaultKeeper(host, { skipDoctor: true }))
+      assert.deepEqual(await readFile(statePath), restored)
+    })
+  })
+
   it(
     'shares the bootstrap lock and preserves an existing snapshot if authentication fails',
     { timeout: 5000 },
