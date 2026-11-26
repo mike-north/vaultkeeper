@@ -15,12 +15,14 @@ import * as fs from 'node:fs/promises'
 import * as os from 'node:os'
 import * as path from 'node:path'
 import * as crypto from 'node:crypto'
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import { flattenedVerify } from 'jose'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
+import { decodeProtectedHeader, flattenedVerify } from 'jose'
 import { VaultKeeper } from '../../src/index.js'
 import { AuthorizationDeniedError } from '../../src/errors.js'
 import { FileBackend } from '../../src/backend/file-backend.js'
-import { validateCapabilityToken, isSigningClaims } from '../../src/identity/session.js'
+import * as session from '../../src/identity/session.js'
+import * as backendTypes from '../../src/backend/types.js'
+import { BackendRegistry } from '../../src/backend/registry.js'
 
 let storageDir: string
 
@@ -33,6 +35,7 @@ beforeEach(async () => {
 })
 
 afterEach(async () => {
+  vi.restoreAllMocks()
   await fs.rm(storageDir, { recursive: true, force: true })
 })
 
@@ -57,6 +60,85 @@ describe('VaultKeeper signing integration', () => {
     await expect(
       VaultKeeper.verify({ payload, jws: result.jws, publicKey: pub.publicKeyPem }),
     ).resolves.toBe(true)
+  })
+
+  it("rejects another vault's signing capability before invoking either backend", async () => {
+    const otherStorageDir = await fs.mkdtemp(path.join(os.tmpdir(), 'vk-vault-sign-other-'))
+    try {
+      const firstBackend = new FileBackend(storageDir)
+      const secondBackend = new FileBackend(otherStorageDir)
+      const firstVault = await VaultKeeper.init({ skipDoctor: true, backend: firstBackend })
+      const secondVault = await VaultKeeper.init({ skipDoctor: true, backend: secondBackend })
+      await firstVault.createSigningKey('overlapping', 'EdDSA')
+      await secondVault.createSigningKey('overlapping', 'EdDSA')
+      const firstPublicKey = await firstVault.exportPublicKey('overlapping')
+      const secondPublicKey = await secondVault.exportPublicKey('overlapping')
+      expect(firstPublicKey.kid).not.toBe(secondPublicKey.kid)
+      const firstToken = await firstVault.authorizeSigningKey('overlapping')
+      const secondToken = await secondVault.authorizeSigningKey('overlapping')
+      const firstSign = vi.spyOn(firstBackend, 'signWithKey')
+      const secondSign = vi.spyOn(secondBackend, 'signWithKey')
+      const presenceProbe = vi.spyOn(backendTypes, 'getBackendCapabilities')
+      const denial = new AuthorizationDeniedError(
+        'Capability token was issued by another vault instance',
+      )
+      const attempts = await Promise.allSettled([
+        secondVault.sign(firstToken, { payload: 'wrong vault' }),
+        firstVault.sign(secondToken, { payload: 'wrong vault' }, { requirePresencePerUse: true }),
+      ])
+      for (const attempt of attempts) {
+        expect(attempt).toMatchObject({ status: 'rejected', reason: denial })
+        if (attempt.status === 'rejected') {
+          expect(attempt.reason).toBeInstanceOf(AuthorizationDeniedError)
+        }
+      }
+      expect(firstSign).not.toHaveBeenCalled()
+      expect(secondSign).not.toHaveBeenCalled()
+      expect(presenceProbe).not.toHaveBeenCalled()
+
+      const payload = 'right vault'
+      for (const { vault, token, publicKey } of [
+        { vault: firstVault, token: firstToken, publicKey: firstPublicKey },
+        { vault: secondVault, token: secondToken, publicKey: secondPublicKey },
+      ]) {
+        const { result } = await vault.sign(token, { payload })
+        expect(decodeProtectedHeader(result.jws).kid).toBe(publicKey.kid)
+        await expect(
+          VaultKeeper.verify({ payload, jws: result.jws, publicKey: publicKey.publicKeyPem }),
+        ).resolves.toBe(true)
+      }
+      expect(firstSign).toHaveBeenCalledExactlyOnceWith(
+        'signing-key:overlapping',
+        expect.any(Uint8Array),
+      )
+      expect(secondSign).toHaveBeenCalledExactlyOnceWith(
+        'signing-key:overlapping',
+        expect.any(Uint8Array),
+      )
+    } finally {
+      await fs.rm(otherStorageDir, { recursive: true, force: true })
+    }
+  })
+
+  it('rejects a foreign signing capability before resolving an unopened backend', async () => {
+    const issuer = await createVault()
+    await issuer.createSigningKey('approval', 'EdDSA')
+    const token = await issuer.authorizeSigningKey('approval')
+    const receiver = await VaultKeeper.init({
+      skipDoctor: true,
+      config: {
+        version: 1,
+        backends: [{ type: 'file', enabled: true, path: storageDir }],
+        keyRotation: { gracePeriodDays: 7 },
+        defaults: { ttlMinutes: 60, trustTier: 3 },
+      },
+    })
+    const createBackend = vi.spyOn(BackendRegistry, 'create')
+
+    await expect(receiver.sign(token, { payload: 'wrong vault' })).rejects.toThrow(
+      new AuthorizationDeniedError('Capability token was issued by another vault instance'),
+    )
+    expect(createBackend).not.toHaveBeenCalled()
   })
 
   it('verify rejects a tampered payload (returns false)', async () => {
@@ -94,15 +176,16 @@ describe('VaultKeeper signing integration', () => {
   it('signing token claims contain no key material', async () => {
     const vault = await createVault()
     await vault.createSigningKey('approval', 'EdDSA')
+    const mintToken = vi.spyOn(session, 'createSigningCapabilityToken')
     const token = await vault.authorizeSigningKey('approval')
-
-    const claims = validateCapabilityToken(token)
-    expect(isSigningClaims(claims)).toBe(true)
-    expect(Object.keys(claims).sort()).toEqual(['backendRef', 'keyType', 'kid'])
-    // No secret/private-key fields anywhere in the claims.
-    expect('val' in claims).toBe(false)
-    const serialized = JSON.stringify(claims)
-    expect(serialized).not.toContain('PRIVATE KEY')
+    const owner = mintToken.mock.lastCall?.[1]
+    const claims = owner === undefined ? undefined : session.validateCapabilityToken(token, owner)
+    const { kid } = await vault.exportPublicKey('approval')
+    expect(claims).toStrictEqual({
+      backendRef: 'signing-key:approval',
+      keyType: 'signing-key',
+      kid,
+    })
   })
 
   // Defense in depth: a signing-key token must be rejected by every
