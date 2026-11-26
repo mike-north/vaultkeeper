@@ -307,6 +307,18 @@ describe('VaultKeeper', () => {
       expect(typeof jwe).toBe('string')
     })
 
+    it('rejects a nonnumeric trust tier supplied by an untyped caller', async () => {
+      const backend = createMockBackend({ 'my-secret': 'hunter2' })
+      const vault = await VaultKeeper.init({ skipDoctor: true, backend })
+      await expect(
+        vault.setup('my-secret', {
+          skipTrust: true,
+          // @ts-expect-error Exercise an invalid JavaScript caller.
+          trustTier: [1],
+        }),
+      ).rejects.toBeInstanceOf(VaultError)
+    })
+
     it('does not share/mutate config between two instances created with the backend option', async () => {
       // Regression: init() previously reused a single shared
       // DEFAULT_INJECTED_BACKEND_CONFIG object whenever `backend` was set

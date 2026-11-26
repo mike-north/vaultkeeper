@@ -672,7 +672,7 @@ export class VaultKeeper {
     }
 
     const currentKey = this.#keyManager.getCurrentKey()
-    const token = createToken(currentKey.key, claims, { kid: currentKey.id })
+    const token = await createToken(currentKey.key, claims, { kid: currentKey.id })
 
     // Only now that the secret was retrieved and the token minted does a
     // first-encounter (or Sigstore) trust decision become a durable manifest

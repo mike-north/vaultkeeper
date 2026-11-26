@@ -22,6 +22,34 @@ pub enum TrustTier {
     Dev = 3,
 }
 
+/// Read canonical string tiers and numeric tiers issued by older TypeScript clients.
+/// This is deliberately stricter than the config parser: only exact wire values
+/// are accepted, so unrecognized identities fail closed.
+fn deserialize_claim_tier<'de, D>(deserializer: D) -> Result<TrustTier, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum WireTier {
+        Number(u64),
+        String(String),
+    }
+    use serde::de::Error;
+    match WireTier::deserialize(deserializer)? {
+        WireTier::Number(1) => Ok(TrustTier::Sigstore),
+        WireTier::Number(2) => Ok(TrustTier::Tofu),
+        WireTier::Number(3) => Ok(TrustTier::Dev),
+        WireTier::String(s) => match s.as_str() {
+            "1" => Ok(TrustTier::Sigstore),
+            "2" => Ok(TrustTier::Tofu),
+            "3" => Ok(TrustTier::Dev),
+            _ => Err(D::Error::custom("invalid trust tier")),
+        },
+        _ => Err(D::Error::custom("invalid trust tier")),
+    }
+}
+
 /// Key status in the rotation lifecycle.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -136,6 +164,7 @@ pub struct VaultClaims {
     #[serde(rename = "use")]
     pub use_limit: Option<u64>,
     /// Trust tier.
+    #[serde(deserialize_with = "deserialize_claim_tier")]
     pub tid: TrustTier,
     /// Backend identifier hint. Required (non-empty) for a secret claim;
     /// absent for a signing-key lease.

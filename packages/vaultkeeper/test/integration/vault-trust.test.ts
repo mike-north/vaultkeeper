@@ -284,6 +284,20 @@ describe('exec approval recording (setup) → subsequent trust', () => {
 })
 
 describe('setup() defers the TOFU manifest write until the operation succeeds (#148)', () => {
+  it('does not trust an executable when token creation rejects an invalid tier', async () => {
+    await backend.store('API_KEY', 'secret')
+    const caller = await writeExecutable('invalid-tier', 'executable')
+    const vault = await createVault()
+    await expect(
+      vault.setup('API_KEY', {
+        executablePath: caller,
+        // @ts-expect-error Exercise a malformed JavaScript caller.
+        trustTier: [1],
+      }),
+    ).rejects.toBeInstanceOf(VaultError)
+    expect((await vault.checkExecutableTrust(caller)).trusted).toBe(false)
+    expect(await manifestExists()).toBe(false)
+  })
   // AC2 + AC3: the exact scenario from #148. Previously #resolveExecutableIdentity
   // ran verifyTrust() — which records a first-encounter (or Sigstore) hash
   // immediately — before backend.retrieve(); a SecretNotFoundError from a
