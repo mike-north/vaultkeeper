@@ -137,9 +137,9 @@ pub async fn load_config(
 ) -> Result<VaultConfig, VaultError> {
     let config_path = host.config_dir().join("config.json");
 
-    match host.file_exists(&config_path).await {
-        Ok(true) => {}
-        _ => return Ok(default_config()),
+    match host.file_exists(&config_path).await? {
+        true => {}
+        false => return Ok(default_config()),
     }
 
     let content = host.read_file(&config_path).await?;

@@ -70,6 +70,30 @@ fn configured_file_path_is_used_for_store_and_delete() {
     assert!(!storage.join("69736f6c61746564.enc").exists());
 }
 
+/// An inaccessible config must not redirect writes to the default store.
+#[cfg(unix)]
+#[test]
+fn inaccessible_config_does_not_use_default_store() {
+    use std::os::unix::fs::{PermissionsExt, symlink};
+    let (mut store, dir) = cli_test_env();
+    let blocked = dir.path().join("blocked");
+    fs::create_dir(&blocked).unwrap();
+    fs::write(blocked.join("config.json"), b"{}").unwrap();
+    fs::remove_file(dir.path().join("config.json")).unwrap();
+    symlink(blocked.join("config.json"), dir.path().join("config.json")).unwrap();
+    fs::set_permissions(&blocked, fs::Permissions::from_mode(0o0)).unwrap();
+    // Privileged users bypass permission bits and cannot exercise this case.
+    if fs::metadata(blocked.join("config.json")).is_err() {
+        store
+            .args(["store", "--name", "test"])
+            .write_stdin("value")
+            .assert()
+            .failure();
+        assert!(!dir.path().join("file").exists());
+    }
+    fs::set_permissions(&blocked, fs::Permissions::from_mode(0o700)).unwrap();
+}
+
 /// A blank path must not redirect secrets into the process working directory.
 #[test]
 fn blank_file_path_is_rejected() {

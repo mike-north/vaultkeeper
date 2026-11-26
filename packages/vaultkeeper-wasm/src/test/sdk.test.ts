@@ -12,7 +12,7 @@
 
 import { describe, it } from 'node:test'
 import * as assert from 'node:assert/strict'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdir, mkdtemp, rm, symlink } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { chmod, readFile, writeFile } from 'node:fs/promises'
@@ -237,6 +237,33 @@ describe('@vaultkeeper/wasm SDK', () => {
       vault.dispose()
     })
   })
+
+  it(
+    'does not use the default store when config is inaccessible',
+    { skip: !isPermissionTestable },
+    async () => {
+      await withTempDir(async (dir) => {
+        const blocked = join(dir, 'blocked')
+        await mkdir(blocked)
+        await writeFile(join(blocked, 'config.json'), '{}')
+        await symlink(join(blocked, 'config.json'), join(dir, 'config.json'))
+        await chmod(blocked, 0)
+        try {
+          await assert.rejects(async () => {
+            const vault = await VaultKeeper.create({ skipDoctor: true }, dir)
+            try {
+              await vault.store('test', 'value')
+            } finally {
+              vault.dispose()
+            }
+          }, FilesystemError)
+          await assert.rejects(() => readFile(join(dir, 'file', '.key')), { code: 'ENOENT' })
+        } finally {
+          await chmod(blocked, 0o700)
+        }
+      })
+    },
+  )
 
   it('rotate key', async () => {
     await withTempDir(async (dir) => {
