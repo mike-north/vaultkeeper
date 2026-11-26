@@ -166,7 +166,7 @@ Thrown by [VaultKeeper.setup()](./vaultkeeper.vaultkeeper.setup.md) when the cal
 
 </td><td>
 
-Thrown when a delegated `fetch()` call fails before a `Response` can be produced — for example the URL is malformed or the underlying network request fails (DNS failure, connection refused, TLS error).
+Thrown when delegated `fetch()` rejects without returning a `Response`<!-- -->. This includes malformed URLs, Fetch redirects, and transport failures.
 
 
 </td></tr>
