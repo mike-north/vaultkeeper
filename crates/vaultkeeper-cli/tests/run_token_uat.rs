@@ -206,6 +206,38 @@ fn assert_exhausted(output: &Output, limit: u64) {
     );
 }
 
+/// An inaccessible durability handle must not spend the only admission.
+#[cfg(unix)]
+#[tokio::test]
+async fn inaccessible_config_directory_does_not_spend_a_use() {
+    let dir = TempDir::new().unwrap();
+    write_config(&dir);
+    let (token, fingerprint) = mint_token_with_limit(&dir, "finite-secret", Some(1)).await;
+    fs::set_permissions(dir.path(), fs::Permissions::from_mode(0o300)).unwrap();
+    // Privileged runners can open a directory despite its mode; they cannot
+    // exercise this permission boundary.
+    if fs::File::open(dir.path()).is_ok() {
+        fs::set_permissions(dir.path(), fs::Permissions::from_mode(0o700)).unwrap();
+        return;
+    }
+    let refused = admit(&dir, &token, "run").output().unwrap();
+    fs::set_permissions(dir.path(), fs::Permissions::from_mode(0o700)).unwrap();
+    assert!(!refused.status.success());
+    assert!(String::from_utf8_lossy(&refused.stderr).contains("open token usage directory"));
+    assert!(
+        !dir.path()
+            .join("token-usage")
+            .join(format!("{fingerprint}.json"))
+            .exists()
+    );
+    let admitted = admit(&dir, &token, "run").output().unwrap();
+    assert!(
+        admitted.status.success(),
+        "{}",
+        String::from_utf8_lossy(&admitted.stderr)
+    );
+}
+
 #[tokio::test]
 async fn finite_use_budget_survives_restart_and_serializes_concurrent_admission() {
     let dir = TempDir::new().unwrap();

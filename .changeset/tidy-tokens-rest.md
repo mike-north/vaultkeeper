@@ -3,3 +3,5 @@
 ---
 
 Enforce finite-use token budgets across restarted and concurrent native CLI invocations. Refuse queued launches without spending a use if their token's key was revoked while waiting.
+
+Clear transient plaintext key-state buffers after loading persisted keys.

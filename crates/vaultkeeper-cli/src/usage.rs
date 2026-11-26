@@ -67,14 +67,25 @@ pub(crate) async fn reserve(
         });
     }
 
+    // Acquire every handle required for durability before committing the count.
+    #[cfg(unix)]
+    let sync_directories = [directory.as_path(), config_dir]
+        .map(|path| {
+            File::open(path).map_err(|error| fs_error(path, "open token usage directory", error))
+        })
+        .into_iter()
+        .collect::<Result<Vec<_>, _>>()?;
+
     write_usage(&state_path, UsageState { uses: uses + 1 })?;
 
     // Persist both directory entries on Unix, including on first use. If
     // syncing fails after rename, fail closed and keep the committed count.
     #[cfg(unix)]
-    for path in [directory.as_path(), config_dir] {
-        File::open(path)
-            .and_then(|dir| dir.sync_all())
+    for (path, dir) in [directory.as_path(), config_dir]
+        .into_iter()
+        .zip(sync_directories)
+    {
+        dir.sync_all()
             .map_err(|error| fs_error(path, "sync token usage directory", error))?;
     }
     Ok(())

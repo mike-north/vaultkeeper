@@ -25,7 +25,7 @@ use aes_gcm::aead::Aead;
 use aes_gcm::{Aes256Gcm, KeyInit, Nonce};
 use base64ct::{Base64, Encoding};
 use serde::{Deserialize, Serialize};
-use zeroize::Zeroize;
+use zeroize::{Zeroize, Zeroizing};
 
 use crate::backend::HostPlatform;
 use crate::errors::VaultError;
@@ -47,14 +47,23 @@ const GCM_TAG_BYTES: usize = 16;
 mod base64_key {
     use base64ct::{Base64, Encoding};
     use serde::{Deserialize, Deserializer, Serializer};
+    use zeroize::Zeroizing;
 
     pub fn serialize<S: Serializer>(bytes: &[u8], serializer: S) -> Result<S::Ok, S::Error> {
         serializer.serialize_str(&Base64::encode_string(bytes))
     }
 
-    pub fn deserialize<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Vec<u8>, D::Error> {
-        let s = String::deserialize(deserializer)?;
-        Base64::decode_vec(&s).map_err(serde::de::Error::custom)
+    pub fn deserialize<'de, D: Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<Zeroizing<Vec<u8>>, D::Error> {
+        let s = Zeroizing::new(String::deserialize(deserializer)?);
+        // The decoder can write a valid prefix before reporting malformed input.
+        let mut bytes = Zeroizing::new(vec![0; s.len()]);
+        let len = Base64::decode(s.as_bytes(), &mut bytes)
+            .map_err(serde::de::Error::custom)?
+            .len();
+        bytes.truncate(len);
+        Ok(bytes)
     }
 }
 
@@ -65,7 +74,7 @@ mod base64_key {
 struct RawKeyMaterial {
     id: String,
     #[serde(with = "base64_key")]
-    key: Vec<u8>,
+    key: Zeroizing<Vec<u8>>,
     created_at: String,
 }
 
@@ -125,7 +134,7 @@ struct RawKeyState {
 fn serialize_key(key: &KeyMaterial) -> RawKeyMaterial {
     RawKeyMaterial {
         id: key.id.clone(),
-        key: key.key.clone(),
+        key: Zeroizing::new(key.key.clone()),
         created_at: epoch_secs_to_iso8601(key.created_at),
     }
 }
@@ -133,14 +142,14 @@ fn serialize_key(key: &KeyMaterial) -> RawKeyMaterial {
 /// Validate every field so a corrupt or truncated entry degrades to "no
 /// persisted state" rather than yielding malformed key material (mirrors the
 /// TS `deserializeKey` type guard).
-fn deserialize_key(raw: RawKeyMaterial) -> Option<KeyMaterial> {
+fn deserialize_key(mut raw: RawKeyMaterial) -> Option<KeyMaterial> {
     if raw.id.is_empty() || raw.key.len() != GCM_KEY_BYTES {
         return None;
     }
     let created_at = iso8601_to_epoch_secs(&raw.created_at)?;
     Some(KeyMaterial {
         id: raw.id,
-        key: raw.key,
+        key: std::mem::take(&mut *raw.key),
         created_at,
     })
 }
@@ -181,7 +190,7 @@ fn encrypt_gcm(key: &[u8], plaintext: &str) -> Result<String, VaultError> {
 /// malformation or authentication failure — callers treat that as "no
 /// recoverable state" rather than a hard error (a tampered envelope, or a
 /// wrap key that no longer matches, is not distinguishable from corruption).
-fn decrypt_gcm(key: &[u8], encoded: &str) -> Option<String> {
+fn decrypt_gcm(key: &[u8], encoded: &str) -> Option<Zeroizing<Vec<u8>>> {
     let parts: Vec<&str> = encoded.split(':').collect();
     if parts.len() != 3 {
         return None;
@@ -202,8 +211,10 @@ fn decrypt_gcm(key: &[u8], encoded: &str) -> Option<String> {
     let mut combined = ciphertext;
     combined.extend_from_slice(&auth_tag);
 
-    let plaintext = cipher.decrypt(nonce, combined.as_slice()).ok()?;
-    String::from_utf8(plaintext).ok()
+    cipher
+        .decrypt(nonce, combined.as_slice())
+        .ok()
+        .map(Zeroizing::new)
 }
 
 /// Read the 32-byte wrapping key at `wrap_path`, generating and persisting a
@@ -300,7 +311,11 @@ async fn try_load_raw(host: &dyn HostPlatform) -> Result<RawLoad, VaultError> {
         return Ok(RawLoad::Corrupt);
     };
 
-    let Ok(parsed) = serde_json::from_str::<RawKeyState>(&json) else {
+    // Validate the entire plaintext, including fields unknown to this version.
+    let Ok(json_text) = std::str::from_utf8(&json) else {
+        return Ok(RawLoad::Corrupt);
+    };
+    let Ok(parsed) = serde_json::from_str::<RawKeyState>(json_text) else {
         return Ok(RawLoad::Corrupt);
     };
     if parsed.version != 1 {
@@ -1127,6 +1142,24 @@ mod tests {
     use std::path::PathBuf;
     use std::sync::{Arc, Mutex};
 
+    /// Decrypted state remains in a zeroizing owner even on parse failures.
+    #[test]
+    fn decrypted_state_is_owned_by_zeroizing_buffer() {
+        let key = [42; GCM_KEY_BYTES];
+        let envelope = encrypt_gcm(&key, "not valid JSON").unwrap();
+        let plaintext: Zeroizing<Vec<u8>> = decrypt_gcm(&key, &envelope).unwrap();
+        assert!(serde_json::from_slice::<RawKeyState>(&plaintext).is_err());
+    }
+
+    /// Decoded key bytes stay guarded even when the surrounding record is rejected.
+    #[test]
+    fn decoded_key_is_owned_by_zeroizing_buffer() {
+        let raw: RawKeyMaterial =
+            serde_json::from_str(r#"{"id":"","key":"AQID","createdAt":"invalid"}"#).unwrap();
+        let _: &Zeroizing<Vec<u8>> = &raw.key;
+        assert!(deserialize_key(raw).is_none());
+    }
+
     // -------------------------------------------------------------------
     // ISO-8601 conversion
     // -------------------------------------------------------------------
@@ -1639,7 +1672,7 @@ mod tests {
     fn deserialize_key_rejects_wrong_length_key_bytes() {
         let raw = RawKeyMaterial {
             id: "k-1".to_string(),
-            key: vec![0u8; 7],
+            key: Zeroizing::new(vec![0u8; 7]),
             created_at: "2024-01-15T10:30:00.000Z".to_string(),
         };
         assert!(deserialize_key(raw).is_none());
@@ -1649,7 +1682,7 @@ mod tests {
     fn deserialize_key_rejects_empty_id() {
         let raw = RawKeyMaterial {
             id: String::new(),
-            key: vec![0u8; GCM_KEY_BYTES],
+            key: Zeroizing::new(vec![0u8; GCM_KEY_BYTES]),
             created_at: "2024-01-15T10:30:00.000Z".to_string(),
         };
         assert!(deserialize_key(raw).is_none());
