@@ -3,10 +3,7 @@
 //! Ports the TypeScript `YubikeyBackend`
 //! (`packages/vaultkeeper/src/backend/yubikey-backend.ts`) into
 //! `vaultkeeper-core`, preserving its on-disk contract exactly: same
-//! `<hex(id)>.enc` entry-path scheme, same `metadata.json` `{ entries: {...}
-//! } }` shape (keyed by id; the TS backend's `list()` only ever reads the
-//! object's keys, so the stored value is opaque bookkeeping and does not
-//! need to match byte-for-byte across implementations), and the same
+//! `<hex(id)>.enc` entry-path scheme and the same
 //! versioned `1:<iv>:<authTag>:<ciphertext>` AES-256-GCM envelope with a key
 //! derived via HKDF-SHA-256 from the YubiKey's HMAC-SHA1 challenge-response
 //! (slot 2), binding the derived key to the secret's `id` via the HKDF
@@ -35,7 +32,6 @@
 //! blob written by a different OpenSSL version rather than failing cleanly.
 //! This port matches that behavior exactly (see issue #293 discussion).
 
-use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -43,7 +39,6 @@ use aes_gcm::aead::Aead;
 use aes_gcm::{Aes256Gcm, KeyInit, Nonce};
 use base64ct::{Base64, Encoding};
 use hkdf::Hkdf;
-use serde::{Deserialize, Serialize};
 use sha2::Sha256;
 use zeroize::{Zeroize, Zeroizing};
 
@@ -56,7 +51,6 @@ use crate::errors::VaultError;
 
 const YKMAN_INSTALL_URL: &str = "https://developers.yubico.com/yubikey-manager/";
 const STORAGE_SUBDIR: &str = "yubikey";
-const METADATA_FILE: &str = "metadata.json";
 const DEVICE_TIMEOUT_MS: u64 = 5000;
 
 /// AES-256-GCM constants.
@@ -71,17 +65,6 @@ const FORMAT_VERSION: &str = "1";
 /// Expected byte length of a YubiKey HMAC-SHA1 response (20 bytes = 40 hex
 /// chars). Must match the TS backend's `HMAC_RESPONSE_HEX_LENGTH` exactly.
 const HMAC_RESPONSE_HEX_LENGTH: usize = 40;
-
-/// On-disk shape of `metadata.json`, matching the TS backend's
-/// `YubikeyMetadata` interface exactly (`{ entries: Record<string, string> }`).
-/// A `BTreeMap` (rather than `HashMap`) keeps this port's own writes
-/// deterministically ordered; it has no bearing on reading TS-written files,
-/// since JSON object key order is irrelevant to `serde_json`.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-struct YubikeyMetadata {
-    #[serde(default)]
-    entries: BTreeMap<String, String>,
-}
 
 /// YubiKey backend via `ykman` CLI.
 ///
@@ -122,29 +105,6 @@ impl YubikeyBackend {
     fn entry_path(&self, id: &str) -> PathBuf {
         let safe_id = hex_encode(id.as_bytes());
         self.storage_dir().join(format!("{safe_id}.enc"))
-    }
-
-    fn metadata_path(&self) -> PathBuf {
-        self.storage_dir().join(METADATA_FILE)
-    }
-
-    /// Load `metadata.json`, matching the TS backend's `loadMetadata`: any
-    /// failure to read or parse (missing file, corrupt JSON, wrong shape)
-    /// is swallowed and treated as an empty store rather than propagated —
-    /// `list()` on a fresh/corrupt store must report no entries, not error.
-    async fn load_metadata(&self) -> YubikeyMetadata {
-        match self.host.read_file(&self.metadata_path()).await {
-            Ok(data) => serde_json::from_slice(&data).unwrap_or_default(),
-            Err(_) => YubikeyMetadata::default(),
-        }
-    }
-
-    async fn save_metadata(&self, metadata: &YubikeyMetadata) -> Result<(), VaultError> {
-        let json = serde_json::to_string_pretty(metadata)
-            .map_err(|e| VaultError::Other(format!("Failed to serialize metadata: {e}")))?;
-        self.host
-            .write_file(&self.metadata_path(), json.as_bytes(), 0o600)
-            .await
     }
 
     /// Perform the YubiKey HMAC-SHA1 challenge-response for `id` and return
@@ -484,13 +444,7 @@ impl SecretBackend for YubikeyBackend {
         // host directory-creation path" without a `.keep` sentinel.
         self.host
             .write_file(&entry_path, encrypted.as_bytes(), 0o600)
-            .await?;
-
-        let mut metadata = self.load_metadata().await;
-        metadata
-            .entries
-            .insert(id.to_string(), entry_path.display().to_string());
-        self.save_metadata(&metadata).await
+            .await
     }
 
     async fn retrieve(&self, id: &str) -> Result<String, VaultError> {
@@ -561,9 +515,7 @@ impl SecretBackend for YubikeyBackend {
             }
         }
 
-        let mut metadata = self.load_metadata().await;
-        metadata.entries.remove(id);
-        self.save_metadata(&metadata).await
+        Ok(())
     }
 
     async fn exists(&self, id: &str) -> Result<bool, VaultError> {
@@ -579,8 +531,23 @@ impl SecretBackend for YubikeyBackend {
 #[cfg_attr(not(target_arch = "wasm32"), async_trait::async_trait)]
 impl ListableBackend for YubikeyBackend {
     async fn list(&self) -> Result<Vec<String>, VaultError> {
-        let metadata = self.load_metadata().await;
-        Ok(metadata.entries.into_keys().collect())
+        // The entry files are authoritative; the old shared index can be
+        // stale after concurrent writes or an interrupted metadata update.
+        let filenames = self.host.list_dir(&self.storage_dir()).await?;
+        let mut ids = Vec::new();
+        for filename in filenames {
+            if let Some(hex) = filename.strip_suffix(".enc")
+                && hex
+                    .bytes()
+                    .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+                && let Ok(bytes) = hex_decode(hex)
+                && let Ok(id) = String::from_utf8(bytes)
+                && hex_encode(id.as_bytes()) == hex
+            {
+                ids.push(id);
+            }
+        }
+        Ok(ids)
     }
 }
 
@@ -653,6 +620,8 @@ mod tests {
         /// disambiguation path from the "genuinely missing" path.
         deny_read: Mutex<HashSet<PathBuf>>,
         deny_delete: Mutex<HashSet<PathBuf>>,
+        /// Synchronizes legacy index reads to expose lost read-modify-write updates.
+        metadata_barrier: Mutex<Option<Arc<tokio::sync::Barrier>>>,
     }
 
     const FAKE_HMAC_RESPONSE: &str = "deadbeefcafe01234567deadbeefcafe01234567";
@@ -668,6 +637,7 @@ mod tests {
                 ykman_installed: true,
                 deny_read: Mutex::new(HashSet::new()),
                 deny_delete: Mutex::new(HashSet::new()),
+                metadata_barrier: Mutex::new(None),
             })
         }
 
@@ -681,6 +651,7 @@ mod tests {
                 ykman_installed: true,
                 deny_read: Mutex::new(HashSet::new()),
                 deny_delete: Mutex::new(HashSet::new()),
+                metadata_barrier: Mutex::new(None),
             })
         }
 
@@ -694,6 +665,7 @@ mod tests {
                 ykman_installed: false,
                 deny_read: Mutex::new(HashSet::new()),
                 deny_delete: Mutex::new(HashSet::new()),
+                metadata_barrier: Mutex::new(None),
             })
         }
     }
@@ -758,14 +730,24 @@ mod tests {
                     code: None,
                 });
             }
-            self.files
+            let result = self
+                .files
                 .lock()
                 .unwrap()
                 .get(path)
                 .cloned()
                 .ok_or_else(|| VaultError::SecretNotFound {
                     message: format!("Not found: {}", path.display()),
-                })
+                });
+            let barrier = if path.file_name().is_some_and(|name| name == "metadata.json") {
+                self.metadata_barrier.lock().unwrap().clone()
+            } else {
+                None
+            };
+            if let Some(barrier) = barrier {
+                barrier.wait().await;
+            }
+            result
         }
         async fn write_file(
             &self,
@@ -995,15 +977,47 @@ mod tests {
     const TS_FIXTURE_PLAINTEXT: &str = "ts-core-compat-secret-\u{1F510}";
 
     #[tokio::test]
+    async fn inventory_survives_stale_or_unreadable_metadata() {
+        let host = TestHost::new();
+        let first = YubikeyBackend::new(host.clone(), false);
+        let second = YubikeyBackend::new(host.clone(), false);
+        *host.metadata_barrier.lock().unwrap() = Some(Arc::new(tokio::sync::Barrier::new(2)));
+        let (a, b) = tokio::join!(first.store("alpha", "a"), second.store("beta", "b"));
+        a.unwrap();
+        b.unwrap();
+        *host.metadata_barrier.lock().unwrap() = None;
+        let mut ids = YubikeyBackend::new(host.clone(), false)
+            .list()
+            .await
+            .unwrap();
+        ids.sort();
+        assert_eq!(ids, vec!["alpha", "beta"]);
+        let metadata_path = first.storage_dir().join("metadata.json");
+        host.files
+            .lock()
+            .unwrap()
+            .insert(metadata_path.clone(), b"broken".to_vec());
+        host.deny_read.lock().unwrap().insert(metadata_path);
+        host.files
+            .lock()
+            .unwrap()
+            .insert(first.storage_dir().join("aéa.enc"), vec![]);
+        let reopened = YubikeyBackend::new(host, false);
+        let mut ids = reopened.list().await.unwrap();
+        ids.sort();
+        assert_eq!(ids, vec!["alpha", "beta"]);
+    }
+
+    #[tokio::test]
     async fn reads_a_metadata_and_entry_pair_written_by_the_ts_backend() {
         let host = TestHost::new();
         *host.hmac_response.lock().unwrap() = TS_FIXTURE_HMAC_RESPONSE.to_string();
         let backend = YubikeyBackend::new(host.clone(), false);
 
-        host.files
-            .lock()
-            .unwrap()
-            .insert(backend.metadata_path(), TS_FIXTURE_METADATA.to_vec());
+        host.files.lock().unwrap().insert(
+            backend.storage_dir().join("metadata.json"),
+            TS_FIXTURE_METADATA.to_vec(),
+        );
         host.files
             .lock()
             .unwrap()
@@ -1014,31 +1028,6 @@ mod tests {
 
         let secret = backend.retrieve(TS_FIXTURE_ID).await.unwrap();
         assert_eq!(secret, TS_FIXTURE_PLAINTEXT);
-    }
-
-    #[tokio::test]
-    async fn metadata_written_by_this_port_matches_the_ts_entries_shape() {
-        let host = TestHost::new();
-        let backend = YubikeyBackend::new(host.clone(), false);
-        backend.store("alpha", "val-a").await.unwrap();
-
-        let raw = host
-            .files
-            .lock()
-            .unwrap()
-            .get(&backend.metadata_path())
-            .cloned()
-            .unwrap();
-        let parsed: serde_json::Value = serde_json::from_slice(&raw).unwrap();
-        let obj = parsed.as_object().unwrap();
-        assert_eq!(
-            obj.len(),
-            1,
-            "metadata.json must have exactly one top-level key: entries"
-        );
-        let entries = obj.get("entries").unwrap().as_object().unwrap();
-        assert!(entries.contains_key("alpha"));
-        assert!(entries.get("alpha").unwrap().is_string());
     }
 
     #[tokio::test]
@@ -1136,13 +1125,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn missing_metadata_entry_does_not_block_direct_retrieve_but_list_omits_it() {
-        // The TS backend's retrieve()/delete() never consult metadata.json —
-        // they recompute the entry path fresh from `id`. metadata.json is
-        // purely a `list()` index. A blob that exists on disk but has no
-        // metadata entry (e.g. the metadata write failed after the blob
-        // write succeeded) must still retrieve correctly, but must not
-        // appear in `list()`.
+    async fn missing_metadata_entry_remains_listed_and_retrievable() {
         let host = TestHost::new();
         let backend = YubikeyBackend::new(host.clone(), false);
         let entry_path = backend.entry_path("orphan");
@@ -1153,7 +1136,7 @@ mod tests {
             .unwrap()
             .insert(entry_path, blob.into_bytes());
 
-        assert_eq!(backend.list().await.unwrap(), Vec::<String>::new());
+        assert_eq!(backend.list().await.unwrap(), vec!["orphan"]);
         let retrieved = backend.retrieve("orphan").await.unwrap();
         assert_eq!(retrieved, "orphaned-secret");
     }

@@ -476,7 +476,7 @@ impl HostPlatform for JsHostPlatform {
 
         let result = JsFuture::from(Promise::from(promise))
             .await
-            .map_err(|e| js_err(&format!("listDir() rejected: {e:?}")))?;
+            .map_err(|e| fs_rejection_to_vault_error(&e, path, "read"))?;
 
         let arr = js_sys::Array::from(&result);
         let mut names = Vec::new();

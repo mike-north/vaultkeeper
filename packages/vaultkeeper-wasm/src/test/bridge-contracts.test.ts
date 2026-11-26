@@ -13,7 +13,7 @@ import { describe, it } from 'node:test'
 import * as assert from 'node:assert/strict'
 import { createServer } from 'node:http'
 import type { AddressInfo } from 'node:net'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createNodeHost } from '../node-host.js'
@@ -25,6 +25,21 @@ import {
   AuthorizationDeniedError,
 } from '../errors.js'
 import type { HostSecretBackend } from '../types.js'
+
+describe('directory inventory errors', () => {
+  it('distinguishes a missing directory from an unreadable inventory', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'vk-list-'))
+    try {
+      const host = createNodeHost(dir)
+      assert.deepEqual(await host.listDir(join(dir, 'missing')), [])
+      const file = join(dir, 'file')
+      await writeFile(file, 'not a directory')
+      await assert.rejects(host.listDir(file), { code: 'ENOTDIR' })
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+})
 
 /** Loose shape of a value thrown across the WASM boundary (see `../errors.ts`). */
 interface BridgeErrorShape {

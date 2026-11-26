@@ -22,6 +22,7 @@ vi.mock('node:fs/promises', () => ({
   unlink: vi.fn(),
   readFile: vi.fn(),
   writeFile: vi.fn(),
+  readdir: vi.fn(),
 }))
 
 import * as fs from 'node:fs/promises'
@@ -155,9 +156,7 @@ describe('YubikeyBackend', () => {
         expect.any(String),
       ])
 
-      // writeFile should have been called twice: once for the secret file,
-      // once for the metadata file.
-      expect(mockFs.writeFile).toHaveBeenCalledTimes(2)
+      expect(mockFs.writeFile).toHaveBeenCalledTimes(1)
 
       // Verify the encrypted payload written to the secret file is a valid
       // versioned GCM blob (1:<iv>:<authTag>:<ciphertext>).
@@ -475,25 +474,30 @@ describe('YubikeyBackend', () => {
   })
 
   describe('list', () => {
-    it('should return all entry keys from metadata file', async () => {
-      const metadata = { entries: { 'my-secret': '/path/a.enc', 'another-secret': '/path/b.enc' } }
-      mockFs.readFile.mockResolvedValue(JSON.stringify(metadata))
+    it('lists stored records even when the legacy inventory is unreadable', async () => {
+      mockFs.readFile.mockRejectedValue(new Error('injected metadata failure'))
+      mockFs.readdir.mockResolvedValue(['616c706861.enc', '62657461.enc'])
+      await expect(new YubikeyBackend().list()).resolves.toEqual(['alpha', 'beta'])
+    })
+    it('should return all entry keys from encrypted filenames', async () => {
+      mockFs.readdir.mockResolvedValue([
+        '6d792d736563726574.enc',
+        '616e6f746865722d736563726574.enc',
+      ])
 
       const result = await backend.list()
       expect(result).toEqual(['my-secret', 'another-secret'])
     })
 
-    it('should return empty array when metadata file does not exist', async () => {
-      // loadMetadata catches errors and returns { entries: {} }
-      mockFs.readFile.mockRejectedValue(Object.assign(new Error('ENOENT'), { code: 'ENOENT' }))
+    it('should return empty array when storage directory does not exist', async () => {
+      mockFs.readdir.mockRejectedValue(Object.assign(new Error('ENOENT'), { code: 'ENOENT' }))
 
       const result = await backend.list()
       expect(result).toEqual([])
     })
 
-    it('should return empty array when metadata has no entries', async () => {
-      const metadata = { entries: {} }
-      mockFs.readFile.mockResolvedValue(JSON.stringify(metadata))
+    it('should return empty array when directory has no entries', async () => {
+      mockFs.readdir.mockResolvedValue([])
 
       const result = await backend.list()
       expect(result).toEqual([])

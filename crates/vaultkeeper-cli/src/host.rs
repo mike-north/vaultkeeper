@@ -270,9 +270,13 @@ impl HostPlatform for NativeHostPlatform {
             Ok(entries) => {
                 let mut names = Vec::new();
                 for entry in entries {
-                    if let Ok(e) = entry
-                        && let Some(name) = e.file_name().to_str()
-                    {
+                    let e = entry.map_err(|error| VaultError::Filesystem {
+                        message: format!("Failed to list {}: {error}", path.display()),
+                        path: path.display().to_string(),
+                        permission: "read".to_string(),
+                        code: None,
+                    })?;
+                    if let Some(name) = e.file_name().to_str() {
                         names.push(name.to_string());
                     }
                 }

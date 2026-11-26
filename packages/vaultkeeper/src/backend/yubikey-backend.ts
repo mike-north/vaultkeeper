@@ -30,7 +30,6 @@ import type { ListableBackend, PresenceCapableBackend, BackendCapabilities } fro
 
 const YKMAN_INSTALL_URL = 'https://developers.yubico.com/yubikey-manager/'
 const STORAGE_DIR_NAME = path.join('.vaultkeeper', 'yubikey')
-const METADATA_FILE = 'metadata.json'
 const DEVICE_TIMEOUT_MS = 5000
 
 /** AES-256-GCM constants */
@@ -40,10 +39,6 @@ const GCM_TAG_LENGTH_BITS = 128
 
 /** Version prefix written at the start of every encrypted file. */
 const FORMAT_VERSION = '1'
-
-interface YubikeyMetadata {
-  entries: Record<string, string>
-}
 
 /**
  * Resolve the storage directory for a YubikeyBackend instance.
@@ -64,37 +59,6 @@ function resolveStorageDir(configuredPath?: string): string {
 function getEntryPath(storageDir: string, id: string): string {
   const safeId = Buffer.from(id, 'utf8').toString('hex')
   return path.join(storageDir, `${safeId}.enc`)
-}
-
-function isStringRecord(value: unknown): value is Record<string, string> {
-  if (value === null || typeof value !== 'object') {
-    return false
-  }
-  return Object.values(value).every((v) => typeof v === 'string')
-}
-
-async function loadMetadata(storageDir: string): Promise<YubikeyMetadata> {
-  const metaPath = path.join(storageDir, METADATA_FILE)
-  try {
-    const raw = await fs.readFile(metaPath, 'utf8')
-    const parsed: unknown = JSON.parse(raw)
-    if (
-      parsed !== null &&
-      typeof parsed === 'object' &&
-      'entries' in parsed &&
-      isStringRecord(parsed.entries)
-    ) {
-      return { entries: parsed.entries }
-    }
-    return { entries: {} }
-  } catch {
-    return { entries: {} }
-  }
-}
-
-async function saveMetadata(storageDir: string, metadata: YubikeyMetadata): Promise<void> {
-  const metaPath = path.join(storageDir, METADATA_FILE)
-  await fs.writeFile(metaPath, JSON.stringify(metadata, null, 2), { mode: 0o600 })
 }
 
 /** Expected byte length of a YubiKey HMAC-SHA1 response (20 bytes = 40 hex chars). */
@@ -385,10 +349,6 @@ export class YubikeyBackend implements ListableBackend, PresenceCapableBackend {
 
     const entryPath = getEntryPath(storageDir, id)
     await fs.writeFile(entryPath, encrypted, { mode: 0o600 })
-
-    const metadata = await loadMetadata(storageDir)
-    metadata.entries[id] = entryPath
-    await saveMetadata(storageDir, metadata)
   }
 
   async retrieve(id: string): Promise<string> {
@@ -424,11 +384,6 @@ export class YubikeyBackend implements ListableBackend, PresenceCapableBackend {
       }
       throw err
     }
-
-    const metadata = await loadMetadata(storageDir)
-    // eslint-disable-next-line @typescript-eslint/no-dynamic-delete
-    delete metadata.entries[id]
-    await saveMetadata(storageDir, metadata)
   }
 
   async exists(id: string): Promise<boolean> {
@@ -444,8 +399,23 @@ export class YubikeyBackend implements ListableBackend, PresenceCapableBackend {
   }
 
   async list(): Promise<string[]> {
-    const storageDir = this.#storageDir
-    const metadata = await loadMetadata(storageDir)
-    return Object.keys(metadata.entries)
+    // Entry files are authoritative: the legacy shared index may be stale.
+    let filenames: string[]
+    try {
+      filenames = await fs.readdir(this.#storageDir)
+    } catch (err) {
+      if (err instanceof Error && 'code' in err && err.code === 'ENOENT') {
+        return []
+      }
+      throw err
+    }
+    return filenames.flatMap((filename) => {
+      if (!/^(?:[0-9a-f]{2})*\.enc$/.test(filename)) {
+        return []
+      }
+      const hex = filename.slice(0, -4)
+      const id = Buffer.from(hex, 'hex').toString('utf8')
+      return Buffer.from(id, 'utf8').toString('hex') === hex ? [id] : []
+    })
   }
 }

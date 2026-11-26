@@ -1,5 +1,5 @@
 /**
- * Generates the `metadata.json` + `<hex-id>.enc` pair consumed by the Rust
+ * Generates the `<hex-id>.enc` entry consumed by the Rust
  * core's TS-fixture-compat test for `YubikeyBackend`
  * (`crates/vaultkeeper-core/src/backend/yubikey.rs`, issue #293 AC3).
  *
@@ -18,7 +18,8 @@
  * `mockChallengeResponse` helper, so the fixture's key derivation is
  * reproducible from the constants documented here.
  *
- * Usage (regenerates `metadata.json` and the `.enc` entry; safe to re-run —
+ * The committed metadata.json is a historical fixture and is not regenerated.
+ * Usage (regenerates the `.enc` entry; safe to re-run —
  * the IV is fresh each time but the plaintext/id/HMAC response are fixed):
  *
  *   pnpm exec tsx crates/vaultkeeper-core/tests/fixtures/ts-written-yubikey/generate-fixture.mts
