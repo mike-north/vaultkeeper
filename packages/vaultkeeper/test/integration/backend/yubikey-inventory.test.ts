@@ -46,8 +46,25 @@ vi.mock('../../../src/util/exec.js', () => ({
 }))
 
 import { YubikeyBackend } from '../../../src/backend/yubikey-backend.js'
+import { FilesystemError } from '../../../src/errors.js'
 
 describe('YubiKey inventory', () => {
+  it('reports an inaccessible inventory directory as a typed filesystem error', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'vk-yubikey-inventory-'))
+    try {
+      const file = join(dir, 'file')
+      await writeFile(file, 'not a directory')
+      const error: unknown = await new YubikeyBackend(file).list().catch((err: unknown) => err)
+      expect(error).toBeInstanceOf(FilesystemError)
+      if (error instanceof FilesystemError) {
+        expect(error.path).toBe(file)
+        expect(error.permission).toBe('read')
+        expect(error.code).toBe('ENOTDIR')
+      }
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
   it('lists concurrent stores after reopen even if the legacy index is corrupt', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'vk-yubikey-inventory-'))
     try {

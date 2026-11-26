@@ -25,6 +25,7 @@ import {
   DecryptionError,
   SetupError,
   ExecError,
+  toFilesystemError,
 } from '../errors.js'
 import type { ListableBackend, PresenceCapableBackend, BackendCapabilities } from './types.js'
 
@@ -407,7 +408,7 @@ export class YubikeyBackend implements ListableBackend, PresenceCapableBackend {
       if (err instanceof Error && 'code' in err && err.code === 'ENOENT') {
         return []
       }
-      throw err
+      throw toFilesystemError(err, 'YubiKey inventory directory', this.#storageDir, 'read')
     }
     return filenames.flatMap((filename) => {
       if (!/^(?:[0-9a-f]{2})*\.enc$/.test(filename)) {
