@@ -2,9 +2,9 @@
  * CLI spawn wrapper for executing external commands.
  */
 
-import { spawn } from 'node:child_process'
-import { collectUtf8 } from './collect-utf8.js'
+import { spawn, type ChildProcess } from 'node:child_process'
 import { PluginNotFoundError, ExecError } from '../errors.js'
+import { collectUtf8 } from './collect-utf8.js'
 
 /** Options for command execution. */
 export interface ExecCommandOptions {
@@ -52,11 +52,20 @@ export function execCommandFull(
   options?: ExecCommandOptions,
 ): Promise<ExecCommandResult> {
   return new Promise((resolve, reject) => {
-    const proc = spawn(command, args, {
-      stdio: [options?.stdin !== undefined ? 'pipe' : 'ignore', 'pipe', 'pipe'],
-    })
+    let proc: ChildProcess
+    try {
+      proc = spawn(command, args, {
+        stdio: [options?.stdin !== undefined ? 'pipe' : 'ignore', 'pipe', 'pipe'],
+      })
+    } catch {
+      // Node can throw before emitting an error event, including for oversized argv.
+      reject(new ExecError(`Failed to spawn '${command}'`, command))
+      return
+    }
     const stdout = collectUtf8(proc.stdout)
     const stderr = collectUtf8(proc.stderr)
+    // A child can close the pipe before the write completes, even on exit zero.
+    let stdinFailed = false
     // Undefined when no timeoutMs was given, or once the timer has fired.
     // Tracked so 'close'/'error' can clear it — otherwise an already-settled
     // promise still leaves the timer pending, which keeps the event loop
@@ -65,8 +74,10 @@ export function execCommandFull(
     let timeoutHandle: ReturnType<typeof setTimeout> | undefined
 
     if (options?.stdin !== undefined && proc.stdin) {
-      proc.stdin.write(options.stdin)
-      proc.stdin.end()
+      proc.stdin.on('error', () => {
+        stdinFailed = true
+      })
+      proc.stdin.end(options.stdin)
     }
 
     if (options?.timeoutMs !== undefined) {
@@ -85,6 +96,13 @@ export function execCommandFull(
     proc.on('close', (code) => {
       if (timeoutHandle !== undefined) {
         clearTimeout(timeoutHandle)
+      }
+      // An explicit child failure carries the exit status and diagnostic output.
+      if (stdinFailed && code === 0) {
+        stdout.discard()
+        stderr.discard()
+        reject(new ExecError(`Failed to write stdin for '${command}'`, command))
+        return
       }
       resolve({
         stdout: stdout.finish(),
@@ -108,9 +126,7 @@ export function execCommandFull(
           ),
         )
       } else {
-        // Any other spawn failure (EACCES on the binary, EMFILE, ...) must
-        // surface typed, not as the raw Node error — the last plain-error
-        // escape on this utility's failure paths.
+        // Other asynchronous spawn failures use the same typed execution error.
         reject(new ExecError(`Failed to spawn '${command}': ${error.message}`, command))
       }
     })

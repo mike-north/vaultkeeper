@@ -19,14 +19,9 @@
 //!
 //! # Ephemeral keychain isolation
 //!
-//! `KeychainBackend` (like the TS backend it ports) never passes `-k
-//! <keychain>` to `security` — every command implicitly targets the current
-//! *default* keychain for writes, and the current *search list* for reads
-//! (`find-generic-password`, `delete-generic-password`, and critically
-//! `dump-keychain`, which `list()` uses, walk every keychain on the search
-//! list, not just the default one). To exercise the real backend without
-//! observing — or polluting — whatever keychains a developer or CI runner
-//! already has configured, this test:
+//! New items go to the default keychain. Reads and deletes use the search
+//! list, and updates target the keychain containing the matching item.
+//! The harness isolates these operations from the runner's keychains:
 //!
 //! 1. Creates a throwaway keychain file in a temp directory with a random
 //!    password (`security create-keychain`).
@@ -402,6 +397,13 @@ async fn keychain_backend_conformance_against_real_security_binary() {
         retrieved, secret,
         "retrieved secret must match the stored value byte-for-byte"
     );
+
+    let replacement = "replacement-🔐\nvalue";
+    backend
+        .store(&name, replacement)
+        .await
+        .expect("replacement must update the existing Keychain item");
+    assert_eq!(backend.retrieve(&name).await.unwrap(), replacement);
 
     let listed = backend.list().await.expect("list must succeed");
     // Not just `contains` — the search-list replacement in

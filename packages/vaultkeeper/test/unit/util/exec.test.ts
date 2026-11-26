@@ -1,10 +1,19 @@
-import { describe, it, expect, vi } from 'vitest'
+import { Buffer } from 'node:buffer'
+import { spawn } from 'node:child_process'
+import { writeFileSync } from 'node:fs'
 import * as fs from 'node:fs/promises'
 import * as os from 'node:os'
 import * as path from 'node:path'
-import { execCommand, execCommandFull } from '../../../src/util/exec.js'
+import { describe, it, expect, vi } from 'vitest'
 import { PluginNotFoundError, ExecError } from '../../../src/errors.js'
+import { execCommand, execCommandFull } from '../../../src/util/exec.js'
 import { splitUtf8Script, splitUtf8Text } from '../../helpers/split-utf8-fixture.js'
+
+// Keep real child processes while letting the buffer tests observe their pipes.
+vi.mock('node:child_process', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:child_process')>()
+  return { ...actual, spawn: vi.fn(actual.spawn) }
+})
 
 describe('execCommand', () => {
   it('returns trimmed stdout on success', async () => {
@@ -38,6 +47,54 @@ describe('execCommand', () => {
 })
 
 describe('execCommandFull', () => {
+  it.each<'stdout' | 'stderr'>(['stdout', 'stderr'])(
+    'wipes raw %s chunks while preserving split UTF-8 characters',
+    async (stream) => {
+      const { spawn: spawnChild } =
+        await vi.importActual<typeof import('node:child_process')>('node:child_process')
+      const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'vk-exec-utf8-'))
+      const signal = path.join(dir, 'continue')
+      const chunks: Buffer[] = []
+      vi.mocked(spawn).mockImplementationOnce((command, args, options) => {
+        const child = spawnChild(command, args, options)
+        // Watch the original pipe buffers before the collector can wipe them.
+        // Release the rest of the character only once its first byte arrived.
+        child[stream]?.on('data', (chunk: Buffer) => {
+          chunks.push(chunk)
+          if (chunks.length === 1) writeFileSync(signal, '')
+        })
+        return child
+      })
+
+      try {
+        const result = await execCommandFull(
+          process.execPath,
+          [
+            '-e',
+            `const fs = require('node:fs')
+const output = process[process.argv[1]]
+output.write(Buffer.from([0xe2]))
+const timer = setInterval(() => {
+  if (fs.existsSync(process.argv[2])) {
+    clearInterval(timer)
+    output.write(Buffer.from([0x82, 0xac]))
+  }
+}, 10)`,
+            stream,
+            signal,
+          ],
+          { timeoutMs: 5000 },
+        )
+        expect(result[stream]).toBe('€')
+        expect(chunks.length).toBeGreaterThanOrEqual(2)
+        expect(chunks.every((chunk) => chunk.every((byte) => byte === 0))).toBe(true)
+      } finally {
+        await fs.rm(dir, { recursive: true, force: true })
+      }
+    },
+    10_000,
+  )
+
   it.each<'stdout' | 'stderr'>(['stdout', 'stderr'])(
     'decodes UTF-8 split across %s chunks',
     async (stream) => {
@@ -102,10 +159,35 @@ describe('execCommandFull', () => {
     expect(result.exitCode).toBe(0)
   })
 
+  it('reports an interrupted stdin write even if the child exits zero', async () => {
+    await expect(
+      execCommandFull(process.execPath, ['-e', 'process.exit(0)'], {
+        stdin: 'x'.repeat(1024 * 1024),
+      }),
+    ).rejects.toThrow(ExecError)
+  })
+
+  it('preserves the child error status and stderr when its stdin write is interrupted', async () => {
+    const result = await execCommandFull(
+      process.execPath,
+      ['-e', "process.stderr.write('write rejected', () => process.exit(42))"],
+      { stdin: 'x'.repeat(1024 * 1024) },
+    )
+    expect(result).toEqual({ stdout: '', stderr: 'write rejected', exitCode: 42 })
+  })
+
   it('wraps ENOENT spawn error in PluginNotFoundError', async () => {
     await expect(
       execCommandFull('this-binary-absolutely-does-not-exist-anywhere', ['--version']),
     ).rejects.toThrow(PluginNotFoundError)
+  })
+
+  it('wraps a synchronous spawn failure for an oversized argument in a typed ExecError', async () => {
+    vi.mocked(spawn).mockImplementationOnce(() => {
+      throw Object.assign(new Error('spawn E2BIG'), { code: 'E2BIG' })
+    })
+
+    await expect(execCommandFull('security', ['metadata'])).rejects.toBeInstanceOf(ExecError)
   })
 
   // Regression (review thread 3591242590): non-ENOENT spawn failures (EACCES
