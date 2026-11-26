@@ -268,6 +268,10 @@ whether membership is intentional.
 - **Signing & leases:** `createSigningKey`, `authorizeSigningKey`, `sign`, `exportPublicKey`,
   `VaultKeeper.verify`, `SigningAlgorithm`, `SigningPublicKey`, `SignRequest`, `SignResult`, `VerifyRequest`,
   `SigningBackend`, `isSigningBackend`, and the signing error family.
+  TypeScript in-process capabilities from `authorize` and `authorizeSigningKey` are bound to the
+  issuing `VaultKeeper` instance, including when instances share configuration or backend storage.
+  A different instance rejects them with `AuthorizationDeniedError` before backend selection or
+  delegated work. For `fetch` and `exec`, the issuer requirement applies to every token in a map.
 - **Backends & registry:** `SecretBackend`, `ListableBackend`, `PresenceCapableBackend`, `BackendRegistry`,
   `BackendConfig`, `BackendFactory`, `BackendSetupFactory`, `BackendCapabilities`, `getBackendCapabilities`,
   `isListableBackend`, `isPresenceCapableBackend`, `defaultBackendType`, `platformNativeBackendType`,
