@@ -609,13 +609,36 @@ async fn take_over_if_stale(host: &dyn HostPlatform, lock_path: &Path) {
     let _ = host.delete_file(lock_path).await;
 }
 
-/// How long [`pause_before_retry`] waits between contention retries. Only
-/// meaningful (and only referenced) on the non-wasm32 implementation below
-/// — the wasm32 one never pauses (see its doc comment) — so this is
-/// `cfg`-gated the same way to avoid an unused-constant warning on that
-/// target.
+/// Base delay for [`pause_before_retry`]: the pause after the first
+/// contended attempt. Later pauses back off exponentially from here up to
+/// [`RETRY_PAUSE_MAX_MS`] (see [`retry_pause_ms`]). Only meaningful (and only
+/// referenced) on the non-wasm32 implementation below — the wasm32 one never
+/// pauses (see its doc comment) — so this is `cfg`-gated the same way to
+/// avoid an unused-constant warning on that target.
 #[cfg(not(target_arch = "wasm32"))]
 const RETRY_PAUSE_MS: u64 = 2;
+
+/// Upper bound on a single [`pause_before_retry`] delay.
+///
+/// A fixed 2ms pause gave [`LOCK_MAX_ATTEMPTS`] a total budget of only
+/// ~100ms, which many genuinely concurrent writers on a loaded machine (CI
+/// runners in particular) can exhaust while every holder is still making
+/// progress, so acquisition failed spuriously with a lock timeout. Backing
+/// off to this cap gives the same attempt count a total budget of roughly
+/// 1.5s — still far below [`LOCK_STALE_AFTER_MS`], so a dead holder is never
+/// waited out by retrying alone.
+#[cfg(not(target_arch = "wasm32"))]
+const RETRY_PAUSE_MAX_MS: u64 = 32;
+
+/// Delay before retry number `attempt` (0-based): `RETRY_PAUSE_MS` doubled
+/// per attempt, capped at [`RETRY_PAUSE_MAX_MS`].
+#[cfg(not(target_arch = "wasm32"))]
+fn retry_pause_ms(attempt: u32) -> u64 {
+    // Clamp the shift first: a large shift would push the bits out and wrap
+    // to 0 (or overflow) rather than saturate. 2ms << 16 is already far above
+    // the cap.
+    (RETRY_PAUSE_MS << attempt.min(16)).min(RETRY_PAUSE_MAX_MS)
+}
 
 /// Pause briefly between lock-acquisition retries, without blocking the
 /// calling OS/executor thread.
@@ -653,7 +676,8 @@ const RETRY_PAUSE_MS: u64 = 2;
 /// `HostPlatform`-supplied primitive (e.g. the JS event loop's
 /// `setTimeout`) instead of extending this function.
 #[cfg(not(target_arch = "wasm32"))]
-async fn pause_before_retry() {
+async fn pause_before_retry(attempt: u32) {
+    let pause_ms = retry_pause_ms(attempt);
     use std::sync::{Arc, Mutex};
     use std::task::Waker;
 
@@ -690,7 +714,7 @@ async fn pause_before_retry() {
     }));
     let thread_state = Arc::clone(&state);
     std::thread::spawn(move || {
-        std::thread::sleep(std::time::Duration::from_millis(RETRY_PAUSE_MS));
+        std::thread::sleep(std::time::Duration::from_millis(pause_ms));
         let mut state = thread_state
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -703,7 +727,7 @@ async fn pause_before_retry() {
     Sleep(state).await;
 }
 #[cfg(target_arch = "wasm32")]
-async fn pause_before_retry() {}
+async fn pause_before_retry(_attempt: u32) {}
 
 /// Acquire the revocation-state lock, with bounded retry and stale-lock
 /// takeover.
@@ -765,7 +789,7 @@ async fn acquire_lock(host: &dyn HostPlatform) -> Result<LockGuard<'_>, VaultErr
                         code: Some("EEXIST".to_string()),
                     });
                 }
-                pause_before_retry().await;
+                pause_before_retry(attempt).await;
             }
             // A genuine failure (not contention, not "unsupported") — e.g.
             // permission denied, disk full. Propagate rather than retry.
@@ -2284,10 +2308,10 @@ mod tests {
     /// permanently contended and permanently "fresh", to force every one of
     /// `LOCK_MAX_ATTEMPTS` attempts to hit contention and run out.
     ///
-    /// Fast by construction: `pause_before_retry`'s per-attempt delay is
-    /// `RETRY_PAUSE_MS` (2ms, see that constant), so `LOCK_MAX_ATTEMPTS`
-    /// (50) attempts cost roughly 100ms total — comfortably sub-second,
-    /// without touching either production constant or adding a sleep here.
+    /// Bounded by construction: `pause_before_retry` backs off from
+    /// `RETRY_PAUSE_MS` (2ms) to `RETRY_PAUSE_MAX_MS` (32ms), so
+    /// `LOCK_MAX_ATTEMPTS` (50) attempts cost roughly 1.5s total, without
+    /// touching any production constant or adding a sleep here.
     #[tokio::test]
     async fn acquire_lock_times_out_after_lock_max_attempts_when_contention_never_clears() {
         let host = AlwaysContendedFreshHost {
@@ -2617,13 +2641,38 @@ mod tests {
     #[tokio::test(flavor = "current_thread")]
     async fn pause_before_retry_does_not_block_the_polling_thread() {
         let start = std::time::Instant::now();
-        tokio::join!(pause_before_retry(), pause_before_retry());
+        tokio::join!(pause_before_retry(0), pause_before_retry(0));
         let elapsed = start.elapsed();
 
         assert!(
             elapsed < std::time::Duration::from_millis(RETRY_PAUSE_MS * 3),
             "two concurrent pauses took {elapsed:?}, suggesting they were serialized by a \
              blocking sleep rather than run concurrently (single pause is {RETRY_PAUSE_MS}ms)"
+        );
+    }
+
+    /// The retry pause backs off exponentially from `RETRY_PAUSE_MS` and
+    /// stays at `RETRY_PAUSE_MAX_MS`, including for attempt numbers large
+    /// enough to overflow a plain shift. The whole schedule must also give
+    /// concurrent writers a total budget well above the old fixed ~100ms
+    /// (which many concurrent writers on a loaded CI runner exhausted) while
+    /// staying far below the stale-lock threshold.
+    #[test]
+    fn retry_pause_backs_off_exponentially_up_to_the_cap() {
+        let schedule: Vec<u64> = (0..8).map(retry_pause_ms).collect();
+        assert_eq!(schedule, vec![2, 4, 8, 16, 32, 32, 32, 32]);
+        assert_eq!(retry_pause_ms(63), RETRY_PAUSE_MAX_MS);
+        assert_eq!(retry_pause_ms(64), RETRY_PAUSE_MAX_MS);
+        assert_eq!(retry_pause_ms(u32::MAX), RETRY_PAUSE_MAX_MS);
+
+        let total_ms: u64 = (0..LOCK_MAX_ATTEMPTS - 1).map(retry_pause_ms).sum();
+        assert!(
+            total_ms >= 1_000,
+            "total retry budget {total_ms}ms is too small"
+        );
+        assert!(
+            u128::from(total_ms) < LOCK_STALE_AFTER_MS,
+            "total retry budget {total_ms}ms must stay below the stale-lock threshold"
         );
     }
 
