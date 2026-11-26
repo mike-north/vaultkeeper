@@ -64,10 +64,28 @@ export class KeyManager {
   hydrate(snapshot: KeyStateSnapshot): void {
     this.#clearGracePeriodTimer()
 
-    if (
+    const retainPrevious =
       snapshot.previous !== undefined &&
       snapshot.gracePeriodExpiresAt !== undefined &&
       Date.now() < snapshot.gracePeriodExpiresAt
+
+    // The manager owns even an expired previous key until its timer runs.
+    // Wipe every displaced buffer, including keys omitted from snapshot().
+    const oldState = this.#state
+    for (const key of [oldState?.current, oldState?.previous]) {
+      if (
+        key !== undefined &&
+        key !== snapshot.current &&
+        !(retainPrevious && key === snapshot.previous)
+      ) {
+        key.key.fill(0)
+      }
+    }
+
+    if (
+      retainPrevious &&
+      snapshot.previous !== undefined &&
+      snapshot.gracePeriodExpiresAt !== undefined
     ) {
       this.#state = { current: snapshot.current, previous: snapshot.previous }
       this.#gracePeriodExpiresAt = snapshot.gracePeriodExpiresAt

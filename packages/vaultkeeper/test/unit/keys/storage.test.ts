@@ -13,6 +13,7 @@
 import * as fs from 'node:fs/promises'
 import * as os from 'node:os'
 import * as path from 'node:path'
+import { strict as assert } from 'node:assert'
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import {
   initializeKeyManager,
@@ -60,7 +61,7 @@ describe('saveKeyState / loadKeyState round-trip', () => {
     expect([...original.key]).toEqual(new Array<number>(32).fill(0))
     const previous = manager.getPreviousKey()
     expect(previous).toBeDefined()
-    if (previous === undefined) throw new Error('rotation did not retain the previous key')
+    assert(previous !== undefined, 'rotation did not retain the previous key')
     expect(await decryptToken(previous.key, await token)).toEqual(claims)
   })
   it('persists the current key so a later load resolves the same id and bytes', async () => {
@@ -100,6 +101,20 @@ describe('grace-period expiry on load', () => {
   })
   afterEach(() => {
     vi.useRealTimers()
+  })
+
+  it('wipes a displaced previous key that expires before publication', async () => {
+    const manager = await initializeKeyManager(dir)
+    await mutateKeyManager(dir, manager, (fresh) => {
+      fresh.rotateKey(5_000)
+    })
+    const previous = manager.getPreviousKey()
+    expect(previous).toBeDefined()
+    await mutateKeyManager(dir, manager, (fresh) => {
+      fresh.revokeKey()
+      vi.setSystemTime(new Date('2024-01-15T10:00:06.000Z'))
+    })
+    expect(previous?.key).toEqual(new Uint8Array(32))
   })
 
   it('drops the previous key once the persisted grace period has elapsed', async () => {

@@ -310,12 +310,8 @@ export async function mutateKeyManager(
       mutate(manager)
       updated = manager.snapshot()
       await writeKeyState(configDir, updated, retainMetadata(loaded.json))
-      const displaced = liveManager.snapshot()
       liveManager.hydrate(updated)
       published = true
-      for (const key of [displaced.current, displaced.previous]) {
-        if (key !== undefined && key !== updated.current && key !== updated.previous) key.key.fill(0)
-      }
     } finally {
       const adopted = published ? liveManager.snapshot() : undefined
       const kept = [adopted?.current, adopted?.previous]
