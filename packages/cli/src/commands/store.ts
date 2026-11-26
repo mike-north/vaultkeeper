@@ -86,17 +86,22 @@ export async function storeCommand(args: string[], configDir: string): Promise<n
   try {
     // Read secret from stdin
     const chunks: Buffer[] = []
-    for await (const chunk of process.stdin) {
-      if (chunk instanceof Buffer) {
-        chunks.push(chunk)
-      } else if (typeof chunk === 'string') {
-        chunks.push(Buffer.from(chunk))
-      } else {
-        chunks.push(Buffer.from(String(chunk)))
+    let input: Buffer
+    try {
+      for await (const chunk of process.stdin) {
+        if (chunk instanceof Buffer) {
+          chunks.push(chunk)
+        } else if (typeof chunk === 'string') {
+          chunks.push(Buffer.from(chunk))
+        } else {
+          chunks.push(Buffer.from(String(chunk)))
+        }
       }
+      input = Buffer.concat(chunks)
+    } finally {
+      // A failed read or concatenation must not leave earlier secret bytes alive.
+      for (const chunk of chunks) chunk.fill(0)
     }
-    const input = Buffer.concat(chunks)
-    for (const chunk of chunks) chunk.fill(0)
     let text: string
     try {
       // Reject invalid bytes instead of silently changing a credential. Keep a
