@@ -75,8 +75,22 @@ export function decryptGcm(key: Buffer, encoded: string, path = ''): string {
       authTagLength: GCM_TAG_LENGTH_BITS / 8,
     })
     decipher.setAuthTag(authTag)
-    const decrypted = Buffer.concat([decipher.update(ciphertext), decipher.final()])
-    return decrypted.toString('utf8')
+    const decrypted = decipher.update(ciphertext)
+    try {
+      const final = decipher.final()
+      try {
+        const plaintext = Buffer.concat([decrypted, final])
+        try {
+          return plaintext.toString('utf8')
+        } finally {
+          plaintext.fill(0)
+        }
+      } finally {
+        final.fill(0)
+      }
+    } finally {
+      decrypted.fill(0)
+    }
   } catch (err) {
     // Wrap every native crypto failure so the documented
     // @throws {DecryptionError} contract holds on every path.
@@ -121,10 +135,12 @@ export async function getOrCreateWrapKey(keyPath: string): Promise<Buffer> {
   }
 
   // Missing or corrupt (wrong length): (re)generate a fresh key in place.
+  existing?.fill(0)
   const key = crypto.randomBytes(GCM_KEY_BYTES)
   try {
     await fs.writeFile(keyPath, key, { mode: 0o600 })
   } catch (err) {
+    key.fill(0)
     throw toFilesystemError(err, 'wrapping key file', keyPath, 'write')
   }
   return key

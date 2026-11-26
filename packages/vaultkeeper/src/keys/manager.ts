@@ -24,12 +24,18 @@ export class KeyManager {
   #gracePeriodTimer: ReturnType<typeof setTimeout> | undefined = undefined
   #gracePeriodExpiresAt: number | undefined = undefined
 
+  readonly #scheduleGracePeriod: boolean
+
+  constructor(scheduleGracePeriod = true) {
+    this.#scheduleGracePeriod = scheduleGracePeriod
+  }
+
   /** Generate a new 32-byte key with a timestamp-based id. */
   generateKey(): KeyMaterial {
     const randomSuffix = crypto.randomBytes(4).toString('hex')
     return {
       id: `k-${String(Date.now())}-${randomSuffix}`,
-      key: new Uint8Array(crypto.randomBytes(32)),
+      key: crypto.randomFillSync(new Uint8Array(32)),
       createdAt: new Date(),
     }
   }
@@ -58,10 +64,28 @@ export class KeyManager {
   hydrate(snapshot: KeyStateSnapshot): void {
     this.#clearGracePeriodTimer()
 
-    if (
+    const retainPrevious =
       snapshot.previous !== undefined &&
       snapshot.gracePeriodExpiresAt !== undefined &&
       Date.now() < snapshot.gracePeriodExpiresAt
+
+    // The manager owns even an expired previous key until its timer runs.
+    // Wipe every displaced buffer, including keys omitted from snapshot().
+    const oldState = this.#state
+    for (const key of [oldState?.current, oldState?.previous]) {
+      if (
+        key !== undefined &&
+        key !== snapshot.current &&
+        !(retainPrevious && key === snapshot.previous)
+      ) {
+        key.key.fill(0)
+      }
+    }
+
+    if (
+      retainPrevious &&
+      snapshot.previous !== undefined &&
+      snapshot.gracePeriodExpiresAt !== undefined
     ) {
       this.#state = { current: snapshot.current, previous: snapshot.previous }
       this.#gracePeriodExpiresAt = snapshot.gracePeriodExpiresAt
@@ -186,6 +210,7 @@ export class KeyManager {
   }
 
   #armGracePeriodTimer(delayMs: number): void {
+    if (!this.#scheduleGracePeriod) return
     this.#gracePeriodTimer = setTimeout(() => {
       if (this.#state !== undefined) {
         // Remove the previous key once the grace period elapses.

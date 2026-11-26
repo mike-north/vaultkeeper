@@ -25,10 +25,11 @@ use aes_gcm::aead::Aead;
 use aes_gcm::{Aes256Gcm, KeyInit, Nonce};
 use base64ct::{Base64, Encoding};
 use serde::{Deserialize, Serialize};
-use zeroize::Zeroize;
+use zeroize::{Zeroize, Zeroizing};
 
 use crate::backend::HostPlatform;
 use crate::errors::VaultError;
+use crate::keys::KeyManager;
 use crate::keys::types::{JtiEntry, KeyMaterial, KeyStateSnapshot, RevocationState};
 use crate::util::time;
 
@@ -49,23 +50,27 @@ mod base64_key {
     use serde::{Deserialize, Deserializer, Serializer};
 
     pub fn serialize<S: Serializer>(bytes: &[u8], serializer: S) -> Result<S::Ok, S::Error> {
-        serializer.serialize_str(&Base64::encode_string(bytes))
+        serializer.serialize_str(&zeroize::Zeroizing::new(Base64::encode_string(bytes)))
     }
 
-    pub fn deserialize<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Vec<u8>, D::Error> {
-        let s = String::deserialize(deserializer)?;
-        Base64::decode_vec(&s).map_err(serde::de::Error::custom)
+    pub fn deserialize<'de, D: Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<zeroize::Zeroizing<Vec<u8>>, D::Error> {
+        let s = zeroize::Zeroizing::new(String::deserialize(deserializer)?);
+        Base64::decode_vec(&s)
+            .map(zeroize::Zeroizing::new)
+            .map_err(serde::de::Error::custom)
     }
 }
 
 /// On-disk JSON shape for a single key (raw bytes base64-encoded), matching
 /// the TS `RawKeyMaterial`.
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct RawKeyMaterial {
     id: String,
     #[serde(with = "base64_key")]
-    key: Vec<u8>,
+    key: Zeroizing<Vec<u8>>,
     created_at: String,
 }
 
@@ -125,7 +130,7 @@ struct RawKeyState {
 fn serialize_key(key: &KeyMaterial) -> RawKeyMaterial {
     RawKeyMaterial {
         id: key.id.clone(),
-        key: key.key.clone(),
+        key: Zeroizing::new(key.key.clone()),
         created_at: epoch_secs_to_iso8601(key.created_at),
     }
 }
@@ -133,14 +138,14 @@ fn serialize_key(key: &KeyMaterial) -> RawKeyMaterial {
 /// Validate every field so a corrupt or truncated entry degrades to "no
 /// persisted state" rather than yielding malformed key material (mirrors the
 /// TS `deserializeKey` type guard).
-fn deserialize_key(raw: RawKeyMaterial) -> Option<KeyMaterial> {
+fn deserialize_key(mut raw: RawKeyMaterial) -> Option<KeyMaterial> {
     if raw.id.is_empty() || raw.key.len() != GCM_KEY_BYTES {
         return None;
     }
     let created_at = iso8601_to_epoch_secs(&raw.created_at)?;
     Some(KeyMaterial {
         id: raw.id,
-        key: raw.key,
+        key: std::mem::take(&mut *raw.key),
         created_at,
     })
 }
@@ -181,7 +186,7 @@ fn encrypt_gcm(key: &[u8], plaintext: &str) -> Result<String, VaultError> {
 /// malformation or authentication failure — callers treat that as "no
 /// recoverable state" rather than a hard error (a tampered envelope, or a
 /// wrap key that no longer matches, is not distinguishable from corruption).
-fn decrypt_gcm(key: &[u8], encoded: &str) -> Option<String> {
+fn decrypt_gcm(key: &[u8], encoded: &str) -> Option<Zeroizing<Vec<u8>>> {
     let parts: Vec<&str> = encoded.split(':').collect();
     if parts.len() != 3 {
         return None;
@@ -203,7 +208,7 @@ fn decrypt_gcm(key: &[u8], encoded: &str) -> Option<String> {
     combined.extend_from_slice(&auth_tag);
 
     let plaintext = cipher.decrypt(nonce, combined.as_slice()).ok()?;
-    String::from_utf8(plaintext).ok()
+    Some(Zeroizing::new(plaintext))
 }
 
 /// Read the 32-byte wrapping key at `wrap_path`, generating and persisting a
@@ -222,14 +227,43 @@ pub(crate) async fn get_or_create_wrap_key(
     host: &dyn HostPlatform,
     wrap_path: &Path,
 ) -> Result<Vec<u8>, VaultError> {
+    if let Ok(key) = host.read_file(wrap_path).await {
+        let mut key = Zeroizing::new(key);
+        if key.len() == GCM_KEY_BYTES {
+            return Ok(std::mem::take(&mut *key));
+        }
+    }
+    with_revocation_lock(host, get_or_create_wrap_key_locked(host, wrap_path)).await
+}
+
+async fn get_or_create_wrap_key_locked(
+    host: &dyn HostPlatform,
+    wrap_path: &Path,
+) -> Result<Vec<u8>, VaultError> {
     match host.read_file(wrap_path).await {
         Ok(data) if data.len() == GCM_KEY_BYTES => Ok(data),
-        Ok(_) => generate_and_write_wrap_key(host, wrap_path).await,
+        Ok(mut invalid) => {
+            invalid.zeroize();
+            recover_wrap_key_locked(host, wrap_path).await
+        }
         Err(read_err) => match host.file_exists(wrap_path).await {
-            Ok(false) => generate_and_write_wrap_key(host, wrap_path).await,
+            Ok(false) => recover_wrap_key_locked(host, wrap_path).await,
             Ok(true) | Err(_) => Err(read_err),
         },
     }
+}
+
+async fn recover_wrap_key_locked(
+    host: &dyn HostPlatform,
+    wrap_path: &Path,
+) -> Result<Vec<u8>, VaultError> {
+    if host
+        .file_exists(&host.config_dir().join(KEY_STATE_FILE))
+        .await?
+    {
+        return Err(invalid_key_state(host));
+    }
+    generate_and_write_wrap_key(host, wrap_path).await
 }
 
 async fn generate_and_write_wrap_key(
@@ -284,7 +318,8 @@ async fn try_load_raw(host: &dyn HostPlatform) -> Result<RawLoad, VaultError> {
         Ok(bytes) => bytes,
         Err(read_err) => match host.file_exists(&state_path).await {
             Ok(false) => return Ok(RawLoad::Absent),
-            Ok(true) | Err(_) => return Err(read_err),
+            Ok(true) => host.read_file(&state_path).await.map_err(|_| read_err)?,
+            Err(_) => return Err(read_err),
         },
     };
     let Ok(envelope) = String::from_utf8(envelope_bytes) else {
@@ -292,15 +327,19 @@ async fn try_load_raw(host: &dyn HostPlatform) -> Result<RawLoad, VaultError> {
     };
 
     let wrap_path = host.config_dir().join(KEY_WRAP_FILE);
-    let mut wrap_key = get_or_create_wrap_key(host, &wrap_path).await?;
-
+    let wrap_key = match host.read_file(&wrap_path).await {
+        Ok(key) => Zeroizing::new(key),
+        Err(err) => match host.file_exists(&wrap_path).await {
+            Ok(false) => return Ok(RawLoad::Corrupt),
+            Ok(true) | Err(_) => return Err(err),
+        },
+    };
     let json = decrypt_gcm(&wrap_key, &envelope);
-    wrap_key.zeroize();
     let Some(json) = json else {
         return Ok(RawLoad::Corrupt);
     };
 
-    let Ok(parsed) = serde_json::from_str::<RawKeyState>(&json) else {
+    let Ok(parsed) = serde_json::from_slice::<RawKeyState>(&json) else {
         return Ok(RawLoad::Corrupt);
     };
     if parsed.version != 1 {
@@ -318,26 +357,8 @@ fn revocation_from_raw(parsed: &RawKeyState) -> RevocationState {
     }
 }
 
-/// Load persisted key state from the host's config directory, or `None` when
-/// no valid state exists yet (first run, or an unreadable/corrupt `keys.enc`).
-///
-/// Mirrors the TS `loadKeyState` for a genuinely missing or corrupt/tampered
-/// `keys.enc`: both degrade to "no state" rather than propagating, so a
-/// fresh install or a damaged store never wedges startup. This intentionally
-/// diverges from the TS implementation (which collapses *every* read
-/// failure, including permission errors, into "absent") on one point: a read
-/// failure on a `keys.enc` that does exist (e.g. permission denied) is not
-/// "nothing was ever persisted", so it propagates as the host's typed
-/// `VaultError` instead of being swallowed — the same classification
-/// `get_or_create_wrap_key` already applies to the wrap file. A failure to
-/// read (or create) the wrapping key for a reason other than "does not exist
-/// yet" propagates the same way, matching the TS `getOrCreateWrapKey`
-/// contract.
-///
-/// This is a key-*material* loader only — it does not return the co-located
-/// revocation state (see [`load_revocation_for_validation`] and
-/// [`mutate_revocation_state`] for that, which have a deliberately different,
-/// fail-closed contract).
+/// Load persisted encryption key material. Missing or corrupt state returns
+/// `None`; other filesystem errors propagate. This read never rewrites files.
 pub async fn load_key_state(
     host: &dyn HostPlatform,
 ) -> Result<Option<KeyStateSnapshot>, VaultError> {
@@ -346,10 +367,11 @@ pub async fn load_key_state(
         RawLoad::Absent | RawLoad::Corrupt => return Ok(None),
     };
 
-    let Some(current) = deserialize_key(parsed.current) else {
-        return Ok(None);
-    };
+    Ok(snapshot_from_raw(*parsed))
+}
 
+fn snapshot_from_raw(parsed: RawKeyState) -> Option<KeyStateSnapshot> {
+    let current = deserialize_key(parsed.current)?;
     let mut snapshot = KeyStateSnapshot {
         current,
         previous: None,
@@ -366,7 +388,7 @@ pub async fn load_key_state(
         snapshot.grace_period_expires_at_ms = Some(expires_at);
     }
 
-    Ok(Some(snapshot))
+    Some(snapshot)
 }
 
 /// Load the persisted revocation state for **lease validation** (issue #298).
@@ -439,175 +461,9 @@ pub async fn load_revocation_for_validation(
 }
 
 // ---------------------------------------------------------------------------
-// Cross-process advisory lock (issue #322) — built entirely on
-// [`HostPlatform::try_create_lock_file`]/[`HostPlatform::delete_file`], so it
-// works identically under wasm on any host that opts in, exactly like the
-// rest of this module.
-//
-// A single lock guards the *entire* revocation-state read-modify-write
-// surface — both [`mutate_revocation_state`] and [`save_key_state`] acquire
-// it — because the race issue #322 exists to fix is specifically a
-// `rotateKey`/`revokeKey` (`save_key_state`) call overlapping a
-// `session revoke` (`mutate_revocation_state`) call, not just two calls to
-// the same function.
-// ---------------------------------------------------------------------------
-
-/// Filename of the advisory lock file, co-located with `keys.enc` in the same
-/// config directory.
+// One cross-process lock protects every write to the key state envelope.
 const REVOCATION_LOCK_FILE: &str = "keys.enc.lock";
-
-/// How long (ms) an unrenewed lock file is treated as abandoned and eligible
-/// for takeover by another acquirer — recovers a lock left behind by a
-/// process that crashed or panicked mid-critical-section, at the cost of a
-/// bounded window during which a still-alive-but-unusually-slow holder could
-/// theoretically be pre-empted. 30s is generously longer than this module's
-/// own critical sections (a handful of small file I/O calls), so a
-/// legitimate holder is never actually still running when this fires in
-/// practice.
-///
-/// Staleness is judged against a wall-clock (`SystemTime`/`Date.now()`)
-/// epoch-ms marker, not a monotonic clock, because the marker must be
-/// meaningful when read back by a *different* OS process from disk —
-/// monotonic clocks have no cross-process shared origin. The tradeoff: a
-/// backward wall-clock step (NTP correction, manual clock change) can make an
-/// abandoned lock look artificially fresh for up to the size of the step,
-/// delaying takeover. This is self-healing, not a stuck state — once real
-/// time passes `LOCK_STALE_AFTER_MS` again, the existing bounded retry
-/// (`LOCK_MAX_ATTEMPTS`) takes the lock over exactly as it would have
-/// without the clock step.
-const LOCK_STALE_AFTER_MS: u128 = 30_000;
-
-/// Bounded retry count for lock acquisition. Each attempt either succeeds,
-/// hits genuine contention from a still-live holder (retried after a brief
-/// pause), or hits a stale lock (taken over immediately, then retried) — this
-/// bounds the total wait so acquisition fails loudly rather than looping
-/// forever if something keeps re-contending.
 const LOCK_MAX_ATTEMPTS: u32 = 50;
-
-/// RAII guard for the revocation-state lock, returned by [`acquire_lock`].
-///
-/// Release the lock via the explicit async [`LockGuard::release`] — every
-/// caller in this module goes through [`with_revocation_lock`], which
-/// guarantees `release()` runs on **every** return from the wrapped critical
-/// section, success or error (issue #322 AC: "guard releases on the
-/// error/early-return path"). `Drop` exists as RAII discipline and a safety
-/// net, but Rust has no async `Drop`: it cannot itself make the
-/// [`HostPlatform::delete_file`] call release needs, so a guard that reaches
-/// `Drop` without having been released (only possible if the critical
-/// section panics — every non-panicking path goes through
-/// `with_revocation_lock`) cannot delete the lock file from that synchronous
-/// callback. That is not silently unsafe: a lock abandoned this way is
-/// recovered by the *next* acquirer's stale-lock takeover in [`acquire_lock`]
-/// (see `LOCK_STALE_AFTER_MS`), not by this `Drop` impl — see
-/// `stale_lock_left_by_a_panicked_holder_is_taken_over` below for the test
-/// that proves that recovery path, and
-/// `lock_is_released_immediately_when_the_critical_section_errors` for the
-/// normal-path release guarantee `Drop` is *not* standing in for.
-struct LockGuard<'a> {
-    host: &'a dyn HostPlatform,
-    lock_path: std::path::PathBuf,
-    /// `true` only when this guard actually holds a lock created via
-    /// [`HostPlatform::try_create_lock_file`] — `false` when the host
-    /// doesn't support locking (the trait's fail-closed default), in which
-    /// case there is nothing to release.
-    held: bool,
-    released: bool,
-}
-
-impl LockGuard<'_> {
-    async fn release(mut self) {
-        if self.held && !self.released {
-            // Best-effort: a failure to delete an already-released lock file
-            // (e.g. a concurrent stale-lock takeover already removed it) is
-            // not itself an error the caller needs to see — the lock is
-            // gone either way.
-            let _ = self.host.delete_file(&self.lock_path).await;
-        }
-        self.released = true;
-    }
-}
-
-impl Drop for LockGuard<'_> {
-    fn drop(&mut self) {
-        // See the struct doc comment: this is a safety net for the one path
-        // that can reach here without `release()` having run — a panic
-        // inside the critical section `with_revocation_lock` wraps. Any
-        // other path reaching `Drop` unreleased is a bug in this module
-        // (a future change that forgot to route through
-        // `with_revocation_lock`), so surface it loudly in debug builds
-        // rather than let it silently rely on stale-lock takeover.
-        if self.held && !self.released && !std::thread::panicking() {
-            debug_assert!(
-                false,
-                "LockGuard for {} dropped without release() outside of a panic — route every \
-                 acquisition through with_revocation_lock",
-                self.lock_path.display()
-            );
-        }
-    }
-}
-
-/// Attempt to take over `lock_path` if the lock file currently there is
-/// older than [`LOCK_STALE_AFTER_MS`]. A malformed or unreadable marker is
-/// treated as *not* stale (never taken over) — this only ever recovers a
-/// lock this module itself created (whose content is always a plain decimal
-/// millisecond timestamp), never guesses at an unrecognized file.
-///
-/// **TOCTOU note** (issue #322 review): a naive "read, decide stale, delete"
-/// sequence has a real race, not just a theoretical one — a *second*
-/// contender can independently observe the same stale marker, delete it, and
-/// successfully recreate the lock (a legitimate fresh acquisition) in the
-/// gap between this function's read and its delete. An unconditional delete
-/// at that point would tear down that contender's brand-new, valid lock
-/// (not the stale one this function decided to reap), and the file's mere
-/// absence afterward would let a *third* party acquire it too — two holders
-/// believing they exclusively hold the lock simultaneously, exactly the bug
-/// this whole mechanism exists to prevent. This function closes that window
-/// by re-reading the marker immediately before deleting and only deleting
-/// when its content is byte-identical to what was originally observed as
-/// stale — a marker recreated in between (by definition carrying a fresh,
-/// non-stale timestamp) never matches, so it is left alone. This does not
-/// require a new `HostPlatform` primitive (no atomic compare-and-delete
-/// exists in this trait, nor in the POSIX/Windows filesystem calls it maps
-/// to) — it shrinks the race to the residual gap between the confirmation
-/// read and the delete call directly below it, which is now just two
-/// sequential host calls with nothing else in between, rather than the
-/// entire staleness-check-plus-earlier-read window. See
-/// `take_over_if_stale_never_deletes_a_lock_recreated_between_its_reads` for
-/// the regression test that exercises exactly this interleaving.
-async fn take_over_if_stale(host: &dyn HostPlatform, lock_path: &Path) {
-    let Ok(existing) = host.read_file(lock_path).await else {
-        return;
-    };
-    let Ok(existing_str) = String::from_utf8(existing.clone()) else {
-        return;
-    };
-    let Ok(created_at_ms) = existing_str.trim().parse::<u128>() else {
-        return;
-    };
-    if time::now_millis().saturating_sub(created_at_ms) <= LOCK_STALE_AFTER_MS {
-        return;
-    }
-
-    // Re-verify immediately before deleting — see the doc comment above.
-    let Ok(current) = host.read_file(lock_path).await else {
-        // Already gone: a concurrent takeover or a normal release beat us
-        // to it. Nothing to delete.
-        return;
-    };
-    if current != existing {
-        // The marker changed since we decided it was stale — a concurrent
-        // acquirer already took over (or the original holder released and
-        // someone else acquired). This is no longer the stale lock we
-        // observed, so it must not be deleted.
-        return;
-    }
-
-    // Best-effort: if a concurrent release/takeover removes it in the
-    // instant between this check and the delete call itself, this simply
-    // no-ops — there is nothing left to distinguish at that point.
-    let _ = host.delete_file(lock_path).await;
-}
 
 /// How long [`pause_before_retry`] waits between contention retries. Only
 /// meaningful (and only referenced) on the non-wasm32 implementation below
@@ -646,12 +502,8 @@ const RETRY_PAUSE_MS: u64 = 2;
 /// `std::thread::spawn` is unavailable on `wasm32-unknown-unknown` (no OS
 /// threads), and there is no portable non-blocking sleep primitive in this
 /// crate's dependency set for that target either. This only matters once a
-/// wasm host actually implements `try_create_lock_file` contention (no wasm
-/// host does yet — see that trait method's doc comment), so retrying
-/// immediately with no pause there is harmless today; a future wasm host
-/// that adds real lock contention should route its pause through a
-/// `HostPlatform`-supplied primitive (e.g. the JS event loop's
-/// `setTimeout`) instead of extending this function.
+/// wasm host implements `try_create_lock_file` with async I/O. Retrying
+/// immediately delegates scheduling to the host’s async filesystem calls.
 #[cfg(not(target_arch = "wasm32"))]
 async fn pause_before_retry() {
     use std::sync::{Arc, Mutex};
@@ -705,58 +557,24 @@ async fn pause_before_retry() {
 #[cfg(target_arch = "wasm32")]
 async fn pause_before_retry() {}
 
-/// Acquire the revocation-state lock, with bounded retry and stale-lock
-/// takeover.
-///
-/// Returns a [`LockGuard`] in every non-error case, including on a host that
-/// doesn't support [`HostPlatform::try_create_lock_file`] — that guard just
-/// has `held: false` and releasing it is a no-op, so callers never need to
-/// branch on host support themselves.
-async fn acquire_lock(host: &dyn HostPlatform) -> Result<LockGuard<'_>, VaultError> {
+/// Acquire the shared lock, retrying only on contention.
+async fn acquire_lock(host: &dyn HostPlatform) -> Result<std::path::PathBuf, VaultError> {
     let lock_path = host.config_dir().join(REVOCATION_LOCK_FILE);
 
     for attempt in 0..LOCK_MAX_ATTEMPTS {
-        let marker = time::now_millis().to_string();
-        match host
-            .try_create_lock_file(&lock_path, marker.as_bytes())
-            .await
-        {
-            Ok(()) => {
-                return Ok(LockGuard {
-                    host,
-                    lock_path,
-                    held: true,
-                    released: false,
-                });
-            }
-            // The trait's fail-closed default for a host that doesn't
-            // implement locking — proceed under the pre-existing
-            // sequential-ordering-only guarantee (see
-            // `mutate_revocation_state`'s doc comment). Matched by variant,
-            // not by string content: `VaultError::LockingNotSupported` is a
-            // dedicated sentinel a real host's genuine failure can never
-            // produce, unlike `VaultError::Other` which many unrelated
-            // failure paths also use.
-            Err(VaultError::LockingNotSupported { .. }) => {
-                return Ok(LockGuard {
-                    host,
-                    lock_path,
-                    held: false,
-                    released: true,
-                });
-            }
+        match host.try_create_lock_file(&lock_path, b"vaultkeeper").await {
+            Ok(()) => return Ok(lock_path),
             // Contention: someone else currently holds this lock.
             Err(VaultError::Filesystem {
                 ref permission,
                 ref code,
                 ..
             }) if permission == "lock" && code.as_deref() == Some("EEXIST") => {
-                take_over_if_stale(host, &lock_path).await;
                 if attempt + 1 == LOCK_MAX_ATTEMPTS {
                     return Err(VaultError::Filesystem {
                         message: format!(
-                            "Timed out waiting for the revocation-state lock at {} after {} \
-                             attempts",
+                            "Timed out waiting for the key-state lock at {} after {} \
+                             attempts. If abandoned, remove it only after stopping all key-state writers.",
                             lock_path.display(),
                             LOCK_MAX_ATTEMPTS
                         ),
@@ -788,50 +606,17 @@ async fn with_revocation_lock<T, F>(
 where
     F: std::future::Future<Output = Result<T, VaultError>>,
 {
-    let guard = acquire_lock(host).await?;
+    let lock_path = acquire_lock(host).await?;
     let result = critical_section.await;
-    guard.release().await;
+    // Publication may already have succeeded. A failed release leaves the store
+    // locked for manual recovery rather than reporting a failed mutation.
+    let _ = host.delete_file(&lock_path).await;
     result
 }
 
-/// Read-modify-write a mutation into the persisted revocation state, without
-/// disturbing whatever key material (`current`/`previous`/grace period) is on
-/// disk at write time — the counterpart a `rotateKey`/`revokeKey` write must
-/// not clobber, and vice versa (issue #298 AC10). Reuses the same atomic
-/// write-temp-then-rename path [`save_key_state`] uses.
-///
-/// **Concurrency scope** (issue #322): wrapped in the advisory lock
-/// [`with_revocation_lock`] acquires — on a host that implements
-/// [`HostPlatform::try_create_lock_file`] (native — see `NativeHostPlatform`
-/// in `crates/vaultkeeper-cli`), two writers whose read-modify-write windows
-/// genuinely overlap (not just sequenced back-to-back) no longer race
-/// last-writer-wins: the second acquirer waits (bounded retry, with
-/// stale-lock takeover for an abandoned holder) until the first releases.
-/// See `crates/vaultkeeper-cli/src/host.rs`'s
-/// `ac10_genuinely_concurrent_revoke_and_rotate_lose_neither_mutation` and
-/// `ac10_many_genuinely_concurrent_revokers_lose_no_mutation` for the tests
-/// that prove this against real OS threads and a real filesystem — not two
-/// sequential calls dressed up as concurrent.
-///
-/// On a host that does **not** implement `try_create_lock_file` (every host
-/// as of this change other than `NativeHostPlatform`, including the current
-/// WASM/JS bridge — see that trait method's doc comment for why) this
-/// degrades to the weaker guarantee this function previously documented: a
-/// `rotateKey`/`revokeKey` write and a revocation write that are *sequenced*
-/// one after the other (in either order) each carry the other's portion
-/// forward untouched (`ac10_sequential_revoke_and_rotate_clobber_neither_order`
-/// in `crates/vaultkeeper-core/tests/lease_revocation_integration.rs`), but
-/// two writers whose windows genuinely overlap can still race
-/// last-writer-wins.
-///
-/// Requires that key state has already been persisted at least once (i.e.
-/// [`crate::vault::VaultKeeper::init`] has run against this config dir) —
-/// there is nothing meaningful to revoke against before any key material
-/// exists. A genuinely corrupt store is also refused rather than silently
-/// reset to empty: unlike [`save_key_state`] (whose caller only ever supplies
-/// fresh key material and has nothing to lose from a reset), a reset here
-/// would silently discard real revocations rather than merely refuse to
-/// validate against them.
+/// Update persisted lease revocation metadata under the shared key-state lock,
+/// preserving encryption key material. Requires an authenticated existing store
+/// and a host that supports exclusive lock-file creation.
 pub async fn mutate_revocation_state(
     host: &dyn HostPlatform,
     mutate: impl FnOnce(&mut RevocationState),
@@ -880,76 +665,89 @@ async fn mutate_revocation_state_locked(
     Ok(revocation)
 }
 
-/// Persist `snapshot` to the host's config directory. The state file and its
-/// wrapping key are both written owner-only (`0o600`).
-///
-/// Uses write-to-temp-then-rename (via [`HostPlatform::rename_file`]) so a
-/// concurrent [`load_key_state`] never observes a half-written envelope.
-/// Every filesystem step (wrap-key read/write, temp write, rename) surfaces
-/// the host's typed `VaultError::Filesystem` on failure rather than a generic
-/// error, matching the `HostFilesystemError` contract at the wasm boundary.
-///
-/// Read-modify-write for the revocation portion of the file (issue #298
-/// AC9): this function's caller only ever supplies key material, so before
-/// writing it re-reads whatever revocation state is currently persisted and
-/// carries it through untouched. `rotateKey`/`revokeKey` must never reset
-/// revocation state to empty, or key rotation becomes a revocation bypass.
-///
-/// A currently-corrupt store refuses the write entirely, with the same
-/// typed fail-closed error [`mutate_revocation_state`] uses for exactly this
-/// case, rather than degrading to an empty revocation portion: writing a
-/// fresh, validly-sealed envelope over an unauthenticated one would silently
-/// discard whatever revocations it might contain, so a single flipped bit in
-/// `keys.enc` followed by a routine rotate/revoke would silently un-revoke
-/// every outstanding lease. Only a genuinely *absent* store — nothing has
-/// ever been persisted, so there is nothing to lose — defaults to an empty
-/// revocation portion.
-///
-/// **Concurrency scope** (issue #322): shares [`with_revocation_lock`] with
-/// [`mutate_revocation_state`] — see that function's doc comment for exactly
-/// what guarantee this does and doesn't provide depending on host locking
-/// support. Sharing the same lock (rather than each function having its own)
-/// is what actually closes the race this issue names: a `rotateKey` call
-/// through this function and a `session revoke` call through
-/// `mutate_revocation_state` mutually exclude each other, not just
-/// same-function callers.
+/// Create persisted key state from a snapshot. Existing stores cannot be
+/// overwritten by a snapshot, which may contain revoked key material.
 pub async fn save_key_state(
     host: &dyn HostPlatform,
     snapshot: &KeyStateSnapshot,
 ) -> Result<(), VaultError> {
-    with_revocation_lock(host, save_key_state_locked(host, snapshot)).await
+    with_revocation_lock(host, async {
+        match try_load_raw(host).await? {
+            RawLoad::Absent => write_snapshot(host, snapshot, &RevocationState::default()).await,
+            RawLoad::Present(_) => Err(VaultError::Other(
+                "Key state already exists; use vault rotation or revocation to update it"
+                    .to_string(),
+            )),
+            RawLoad::Corrupt => Err(invalid_key_state(host)),
+        }
+    })
+    .await
 }
 
-async fn save_key_state_locked(
+fn invalid_key_state(host: &dyn HostPlatform) -> VaultError {
+    VaultError::Decryption {
+        message: "Cannot persist key state: keys.enc failed to authenticate or parse. Restore keys.enc and .keys.wrap from backup before retrying.".to_string(),
+        path: host.config_dir().join(KEY_STATE_FILE).display().to_string(),
+    }
+}
+
+pub(crate) async fn initialize_key_manager(
+    host: &dyn HostPlatform,
+) -> Result<KeyManager, VaultError> {
+    if let Some(snapshot) = load_key_state(host).await? {
+        let mut manager = KeyManager::new();
+        manager.hydrate(snapshot);
+        return Ok(manager);
+    }
+    with_revocation_lock(host, async {
+        let mut manager = KeyManager::new();
+        match try_load_raw(host).await? {
+            RawLoad::Present(parsed) => {
+                manager.hydrate(snapshot_from_raw(*parsed).ok_or_else(|| invalid_key_state(host))?);
+            }
+            RawLoad::Absent => {
+                manager.init()?;
+                write_snapshot(host, &manager.snapshot()?, &RevocationState::default()).await?;
+            }
+            RawLoad::Corrupt => return Err(invalid_key_state(host)),
+        }
+        Ok(manager)
+    })
+    .await
+}
+
+pub(crate) async fn mutate_key_manager(
+    host: &dyn HostPlatform,
+    mutate: impl FnOnce(&mut KeyManager) -> Result<(), VaultError>,
+) -> Result<KeyManager, VaultError> {
+    with_revocation_lock(host, async {
+        let RawLoad::Present(parsed) = try_load_raw(host).await? else {
+            return Err(invalid_key_state(host));
+        };
+        let revocation = revocation_from_raw(&parsed);
+        let mut manager = KeyManager::new();
+        manager.hydrate(snapshot_from_raw(*parsed).ok_or_else(|| invalid_key_state(host))?);
+        mutate(&mut manager)?;
+        write_snapshot(host, &manager.snapshot()?, &revocation).await?;
+        Ok(manager)
+    })
+    .await
+}
+
+async fn write_snapshot(
     host: &dyn HostPlatform,
     snapshot: &KeyStateSnapshot,
+    revocation: &RevocationState,
 ) -> Result<(), VaultError> {
-    let revocation = match try_load_raw(host).await? {
-        RawLoad::Present(parsed) => revocation_from_raw(&parsed),
-        RawLoad::Absent => RevocationState::default(),
-        RawLoad::Corrupt => {
-            let state_path = host.config_dir().join(KEY_STATE_FILE);
-            return Err(VaultError::Decryption {
-                message: "Cannot persist key state: keys.enc failed to authenticate or \
-                          parse. Writing forward would silently discard whatever \
-                          revocation state it might contain and un-revoke every \
-                          outstanding lease. Restore keys.enc and .keys.wrap from backup \
-                          before retrying."
-                    .to_string(),
-                path: state_path.display().to_string(),
-            });
-        }
-    };
-
     write_raw_state(
         host,
         serialize_key(&snapshot.current),
         snapshot.previous.as_ref().map(serialize_key),
-        match (&snapshot.previous, snapshot.grace_period_expires_at_ms) {
-            (Some(_), Some(expiry)) => Some(expiry),
-            _ => None,
-        },
-        &revocation,
+        snapshot
+            .previous
+            .as_ref()
+            .and(snapshot.grace_period_expires_at_ms),
+        revocation,
     )
     .await
 }
@@ -964,7 +762,7 @@ async fn write_raw_state(
     revocation: &RevocationState,
 ) -> Result<(), VaultError> {
     let wrap_path = host.config_dir().join(KEY_WRAP_FILE);
-    let mut wrap_key = get_or_create_wrap_key(host, &wrap_path).await?;
+    let wrap_key = Zeroizing::new(get_or_create_wrap_key_locked(host, &wrap_path).await?);
 
     let raw = RawKeyState {
         version: 1,
@@ -976,11 +774,11 @@ async fn write_raw_state(
         key_generations: revocation.key_generations.clone(),
     };
 
-    let json = serde_json::to_string(&raw)
-        .map_err(|e| VaultError::Other(format!("Failed to serialize key state: {e}")))?;
-    let envelope = encrypt_gcm(&wrap_key, &json);
-    wrap_key.zeroize();
-    let envelope = envelope?;
+    let json = Zeroizing::new(
+        serde_json::to_string(&raw)
+            .map_err(|e| VaultError::Other(format!("Failed to serialize key state: {e}")))?,
+    );
+    let envelope = encrypt_gcm(&wrap_key, &json)?;
 
     let state_path = host.config_dir().join(KEY_STATE_FILE);
     let mut suffix = [0u8; 4];
@@ -991,11 +789,14 @@ async fn write_raw_state(
         .config_dir()
         .join(format!("{KEY_STATE_FILE}.{suffix_hex}.tmp"));
 
-    host.write_file(&tmp_path, envelope.as_bytes(), 0o600)
-        .await?;
-    host.rename_file(&tmp_path, &state_path).await?;
-
-    Ok(())
+    let result = match host.write_file(&tmp_path, envelope.as_bytes(), 0o600).await {
+        Ok(()) => host.rename_file(&tmp_path, &state_path).await,
+        Err(err) => Err(err),
+    };
+    if result.is_err() {
+        let _ = host.delete_file(&tmp_path).await;
+    }
+    result
 }
 
 // ---------------------------------------------------------------------------
@@ -1196,6 +997,7 @@ mod tests {
         files: Mutex<HashMap<PathBuf, Vec<u8>>>,
         config_dir: PathBuf,
         deny_read: Mutex<HashSet<PathBuf>>,
+        fail_rename: std::sync::atomic::AtomicBool,
     }
 
     impl TestHost {
@@ -1204,6 +1006,7 @@ mod tests {
                 files: Mutex::new(HashMap::new()),
                 config_dir: PathBuf::from("/test/config"),
                 deny_read: Mutex::new(HashSet::new()),
+                fail_rename: std::sync::atomic::AtomicBool::new(false),
             }
         }
     }
@@ -1258,6 +1061,11 @@ mod tests {
             Ok(())
         }
         async fn rename_file(&self, from: &Path, to: &Path) -> Result<(), VaultError> {
+            if self.fail_rename.load(std::sync::atomic::Ordering::Relaxed) {
+                return Err(VaultError::Other(
+                    "simulated publication failure".to_string(),
+                ));
+            }
             let data = self
                 .files
                 .lock()
@@ -1515,16 +1323,8 @@ mod tests {
         host.delete_file(&wrap_path).await.unwrap();
 
         assert!(load_key_state(&host).await.unwrap().is_none());
-        // A fresh wrap key was generated in its place (not left missing).
-        assert!(host.file_exists(&wrap_path).await.unwrap());
+        assert!(!host.file_exists(&wrap_path).await.unwrap());
 
-        // The now-undecryptable `keys.enc` is `RawLoad::Corrupt` under the
-        // fresh wrap key, so a save must refuse rather than silently
-        // overwrite it — the same fail-closed contract as a byte-flipped
-        // envelope, since this function cannot distinguish "wrap key lost"
-        // from "ciphertext tampered" at the `RawLoad` level, and both mean
-        // "whatever revocation state might be in there is about to be
-        // silently discarded".
         let fresh = make_key("k-new-bbbb", 0x22, 1_705_314_600);
         let err = save_key_state(
             &host,
@@ -1558,7 +1358,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn wrong_length_wrap_key_is_regenerated_but_save_still_refuses_on_corrupt_store() {
+    async fn wrong_length_wrap_key_is_left_in_place_on_corrupt_store() {
         let host = TestHost::new();
         save_key_state(
             &host,
@@ -1577,20 +1377,12 @@ mod tests {
             .unwrap();
 
         assert!(load_key_state(&host).await.unwrap().is_none());
-        // A fresh, correctly-sized wrap key replaced the wrong-length one...
-        assert_eq!(
-            host.read_file(&wrap_path).await.unwrap().len(),
-            GCM_KEY_BYTES
-        );
+        assert_eq!(host.read_file(&wrap_path).await.unwrap(), vec![0xab; 7]);
 
-        // ...but `keys.enc` (sealed under the discarded wrong-length key) is
-        // still `RawLoad::Corrupt` under the new one, so save must refuse
-        // rather than panic or silently overwrite it.
-        let fresh = make_key("k-new-bbbb", 0x22, 1_705_314_600);
         let err = save_key_state(
             &host,
             &KeyStateSnapshot {
-                current: fresh,
+                current: make_key("k-new-bbbb", 0x22, 1_705_314_600),
                 previous: None,
                 grace_period_expires_at_ms: None,
             },
@@ -1639,7 +1431,7 @@ mod tests {
     fn deserialize_key_rejects_wrong_length_key_bytes() {
         let raw = RawKeyMaterial {
             id: "k-1".to_string(),
-            key: vec![0u8; 7],
+            key: Zeroizing::new(vec![0u8; 7]),
             created_at: "2024-01-15T10:30:00.000Z".to_string(),
         };
         assert!(deserialize_key(raw).is_none());
@@ -1649,7 +1441,7 @@ mod tests {
     fn deserialize_key_rejects_empty_id() {
         let raw = RawKeyMaterial {
             id: String::new(),
-            key: vec![0u8; GCM_KEY_BYTES],
+            key: Zeroizing::new(vec![0u8; GCM_KEY_BYTES]),
             created_at: "2024-01-15T10:30:00.000Z".to_string(),
         };
         assert!(deserialize_key(raw).is_none());
@@ -1882,32 +1674,21 @@ mod tests {
         .await
         .unwrap();
 
-        // Simulates `rotateKey`'s `persist_key_state`: a fresh snapshot built
-        // purely from key material, with no knowledge of revocation state.
-        save_key_state(
-            &host,
-            &KeyStateSnapshot {
-                current: make_key("k-2-bbbb", 0x22, 1_705_314_600),
-                previous: Some(make_key("k-1-aaaa", 0x11, 1_705_300_000)),
-                grace_period_expires_at_ms: Some((time::now_millis() + 60_000) as u64),
-            },
-        )
-        .await
-        .unwrap();
-
+        let mut manager = mutate_key_manager(&host, |manager| manager.rotate_key(60_000))
+            .await
+            .unwrap();
+        let rotated = manager.snapshot().unwrap();
         let state = load_revocation_for_validation(&host, 0).await.unwrap();
         assert!(state.is_jti_revoked("survives-rotation"));
         assert_eq!(state.min_generation_for("release-signer"), 1);
 
-        // And the reverse: a revocation mutation must not disturb the
-        // rotated key material.
         mutate_revocation_state(&host, |state| {
             state.revoke_jti("another-jti", 9_999_999_999);
         })
         .await
         .unwrap();
         let loaded = load_key_state(&host).await.unwrap().unwrap();
-        assert_eq!(loaded.current.id, "k-2-bbbb");
+        assert_eq!(loaded.current.id, rotated.current.id);
         assert_eq!(
             loaded.previous.as_ref().map(|k| k.id.as_str()),
             Some("k-1-aaaa")
@@ -2056,13 +1837,7 @@ mod tests {
     // Issue #322 — cross-process revocation-state lock.
     // -------------------------------------------------------------------
 
-    /// A host that implements no `HostPlatform` capability beyond the bare
-    /// minimum required by the trait — every optional method (including
-    /// `try_create_lock_file`) is left at its default. Stands in for the
-    /// WASM/JS bridge's documented fallback (`JsHostPlatform` does not
-    /// override `try_create_lock_file` either — see that struct's doc
-    /// comment in `crates/vaultkeeper-wasm/src/wasm_impl.rs`), without
-    /// pulling in a wasm32 target to exercise it.
+    /// Host with no exclusive lock support.
     struct DefaultLockHost {
         config_dir: PathBuf,
     }
@@ -2207,22 +1982,13 @@ mod tests {
         );
     }
 
-    /// Host double whose lock is permanently contended
-    /// (`try_create_lock_file` unconditionally reports `EEXIST`) and whose
-    /// lock marker always reads back as freshly created (`now_millis()` on
-    /// every read) so `take_over_if_stale` never considers it abandoned.
-    /// Used by
-    /// [`acquire_lock_times_out_after_lock_max_attempts_when_contention_never_clears`]
-    /// to exercise the `attempt + 1 == LOCK_MAX_ATTEMPTS` branch — every
-    /// other contention test in this module resolves via a successful
-    /// retry or a stale-lock takeover, so that timeout arm otherwise has no
-    /// coverage.
-    struct AlwaysContendedFreshHost {
+    /// Host double that always reports lock contention.
+    struct AlwaysContendedHost {
         config_dir: PathBuf,
     }
 
     #[async_trait::async_trait]
-    impl HostPlatform for AlwaysContendedFreshHost {
+    impl HostPlatform for AlwaysContendedHost {
         async fn exec(
             &self,
             _cmd: &str,
@@ -2232,10 +1998,7 @@ mod tests {
             unimplemented!("not exercised by this test")
         }
         async fn read_file(&self, _path: &Path) -> Result<Vec<u8>, VaultError> {
-            // Always "just created" — never stale, so `take_over_if_stale`
-            // never fires and the retry loop must run to genuine
-            // exhaustion rather than resolving via takeover.
-            Ok(time::now_millis().to_string().into_bytes())
+            unimplemented!("contention must not read the lock marker")
         }
         async fn write_file(
             &self,
@@ -2249,10 +2012,7 @@ mod tests {
             unimplemented!("not exercised by this test")
         }
         async fn delete_file(&self, _path: &Path) -> Result<(), VaultError> {
-            // `take_over_if_stale` would call this if it ever decided the
-            // marker was stale, which it never does here — present only so
-            // the trait is satisfied.
-            Ok(())
+            unimplemented!("contention must not remove the lock")
         }
         async fn list_dir(&self, _path: &Path) -> Result<Vec<String>, VaultError> {
             unimplemented!("not exercised by this test")
@@ -2277,20 +2037,10 @@ mod tests {
         }
     }
 
-    /// Regression test for a coverage gap in `acquire_lock`'s bounded-retry
-    /// loop: the `attempt + 1 == LOCK_MAX_ATTEMPTS` timeout branch (never
-    /// resolving via a successful retry or a stale-lock takeover) had zero
-    /// test coverage. Uses [`AlwaysContendedFreshHost`], whose lock is both
-    /// permanently contended and permanently "fresh", to force every one of
-    /// `LOCK_MAX_ATTEMPTS` attempts to hit contention and run out.
-    ///
-    /// Fast by construction: `pause_before_retry`'s per-attempt delay is
-    /// `RETRY_PAUSE_MS` (2ms, see that constant), so `LOCK_MAX_ATTEMPTS`
-    /// (50) attempts cost roughly 100ms total — comfortably sub-second,
-    /// without touching either production constant or adding a sleep here.
+    /// Persistent contention returns a typed timeout.
     #[tokio::test]
     async fn acquire_lock_times_out_after_lock_max_attempts_when_contention_never_clears() {
-        let host = AlwaysContendedFreshHost {
+        let host = AlwaysContendedHost {
             config_dir: PathBuf::from("/test/config"),
         };
 
@@ -2318,36 +2068,15 @@ mod tests {
         }
     }
 
-    /// `acquire_lock` treats that same fail-closed default as "this host
-    /// doesn't support locking" and proceeds without one, rather than
-    /// propagating it as a hard failure — a `mutate_revocation_state` call
-    /// against a non-locking host must still succeed exactly as it did
-    /// before issue #322 (the pre-existing sequential-ordering-only
-    /// guarantee), not start refusing every call outright.
     #[tokio::test]
-    async fn non_locking_host_still_completes_revocation_writes() {
-        let host = TestHost::new();
-        seed_key_state(&host).await;
-
-        // TestHost overrides `try_create_lock_file` with real locking
-        // support (used by the concurrency tests below) — this test instead
-        // exercises the *unsupported* path directly through the shared
-        // `acquire_lock`/`with_revocation_lock` machinery via
-        // `DefaultLockHost`, then confirms `mutate_revocation_state` itself
-        // (against the ordinary, locking-capable `TestHost`) is unaffected
-        // either way: both hosts complete the write.
-        let default_host = DefaultLockHost {
+    async fn non_locking_host_refuses_key_state_writes() {
+        let host = DefaultLockHost {
             config_dir: PathBuf::from("/test/config"),
         };
-        let guard = acquire_lock(&default_host).await.unwrap();
-        guard.release().await;
-
-        let result = mutate_revocation_state(&host, |state| {
-            state.revoke_jti("still-works-jti", 9_999_999_999);
-        })
-        .await
-        .unwrap();
-        assert!(result.is_jti_revoked("still-works-jti"));
+        assert!(matches!(
+            mutate_revocation_state(&host, |_| panic!("mutation without lock")).await,
+            Err(VaultError::LockingNotSupported { .. })
+        ));
     }
 
     /// Issue #322 AC: the lock is released promptly on the error/early-return
@@ -2355,7 +2084,7 @@ mod tests {
     /// `mutate_revocation_state` fail closed (see
     /// `ac6_tampered_envelope_fails_closed_for_lease_validation`), and that
     /// failure must not leave the lock file behind for the next caller to
-    /// wait out a full stale-lock timeout on.
+    /// wait on.
     #[tokio::test]
     async fn lock_is_released_immediately_when_the_critical_section_errors() {
         let host = TestHost::new();
@@ -2379,221 +2108,8 @@ mod tests {
         // Proves the release was real, not merely "the file happens to be
         // absent": a fresh acquisition succeeds immediately (no contention),
         // which would fail/hang were the lock still held.
-        let guard = acquire_lock(&host).await.unwrap();
-        guard.release().await;
-    }
-
-    /// Issue #322 AC: stale-lock takeover. A lock file left behind with an
-    /// acquisition timestamp far enough in the past to be considered
-    /// abandoned (standing in for a holder that crashed or panicked before
-    /// reaching `LockGuard::release`) does not permanently wedge
-    /// acquisition — see `LockGuard`'s doc comment for why recovering a
-    /// panic-abandoned lock is this takeover's job, not `Drop`'s.
-    #[tokio::test]
-    async fn stale_lock_left_by_a_panicked_holder_is_taken_over() {
-        let host = TestHost::new();
-        seed_key_state(&host).await;
-
-        let lock_path = host.config_dir().join(REVOCATION_LOCK_FILE);
-        // "0" epoch milliseconds — always older than `LOCK_STALE_AFTER_MS`.
-        host.write_file(&lock_path, b"0", 0o600).await.unwrap();
-
-        let result = mutate_revocation_state(&host, |state| {
-            state.revoke_jti("post-takeover-jti", 9_999_999_999);
-        })
-        .await
-        .unwrap();
-        assert!(result.is_jti_revoked("post-takeover-jti"));
-    }
-
-    /// A panic inside `with_revocation_lock`'s critical section is the one
-    /// path that reaches `LockGuard::drop` without `release()` having run
-    /// (see that struct's doc comment). This test drives a real panic
-    /// through a real (spawned) unwind — rather than asserting on `Drop`'s
-    /// internals directly — and confirms two things: the lock left behind
-    /// is recovered by the ordinary stale-lock takeover path (not by
-    /// `Drop` itself), and `Drop`'s `debug_assert` safety net does not fire
-    /// on this path. That assert only skips when
-    /// `std::thread::panicking()` is true; if it fired anyway it would be a
-    /// panic raised while already unwinding from another panic, which
-    /// aborts the process outright — so this test completing at all (rather
-    /// than the whole binary aborting) is itself proof the guard's `Drop`
-    /// stayed silent here, as designed.
-    ///
-    /// `with_revocation_lock` is async, so a synchronous
-    /// `std::panic::catch_unwind` around it doesn't cleanly apply across
-    /// `.await` points; a spawned task's `JoinHandle` gives the same
-    /// "did it panic" signal without fighting the executor.
-    #[tokio::test]
-    async fn panicking_critical_section_is_recovered_by_stale_lock_takeover() {
-        let host = Arc::new(TestHost::new());
-        seed_key_state(&host).await;
-
-        let lock_path = host.config_dir().join(REVOCATION_LOCK_FILE);
-
-        let task_host = Arc::clone(&host);
-        let join_result = tokio::spawn(async move {
-            with_revocation_lock::<(), _>(&*task_host, async {
-                panic!("simulated panic inside the revocation-state critical section");
-            })
-            .await
-        })
-        .await;
-
-        let join_err = join_result.expect_err("expected the spawned task to have panicked");
-        assert!(
-            join_err.is_panic(),
-            "expected a panic-flavored JoinError, got {join_err:?}"
-        );
-
-        // The panic pre-empted `LockGuard::release`, so the lock file is
-        // left behind — abandoned, not released — exactly as a real
-        // crashed process would leave it.
-        assert!(
-            host.file_exists(&lock_path).await.unwrap(),
-            "the panicked holder's lock file must still be present, not released"
-        );
-
-        // Simulate the passage of time past `LOCK_STALE_AFTER_MS`, the same
-        // synthetic-stale-marker technique
-        // `stale_lock_left_by_a_panicked_holder_is_taken_over` uses above.
-        host.write_file(&lock_path, b"0", 0o600).await.unwrap();
-
-        let result = mutate_revocation_state(&*host, |state| {
-            state.revoke_jti("post-panic-takeover-jti", 9_999_999_999);
-        })
-        .await
-        .unwrap();
-        assert!(result.is_jti_revoked("post-panic-takeover-jti"));
-    }
-
-    /// A lock file whose content isn't a parseable timestamp (never written
-    /// by this module) must never be taken over — `take_over_if_stale` only
-    /// recovers locks it recognizes as its own, not an arbitrary file that
-    /// happens to occupy the lock path.
-    #[tokio::test]
-    async fn malformed_lock_marker_is_never_treated_as_stale() {
-        let host = TestHost::new();
-        let lock_path = host.config_dir().join(REVOCATION_LOCK_FILE);
-        host.write_file(&lock_path, b"not-a-timestamp", 0o600)
-            .await
-            .unwrap();
-
-        take_over_if_stale(&host, &lock_path).await;
-
-        assert!(
-            host.file_exists(&lock_path).await.unwrap(),
-            "a malformed marker must be left in place, not taken over"
-        );
-    }
-
-    /// A host wrapper that simulates a *second* contender taking over the
-    /// same stale lock in the gap between `take_over_if_stale`'s two reads
-    /// of the marker — used by
-    /// [`take_over_if_stale_never_deletes_a_lock_recreated_between_its_reads`]
-    /// to deterministically reproduce the exact interleaving issue #322
-    /// review flagged, rather than relying on real thread-scheduling timing
-    /// (which could pass or fail depending on luck).
-    struct RaceDuringTakeoverHost {
-        inner: TestHost,
-        /// Number of `read_file` calls observed for the lock path so far.
-        lock_reads: std::sync::atomic::AtomicUsize,
-    }
-
-    #[async_trait::async_trait]
-    impl HostPlatform for RaceDuringTakeoverHost {
-        async fn exec(
-            &self,
-            cmd: &str,
-            args: &[&str],
-            options: ExecOptions<'_>,
-        ) -> Result<ExecOutput, VaultError> {
-            self.inner.exec(cmd, args, options).await
-        }
-        async fn read_file(&self, path: &Path) -> Result<Vec<u8>, VaultError> {
-            if path == self.inner.config_dir().join(REVOCATION_LOCK_FILE) {
-                let call = self
-                    .lock_reads
-                    .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                if call == 1 {
-                    // This is `take_over_if_stale`'s confirmation read — the
-                    // second time it reads the lock marker, immediately
-                    // before it would otherwise delete it. Simulate a
-                    // second contender winning the takeover race first: it
-                    // deleted the stale marker and created its own fresh,
-                    // valid lock, right in this gap.
-                    self.inner
-                        .write_file(path, b"fresh-holders-marker", 0o600)
-                        .await
-                        .unwrap();
-                }
-            }
-            self.inner.read_file(path).await
-        }
-        async fn write_file(
-            &self,
-            path: &Path,
-            content: &[u8],
-            mode: u32,
-        ) -> Result<(), VaultError> {
-            self.inner.write_file(path, content, mode).await
-        }
-        async fn file_exists(&self, path: &Path) -> Result<bool, VaultError> {
-            self.inner.file_exists(path).await
-        }
-        async fn delete_file(&self, path: &Path) -> Result<(), VaultError> {
-            self.inner.delete_file(path).await
-        }
-        async fn rename_file(&self, from: &Path, to: &Path) -> Result<(), VaultError> {
-            self.inner.rename_file(from, to).await
-        }
-        async fn list_dir(&self, path: &Path) -> Result<Vec<String>, VaultError> {
-            self.inner.list_dir(path).await
-        }
-        async fn try_create_lock_file(
-            &self,
-            path: &Path,
-            content: &[u8],
-        ) -> Result<(), VaultError> {
-            self.inner.try_create_lock_file(path, content).await
-        }
-        fn platform(&self) -> Platform {
-            self.inner.platform()
-        }
-        fn config_dir(&self) -> &Path {
-            self.inner.config_dir()
-        }
-    }
-
-    /// Regression test for issue #322 review feedback: `take_over_if_stale`
-    /// must not delete a lock file that a concurrent contender has already
-    /// taken over and recreated in the window between this function's
-    /// staleness read and its delete call. Before the fix, an unconditional
-    /// delete at that point would tear down the *new* holder's valid lock
-    /// (not the stale one this function decided to reap), letting a third
-    /// party acquire the now-vacant path too — two simultaneous holders,
-    /// exactly the bug this whole mechanism exists to prevent.
-    #[tokio::test]
-    async fn take_over_if_stale_never_deletes_a_lock_recreated_between_its_reads() {
-        let inner = TestHost::new();
-        let lock_path = inner.config_dir().join(REVOCATION_LOCK_FILE);
-        // "0" epoch milliseconds — always older than `LOCK_STALE_AFTER_MS`,
-        // so the first read correctly judges this stale.
-        inner.write_file(&lock_path, b"0", 0o600).await.unwrap();
-
-        let host = RaceDuringTakeoverHost {
-            inner,
-            lock_reads: std::sync::atomic::AtomicUsize::new(0),
-        };
-
-        take_over_if_stale(&host, &lock_path).await;
-
-        assert_eq!(
-            host.inner.read_file(&lock_path).await.unwrap(),
-            b"fresh-holders-marker",
-            "the concurrent contender's freshly recreated lock must survive \
-             take_over_if_stale untouched"
-        );
+        let lock_path = acquire_lock(&host).await.unwrap();
+        host.delete_file(&lock_path).await.unwrap();
     }
 
     /// Regression test for issue #322 review feedback: `pause_before_retry`
@@ -2625,6 +2141,26 @@ mod tests {
             "two concurrent pauses took {elapsed:?}, suggesting they were serialized by a \
              blocking sleep rather than run concurrently (single pause is {RETRY_PAUSE_MS}ms)"
         );
+    }
+
+    #[tokio::test]
+    async fn failed_key_publication_keeps_the_envelope_and_releases_the_lock() {
+        let host = TestHost::new();
+        seed_key_state(&host).await;
+        let before = host.files.lock().unwrap().clone();
+        host.fail_rename
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+        assert!(
+            mutate_key_manager(&host, KeyManager::revoke_key)
+                .await
+                .is_err()
+        );
+        assert_eq!(*host.files.lock().unwrap(), before);
+        host.fail_rename
+            .store(false, std::sync::atomic::Ordering::Relaxed);
+        mutate_key_manager(&host, KeyManager::revoke_key)
+            .await
+            .unwrap();
     }
 
     /// Issue #322 AC: two genuinely overlapping mutators — real OS threads,

@@ -9,6 +9,7 @@ import { execFile } from 'node:child_process'
 import {
   access,
   mkdir,
+  open,
   readdir,
   readFile,
   rename,
@@ -115,6 +116,25 @@ export function createNodeHost(configDirOverride?: string): WasmHostPlatform {
       try {
         const buf = await readFile(path)
         return new Uint8Array(buf)
+      } catch (err) {
+        throw toHostFilesystemError(err, path)
+      }
+    },
+
+    async tryCreateLockFile(path: string, content: Uint8Array): Promise<void> {
+      try {
+        await mkdir(dirname(path), { recursive: true, mode: 0o700 })
+        const lock = await open(path, 'wx', 0o600)
+        try {
+          try {
+            await lock.writeFile(content)
+          } finally {
+            await lock.close()
+          }
+        } catch (err) {
+          await unlink(path).catch(() => undefined)
+          throw err
+        }
       } catch (err) {
         throw toHostFilesystemError(err, path)
       }

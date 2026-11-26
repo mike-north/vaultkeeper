@@ -22,7 +22,7 @@ import type {
 } from './types.js'
 import { loadConfig, getDefaultConfigDir } from './config.js'
 import { KeyManager } from './keys/manager.js'
-import { loadKeyState, saveKeyState } from './keys/storage.js'
+import { initializeKeyManager, mutateKeyManager } from './keys/storage.js'
 import { BackendRegistry } from './backend/registry.js'
 import { isSigningBackend, getBackendCapabilities } from './backend/types.js'
 import type {
@@ -405,18 +405,8 @@ export class VaultKeeper {
     // in memory and never touch the config dir.
     const persistKeys = options?.config === undefined && options?.backend === undefined
 
-    const keyManager = new KeyManager()
-    if (persistKeys) {
-      const loaded = await loadKeyState(configDir)
-      if (loaded !== undefined) {
-        keyManager.hydrate(loaded)
-      } else {
-        await keyManager.init()
-        await saveKeyState(configDir, keyManager.snapshot())
-      }
-    } else {
-      await keyManager.init()
-    }
+    const keyManager = persistKeys ? await initializeKeyManager(configDir) : new KeyManager()
+    if (!persistKeys) await keyManager.init()
 
     return new VaultKeeper(config, keyManager, configDir, persistKeys, options?.backend)
   }
@@ -1124,8 +1114,9 @@ export class VaultKeeper {
     const gracePeriodMs = this.#config.keyRotation.gracePeriodDays * 24 * 60 * 60 * 1000
     // Throws RotationInProgressError synchronously if a prior rotation's grace
     // period is still active — including one persisted by an earlier process.
-    this.#keyManager.rotateKey(gracePeriodMs)
-    await this.#persistKeyState()
+    await this.#updateKeyManager((manager) => {
+      manager.rotateKey(gracePeriodMs)
+    })
   }
 
   /**
@@ -1136,19 +1127,17 @@ export class VaultKeeper {
    * so that `setup()` can be called immediately after revocation.
    */
   async revokeKey(): Promise<void> {
-    this.#keyManager.revokeKey()
-    await this.#persistKeyState()
+    await this.#updateKeyManager((manager) => {
+      manager.revokeKey()
+    })
   }
 
-  /**
-   * Persist the current key state to the config dir when persistence is
-   * enabled. A no-op for injected-config/backend instances (in-memory keys).
-   */
-  async #persistKeyState(): Promise<void> {
-    if (!this.#persistKeys) {
-      return
+  async #updateKeyManager(mutate: (manager: KeyManager) => void): Promise<void> {
+    if (this.#persistKeys) {
+      await mutateKeyManager(this.#configDir, this.#keyManager, mutate)
+    } else {
+      mutate(this.#keyManager)
     }
-    await saveKeyState(this.#configDir, this.#keyManager.snapshot())
   }
 
   /**

@@ -13,8 +13,15 @@
 import * as fs from 'node:fs/promises'
 import * as os from 'node:os'
 import * as path from 'node:path'
+import { strict as assert } from 'node:assert'
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { loadKeyState, saveKeyState } from '../../../src/keys/storage.js'
+import {
+  initializeKeyManager,
+  loadKeyState,
+  mutateKeyManager,
+  saveKeyState,
+} from '../../../src/keys/storage.js'
+import { createToken, decryptToken } from '../../../src/jwe/token.js'
 import type { KeyMaterial, KeyStateSnapshot } from '../../../src/keys/types.js'
 
 const CREATED_AT = new Date('2024-01-15T10:30:00.000Z')
@@ -34,6 +41,29 @@ afterEach(async () => {
 })
 
 describe('saveKeyState / loadKeyState round-trip', () => {
+  it('wipes displaced key material without interrupting an in-flight token operation', async () => {
+    const manager = await initializeKeyManager(dir)
+    const original = manager.getCurrentKey()
+    const claims = {
+      jti: 'test',
+      exp: 2000000000,
+      iat: 1,
+      sub: 'test',
+      exe: 'dev',
+      use: null,
+      tid: 1,
+      ref: 'test',
+    } satisfies import('../../../src/types.js').VaultClaims
+    const token = createToken(original.key, claims, { kid: original.id })
+    await mutateKeyManager(dir, manager, (fresh) => {
+      fresh.rotateKey(60_000)
+    })
+    expect([...original.key]).toEqual(new Array<number>(32).fill(0))
+    const previous = manager.getPreviousKey()
+    expect(previous).toBeDefined()
+    assert(previous !== undefined, 'rotation did not retain the previous key')
+    expect(await decryptToken(previous.key, await token)).toEqual(claims)
+  })
   it('persists the current key so a later load resolves the same id and bytes', async () => {
     const current = makeKey('k-1-aaaa', 0x11)
     await saveKeyState(dir, { current })
@@ -71,6 +101,20 @@ describe('grace-period expiry on load', () => {
   })
   afterEach(() => {
     vi.useRealTimers()
+  })
+
+  it('wipes a displaced previous key that expires before publication', async () => {
+    const manager = await initializeKeyManager(dir)
+    await mutateKeyManager(dir, manager, (fresh) => {
+      fresh.rotateKey(5_000)
+    })
+    const previous = manager.getPreviousKey()
+    expect(previous).toBeDefined()
+    await mutateKeyManager(dir, manager, (fresh) => {
+      fresh.revokeKey()
+      vi.setSystemTime(new Date('2024-01-15T10:00:06.000Z'))
+    })
+    expect(previous?.key).toEqual(new Uint8Array(32))
   })
 
   it('drops the previous key once the persisted grace period has elapsed', async () => {
@@ -134,26 +178,18 @@ describe('corrupt / tampered state degrades safely', () => {
     expect(await loadKeyState(dir)).toBeUndefined()
   })
 
-  it('recovers from a corrupt (wrong-length) wrapping key by regenerating it', async () => {
+  it('keeps a corrupt wrapping key and its existing envelope unchanged', async () => {
     // First save establishes both keys.enc and a valid .keys.wrap.
     await saveKeyState(dir, { current: makeKey('k-old-aaaa', 0x11) })
 
-    // Truncate the wrapping key to a non-32-byte length, as a partial write or
-    // disk corruption would. The old state is now unrecoverable (load degrades
-    // to "no state") — but a subsequent save must not throw "Invalid key
-    // length"; it regenerates the wrap key and persists fresh state.
     const wrapPath = path.join(dir, '.keys.wrap')
-    await fs.writeFile(wrapPath, Buffer.alloc(7, 0xab), { mode: 0o600 })
-
-    // Load degrades gracefully rather than crashing.
+    const corrupted = Buffer.alloc(7, 0xab)
+    await fs.writeFile(wrapPath, corrupted, { mode: 0o600 })
     expect(await loadKeyState(dir)).toBeUndefined()
-
-    // Save succeeds (no throw) and the freshly wrapped state round-trips.
-    const fresh = makeKey('k-new-bbbb', 0x22)
-    await saveKeyState(dir, { current: fresh })
-    expect((await fs.stat(wrapPath)).size).toBe(32)
-    const loaded = await loadKeyState(dir)
-    expect(loaded?.current.id).toBe('k-new-bbbb')
+    await expect(saveKeyState(dir, { current: makeKey('k-new-bbbb', 0x22) })).rejects.toThrow(
+      'Key state already exists',
+    )
+    expect(await fs.readFile(wrapPath)).toEqual(corrupted)
   })
 })
 
