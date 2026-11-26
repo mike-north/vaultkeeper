@@ -20,7 +20,8 @@
 //! order as retrieval. Replacement opens only the owning keychain and
 //! modifies an existing item reference. If the lookup becomes stale, no
 //! item can be added there or in the default keychain. A confirmed miss
-//! uses a regular add in the default keychain.
+//! uses a regular add in the default keychain. Before that add, a separate
+//! metadata query confirms absence in each keychain in the search list.
 
 use crate::backend::types::{ExecOptions, HostPlatform, ListableBackend, Platform, SecretBackend};
 use crate::errors::VaultError;
@@ -40,13 +41,16 @@ const SERVICE_PREFIX: &str = "vaultkeeper:";
 const ITEM_NOT_FOUND_EXIT: i32 = 44;
 
 /// The system JXA runner loads the Security framework without a build-time dependency.
-const UPDATE_COMMAND: &str = "/usr/bin/osascript";
+const KEYCHAIN_BRIDGE: &str = "/usr/bin/osascript";
 
 /// Keep in sync with the script embedded in the TypeScript Keychain backend.
 const UPDATE_SCRIPT: &str = include_str!("keychain-update.js");
 
+/// Read-only confirmation of a search miss. Keep in sync with the TypeScript backend.
+const CONFIRM_MISS_SCRIPT: &str = include_str!("keychain-confirm-miss.js");
+
 /// The complete OSStatus for a locked keychain that would require user interaction.
-const UPDATE_LOCKED_STATUS: &str = "-25308";
+const LOCKED_STATUS: &str = "-25308";
 
 /// Reserve two bytes for the newline and NUL in security's 4096-byte input buffer.
 const MAX_INTERACTIVE_COMMAND_BYTES: usize = 4094;
@@ -86,6 +90,35 @@ impl KeychainBackend {
     /// orchestration.
     pub fn new(host: Arc<dyn HostPlatform>) -> Self {
         Self { host }
+    }
+
+    /// Require each searched keychain to be readable and explicitly miss the item.
+    async fn confirm_missing(&self, service: &str) -> Result<(), VaultError> {
+        let output = self
+            .host
+            .exec(
+                KEYCHAIN_BRIDGE,
+                &[
+                    "-l",
+                    "JavaScript",
+                    "-e",
+                    CONFIRM_MISS_SCRIPT,
+                    "--",
+                    service,
+                    ACCOUNT,
+                ],
+                ExecOptions::default(),
+            )
+            .await?;
+        let status = std::str::from_utf8(&output.stdout).ok().map(str::trim);
+        match (output.exit_code, status) {
+            (0, Some("absent")) => Ok(()),
+            (0, Some(LOCKED_STATUS)) => Err(Self::locked_write_error()),
+            _ => Err(VaultError::Exec {
+                message: "Failed to confirm the macOS Keychain item is absent".to_owned(),
+                command: KEYCHAIN_BRIDGE.to_owned(),
+            }),
+        }
     }
 
     fn service_name(id: &str) -> String {
@@ -237,14 +270,14 @@ impl KeychainBackend {
         let size = u32::try_from(encoded_bytes)
             .map_err(|_| VaultError::Exec {
                 message: "macOS Keychain replacement exceeds the native size limit".to_owned(),
-                command: UPDATE_COMMAND.to_owned(),
+                command: KEYCHAIN_BRIDGE.to_owned(),
             })?
             .to_string();
         let encoded = Zeroizing::new(Base64::encode_string(secret.as_bytes()));
         let mut output = self
             .host
             .exec(
-                UPDATE_COMMAND,
+                KEYCHAIN_BRIDGE,
                 &[
                     "-l",
                     "JavaScript",
@@ -266,10 +299,10 @@ impl KeychainBackend {
         let status = std::str::from_utf8(&output.stdout).ok().map(str::trim);
         let result = match (output.exit_code, status) {
             (0, Some("0")) => Ok(()),
-            (0, Some(UPDATE_LOCKED_STATUS)) => Err(Self::locked_write_error()),
+            (0, Some(LOCKED_STATUS)) => Err(Self::locked_write_error()),
             _ => Err(VaultError::Exec {
                 message: "macOS Keychain replacement failed".to_owned(),
-                command: UPDATE_COMMAND.to_owned(),
+                command: KEYCHAIN_BRIDGE.to_owned(),
             }),
         };
         output.stdout.zeroize();
@@ -288,6 +321,7 @@ impl KeychainBackend {
         let prefix = format!("add-generic-password -a \"{ACCOUNT}\" -s {service_token} -w \"");
         let suffix = "\"\n";
         check_command_size(prefix.len() + encoded_bytes + suffix.len() - 1)?;
+        self.confirm_missing(service).await?;
         let encoded = Zeroizing::new(Base64::encode_string(secret.as_bytes()));
         let script = interactive_script(&prefix, &encoded, suffix);
         let mut output = self
@@ -588,6 +622,7 @@ mod tests {
         calls: Mutex<Vec<RecordedExec>>,
         reject_writes: std::sync::atomic::AtomicBool,
         owner_unavailable: std::sync::atomic::AtomicBool,
+        owner_lost_during_lookup: std::sync::atomic::AtomicBool,
         shadow_item: std::sync::atomic::AtomicBool,
         list_keychains_unavailable: bool,
         platform: Platform,
@@ -601,6 +636,7 @@ mod tests {
                 calls: Mutex::new(Vec::new()),
                 reject_writes: false.into(),
                 owner_unavailable: false.into(),
+                owner_lost_during_lookup: false.into(),
                 shadow_item: false.into(),
                 list_keychains_unavailable: false,
                 platform: Platform::Darwin,
@@ -672,12 +708,15 @@ mod tests {
                         let target = tokens.get(7 + offset).map(String::as_str);
                         let mut entries = self.entries.lock().unwrap();
                         let exists = entries.contains_key(&service);
-                        if update
-                            && self
-                                .owner_unavailable
-                                .load(std::sync::atomic::Ordering::Relaxed)
+                        if self
+                            .owner_lost_during_lookup
+                            .load(std::sync::atomic::Ordering::Relaxed)
+                            || update
+                                && self
+                                    .owner_unavailable
+                                    .load(std::sync::atomic::Ordering::Relaxed)
                         {
-                            // The explicit target can disappear between lookup and -U's add.
+                            // The hidden owner's item cannot block a fallback add in the default.
                             self.shadow_item
                                 .store(true, std::sync::atomic::Ordering::Relaxed);
                             last_exit_code = 0;
@@ -766,7 +805,37 @@ mod tests {
                 stdin: options.stdin.map(|s| s.to_vec()),
             });
 
-            if cmd == UPDATE_COMMAND {
+            if cmd == KEYCHAIN_BRIDGE {
+                if let [
+                    "-l",
+                    "JavaScript",
+                    "-e",
+                    CONFIRM_MISS_SCRIPT,
+                    "--",
+                    service,
+                    ACCOUNT,
+                ] = args
+                {
+                    assert!(
+                        options.stdin.is_none(),
+                        "absence confirmation is metadata-only"
+                    );
+                    let status = if self
+                        .owner_lost_during_lookup
+                        .load(std::sync::atomic::Ordering::Relaxed)
+                    {
+                        "-25294\n"
+                    } else if self.entries.lock().unwrap().contains_key(*service) {
+                        "present\n"
+                    } else {
+                        "absent\n"
+                    };
+                    return Ok(ExecOutput {
+                        stdout: status.as_bytes().to_vec(),
+                        stderr: Vec::new(),
+                        exit_code: 0,
+                    });
+                }
                 return Ok(self.run_update(args, options.stdin.expect("replacement on stdin")));
             }
 
@@ -793,6 +862,16 @@ mod tests {
                     Ok(self.run_interactive_script(&script))
                 }
                 Some("find-generic-password") => {
+                    if self
+                        .owner_lost_during_lookup
+                        .load(std::sync::atomic::Ordering::Relaxed)
+                    {
+                        return Ok(ExecOutput {
+                            stdout: Vec::new(),
+                            stderr: b"security: SecKeychainSearchCopyNext: The specified item could not be found in the keychain.\n".to_vec(),
+                            exit_code: 44,
+                        });
+                    }
                     let service = args.get(4).expect("service arg").to_string();
                     let wants_value = args.contains(&"-w");
                     match self.entries.lock().unwrap().get(&service) {
@@ -909,7 +988,7 @@ mod tests {
         backend.store("my-secret", "secret-value").await.unwrap();
 
         let calls = host.calls.lock().unwrap();
-        assert_eq!(calls.len(), 2);
+        assert_eq!(calls.len(), 3);
         assert_eq!(calls[0].cmd, "security");
         assert_eq!(
             calls[0].args,
@@ -921,8 +1000,9 @@ mod tests {
                 "vaultkeeper:my-secret"
             ]
         );
-        assert_eq!(calls[1].cmd, "security");
-        assert_eq!(calls[1].args, ["-i"]);
+        assert_eq!(calls[1].cmd, KEYCHAIN_BRIDGE);
+        assert_eq!(calls[2].cmd, "security");
+        assert_eq!(calls[2].args, ["-i"]);
     }
 
     #[tokio::test]
@@ -981,6 +1061,27 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn store_does_not_create_a_default_keychain_copy_if_lookup_skips_the_owner() {
+        use std::sync::atomic::Ordering::Relaxed;
+
+        let host = TestHost::new();
+        let backend = KeychainBackend::new(host.clone());
+        let prior = "still-valid-🔐\ncredential";
+        backend.store("id", prior).await.unwrap();
+        host.owner_lost_during_lookup.store(true, Relaxed);
+
+        let result = backend.store("id", "replacement").await;
+        host.owner_lost_during_lookup.store(false, Relaxed);
+
+        assert!(
+            matches!(result, Err(VaultError::Exec { .. })),
+            "got {result:?}"
+        );
+        assert!(!host.shadow_item.load(Relaxed));
+        assert_eq!(backend.retrieve("id").await.unwrap(), prior);
+    }
+
+    #[tokio::test]
     async fn oversized_creates_fail_after_lookup_and_before_writing() {
         let host = TestHost::new();
         let backend = KeychainBackend::new(host.clone());
@@ -995,9 +1096,9 @@ mod tests {
         ));
         {
             let calls = host.calls.lock().unwrap();
-            assert_eq!(calls.len(), 3);
-            assert_eq!(calls[2].args[0], "find-generic-password");
-            assert_eq!(calls[2].args[4], "vaultkeeper:new-id");
+            assert_eq!(calls.len(), 4);
+            assert_eq!(calls[3].args[0], "find-generic-password");
+            assert_eq!(calls[3].args[4], "vaultkeeper:new-id");
         }
         assert_eq!(backend.retrieve("id").await.unwrap(), "prior");
     }
@@ -1685,16 +1786,12 @@ mod tests {
         impl HostPlatform for EchoingStderrHost {
             async fn exec(
                 &self,
-                _cmd: &str,
+                cmd: &str,
                 args: &[&str],
-                _options: ExecOptions<'_>,
+                options: ExecOptions<'_>,
             ) -> Result<ExecOutput, VaultError> {
-                if args.first() == Some(&"find-generic-password") {
-                    return Ok(ExecOutput {
-                        stdout: Vec::new(),
-                        stderr: Vec::new(),
-                        exit_code: 44,
-                    });
+                if args != ["-i"] {
+                    return self.inner.exec(cmd, args, options).await;
                 }
                 let encoded = Base64::encode_string(SENTINEL.as_bytes());
                 Ok(ExecOutput {
@@ -1738,6 +1835,10 @@ mod tests {
             .await
             .unwrap_err();
         let message = err.to_string();
+        assert!(
+            message.contains("macOS Keychain write failed"),
+            "got {err:?}"
+        );
         let encoded = Base64::encode_string(SENTINEL.as_bytes());
         assert!(
             !message.contains(SENTINEL) && !message.contains(&encoded),
@@ -1812,6 +1913,7 @@ mod tests {
             calls: Mutex::new(Vec::new()),
             reject_writes: false.into(),
             owner_unavailable: false.into(),
+            owner_lost_during_lookup: false.into(),
             shadow_item: false.into(),
             list_keychains_unavailable: false,
             platform: Platform::Linux,
@@ -1835,6 +1937,7 @@ mod tests {
             calls: Mutex::new(Vec::new()),
             reject_writes: false.into(),
             owner_unavailable: false.into(),
+            owner_lost_during_lookup: false.into(),
             shadow_item: false.into(),
             list_keychains_unavailable: true,
             platform: Platform::Darwin,

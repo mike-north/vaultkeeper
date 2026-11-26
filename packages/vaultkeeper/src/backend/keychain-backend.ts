@@ -10,6 +10,7 @@
 import { constants as bufferConstants, isUtf8 } from 'node:buffer'
 import { execCommandFull } from '../util/exec.js'
 import { BackendLockedError, ExecError, SecretNotFoundError } from '../errors.js'
+import { KEYCHAIN_CONFIRM_MISS_SCRIPT } from './keychain-confirm-miss.js'
 import { KEYCHAIN_UPDATE_SCRIPT } from './keychain-update.js'
 import type { ListableBackend } from './types.js'
 
@@ -20,10 +21,10 @@ const SERVICE_PREFIX = 'vaultkeeper:'
 const ITEM_NOT_FOUND_EXIT = 44
 
 /** The system JXA runner loads the Security framework without a bundled binary. */
-const UPDATE_COMMAND = '/usr/bin/osascript'
+const KEYCHAIN_BRIDGE = '/usr/bin/osascript'
 
 /** The full OSStatus for a locked keychain that would require user interaction. */
-const UPDATE_LOCKED_STATUS = '-25308'
+const LOCKED_STATUS = '-25308'
 
 /** Reserve two bytes for the newline and NUL in security's 4096-byte input buffer. */
 const MAX_INTERACTIVE_COMMAND_BYTES = 4094
@@ -94,13 +95,11 @@ export class KeychainBackend implements ListableBackend {
   }
 
   async store(id: string, secret: string): Promise<void> {
-    // security tokenizes this input one line at a time.
-    if (id.includes('\n') || id.includes('\r') || id.includes('\0')) {
-      throw new ExecError('Keychain store requires an ID without line breaks or NUL', 'security')
+    // NUL cannot be passed as subprocess metadata. Line breaks are valid for legacy updates.
+    if (id.includes('\0')) {
+      throw new ExecError('Keychain store requires an ID without NUL', 'security')
     }
     const service = `${SERVICE_PREFIX}${id}`
-    // Bound service metadata before giving it to either subprocess.
-    checkCommandSize(Buffer.byteLength(service))
     const lookup = await execCommandFull('security', [
       'find-generic-password',
       '-a',
@@ -128,6 +127,26 @@ export class KeychainBackend implements ListableBackend {
     }
   }
 
+  /** Require each searched keychain to be readable and explicitly miss the item. */
+  private async confirmMissing(service: string): Promise<void> {
+    const result = await execCommandFull(KEYCHAIN_BRIDGE, [
+      '-l',
+      'JavaScript',
+      '-e',
+      KEYCHAIN_CONFIRM_MISS_SCRIPT,
+      '--',
+      service,
+      ACCOUNT,
+    ])
+    const status = result.stdout.trim()
+    if (result.exitCode === 0 && status === LOCKED_STATUS) {
+      throw new BackendLockedError('macOS Keychain is locked', true)
+    }
+    if (result.exitCode !== 0 || status !== 'absent') {
+      throw new ExecError('Failed to confirm the macOS Keychain item is absent', KEYCHAIN_BRIDGE)
+    }
+  }
+
   /** Update only the matching item in the keychain that owned it at lookup time. */
   private async updateExisting(
     target: string,
@@ -137,10 +156,10 @@ export class KeychainBackend implements ListableBackend {
   ): Promise<void> {
     // Node's encoded string limit is below the native UInt32 payload limit.
     if (encodedBytes > bufferConstants.MAX_STRING_LENGTH) {
-      throw new ExecError('macOS Keychain replacement is too large to encode', UPDATE_COMMAND)
+      throw new ExecError('macOS Keychain replacement is too large to encode', KEYCHAIN_BRIDGE)
     }
     const result = await execCommandFull(
-      UPDATE_COMMAND,
+      KEYCHAIN_BRIDGE,
       [
         '-l',
         'JavaScript',
@@ -156,19 +175,24 @@ export class KeychainBackend implements ListableBackend {
     )
     // The helper returns the full OSStatus on stdout. The process exit status describes the runner.
     const status = result.stdout.trim()
-    if (result.exitCode === 0 && status === UPDATE_LOCKED_STATUS) {
+    if (result.exitCode === 0 && status === LOCKED_STATUS) {
       throw new BackendLockedError('macOS Keychain is locked', true)
     }
     if (result.exitCode !== 0 || status !== '0') {
-      throw new ExecError('macOS Keychain replacement failed', UPDATE_COMMAND)
+      throw new ExecError('macOS Keychain replacement failed', KEYCHAIN_BRIDGE)
     }
   }
 
   /** Add a new item after a confirmed miss. The default keychain rejects duplicate creates. */
   private async addNew(service: string, secret: string, encodedBytes: number): Promise<void> {
+    // The interactive tokenizer treats each line as a command. Existing updates use argv metadata.
+    if (service.includes('\n') || service.includes('\r')) {
+      throw new ExecError('Keychain creation requires an ID without line breaks', 'security')
+    }
     const prefix = `add-generic-password -a "${ACCOUNT}" -s ${quoteKeychainArgument(service)} -w "`
     const suffix = '"\n'
     checkCommandSize(Buffer.byteLength(prefix) + encodedBytes + Buffer.byteLength(suffix) - 1)
+    await this.confirmMissing(service)
     // Even an empty password has an explicit token. Keep the script on
     // stdin and exclude the tool's potentially sensitive output from errors.
     const result = await execCommandFull('security', ['-i'], {

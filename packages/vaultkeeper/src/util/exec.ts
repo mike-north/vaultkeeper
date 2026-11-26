@@ -2,7 +2,7 @@
  * CLI spawn wrapper for executing external commands.
  */
 
-import { spawn } from 'node:child_process'
+import { spawn, type ChildProcess } from 'node:child_process'
 import { PluginNotFoundError, ExecError } from '../errors.js'
 import { collectUtf8 } from './collect-utf8.js'
 
@@ -52,9 +52,16 @@ export function execCommandFull(
   options?: ExecCommandOptions,
 ): Promise<ExecCommandResult> {
   return new Promise((resolve, reject) => {
-    const proc = spawn(command, args, {
-      stdio: [options?.stdin !== undefined ? 'pipe' : 'ignore', 'pipe', 'pipe'],
-    })
+    let proc: ChildProcess
+    try {
+      proc = spawn(command, args, {
+        stdio: [options?.stdin !== undefined ? 'pipe' : 'ignore', 'pipe', 'pipe'],
+      })
+    } catch {
+      // Node can throw before emitting an error event, including for oversized argv.
+      reject(new ExecError(`Failed to spawn '${command}'`, command))
+      return
+    }
     const stdout = collectUtf8(proc.stdout)
     const stderr = collectUtf8(proc.stderr)
     // A child can close the pipe before the write completes, even on exit zero.
@@ -119,9 +126,7 @@ export function execCommandFull(
           ),
         )
       } else {
-        // Any other spawn failure (EACCES on the binary, EMFILE, ...) must
-        // surface typed, not as the raw Node error — the last plain-error
-        // escape on this utility's failure paths.
+        // Other asynchronous spawn failures use the same typed execution error.
         reject(new ExecError(`Failed to spawn '${command}': ${error.message}`, command))
       }
     })

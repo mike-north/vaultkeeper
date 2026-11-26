@@ -8,6 +8,7 @@ vi.mock('../../../src/util/exec.js', () => ({
 
 import { execCommand, execCommandFull } from '../../../src/util/exec.js'
 import { KeychainBackend } from '../../../src/backend/keychain-backend.js'
+import { KEYCHAIN_CONFIRM_MISS_SCRIPT } from '../../../src/backend/keychain-confirm-miss.js'
 import { KEYCHAIN_UPDATE_SCRIPT } from '../../../src/backend/keychain-update.js'
 import { ExecError, SecretNotFoundError } from '../../../src/errors.js'
 
@@ -26,8 +27,19 @@ function mockKeychain() {
   let shadow: string | undefined
   let rejected = false
   let ownerUnavailable = false
+  let ownerLostDuringLookup = false
+  let serviceName = 'vaultkeeper:my-secret'
   mockExecCommandFull.mockImplementation((cmd, args, options) => {
     if (args[0] === 'find-generic-password') {
+      if (ownerLostDuringLookup) {
+        return Promise.resolve(
+          makeResult(
+            44,
+            '',
+            'security: SecKeychainSearchCopyNext: The specified item could not be found in the keychain.\n',
+          ),
+        )
+      }
       return Promise.resolve(
         entry === undefined
           ? makeResult(44)
@@ -41,10 +53,17 @@ function mockKeychain() {
     if (cmd === '/usr/bin/osascript') {
       const value = options?.stdin
       const [, , , script, , target, service, account, size] = args
+      if (script === KEYCHAIN_CONFIRM_MISS_SCRIPT) {
+        if (target !== serviceName || service !== 'vaultkeeper' || value !== undefined) {
+          return Promise.resolve(makeResult(2))
+        }
+        const status = ownerLostDuringLookup ? '-25294' : entry === undefined ? 'absent' : 'present'
+        return Promise.resolve(makeResult(0, `${status}\n`))
+      }
       if (
         script !== KEYCHAIN_UPDATE_SCRIPT ||
         target !== path ||
-        service !== 'vaultkeeper:my-secret' ||
+        service !== serviceName ||
         account !== 'vaultkeeper' ||
         value === undefined ||
         String(value.length) !== size
@@ -63,6 +82,11 @@ function mockKeychain() {
       )
     if (args[0] !== '-i' || write === null) return Promise.resolve(makeResult(2))
     const [, update, value, target] = write
+    if (ownerLostDuringLookup) {
+      // An ordinary add succeeds in the default even though the hidden owner still has the item.
+      shadow = value
+      return Promise.resolve(makeResult(0))
+    }
     if (ownerUnavailable && update !== undefined) {
       // An explicit target does not prevent Apple's fallback add redirecting to the default.
       shadow = value
@@ -86,11 +110,18 @@ function mockKeychain() {
     return Promise.resolve('')
   })
   return {
+    seedLegacy: (id: string, value: string) => {
+      serviceName = `vaultkeeper:${id}`
+      entry = Buffer.from(value).toString('base64')
+    },
     rejectWrites: () => {
       rejected = true
     },
     setOwnerUnavailable: (unavailable: boolean) => {
       ownerUnavailable = unavailable
+    },
+    setOwnerLostDuringLookup: (unavailable: boolean) => {
+      ownerLostDuringLookup = unavailable
     },
     hasShadow: () => shadow !== undefined,
   }
@@ -163,6 +194,40 @@ describe('KeychainBackend', () => {
       expect(keychain.hasShadow()).toBe(false)
     })
 
+    it('fails without a default-keychain copy if lookup silently skips the owner', async () => {
+      const keychain = mockKeychain()
+      const prior = 'still-valid-🔐\ncredential'
+      await backend.store('my-secret', prior)
+      keychain.setOwnerLostDuringLookup(true)
+
+      await expect(backend.store('my-secret', 'replacement')).rejects.toThrow(/confirm.*absent/)
+      keychain.setOwnerLostDuringLookup(false)
+
+      expect(keychain.hasShadow()).toBe(false)
+      await expect(backend.retrieve('my-secret')).resolves.toBe(prior)
+    })
+
+    it.each(['legacy\nname', 'legacy\rname'])('replaces an existing legacy ID %j', async (id) => {
+      const keychain = mockKeychain()
+      keychain.seedLegacy(id, 'prior')
+      await expect(backend.retrieve(id)).resolves.toBe('prior')
+
+      await backend.store(id, 'replacement')
+      await expect(backend.retrieve(id)).resolves.toBe('replacement')
+      expect(mockExecCommandFull.mock.calls.some(([, args]) => args[0] === '-i')).toBe(false)
+    })
+
+    it('replaces an existing legacy ID larger than the interactive create limit', async () => {
+      const id = 'a'.repeat(4096)
+      const keychain = mockKeychain()
+      keychain.seedLegacy(id, 'prior')
+      await expect(backend.retrieve(id)).resolves.toBe('prior')
+
+      await backend.store(id, 'replacement')
+      await expect(backend.retrieve(id)).resolves.toBe('replacement')
+      expect(mockExecCommandFull.mock.calls.some(([, args]) => args[0] === '-i')).toBe(false)
+    })
+
     it('returns only the successful replacement and keeps the write off argv', async () => {
       mockKeychain()
       await backend.store('my-secret', 'prior')
@@ -172,6 +237,7 @@ describe('KeychainBackend', () => {
       expect(mockExecCommand).not.toHaveBeenCalled()
       expect(mockExecCommandFull.mock.calls.map(([, args]) => args[0])).toEqual([
         'find-generic-password',
+        '-l',
         '-i',
         'find-generic-password',
         '-l',
@@ -179,7 +245,7 @@ describe('KeychainBackend', () => {
       ])
       const encoded = Buffer.from(replacement).toString('base64')
       expect(mockExecCommandFull).toHaveBeenNthCalledWith(
-        4,
+        5,
         '/usr/bin/osascript',
         [
           '-l',
@@ -225,7 +291,10 @@ describe('KeychainBackend', () => {
     })
 
     it('quotes service names and writes an explicit empty password', async () => {
-      mockExecCommandFull.mockResolvedValueOnce(makeResult(44)).mockResolvedValueOnce(makeResult(0))
+      mockExecCommandFull
+        .mockResolvedValueOnce(makeResult(44))
+        .mockResolvedValueOnce(makeResult(0, 'absent\n'))
+        .mockResolvedValueOnce(makeResult(0))
       await backend.store('id "with quotes" and \\', '')
       expect(mockExecCommandFull).toHaveBeenLastCalledWith('security', ['-i'], {
         stdin:
@@ -233,17 +302,36 @@ describe('KeychainBackend', () => {
       })
     })
 
-    it.each(['split\nline', 'carriage\rreturn', 'embedded\0nul'])(
-      'rejects IDs that cannot be represented on one line',
+    it.each(['split\nline', 'carriage\rreturn'])(
+      'rejects creation of a multiline ID %j',
       async (id) => {
-        await expect(backend.store(id, 'value')).rejects.toThrow(ExecError)
-        expect(mockExecCommandFull).not.toHaveBeenCalled()
+        mockExecCommandFull.mockResolvedValueOnce(makeResult(44))
+        await expect(backend.store(id, 'value')).rejects.toThrow(/creation.*without line breaks/)
+        expect(mockExecCommandFull).toHaveBeenCalledExactlyOnceWith('security', [
+          'find-generic-password',
+          '-a',
+          'vaultkeeper',
+          '-s',
+          `vaultkeeper:${id}`,
+        ])
       },
     )
 
-    it('rejects oversized service metadata before the lookup', async () => {
-      await expect(backend.store('a'.repeat(300_000), 'value')).rejects.toThrow(/line limit/i)
+    it('rejects NUL before passing the ID to a subprocess', async () => {
+      await expect(backend.store('embedded\0nul', 'value')).rejects.toThrow(ExecError)
       expect(mockExecCommandFull).not.toHaveBeenCalled()
+    })
+
+    it('rejects creation with oversized service metadata before writing', async () => {
+      mockExecCommandFull.mockResolvedValueOnce(makeResult(44))
+      await expect(backend.store('a'.repeat(300_000), 'value')).rejects.toThrow(/line limit/i)
+      expect(mockExecCommandFull).toHaveBeenCalledExactlyOnceWith('security', [
+        'find-generic-password',
+        '-a',
+        'vaultkeeper',
+        '-s',
+        `vaultkeeper:${'a'.repeat(300_000)}`,
+      ])
     })
 
     it('rejects an oversized creation after lookup and before writing', async () => {
@@ -273,8 +361,9 @@ describe('KeychainBackend', () => {
     it('reports a native failure even if the status wrapped to exit zero', async () => {
       mockExecCommandFull
         .mockResolvedValueOnce(makeResult(44))
+        .mockResolvedValueOnce(makeResult(0, 'absent\n'))
         .mockResolvedValueOnce(makeResult(0, '', 'add-generic-password: returned -25600\n'))
-      await expect(backend.store('my-secret', 'value')).rejects.toThrow(ExecError)
+      await expect(backend.store('my-secret', 'value')).rejects.toThrow(/write failed/)
     })
 
     it('omits credential-bearing diagnostics from errors', async () => {
@@ -282,9 +371,10 @@ describe('KeychainBackend', () => {
       const encoded = Buffer.from(secret).toString('base64')
       mockExecCommandFull
         .mockResolvedValueOnce(makeResult(44))
+        .mockResolvedValueOnce(makeResult(0, 'absent\n'))
         .mockResolvedValueOnce(makeResult(1, '', `${secret} ${encoded}`))
       const pending = backend.store('my-secret', secret)
-      await expect(pending).rejects.toThrow(ExecError)
+      await expect(pending).rejects.toThrow(/write failed/)
       await expect(pending).rejects.not.toThrow(secret)
       await expect(pending).rejects.not.toThrow(encoded)
     })

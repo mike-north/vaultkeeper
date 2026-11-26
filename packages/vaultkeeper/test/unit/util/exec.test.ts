@@ -182,6 +182,14 @@ const timer = setInterval(() => {
     ).rejects.toThrow(PluginNotFoundError)
   })
 
+  it('wraps a synchronous spawn failure for an oversized argument in a typed ExecError', async () => {
+    vi.mocked(spawn).mockImplementationOnce(() => {
+      throw Object.assign(new Error('spawn E2BIG'), { code: 'E2BIG' })
+    })
+
+    await expect(execCommandFull('security', ['metadata'])).rejects.toBeInstanceOf(ExecError)
+  })
+
   // Regression (review thread 3591242590): non-ENOENT spawn failures (EACCES
   // on the target, EMFILE, ...) previously rejected with the raw Node error —
   // the last plain-error escape on this utility's failure paths. Spawning a

@@ -144,9 +144,11 @@ deliberately and never logged casually.
 
 The macOS Keychain backend updates an existing credential in its owning keychain. A rejected
 update leaves the prior value in place. If the owning keychain or item becomes unavailable after
-lookup, the replacement fails without creating another item. Creating a new item uses one
-`security -i` input line, subject to the tool's byte limit. Writes reject IDs containing a line
-break or NUL before sending the credential.
+lookup, the replacement fails without creating another item. Before creating, the backend must
+confirm the item is absent from every keychain in the search list. An unavailable keychain makes
+that check fail. Creating a new item uses one `security -i` input line, subject to the tool's byte
+limit, and rejects IDs containing a line break or NUL. The native TypeScript update path supports
+legacy IDs with line breaks and IDs that exceed the interactive creation limit.
 
 **G7 — Exit-code taxonomy.** `0` success; `1` a typed operational failure (the `VaultError` surface, §2.1);
 `2` reserved for clap usage errors; `run` **propagates the child's exit code**, and a signal-terminated
