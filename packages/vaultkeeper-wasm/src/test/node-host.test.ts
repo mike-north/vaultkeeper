@@ -7,6 +7,7 @@ import {
   open,
   readdir,
   readFile,
+  realpath,
   rm,
   stat,
   symlink,
@@ -15,6 +16,7 @@ import {
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
+import { fileURLToPath } from 'node:url'
 import { createNodeHost } from '../node-host.js'
 
 const unixOnly = { skip: process.platform === 'win32' }
@@ -107,6 +109,89 @@ await test(
       assert.deepEqual(aclListing(directory).split('\n').slice(1), parentAcl)
       assert.equal((await stat(directory)).mode & 0o777, 0o755)
       assert.deepEqual(await readdir(directory), ['key'])
+    })
+  },
+)
+
+/** Run a fresh file-backed vault with only the grants needed by the SDK and storage. */
+function storeWithNodePermissions(directory: string, allowChild: boolean, umask: number) {
+  const script = `
+    import * as assert from 'node:assert/strict'
+    import { randomUUID } from 'node:crypto'
+    import { VaultKeeper } from ${JSON.stringify(new URL('../index.js', import.meta.url))}
+
+    assert.equal(process.permission.has('child'), ${String(allowChild)})
+    process.umask(${String(umask)})
+    const vault = await VaultKeeper.create({ skipDoctor: true }, process.argv[1])
+    try {
+      const value = randomUUID()
+      await vault.store('permission-test', value)
+      assert.equal(await vault.retrieve('permission-test'), value)
+    } finally {
+      vault.dispose()
+    }
+  `
+  return spawnSync(
+    process.execPath,
+    [
+      '--permission',
+      '--preserve-symlinks',
+      `--allow-fs-read=${fileURLToPath(new URL('../../', import.meta.url))}`,
+      `--allow-fs-read=${directory}`,
+      `--allow-fs-write=${directory}`,
+      ...(allowChild ? ['--allow-child-process'] : []),
+      '--input-type=module',
+      '--eval',
+      script,
+      directory,
+    ],
+    { encoding: 'utf8', env: { ...process.env, NODE_OPTIONS: '' } },
+  )
+}
+
+/** The stable spelling is available on the supported Node versions with `--permission`. */
+const hasNodePermissionModel = process.allowedNodeEnvironmentFlags.has('--permission')
+
+await test(
+  'file-backed keys remain private under the Node permission model',
+  { skip: unixOnly.skip || !hasNodePermissionModel },
+  async () => {
+    for (const umask of [0o000, 0o777]) {
+      await withStorage(async (directory) => {
+        const isMac = process.platform === 'darwin'
+        if (isMac) {
+          await grantInheritedRead(directory)
+        }
+        // Isolate the key's mode from recursive creation of its storage directory.
+        await mkdir(join(directory, 'file'), { mode: 0o700 })
+        const child = storeWithNodePermissions(await realpath(directory), isMac, umask)
+        assert.ifError(child.error)
+        assert.equal(child.status, 0, child.stderr)
+        for (const path of [join(directory, '.keys.wrap'), join(directory, 'file', '.key')]) {
+          const metadata = await stat(path)
+          assert.equal(metadata.size, 32)
+          assert.equal(metadata.mode & 0o777, 0o600)
+          if (isMac) {
+            assert.doesNotMatch(aclListing(path), /\n\s*\d+:/u)
+          }
+        }
+      })
+    }
+  },
+)
+
+await test(
+  'macOS filesystem-only permissions fail closed on inherited ACLs',
+  { skip: process.platform !== 'darwin' || !hasNodePermissionModel },
+  async () => {
+    await withStorage(async (directory) => {
+      await grantInheritedRead(directory)
+      const child = storeWithNodePermissions(await realpath(directory), false, 0o000)
+      assert.ifError(child.error)
+      assert.equal(child.status, 1, child.stderr)
+      assert.match(child.stderr, /FilesystemError/u)
+      assert.match(child.stderr, /ERR_ACCESS_DENIED/u)
+      assert.deepEqual(await readdir(directory), [])
     })
   },
 )

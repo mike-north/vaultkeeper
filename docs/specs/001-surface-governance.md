@@ -248,6 +248,9 @@ any previous file. Descriptors opened on a previous inode continue to see only t
 The destination must be absent or a writable regular file, and its parent directory must permit replacement.
 On macOS, both hosts clear inherited ACLs from an empty private staging directory before creating the file.
 If the staging directory cannot be secured, they return a filesystem error before writing any key bytes.
+Under Node's permission model, the Node/WASM host uses its vault filesystem grant to set the mode when
+descriptor-based `chmod` is blocked. On macOS, the Node/WASM host also requires the child-process grant to
+clear inherited ACLs before writing.
 This contract assumes the vault owner controls mutation of the storage directory. Reads preserve the
 permissions of legacy keys.
 

@@ -10,6 +10,7 @@ import { randomUUID } from 'node:crypto'
 import { constants } from 'node:fs'
 import {
   access,
+  chmod,
   lstat,
   mkdir,
   open,
@@ -20,6 +21,7 @@ import {
   unlink,
   writeFile,
 } from 'node:fs/promises'
+import type { FileHandle } from 'node:fs/promises'
 import { homedir, platform as osPlatform } from 'node:os'
 import { basename, dirname, isAbsolute, join } from 'node:path'
 import { promisify } from 'node:util'
@@ -85,6 +87,36 @@ async function makeStagingDirPrivate(directory: string): Promise<void> {
   }
 }
 
+/** Establish the requested mode on the open staging inode before any bytes are written. */
+async function applyStagingMode(file: FileHandle, staging: string, mode: number): Promise<void> {
+  try {
+    await file.chmod(mode)
+  } catch (err) {
+    if (!isErrnoException(err) || err.code !== 'ERR_ACCESS_DENIED') {
+      throw err
+    }
+    // Node's permission model can disable descriptor chmod while granting
+    // pathname chmod inside the vault. Only restore bits that umask removed.
+    const opened = await file.stat({ bigint: true })
+    if ((opened.mode & 0o777n) !== BigInt(mode & 0o777)) {
+      // The vault owner controls parent mutations. Check the staging name
+      // still refers to the open inode before a path-based permission change.
+      const named = await lstat(staging, { bigint: true })
+      if (!named.isFile() || named.dev !== opened.dev || named.ino !== opened.ino) {
+        throw new HostFilesystemError(
+          'Staging path no longer names the open file',
+          staging,
+          undefined,
+        )
+      }
+      await chmod(staging, mode)
+    }
+  }
+  if (((await file.stat()).mode & 0o777) !== (mode & 0o777)) {
+    throw new HostFilesystemError('Requested permissions were not applied', staging, undefined)
+  }
+}
+
 /**
  * Publish complete bytes from a fresh inode with the requested permissions.
  * Readers holding the previous inode can only see the previous contents.
@@ -127,10 +159,7 @@ async function writeFileSecureUnix(path: string, content: Uint8Array, mode: numb
     const file = await open(staging, 'wx', mode)
     try {
       try {
-        await file.chmod(mode)
-        if (((await file.stat()).mode & 0o777) !== (mode & 0o777)) {
-          throw new HostFilesystemError('Requested permissions were not applied', path, undefined)
-        }
+        await applyStagingMode(file, staging, mode)
         await file.writeFile(content)
       } catch (err) {
         await file.close().catch(() => undefined)
