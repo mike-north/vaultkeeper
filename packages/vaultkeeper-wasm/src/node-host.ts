@@ -6,18 +6,11 @@
  */
 
 import { execFile } from 'node:child_process'
-import {
-  access,
-  mkdir,
-  readdir,
-  readFile,
-  rename,
-  unlink,
-  writeFile,
-  chmod,
-} from 'node:fs/promises'
+import { randomUUID } from 'node:crypto'
+import { constants } from 'node:fs'
+import { access, mkdir, open, readdir, readFile, rename, unlink, writeFile } from 'node:fs/promises'
 import { homedir, platform as osPlatform } from 'node:os'
-import { dirname, join } from 'node:path'
+import { basename, dirname, join } from 'node:path'
 import type { ExecOptions, HttpFetchRequest, HttpFetchResponse, WasmHostPlatform } from './types.js'
 
 /**
@@ -57,6 +50,56 @@ function toHostFilesystemError(err: unknown, path: string): HostFilesystemError 
   const message = err instanceof Error ? err.message : String(err)
   const code = isErrnoException(err) && typeof err.code === 'string' ? err.code : undefined
   return new HostFilesystemError(message, path, code)
+}
+
+/**
+ * Publish complete bytes from a fresh inode with the requested permissions.
+ * Readers holding the previous inode can only see the previous contents.
+ */
+async function writeFileSecureUnix(path: string, content: Uint8Array, mode: number): Promise<void> {
+  // Preserve the existing destination's write-access check without following
+  // symlinks or blocking on a FIFO.
+  const previous = await open(
+    path,
+    constants.O_WRONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
+  ).catch((err: unknown) => {
+    if (isErrnoException(err) && err.code === 'ENOENT') return undefined
+    throw err
+  })
+  if (previous !== undefined) {
+    try {
+      if (!(await previous.stat()).isFile()) {
+        throw new HostFilesystemError('Expected a regular file', path, undefined)
+      }
+    } finally {
+      await previous.close()
+    }
+  }
+
+  let name: string
+  do {
+    name = `.vaultkeeper-write-${randomUUID()}`
+  } while (name === basename(path))
+  // Keep the kernel's resolution of parent components such as symlink/..
+  const staging = `${dirname(path)}/${name}`
+  const file = await open(staging, 'wx', mode)
+  try {
+    try {
+      await file.chmod(mode)
+      if (((await file.stat()).mode & 0o777) !== (mode & 0o777)) {
+        throw new HostFilesystemError('Requested permissions were not applied', path, undefined)
+      }
+      await file.writeFile(content)
+    } catch (err) {
+      await file.close().catch(() => undefined)
+      throw err
+    }
+    await file.close()
+    await rename(staging, path)
+  } catch (err) {
+    await unlink(staging).catch(() => undefined)
+    throw err
+  }
 }
 
 /**
@@ -131,10 +174,10 @@ export function createNodeHost(configDirOverride?: string): WasmHostPlatform {
         }
       }
       try {
-        await writeFile(path, content)
-        // chmod is a no-op on Windows; skip to avoid errors
-        if (osPlatform() !== 'win32') {
-          await chmod(path, mode)
+        if (osPlatform() === 'win32') {
+          await writeFile(path, content)
+        } else {
+          await writeFileSecureUnix(path, content, mode)
         }
       } catch (err) {
         throw toHostFilesystemError(err, path)

@@ -111,6 +111,72 @@ fn create_dir_all_secure_unix(path: &Path) -> std::io::Result<()> {
     }
 }
 
+/// Publish a complete file with its requested permissions already in effect.
+#[cfg(unix)]
+fn write_file_secure_unix(path: &Path, content: &[u8], mode: u32) -> std::io::Result<()> {
+    use std::fs::{self, OpenOptions, Permissions};
+    use std::io::{Error, ErrorKind, Write};
+    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    // Rename checks directory access. Also require write access to any
+    // existing regular file, without following links or blocking on a FIFO.
+    match OpenOptions::new()
+        .write(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+        .open(path)
+    {
+        Ok(file) if file.metadata()?.is_file() => {}
+        Ok(_) => {
+            return Err(Error::new(
+                ErrorKind::InvalidInput,
+                "expected a regular file",
+            ));
+        }
+        Err(err) if err.kind() == ErrorKind::NotFound => {}
+        Err(err) => return Err(err),
+    }
+
+    // Sibling staging files can be published by rename. Exclusive creation
+    // gives concurrent writers distinct inodes, including after PID reuse.
+    static WRITE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+    let (staging, mut file) = loop {
+        let sequence = WRITE_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+        let staging = path.with_file_name(format!(
+            ".vaultkeeper-write-{}-{sequence}",
+            std::process::id()
+        ));
+        if staging == path {
+            continue;
+        }
+        match OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(mode)
+            .open(&staging)
+        {
+            Ok(file) => break (staging, file),
+            Err(err) if err.kind() == ErrorKind::AlreadyExists => continue,
+            Err(err) => return Err(err),
+        }
+    };
+
+    let result = (|| {
+        // Restore any bits stripped by umask while the inode is empty.
+        file.set_permissions(Permissions::from_mode(mode))?;
+        if file.metadata()?.permissions().mode() & 0o777 != mode & 0o777 {
+            return Err(Error::other("requested permissions were not applied"));
+        }
+        file.write_all(content)?;
+        // Readers holding an older inode can only see the previous bytes.
+        fs::rename(&staging, path)
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(staging);
+    }
+    result
+}
+
 #[async_trait::async_trait]
 impl HostPlatform for NativeHostPlatform {
     async fn exec(
@@ -192,28 +258,19 @@ impl HostPlatform for NativeHostPlatform {
             })?;
         }
 
-        std::fs::write(path, content).map_err(|e| VaultError::Filesystem {
+        #[cfg(unix)]
+        let result = write_file_secure_unix(path, content, mode);
+        #[cfg(not(unix))]
+        let result = {
+            let _ = mode;
+            std::fs::write(path, content)
+        };
+        result.map_err(|e| VaultError::Filesystem {
             message: format!("Failed to write {}: {e}", path.display()),
             path: path.display().to_string(),
             permission: "write".to_string(),
             code: None,
-        })?;
-
-        // Set permissions on Unix
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let perms = std::fs::Permissions::from_mode(mode);
-            std::fs::set_permissions(path, perms).map_err(|e| VaultError::Filesystem {
-                message: format!("Failed to set permissions on {}: {e}", path.display()),
-                path: path.display().to_string(),
-                permission: "write".to_string(),
-                code: None,
-            })?;
-        }
-
-        let _ = mode; // suppress unused warning on non-Unix
-        Ok(())
+        })
     }
 
     async fn file_exists(&self, path: &Path) -> Result<bool, VaultError> {
@@ -564,6 +621,107 @@ mod tests {
 
         let mode = fs::metadata(&nested).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode, 0o700, "freshly created parent dir must be 0o700");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn secure_write_replaces_legacy_inode_and_rejects_symlinks() {
+        use std::io::Read;
+        use std::os::unix::fs::{PermissionsExt, symlink};
+
+        let dir = tempfile::tempdir().unwrap();
+        let host = NativeHostPlatform::new(dir.path().to_path_buf());
+        let target = dir.path().join("key");
+        fs::write(&target, b"old").unwrap();
+        fs::set_permissions(&target, fs::Permissions::from_mode(0o666)).unwrap();
+        let mut previous = fs::File::open(&target).unwrap();
+        let link = dir.path().join("link");
+        symlink(&target, &link).unwrap();
+        assert!(matches!(
+            host.write_file(&link, b"unexpected", 0o600).await,
+            Err(VaultError::Filesystem { .. })
+        ));
+        host.write_file(&target, b"replacement", 0o600)
+            .await
+            .unwrap();
+        assert_eq!(fs::read(&target).unwrap(), b"replacement");
+        assert_eq!(
+            fs::metadata(&target).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        let mut bytes = Vec::new();
+        previous.read_to_end(&mut bytes).unwrap();
+        assert_eq!(bytes, b"old");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn secure_write_survives_partial_write_and_interruption() {
+        use std::os::unix::fs::PermissionsExt;
+        use std::os::unix::process::ExitStatusExt;
+        use std::process::Command;
+
+        for interrupted in [false, true] {
+            let dir = tempfile::tempdir().unwrap();
+            fs::set_permissions(dir.path(), fs::Permissions::from_mode(0o755)).unwrap();
+            let signal = if interrupted { "-" } else { "" };
+            let child = Command::new("/bin/sh")
+                .args([
+                    "-c",
+                    "umask 000; ulimit -c 0; ulimit -f 1 || exit; trap \"$1\" XFSZ; shift; exec \"$@\"",
+                    "vaultkeeper-test",
+                    signal,
+                ])
+                .arg(std::env::current_exe().unwrap())
+                .args(["--exact", "host::tests::secure_write_limited_child"])
+                .env("VAULTKEEPER_TEST_WRITE_DIR", dir.path())
+                .output()
+                .unwrap();
+            if interrupted {
+                assert_eq!(child.status.signal(), Some(libc::SIGXFSZ));
+            } else {
+                assert!(child.status.success(), "{child:?}");
+            }
+
+            let existing = dir.path().join("existing-key");
+            assert_eq!(fs::read(&existing).unwrap(), b"old fixture");
+            assert_eq!(
+                fs::metadata(&existing).unwrap().permissions().mode() & 0o777,
+                0o600
+            );
+            assert!(!dir.path().join("missing-key").exists());
+
+            let staging: Vec<_> = fs::read_dir(dir.path())
+                .unwrap()
+                .map(|entry| entry.unwrap().path())
+                .filter(|path| *path != existing)
+                .collect();
+            assert_eq!(staging.len(), usize::from(interrupted));
+            for path in staging {
+                let metadata = fs::metadata(path).unwrap();
+                assert!((1..16 * 1024).contains(&metadata.len()));
+                assert_eq!(metadata.permissions().mode() & 0o777, 0o600);
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn secure_write_limited_child() {
+        let Some(dir) = std::env::var_os("VAULTKEEPER_TEST_WRITE_DIR").map(PathBuf::from) else {
+            return;
+        };
+        let host = NativeHostPlatform::new(dir.clone());
+        let existing = dir.join("existing-key");
+        host.write_file(&existing, b"old fixture", 0o600)
+            .await
+            .unwrap();
+        for path in [dir.join("missing-key"), existing] {
+            assert!(matches!(
+                host.write_file(&path, &[1; 16 * 1024], 0o600).await,
+                Err(VaultError::Filesystem { permission, .. }) if permission == "write"
+            ));
+        }
     }
 
     /// AC2: an already-existing directory with broader permissions must be
