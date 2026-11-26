@@ -36,11 +36,28 @@ function releaseFixture(t, { cargo = '0.5.0', wasm = cargo, laterTip = false } =
 
   commitVersions('0.4.0', '0.4.0')
   let commit = commitVersions(cargo, wasm)
+  const releaseCommit = commit
   if (laterTip) commit = commitVersions(cargo, wasm)
   // The Changesets checkout can move beyond the push under evaluation.
   commitVersions('0.6.0', '0.6.0')
-  return { cwd, commit, publishedPackages: [] }
+  return { cwd, commit, releaseCommit, publishedPackages: [] }
 }
+
+test('recovery binds missing crates to the npm source commit', async (t) => {
+  const fixture = releaseFixture(t, { laterTip: true })
+  const { request } = registry({ gitHead: fixture.releaseCommit, coreVersions: ['0.5.0'] })
+  assert.deepEqual(await missingCrates({ ...fixture, request }), {
+    missing: ['vaultkeeper-cli'], source: fixture.releaseCommit,
+  })
+})
+
+test('recovery rejects absent or unrelated npm source evidence', async (t) => {
+  const fixture = releaseFixture(t)
+  for (const gitHead of [undefined, 'f'.repeat(40)]) {
+    const { request } = registry({ gitHead })
+    await assert.rejects(missingCrates({ ...fixture, request }), /source|commit/i)
+  }
+})
 
 test('a later push tip preserves the release for initial publication and a full rerun', async (t) => {
   const fixture = releaseFixture(t, { laterTip: true })
@@ -56,12 +73,12 @@ test('a later push tip preserves the release for initial publication and a full 
   assert.deepEqual(rerun.urls, [npmUrl, coreUrl, cliUrl])
 })
 
-function registry({ npmStatus = 200, coreVersions = [], cliVersions = [], coreStatus } = {}) {
+function registry({ npmStatus = 200, coreVersions = [], cliVersions = [], coreStatus, gitHead } = {}) {
   const urls = []
   const request = async (url) => {
     urls.push(url)
     if (url === npmUrl) {
-      return Response.json({ name: '@vaultkeeper/wasm', version: '0.5.0' }, { status: npmStatus })
+      return Response.json({ name: '@vaultkeeper/wasm', version: '0.5.0', gitHead }, { status: npmStatus })
     }
     assert.ok(url === coreUrl || url === cliUrl, `Unexpected URL: ${url}`)
     if (url === coreUrl && coreStatus) {
