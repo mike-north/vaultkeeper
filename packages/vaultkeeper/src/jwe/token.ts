@@ -46,7 +46,13 @@ export async function createToken(
     header.kid = options.kid
   }
 
-  return new CompactEncrypt(plaintext).setProtectedHeader(header).encrypt(key)
+  // Crypto may outlive the manager's current snapshot during rotation.
+  const operationKey = Uint8Array.from(key)
+  try {
+    return await new CompactEncrypt(plaintext).setProtectedHeader(header).encrypt(operationKey)
+  } finally {
+    operationKey.fill(0)
+  }
 }
 
 /**
@@ -135,12 +141,15 @@ function parseVaultClaims(raw: unknown): VaultClaims | undefined {
  */
 export async function decryptToken(key: Uint8Array, jwe: string): Promise<VaultClaims> {
   let plaintext: Uint8Array
+  const operationKey = Uint8Array.from(key)
   try {
-    const result = await compactDecrypt(jwe, key)
+    const result = await compactDecrypt(jwe, operationKey)
     plaintext = result.plaintext
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
     throw new InvalidTokenError(`JWE decryption failed: ${message}`)
+  } finally {
+    operationKey.fill(0)
   }
 
   let parsed: unknown

@@ -14,7 +14,13 @@ import * as fs from 'node:fs/promises'
 import * as os from 'node:os'
 import * as path from 'node:path'
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { loadKeyState, saveKeyState } from '../../../src/keys/storage.js'
+import {
+  initializeKeyManager,
+  loadKeyState,
+  mutateKeyManager,
+  saveKeyState,
+} from '../../../src/keys/storage.js'
+import { createToken, decryptToken } from '../../../src/jwe/token.js'
 import type { KeyMaterial, KeyStateSnapshot } from '../../../src/keys/types.js'
 
 const CREATED_AT = new Date('2024-01-15T10:30:00.000Z')
@@ -34,6 +40,29 @@ afterEach(async () => {
 })
 
 describe('saveKeyState / loadKeyState round-trip', () => {
+  it('wipes displaced key material without interrupting an in-flight token operation', async () => {
+    const manager = await initializeKeyManager(dir)
+    const original = manager.getCurrentKey()
+    const claims = {
+      jti: 'test',
+      exp: 2000000000,
+      iat: 1,
+      sub: 'test',
+      exe: 'dev',
+      use: null,
+      tid: 1,
+      ref: 'test',
+    } satisfies import('../../../src/types.js').VaultClaims
+    const token = createToken(original.key, claims, { kid: original.id })
+    await mutateKeyManager(dir, manager, (fresh) => {
+      fresh.rotateKey(60_000)
+    })
+    expect([...original.key]).toEqual(new Array<number>(32).fill(0))
+    const previous = manager.getPreviousKey()
+    expect(previous).toBeDefined()
+    if (previous === undefined) throw new Error('rotation did not retain the previous key')
+    expect(await decryptToken(previous.key, await token)).toEqual(claims)
+  })
   it('persists the current key so a later load resolves the same id and bytes', async () => {
     const current = makeKey('k-1-aaaa', 0x11)
     await saveKeyState(dir, { current })
