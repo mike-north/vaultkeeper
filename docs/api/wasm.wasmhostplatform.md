@@ -127,6 +127,17 @@ _(Optional)_ Optional interactive human-approval capability (issue \#239). Absen
 </td></tr>
 <tr><td>
 
+[tryCreateLockFile(path, content)?](./wasm.wasmhostplatform.trycreatelockfile.md)
+
+
+</td><td>
+
+_(Optional)_ Atomically create the writer lock. Reject an occupied path with code EEXIST.
+
+
+</td></tr>
+<tr><td>
+
 [writeFile(path, content, mode)](./wasm.wasmhostplatform.writefile.md)
 
 

@@ -70,6 +70,8 @@ export interface WasmHostPlatform {
   readFile(path: string): Promise<Uint8Array>
   writeFile(path: string, content: Uint8Array, mode: number): Promise<void>
   fileExists(path: string): Promise<boolean>
+  /** Atomically create the writer lock. Reject an occupied path with code EEXIST. */
+  tryCreateLockFile?(path: string, content: Uint8Array): Promise<void>
   deleteFile(path: string): Promise<void>
   renameFile(from: string, to: string): Promise<void>
   listDir(path: string): Promise<string[]>

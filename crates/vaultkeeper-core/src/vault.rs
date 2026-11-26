@@ -373,11 +373,7 @@ impl VaultKeeper {
         if persist_keys {
             match crate::keys::load_key_state(host).await? {
                 Some(snapshot) => key_manager.hydrate(snapshot),
-                None => {
-                    key_manager.init()?;
-                    let snapshot = key_manager.snapshot()?;
-                    crate::keys::save_key_state(host, &snapshot).await?;
-                }
+                None => crate::keys::storage::initialize_key_state(host, &mut key_manager).await?,
             }
         } else {
             key_manager.init()?;
@@ -422,25 +418,27 @@ impl VaultKeeper {
     pub async fn rotate_key(&mut self, host: &dyn HostPlatform) -> Result<(), VaultError> {
         let grace_period_ms =
             u64::from(self.config.key_rotation.grace_period_days) * 24 * 60 * 60 * 1000;
-        self.key_manager.rotate_key(grace_period_ms)?;
-        self.persist_key_state(host).await
+        self.update_keys(host, |manager| manager.rotate_key(grace_period_ms))
+            .await
     }
 
     /// Emergency key revocation, then persist the new state so a later
     /// process picks up the revocation (see `keys::storage`).
     pub async fn revoke_key(&mut self, host: &dyn HostPlatform) -> Result<(), VaultError> {
-        self.key_manager.revoke_key()?;
-        self.persist_key_state(host).await
+        self.update_keys(host, KeyManager::revoke_key).await
     }
 
-    /// Persist the current key state to the config dir when persistence is
-    /// enabled. A no-op for injected-config instances (in-memory keys).
-    async fn persist_key_state(&mut self, host: &dyn HostPlatform) -> Result<(), VaultError> {
-        if !self.persist_keys {
-            return Ok(());
+    async fn update_keys(
+        &mut self,
+        host: &dyn HostPlatform,
+        update: impl FnOnce(&mut KeyManager) -> Result<(), VaultError>,
+    ) -> Result<(), VaultError> {
+        if self.persist_keys {
+            self.key_manager = crate::keys::storage::update_key_state(host, update).await?;
+        } else {
+            update(&mut self.key_manager)?;
         }
-        let snapshot = self.key_manager.snapshot()?;
-        crate::keys::save_key_state(host, &snapshot).await
+        Ok(())
     }
 
     // --- Lease revocation store (issue #298) -------------------------------

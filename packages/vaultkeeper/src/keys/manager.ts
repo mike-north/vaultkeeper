@@ -20,6 +20,7 @@ import type { KeyMaterial, KeyState, KeyStateSnapshot } from './types.js'
  * @internal
  */
 export class KeyManager {
+  #timersEnabled = true
   #state: KeyState | undefined = undefined
   #gracePeriodTimer: ReturnType<typeof setTimeout> | undefined = undefined
   #gracePeriodExpiresAt: number | undefined = undefined
@@ -29,7 +30,7 @@ export class KeyManager {
     const randomSuffix = crypto.randomBytes(4).toString('hex')
     return {
       id: `k-${String(Date.now())}-${randomSuffix}`,
-      key: new Uint8Array(crypto.randomBytes(32)),
+      key: crypto.randomBytes(32),
       createdAt: new Date(),
     }
   }
@@ -55,7 +56,8 @@ export class KeyManager {
    * on that timer (grace is always re-checked against the wall clock).
    * @internal
    */
-  hydrate(snapshot: KeyStateSnapshot): void {
+  hydrate(snapshot: KeyStateSnapshot, timersEnabled = true): void {
+    this.#timersEnabled = timersEnabled
     this.#clearGracePeriodTimer()
 
     if (
@@ -186,14 +188,23 @@ export class KeyManager {
   }
 
   #armGracePeriodTimer(delayMs: number): void {
-    this.#gracePeriodTimer = setTimeout(() => {
-      if (this.#state !== undefined) {
-        // Remove the previous key once the grace period elapses.
-        this.#state = { current: this.#state.current }
-      }
-      this.#gracePeriodExpiresAt = undefined
-      this.#gracePeriodTimer = undefined
-    }, delayMs)
+    if (!this.#timersEnabled) return
+    this.#gracePeriodTimer = setTimeout(
+      () => {
+        if (this.isInGracePeriod() && this.#gracePeriodExpiresAt !== undefined) {
+          this.#armGracePeriodTimer(this.#gracePeriodExpiresAt - Date.now())
+          return
+        }
+        if (this.#state !== undefined) {
+          // Remove the previous key once the grace period elapses.
+          this.#state.previous?.key.fill(0)
+          this.#state = { current: this.#state.current }
+        }
+        this.#gracePeriodExpiresAt = undefined
+        this.#gracePeriodTimer = undefined
+      },
+      Math.min(delayMs, 2_147_483_647),
+    )
 
     // Allow the timer to be GC'd without keeping the process alive.
     if (typeof this.#gracePeriodTimer.unref === 'function') {

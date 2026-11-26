@@ -54,3 +54,7 @@ _(Optional)_
 
 Promise&lt;[VaultKeeper](./vaultkeeper.vaultkeeper.md)<!-- -->&gt;
 
+## Exceptions
+
+{<!-- -->DecryptionError<!-- -->} If persisted key state fails authentication or validation. Restore the snapshot and its wrapping key from a matching backup.
+

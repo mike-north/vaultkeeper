@@ -6,8 +6,11 @@
  */
 
 import { execFile } from 'node:child_process'
+import { randomUUID } from 'node:crypto'
 import {
-  access,
+  link,
+  lstat,
+  open,
   mkdir,
   readdir,
   readFile,
@@ -17,7 +20,8 @@ import {
   chmod,
 } from 'node:fs/promises'
 import { homedir, platform as osPlatform } from 'node:os'
-import { dirname, join } from 'node:path'
+import { setTimeout } from 'node:timers/promises'
+import { basename, dirname, join } from 'node:path'
 import type { ExecOptions, HttpFetchRequest, HttpFetchResponse, WasmHostPlatform } from './types.js'
 
 /**
@@ -113,8 +117,11 @@ export function createNodeHost(configDirOverride?: string): WasmHostPlatform {
 
     async readFile(path: string): Promise<Uint8Array> {
       try {
-        const buf = await readFile(path)
-        return new Uint8Array(buf)
+        const name = basename(path)
+        if ((name === 'keys.enc' || name === '.keys.wrap') && !(await lstat(path)).isFile()) {
+          throw new HostFilesystemError('Expected a regular key storage file', path, undefined)
+        }
+        return await readFile(path)
       } catch (err) {
         throw toHostFilesystemError(err, path)
       }
@@ -143,7 +150,7 @@ export function createNodeHost(configDirOverride?: string): WasmHostPlatform {
 
     async fileExists(path: string): Promise<boolean> {
       try {
-        await access(path)
+        await lstat(path)
         return true
       } catch (err) {
         // Mirror the native host's `file_exists` (crates/vaultkeeper-cli/src/host.rs):
@@ -154,6 +161,29 @@ export function createNodeHost(configDirOverride?: string): WasmHostPlatform {
           return false
         }
         throw toHostFilesystemError(err, path)
+      }
+    },
+
+    async tryCreateLockFile(path: string, content: Uint8Array): Promise<void> {
+      const temporary = `${path}.${randomUUID()}.tmp`
+      let ownsTemp = false
+      try {
+        await mkdir(dirname(path), { recursive: true, mode: 0o700 })
+        const file = await open(temporary, 'wx', 0o600)
+        ownsTemp = true
+        try {
+          await file.writeFile(content)
+        } finally {
+          await file.close()
+        }
+        // Publish the complete marker exclusively, with no empty-lock window.
+        await link(temporary, path)
+      } catch (error) {
+        // The WASM core retries contention but cannot sleep on an OS thread.
+        if (isErrnoException(error) && error.code === 'EEXIST') await setTimeout(20)
+        throw toHostFilesystemError(error, path)
+      } finally {
+        if (ownsTemp) await unlink(temporary).catch(() => undefined)
       }
     },
 
