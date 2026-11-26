@@ -9,15 +9,22 @@ import {
   AuthorizationDeniedError,
   SigningNotSupportedError,
   InvalidKeyMaterialError,
+  TokenExpiredError,
   VaultError,
 } from '../../src/errors.js'
 import * as jweTokenModule from '../../src/jwe/token.js'
 import * as delegatedFetchModule from '../../src/access/delegated-fetch.js'
 import * as delegatedExecModule from '../../src/access/delegated-exec.js'
+import { spawn } from 'node:child_process'
 import * as crypto from 'node:crypto'
 import { CompactSign } from 'jose'
-import { createCapabilityToken } from '../../src/identity/session.js'
+import type { CapabilityToken } from '../../src/identity/session.js'
 import type { VaultClaims } from '../../src/types.js'
+
+vi.mock('node:child_process', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:child_process')>()
+  return { ...actual, spawn: vi.fn(actual.spawn) }
+})
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -467,6 +474,262 @@ describe('VaultKeeper', () => {
     })
   })
 
+  describe('deferred JWE capability expiry', () => {
+    const issuedAt = Date.parse('2026-01-01T00:00:00.000Z')
+    const expiresAt = issuedAt + 60_000
+
+    beforeEach(() => {
+      vi.useFakeTimers({ toFake: ['Date'] })
+      vi.setSystemTime(issuedAt)
+    })
+
+    afterEach(() => {
+      vi.useRealTimers()
+      vi.unstubAllGlobals()
+      vi.mocked(spawn).mockReset()
+    })
+
+    async function authorizeLease(ttlMinutes = 1) {
+      const vault = await initVault()
+      const jwe = await vault.setup('my-secret', { skipTrust: true, ttlMinutes })
+      const { token } = await vault.authorize(jwe)
+      return { vault, token }
+    }
+
+    it('allows direct and delegated access immediately before expiry', async () => {
+      const { vault, token } = await authorizeLease()
+      const fetchSpy = vi.fn(() => Promise.resolve(new Response('ok')))
+      vi.stubGlobal('fetch', fetchSpy)
+      const accessor = vault.getSecret(token)
+
+      vi.setSystemTime(expiresAt - 1)
+      expect(accessor.read((buf) => buf.toString('utf8'))).toBe('hunter2')
+      await vault.fetch(token, { url: 'https://example.invalid' })
+      const { result } = await vault.exec(token, {
+        command: process.execPath,
+        args: ['--version'],
+        env: { SECRET: '{{secret}}' },
+      })
+      expect(fetchSpy).toHaveBeenCalledOnce()
+      expect(vi.mocked(spawn)).toHaveBeenCalledOnce()
+      expect(result.exitCode).toBe(0)
+    })
+
+    it('sign() rejects a secret capability at its deadline and after expiry is recorded', async () => {
+      const { vault, token } = await authorizeLease()
+      const request = { payload: 'test-data' }
+
+      vi.setSystemTime(expiresAt)
+      await expect(vault.sign(token, request)).rejects.toBeInstanceOf(AuthorizationDeniedError)
+
+      // Secret access still detects expiry and retains that denial across clock corrections.
+      expect(() => vault.getSecret(token)).toThrow(TokenExpiredError)
+      vi.setSystemTime(expiresAt - 1)
+      await expect(vault.sign(token, request)).rejects.toBeInstanceOf(AuthorizationDeniedError)
+      expect(() => vault.getSecret(token)).toThrow(TokenExpiredError)
+    })
+
+    it('preserves issuer ownership before and after JWE expiry is recorded', async () => {
+      const { vault: issuer, token } = await authorizeLease()
+      const receiver = await initVault()
+      const denial = new AuthorizationDeniedError(
+        'Capability token was issued by another vault instance',
+      )
+
+      vi.setSystemTime(expiresAt)
+      expect(() => receiver.getSecret(token)).toThrow(denial)
+
+      // A foreign vault cannot retire the capability even at its deadline.
+      vi.setSystemTime(expiresAt - 1)
+      expect(() => issuer.getSecret(token)).not.toThrow()
+
+      vi.setSystemTime(expiresAt)
+      expect(() => issuer.getSecret(token)).toThrow(TokenExpiredError)
+
+      // Once the issuer observes expiry, the retired entry remains issuer-bound.
+      vi.setSystemTime(expiresAt - 1)
+      expect(() => receiver.getSecret(token)).toThrow(denial)
+      await expect(receiver.sign(token, { payload: 'test-data' })).rejects.toThrow(denial)
+      expect(() => issuer.getSecret(token)).toThrow(TokenExpiredError)
+    })
+
+    it.each([0, 1])('denies a delayed operation at expiry plus %d ms', async (offset) => {
+      const { vault, token } = await authorizeLease()
+      const accessor = vault.getSecret(token)
+      const read = vi.fn<(buf: Buffer) => void>()
+      const fetchSpy = vi.fn(() => Promise.resolve(new Response('ok')))
+      vi.stubGlobal('fetch', fetchSpy)
+      const spawnSpy = vi.mocked(spawn).mockImplementationOnce(() => {
+        throw new VaultError('Unexpected process dispatch')
+      })
+
+      vi.setSystemTime(expiresAt + offset)
+      await expect(vault.fetch(token, { url: 'https://example.invalid' })).rejects.toThrow(
+        TokenExpiredError,
+      )
+      await expect(vault.exec(token, { command: 'unused' })).rejects.toThrow(TokenExpiredError)
+      expect(() => vault.getSecret(token)).toThrow(TokenExpiredError)
+      expect(() => {
+        accessor.read(read)
+      }).toThrow(TokenExpiredError)
+      expect(fetchSpy).not.toHaveBeenCalled()
+      expect(spawnSpy).not.toHaveBeenCalled()
+      expect(read).not.toHaveBeenCalled()
+    })
+
+    it.each([0, 1])(
+      'checks an outstanding accessor first read at expiry plus %d ms',
+      async (offset) => {
+        const { vault, token } = await authorizeLease()
+        const accessor = vault.getSecret(token)
+        const read = vi.fn<(buf: Buffer) => void>()
+
+        vi.setSystemTime(expiresAt + offset)
+        expect(() => {
+          accessor.read(read)
+        }).toThrow(TokenExpiredError)
+        expect(read).not.toHaveBeenCalled()
+        vi.setSystemTime(expiresAt - 1)
+        expect(() => {
+          accessor.read(read)
+        }).toThrow(TokenExpiredError)
+        expect(read).not.toHaveBeenCalled()
+      },
+    )
+
+    it('honors fractional-second expiry at redemption and use', async () => {
+      const { vault, token } = await authorizeLease(0.125)
+      const jwe = await vault.setup('my-secret', { skipTrust: true, ttlMinutes: 0.125 })
+      vi.setSystemTime(issuedAt + 7_499)
+      expect(vault.getSecret(token).read((buf) => buf.toString('utf8'))).toBe('hunter2')
+
+      vi.setSystemTime(issuedAt + 7_500)
+      expect(() => vault.getSecret(token)).toThrow(TokenExpiredError)
+      await expect(vault.authorize(jwe)).rejects.toThrow(TokenExpiredError)
+    })
+
+    it('checks every named capability after preparing a delegated fetch', async () => {
+      const { vault, token } = await authorizeLease()
+      const otherJwe = await vault.setup('my-secret', { skipTrust: true, ttlMinutes: 2 })
+      const { token: other } = await vault.authorize(otherJwe)
+      const fetchSpy = vi.fn(() => Promise.resolve(new Response('ok')))
+      vi.stubGlobal('fetch', fetchSpy)
+
+      vi.setSystemTime(expiresAt - 1)
+      await expect(
+        vault.fetch(
+          { other, urgent: token },
+          {
+            url: 'https://example.invalid',
+            get headers() {
+              vi.setSystemTime(expiresAt)
+              return { 'X-Other': '{{secret:other}}' }
+            },
+          },
+        ),
+      ).rejects.toThrow(TokenExpiredError)
+      expect(fetchSpy).not.toHaveBeenCalled()
+    })
+
+    it.each([false, true])(
+      'preserves single-destination fetch policy at dispatch (expired during lookup: %s)',
+      async (expiresDuringLookup) => {
+        const { vault, token } = await authorizeLease()
+        const dispatch = vi.fn<typeof fetch>().mockResolvedValue(new Response('ok'))
+        vi.stubGlobal('fetch', dispatch)
+        Object.defineProperty(globalThis, 'fetch', {
+          configurable: true,
+          get() {
+            // Resolving the transport is part of preparation and can consume the last millisecond.
+            if (expiresDuringLookup) {
+              vi.setSystemTime(expiresAt)
+            }
+            return dispatch
+          },
+        })
+
+        vi.setSystemTime(expiresAt - 1)
+        const url = 'https://example.invalid'
+        const pending = vault.fetch(token, { url })
+
+        if (expiresDuringLookup) {
+          await expect(pending).rejects.toThrow(TokenExpiredError)
+          expect(dispatch).not.toHaveBeenCalled()
+        } else {
+          await expect(pending).resolves.toMatchObject({ response: { status: 200 } })
+          expect(dispatch).toHaveBeenCalledExactlyOnceWith(url, { redirect: 'error' })
+        }
+      },
+    )
+
+    it('checks expiry after preparing a delegated command', async () => {
+      const { vault, token } = await authorizeLease()
+      const spawnSpy = vi.mocked(spawn).mockImplementationOnce(() => {
+        throw new VaultError('Unexpected process dispatch')
+      })
+
+      vi.setSystemTime(expiresAt - 1)
+      await expect(
+        vault.exec(token, {
+          command: 'unused',
+          get env() {
+            vi.setSystemTime(expiresAt)
+            return { SECRET: '{{secret}}' }
+          },
+        }),
+      ).rejects.toThrow(TokenExpiredError)
+      expect(spawnSpy).not.toHaveBeenCalled()
+    })
+
+    it.each(['fetch', 'exec'])(
+      'denies named %s when the earliest lease expires during the final capability walk',
+      async (operation) => {
+        const { vault, token: earliest } = await authorizeLease()
+        const otherJwe = await vault.setup('my-secret', { skipTrust: true, ttlMinutes: 2 })
+        const { token: other } = await vault.authorize(otherJwe)
+        const fetchSpy = vi.fn(() => Promise.resolve(new Response('ok')))
+        vi.stubGlobal('fetch', fetchSpy)
+        const spawnSpy = vi.mocked(spawn).mockImplementationOnce(() => {
+          throw new VaultError('Unexpected process dispatch')
+        })
+
+        vi.setSystemTime(expiresAt - 1)
+        const advanceDuringFinalCheck = () => {
+          // Dispatch preparation is complete. The first validation sees a live lease, but
+          // continued clock reads must reflect the deadline crossing during validation.
+          vi.spyOn(Date, 'now').mockImplementationOnce(() => {
+            vi.setSystemTime(expiresAt)
+            return expiresAt - 1
+          })
+        }
+        const tokens = { other, earliest, last: other }
+        const pending =
+          operation === 'fetch'
+            ? vault.fetch(tokens, {
+                url: 'https://example.invalid',
+                get headers() {
+                  advanceDuringFinalCheck()
+                  return { 'X-Other': '{{secret:other}}' }
+                },
+              })
+            : vault.exec(tokens, {
+                command: 'unused',
+                env: { SECRET: '{{secret:other}}' },
+                get cwd() {
+                  advanceDuringFinalCheck()
+                  return process.cwd()
+                },
+              })
+
+        await expect(pending).rejects.toThrow(TokenExpiredError)
+        expect(fetchSpy).not.toHaveBeenCalled()
+        expect(spawnSpy).not.toHaveBeenCalled()
+        vi.setSystemTime(expiresAt - 1)
+        expect(() => vault.getSecret(earliest)).toThrow(TokenExpiredError)
+      },
+    )
+  })
+
   describe('rotateKey', () => {
     it('should rotate the key and provide rotatedJwt on authorize', async () => {
       const vault = await initVault()
@@ -552,20 +815,89 @@ describe('VaultKeeper', () => {
       })
 
       expect(execSpy).toHaveBeenCalledOnce()
-      expect(execSpy).toHaveBeenCalledWith('hunter2', expect.objectContaining({ command: 'echo' }))
+      expect(execSpy).toHaveBeenCalledWith(
+        'hunter2',
+        expect.objectContaining({ command: 'echo' }),
+        expect.any(Function),
+      )
       expect(result.exitCode).toBe(0)
       expect(vaultResponse.keyStatus).toBe('current')
     })
+  })
+
+  describe('capability issuer ownership', () => {
+    async function authorizeSecret(vault: VaultKeeper): Promise<CapabilityToken> {
+      const jwe = await vault.setup('my-secret', { skipTrust: true })
+      return (await vault.authorize(jwe)).token
+    }
+
+    const denial = new AuthorizationDeniedError(
+      'Capability token was issued by another vault instance',
+    )
+
+    it('rejects getSecret with a secret capability from another vault', async () => {
+      const issuer = await initVault()
+      const receiver = await initVault()
+      const foreign = await authorizeSecret(issuer)
+
+      expect(() => receiver.getSecret(foreign)).toThrow(denial)
+    })
+
+    const tokenForms = [
+      { label: 'a single token', makeInput: (foreign: CapabilityToken) => foreign },
+      {
+        label: 'a mixed-owner map',
+        makeInput: (foreign: CapabilityToken, local: CapabilityToken) => ({ local, foreign }),
+      },
+    ]
+
+    it.each(tokenForms)(
+      'rejects foreign capabilities in fetch with $label',
+      async ({ makeInput }) => {
+        const issuer = await initVault()
+        const receiver = await initVault()
+        const foreign = await authorizeSecret(issuer)
+        const local = await authorizeSecret(receiver)
+        const fetchSpy = vi
+          .spyOn(delegatedFetchModule, 'delegatedFetch')
+          .mockResolvedValue(new Response())
+
+        await expect(
+          receiver.fetch(makeInput(foreign, local), { url: 'https://example.com' }),
+        ).rejects.toThrow(denial)
+        expect(fetchSpy).not.toHaveBeenCalled()
+      },
+    )
+
+    it.each(tokenForms)(
+      'rejects foreign capabilities in exec with $label',
+      async ({ makeInput }) => {
+        const issuer = await initVault()
+        const receiver = await initVault()
+        const foreign = await authorizeSecret(issuer)
+        const local = await authorizeSecret(receiver)
+        const execSpy = vi.spyOn(delegatedExecModule, 'delegatedExec').mockResolvedValue({
+          stdout: '',
+          stderr: '',
+          exitCode: 0,
+        })
+
+        await expect(receiver.exec(makeInput(foreign, local), { command: 'echo' })).rejects.toThrow(
+          denial,
+        )
+        expect(execSpy).not.toHaveBeenCalled()
+      },
+    )
   })
 
   // Defense in depth (issue #280/#287): a JWE-based signing-key lease shares
   // the same `VaultClaims` shape as a secret token, so it is not caught by
   // the `isSigningClaims()` check that only recognizes the separate
   // in-memory `keyType` marker (see `vault-sign.test.ts` for that path).
-  // getSecret/fetch/exec must each independently reject a hand-constructed
+  // getSecret/fetch/exec must each reject an issuer-owned
   // lease claims payload via the `kty: 'signing-key'` discriminator.
   describe('JWE-based signing-key lease rejected by secret-access paths', () => {
-    function makeLeaseClaims(overrides: Partial<VaultClaims> = {}): VaultClaims {
+    function makeLeaseClaims(): VaultClaims {
       const now = Math.floor(Date.now() / 1000)
       return {
         jti: 'lease-jti-1',
@@ -579,32 +911,51 @@ describe('VaultKeeper', () => {
         kty: 'signing-key',
         kid: 'kid-abc123',
         kgen: 1,
-        ...overrides,
       }
+    }
+
+    async function authorizeLease(vault: VaultKeeper): Promise<CapabilityToken> {
+      const createToken = jweTokenModule.createToken
+      vi.spyOn(jweTokenModule, 'createToken').mockImplementationOnce((key, _claims, options) =>
+        createToken(key, makeLeaseClaims(), options),
+      )
+      const jwe = await vault.setup('my-secret', { skipTrust: true })
+      return (await vault.authorize(jwe)).token
     }
 
     it('getSecret rejects a signing-key lease', async () => {
       const vault = await initVault()
-      const token = createCapabilityToken(makeLeaseClaims())
+      const token = await authorizeLease(vault)
 
-      expect(() => vault.getSecret(token)).toThrow(AuthorizationDeniedError)
+      expect(() => vault.getSecret(token)).toThrow(
+        new AuthorizationDeniedError(
+          'This capability token authorizes a signing key, not a secret — ' +
+            'it cannot be read with getSecret(). Use sign() instead.',
+        ),
+      )
     })
 
     it('fetch rejects a signing-key lease', async () => {
       const vault = await initVault()
-      const token = createCapabilityToken(makeLeaseClaims())
+      const token = await authorizeLease(vault)
 
-      await expect(vault.fetch(token, { url: 'https://example.com' })).rejects.toBeInstanceOf(
-        AuthorizationDeniedError,
+      await expect(vault.fetch(token, { url: 'https://example.com' })).rejects.toThrow(
+        new AuthorizationDeniedError(
+          'This capability token authorizes a signing-key lease, not a secret — ' +
+            'it cannot be injected into fetch() or exec().',
+        ),
       )
     })
 
     it('exec rejects a signing-key lease', async () => {
       const vault = await initVault()
-      const token = createCapabilityToken(makeLeaseClaims())
+      const token = await authorizeLease(vault)
 
-      await expect(vault.exec(token, { command: 'echo' })).rejects.toBeInstanceOf(
-        AuthorizationDeniedError,
+      await expect(vault.exec(token, { command: 'echo' })).rejects.toThrow(
+        new AuthorizationDeniedError(
+          'This capability token authorizes a signing-key lease, not a secret — ' +
+            'it cannot be injected into fetch() or exec().',
+        ),
       )
     })
   })

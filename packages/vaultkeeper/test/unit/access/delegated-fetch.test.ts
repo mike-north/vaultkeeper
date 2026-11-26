@@ -228,6 +228,19 @@ describe('delegatedFetch', () => {
   })
 
   describe('negative cases', () => {
+    it('wraps a missing global fetch in a typed FetchError', async () => {
+      vi.stubGlobal('fetch', mockFetch)
+      try {
+        Reflect.deleteProperty(globalThis, 'fetch')
+        expect('fetch' in globalThis).toBe(false)
+        await expect(delegatedFetch('s', { url: 'https://example.invalid' })).rejects.toThrow(
+          FetchError,
+        )
+      } finally {
+        vi.unstubAllGlobals()
+      }
+    })
+
     // Regression test for the audit in
     // https://github.com/mike-north/vaultkeeper/issues/71: delegatedFetch()
     // previously let a raw fetch() rejection escape untyped, the same

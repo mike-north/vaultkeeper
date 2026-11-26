@@ -55,5 +55,5 @@ Compact JWE string from setup()
 
 Promise&lt;{ token: [CapabilityToken](./vaultkeeper.capabilitytoken.md)<!-- -->; vaultResponse: [VaultResponse](./vaultkeeper.vaultresponse.md)<!-- -->; }&gt;
 
-Object containing an opaque [CapabilityToken](./vaultkeeper.capabilitytoken.md) for use with fetch/exec/getSecret, and a [VaultResponse](./vaultkeeper.vaultresponse.md) describing key status. When the JWE was decrypted with a non-current key, `vaultResponse.rotatedJwt` contains a re-encrypted JWE for the current key.
+Object containing an opaque [CapabilityToken](./vaultkeeper.capabilitytoken.md) for use with this vault instance's fetch/exec/getSecret, and a [VaultResponse](./vaultkeeper.vaultresponse.md) describing key status. When the JWE was decrypted with a non-current key, `vaultResponse.rotatedJwt` contains a re-encrypted JWE for the current key.
 

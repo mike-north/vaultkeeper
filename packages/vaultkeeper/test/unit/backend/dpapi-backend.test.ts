@@ -17,7 +17,7 @@ vi.mock('node:fs/promises', () => ({
 import * as fs from 'node:fs/promises'
 import { execCommand, execCommandFull } from '../../../src/util/exec.js'
 import { DpapiBackend } from '../../../src/backend/dpapi-backend.js'
-import { SecretNotFoundError, FilesystemError } from '../../../src/errors.js'
+import { DecryptionError, SecretNotFoundError, FilesystemError } from '../../../src/errors.js'
 
 const mockExecCommand = vi.mocked(execCommand)
 const mockExecCommandFull = vi.mocked(execCommandFull)
@@ -143,7 +143,9 @@ describe('DpapiBackend', () => {
         expect.objectContaining({ recursive: true }),
       )
       const writePathArg = mockExecCommand.mock.calls[0]?.[1]?.find(
-        (arg) => typeof arg === 'string' && arg.includes(customDir),
+        (arg) =>
+          typeof arg === 'string' &&
+          arg.includes(JSON.stringify(path.join(customDir, '6d792d736563726574.enc'))),
       )
       expect(writePathArg).toBeDefined()
     })
@@ -186,10 +188,37 @@ describe('DpapiBackend', () => {
   describe('retrieve', () => {
     it('should run powershell decrypt when file exists', async () => {
       mockFs.access.mockResolvedValue(undefined)
-      mockExecCommand.mockResolvedValue('decrypted-secret')
+      mockExecCommand.mockResolvedValue(Buffer.from('decrypted-secret', 'utf8').toString('base64'))
 
       const result = await backend.retrieve('my-secret')
       expect(result).toBe('decrypted-secret')
+    })
+
+    it.each([
+      ['leading and trailing spaces', '  decrypted secret  '],
+      ['tabs', '\tdecrypted secret\t'],
+      ['newlines', '\ndecrypted secret\r\n'],
+      ['whitespace only', ' \t\r\n '],
+      ['empty output', ''],
+      ['Unicode and a leading BOM', '\uFEFF\t日本語 🔒\r\n'],
+    ])('preserves %s exactly (issue #396)', async (_label, secret) => {
+      mockFs.access.mockResolvedValue(undefined)
+      mockExecCommand.mockImplementation((_command, args) => {
+        const script = args.at(-1) ?? ''
+        const output = script.includes('[System.Convert]::ToBase64String($bytes)')
+          ? Buffer.from(secret, 'utf8').toString('base64')
+          : secret
+        return Promise.resolve((output + '\r\n').trim())
+      })
+
+      await expect(backend.retrieve('my-secret')).resolves.toBe(secret)
+    })
+
+    it.each(['bad!', 'YQ', 'YR==', '/w=='])('rejects malformed output %s', async (output) => {
+      mockFs.access.mockResolvedValue(undefined)
+      mockExecCommand.mockResolvedValue(output)
+
+      await expect(backend.retrieve('my-secret')).rejects.toBeInstanceOf(DecryptionError)
     })
 
     it('should throw SecretNotFoundError when file does not exist', async () => {

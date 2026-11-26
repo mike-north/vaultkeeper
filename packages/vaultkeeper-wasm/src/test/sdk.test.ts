@@ -24,6 +24,7 @@ import {
   DecryptionError,
   FilesystemError,
   InvalidTokenError,
+  KeyRevokedError,
   RotationInProgressError,
   AccessorConsumedError,
   ExecutableTrustRequiredError,
@@ -359,6 +360,37 @@ describe('@vaultkeeper/wasm SDK', () => {
       const second = await createTestVault(dir)
       await assert.rejects(() => second.rotateKey(), /rotation/i)
       second.dispose()
+    })
+  })
+
+  it('a rotation from a stale instance cannot restore a revoked token key', async (t) => {
+    await withTempDir(async (dir) => {
+      const operator = await createTestVault(dir)
+      t.after(() => {
+        operator.dispose()
+      })
+      const stale = await createTestVault(dir)
+      t.after(() => {
+        stale.dispose()
+      })
+      const revokedToken = await operator.setup('before-revoke', 'old-value', { skipTrust: true })
+
+      await operator.revokeKey()
+      const validToken = await operator.setup('after-revoke', 'new-value', { skipTrust: true })
+      await stale.rotateKey()
+
+      // Reopen the vault to inspect the published key state independently of both writers.
+      const reader = await createTestVault(dir)
+      t.after(() => {
+        reader.dispose()
+      })
+      assert.throws(() => reader.authorize(revokedToken), KeyRevokedError)
+      const authorization = reader.authorize(validToken)
+      assert.equal(authorization.response.keyStatus, 'previous')
+      assert.equal(
+        authorization.secret.read((value) => value),
+        'new-value',
+      )
     })
   })
 
