@@ -912,6 +912,30 @@ mod tests {
         assert!(backend.retrieve_calls().is_empty());
     }
 
+    /// A weaker verified executable must not cause a lease's secret to be read.
+    #[tokio::test]
+    async fn sigstore_lease_with_registry_identity_is_refused_before_retrieve() {
+        let json = r#"{
+            "version": 1, "name": "p",
+            "entries": {
+                "TOKEN": { "secret": "s", "materialize": "lease", "minTrust": "sigstore" }
+            }
+        }"#;
+        let profile = load_profile_from_str(json, &defaults()).unwrap();
+        let backend = SpyBackend::new();
+        backend.store("s", "v").await.unwrap();
+        let km = key_manager();
+        let opts = ResolveOptions {
+            backend: &backend,
+            key_manager: &km,
+            executable_identity: Some(identity("registry-hash", TrustTier::Tofu)),
+        };
+
+        let err = resolve_profile(&profile, &opts).await.unwrap_err();
+        assert_matches!(err, VaultError::ExecutableTrustRequired { .. });
+        assert!(backend.retrieve_calls().is_empty());
+    }
+
     #[tokio::test]
     async fn sigstore_tier_lease_with_executable_identity_binds_it_into_the_exe_claim() {
         let json = r#"{

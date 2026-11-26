@@ -640,7 +640,7 @@ async fn cmd_run_profile(
         // (`VaultError::ExecutableTrustRequired`) rather than silently
         // minted with an incoherent "dev" exe marker — see the PR
         // description for the tracked follow-up.
-        executable_hash: None,
+        executable_identity: None,
     };
 
     let resolved = match resolve_profile(&plan.profile, &resolve_options).await {
@@ -805,7 +805,7 @@ async fn cmd_run_token(
         let resolve_options = ResolveOptions {
             backend: &backend,
             key_manager: vault.key_manager(),
-            executable_hash: None,
+            executable_identity: None,
         };
         let resolved = match resolve_profile(&plan.profile, &resolve_options).await {
             Ok(r) => r,
