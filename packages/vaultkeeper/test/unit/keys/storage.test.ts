@@ -32,17 +32,22 @@ const stageFault = vi.hoisted(() => ({
   closeError: Object.assign(new Error('close failed'), { code: 'EIO' }),
 }))
 
-// Model macOS's path limit on all platforms so the boundary stays tested in CI.
+// Exercise the native limit on macOS and model it elsewhere so CI covers the same boundary.
 const pathLimit = vi.hoisted(() => ({ enabled: false }))
+
+/** Reject paths that cannot fit in macOS's 1,024-byte buffer with a terminating NUL. */
+function checkPathLimit(...paths: fs.PathLike[]): void {
+  if (pathLimit.enabled && paths.some((file) => Buffer.byteLength(String(file)) >= 1024)) {
+    throw Object.assign(new Error('path too long'), { code: 'ENAMETOOLONG' })
+  }
+}
 
 vi.mock('node:fs/promises', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:fs/promises')>()
   return {
     ...actual,
     open: async (...args: Parameters<typeof actual.open>): Promise<fs.FileHandle> => {
-      if (pathLimit.enabled && args[1] === 'wx' && Buffer.byteLength(String(args[0])) >= 1024) {
-        throw Object.assign(new Error('path too long'), { code: 'ENAMETOOLONG' })
-      }
+      checkPathLimit(args[0])
       const handle = await actual.open(...args)
       if (args[1] === 'wx' && (stageFault.write || stageFault.close)) {
         stageFault.path = String(args[0])
@@ -62,7 +67,12 @@ vi.mock('node:fs/promises', async (importOriginal) => {
       }
       return handle
     },
+    link: async (...args: Parameters<typeof actual.link>): Promise<void> => {
+      checkPathLimit(...args)
+      await actual.link(...args)
+    },
     rename: async (...args: Parameters<typeof actual.rename>): Promise<void> => {
+      checkPathLimit(...args)
       if (renameBarrier.enabled) {
         const fail = await new Promise<boolean>((resolve) => {
           renameBarrier.pending.push({
@@ -88,6 +98,18 @@ function makeKey(id: string, byte: number): KeyMaterial {
   return { id, key: new Uint8Array(32).fill(byte), createdAt: CREATED_AT }
 }
 
+/** Fill the path budget with components below the filesystem's per-name limit. */
+function directoryAtByteLength(base: string, targetLength: number): string {
+  let target = base
+  while (Buffer.byteLength(target) < targetLength) {
+    const remaining = targetLength - Buffer.byteLength(target) - 1
+    const length = remaining === 201 ? 199 : Math.min(remaining, 200)
+    target = path.join(target, 'a'.repeat(length))
+  }
+  expect(Buffer.byteLength(target)).toBe(targetLength)
+  return target
+}
+
 let dir: string
 
 beforeEach(async () => {
@@ -103,44 +125,64 @@ afterEach(async () => {
 })
 
 describe('saveKeyState / loadKeyState round-trip', () => {
-  it('saves and reloads at the macOS path boundary supported by the old staging name', async () => {
-    let target = dir
-    const targetLength = Buffer.byteLength(dir) === 989 ? 991 : Math.max(990, Buffer.byteLength(dir))
-    while (Buffer.byteLength(target) < targetLength) {
-      const remaining = targetLength - Buffer.byteLength(target) - 1
-      const length = remaining === 201 ? 199 : Math.min(remaining, 200)
-      target = path.join(target, 'a'.repeat(length))
-    }
-    expect(Buffer.byteLength(target)).toBe(targetLength)
-    const snapshot = { current: makeKey('k-boundary', 0x42) }
-    pathLimit.enabled = true
-    await saveKeyState(target, snapshot)
-    expect(await loadKeyState(target)).toEqual(snapshot)
-  })
+  it.each([
+    { targetLength: 1004, state: 'fresh' },
+    { targetLength: 1004, state: 'corrupt' },
+    { targetLength: 1009, state: 'fresh' },
+    { targetLength: 1009, state: 'corrupt' },
+    { targetLength: 1009, state: 'interrupted repair' },
+  ])(
+    'saves and reloads a $state store in a $targetLength-byte config directory',
+    async ({ targetLength, state }) => {
+      // Resolve the temp root's symlinks so kernel path expansion does not add bytes.
+      const target = directoryAtByteLength(await fs.realpath(dir), targetLength)
+      const wrapPath = path.join(target, '.keys.wrap')
+      const candidate = Buffer.alloc(32, 0x42)
+      if (state !== 'fresh') {
+        await fs.mkdir(target, { recursive: true })
+        await fs.writeFile(wrapPath, Buffer.alloc(1))
+      }
+      if (state === 'interrupted repair') {
+        await fs.writeFile(`${wrapPath}.r`, candidate, { mode: 0o600 })
+      }
+      const snapshot = { current: makeKey('k-boundary', 0x42) }
+      pathLimit.enabled = process.platform !== 'darwin'
+      await saveKeyState(target, snapshot)
+      expect(await loadKeyState(target)).toEqual(snapshot)
+      expect((await fs.readFile(wrapPath)).byteLength).toBe(32)
+      expect((await fs.readdir(target)).sort()).toEqual(['.keys.wrap', 'keys.enc'])
+      if (state === 'interrupted repair') {
+        expect(await fs.readFile(wrapPath)).toEqual(candidate)
+      }
+    },
+  )
   it.each([
     { write: true, code: 'ENOSPC', cause: stageFault.writeError },
     { write: false, code: 'EIO', cause: stageFault.closeError },
-  ])('preserves the primary staging error when write failure is $write', async ({ write, code, cause }) => {
-    const initial = { current: makeKey('k-initial', 0x10) }
-    await saveKeyState(dir, initial)
-    stageFault.write = write
-    stageFault.close = true
+  ])(
+    'preserves the primary staging error when write failure is $write',
+    async ({ write, code, cause }) => {
+      const initial = { current: makeKey('k-initial', 0x10) }
+      await saveKeyState(dir, initial)
+      stageFault.write = write
+      stageFault.close = true
 
-    const result = await saveKeyState(dir, { current: makeKey('k-next', 0x11) }).catch(
-      (error: unknown) => error,
-    )
-    expect(result).toBeInstanceOf(FilesystemError)
-    expect(result).toMatchObject({
-      name: 'FilesystemError',
-      code,
-      cause,
-      path: stageFault.path,
-    })
-    expect(path.dirname(stageFault.path)).toBe(dir)
-    expect(path.basename(stageFault.path)).toMatch(/^\.[A-Za-z0-9_-]{12}$/)
-    await expect(fs.stat(stageFault.path)).rejects.toMatchObject({ code: 'ENOENT' })
-    expect(await loadKeyState(dir)).toEqual(initial)
-  })
+      const result = await saveKeyState(dir, { current: makeKey('k-next', 0x11) }).catch(
+        (error: unknown) => error,
+      )
+      expect(result).toBeInstanceOf(FilesystemError)
+      expect(result).toMatchObject({
+        name: 'FilesystemError',
+        code,
+        cause,
+        path: stageFault.path,
+      })
+      expect(path.dirname(stageFault.path)).toBe(dir)
+      expect(path.basename(stageFault.path)).toMatch(/^\.[A-Za-z0-9_-]{12}$/)
+      await expect(fs.stat(stageFault.path)).rejects.toMatchObject({ code: 'ENOENT' })
+      expect(await loadKeyState(dir)).toEqual(initial)
+    },
+  )
   it('persists the current key so a later load resolves the same id and bytes', async () => {
     const current = makeKey('k-1-aaaa', 0x11)
     await saveKeyState(dir, { current })

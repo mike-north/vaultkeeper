@@ -36,13 +36,16 @@ import {
   InvalidAlgorithmError,
   InvalidKeyMaterialError,
 } from '../errors.js'
-import { encryptGcm, decryptGcm, getOrCreateWrapKey } from '../util/at-rest.js'
+import { encryptGcm, decryptGcm, getOrCreateWrapKey, writeFileIfAbsent } from '../util/at-rest.js'
 import { getDefaultConfigDir } from '../config.js'
 import type { ListableBackend, SigningBackend } from './types.js'
 import type { SigningAlgorithm, SigningPublicKey } from '../types.js'
+import type { WrapKeyPublication } from '../util/at-rest.js'
 
 const STORAGE_DIR_NAME = 'file'
 const KEY_FILE = '.key'
+/** All writers select the same repair candidate, with the same path budget as `.key`. */
+const KEY_REPAIR_FILE = '.k.r'
 /**
  * Subdirectory (under the secret storage dir) holding encrypted signing-key
  * private material. Kept separate from the `.enc` secret files so a signing key
@@ -119,8 +122,16 @@ async function ensureStorageDir(storageDir: string): Promise<void> {
   }
 }
 
-async function getOrCreateKey(storageDir: string): Promise<Buffer> {
-  return getOrCreateWrapKey(path.join(storageDir, KEY_FILE))
+/** Ordinary secrets and signing identities share one wrapping key and repair candidate. */
+async function getOrCreateKey(
+  storageDir: string,
+  publication: WrapKeyPublication = 'sequential-fallback',
+): Promise<Buffer> {
+  return getOrCreateWrapKey(
+    path.join(storageDir, KEY_FILE),
+    publication,
+    path.join(storageDir, KEY_REPAIR_FILE),
+  )
 }
 
 /**
@@ -324,7 +335,7 @@ export class FileBackend implements ListableBackend, SigningBackend {
       }
       throw toFilesystemError(err, 'signing key', keyPath, 'read')
     }
-    const wrapKey = await getOrCreateKey(this.#storageDir)
+    const wrapKey = await getOrCreateKey(this.#storageDir, 'atomic')
     try {
       return decryptGcm(wrapKey, encoded)
     } catch (err) {
@@ -332,6 +343,8 @@ export class FileBackend implements ListableBackend, SigningBackend {
         `Failed to decrypt signing key: ${err instanceof Error ? err.message : String(err)}`,
         keyPath,
       )
+    } finally {
+      wrapKey.fill(0)
     }
   }
 
@@ -348,9 +361,7 @@ export class FileBackend implements ListableBackend, SigningBackend {
     try {
       await fs.mkdir(this.#signingDir, { recursive: true, mode: 0o700 })
     } catch (err) {
-      if (err instanceof Error && 'code' in err && err.code !== 'EEXIST') {
-        throw toFilesystemError(err, 'signing-key directory', this.#signingDir, 'create')
-      }
+      throw toFilesystemError(err, 'signing-key directory', this.#signingDir, 'create')
     }
 
     const keyPath = this.#signingKeyPath(id)
@@ -381,20 +392,18 @@ export class FileBackend implements ListableBackend, SigningBackend {
 
     const { privateKey } = crypto.generateKeyPairSync('ed25519')
     const pkcs8Pem = privateKey.export({ type: 'pkcs8', format: 'pem' }).toString()
-    const wrapKey = await getOrCreateKey(this.#storageDir)
-    const encrypted = encryptGcm(wrapKey, pkcs8Pem)
+    const wrapKey = await getOrCreateKey(this.#storageDir, 'atomic')
+    let encrypted: string
     try {
-      // wx: fail if the path was created between our probe and here (TOCTOU),
-      // so a concurrent enrollment can never be silently overwritten either.
-      await fs.writeFile(keyPath, encrypted, { mode: 0o600, flag: 'wx' })
-    } catch (err) {
-      if (err instanceof Error && 'code' in err && err.code === 'EEXIST') {
-        throw new SigningKeyAlreadyExistsError(
-          `Signing key already exists: ${displayKeyName(id)}`,
-          displayKeyName(id),
-        )
-      }
-      throw toFilesystemError(err, 'signing key', keyPath, 'write')
+      encrypted = encryptGcm(wrapKey, pkcs8Pem)
+    } finally {
+      wrapKey.fill(0)
+    }
+    if (!(await writeFileIfAbsent(keyPath, encrypted, 'signing key'))) {
+      throw new SigningKeyAlreadyExistsError(
+        `Signing key already exists: ${displayKeyName(id)}`,
+        displayKeyName(id),
+      )
     }
   }
 
