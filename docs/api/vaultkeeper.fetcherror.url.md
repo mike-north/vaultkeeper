@@ -4,7 +4,7 @@
 
 ## FetchError.url property
 
-The unresolved URL template that fetch failed to request, with `{{secret}}`<!-- -->/`{{secret:name}}` placeholders left intact. The placeholder-resolved URL is deliberately never stored here, so an injected secret is never exposed.
+The original request URL template, with `{{secret}}` and `{{secret:name}}` placeholders intact. It identifies the request without disclosing URL substitutions, even if the server received the request.
 
 **Signature:**
 
