@@ -751,19 +751,22 @@ export class VaultKeeper {
    * **Token map ({@link SecretTokenMap}):** every `{{secret:name}}` placeholder
    * is replaced with the secret from the corresponding named token.
    *
-   * The raw secret is never exposed in the return value.
+   * The delegation covers only the requested URL. Fetch redirect statuses
+   * (301, 302, 303, 307, and 308) reject with {@link FetchError}, including
+   * same-origin redirects and requests without placeholders.
    *
    * @param token - A single `CapabilityToken` or a `SecretTokenMap` mapping
    *   names to tokens obtained from `authorize()`.
    * @param request - The fetch request template with placeholders.
    * @returns The `Response` from the underlying `fetch()` call, together with
-   *   the vault metadata (`vaultResponse`).
+   *   the vault metadata (`vaultResponse`). `Response.url` can include
+   * substitutions made in the request URL.
    * @throws {AuthorizationDeniedError} If any token is invalid or was not
    *   created by this vault instance.
    * @throws {VaultError} If a named placeholder references an unknown
    *   secret name.
-   * @throws {FetchError} If the URL is malformed or the underlying network
-   *   request fails.
+   * @throws {FetchError} If the URL is malformed, the server sends a Fetch
+   *   redirect, or the underlying network request fails.
    */
   async fetch(
     token: CapabilityToken | SecretTokenMap,
