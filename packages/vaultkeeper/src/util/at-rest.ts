@@ -17,6 +17,7 @@
 
 import * as fs from 'node:fs/promises'
 import * as crypto from 'node:crypto'
+import * as path from 'node:path'
 import { toFilesystemError, DecryptionError } from '../errors.js'
 
 const GCM_IV_BYTES = 12
@@ -87,6 +88,42 @@ export function decryptGcm(key: Buffer, encoded: string, path = ''): string {
   }
 }
 
+/** Stage private data before publishing it atomically without replacement. @internal */
+export async function writeFileIfAbsent(
+  dest: string,
+  content: string | Buffer,
+  resource: string,
+): Promise<boolean> {
+  const temp = path.join(path.dirname(dest), `.vk-${crypto.randomUUID()}.tmp`)
+  let file: Awaited<ReturnType<typeof fs.open>>
+  try {
+    file = await fs.open(temp, 'wx', 0o600)
+  } catch (err) {
+    throw toFilesystemError(err, resource, dest, 'write')
+  }
+
+  try {
+    try {
+      await file.writeFile(content)
+      if (process.platform !== 'win32') await file.chmod(0o600)
+    } finally {
+      await file.close()
+    }
+    try {
+      await fs.link(temp, dest)
+    } catch (err) {
+      if (err instanceof Error && 'code' in err && err.code === 'EEXIST') return false
+      throw err
+    }
+    return true
+  } catch (err) {
+    throw toFilesystemError(err, resource, dest, 'write')
+  } finally {
+    // The link is the commit point. A cleanup failure does not undo it.
+    await fs.unlink(temp).catch(() => undefined)
+  }
+}
+
 /**
  * Read the 32-byte wrapping key at `keyPath`, generating and persisting a fresh
  * random one (mode `0o600`) when the file does not yet exist **or** holds a
@@ -116,16 +153,62 @@ export async function getOrCreateWrapKey(keyPath: string): Promise<Buffer> {
     }
   }
 
-  if (existing?.byteLength === GCM_KEY_BYTES) {
-    return existing
+  if (existing?.byteLength === GCM_KEY_BYTES) return existing
+  if (existing !== undefined) {
+    existing.fill(0)
+    return repairWrapKey(keyPath)
   }
 
-  // Missing or corrupt (wrong length): (re)generate a fresh key in place.
   const key = crypto.randomBytes(GCM_KEY_BYTES)
+  let published = false
   try {
-    await fs.writeFile(keyPath, key, { mode: 0o600 })
-  } catch (err) {
-    throw toFilesystemError(err, 'wrapping key file', keyPath, 'write')
+    published = await writeFileIfAbsent(keyPath, key, 'wrapping key file')
+    if (published) return key
+  } finally {
+    if (!published) key.fill(0)
   }
-  return key
+
+  return readValidWrapKey(keyPath)
+}
+
+async function readValidWrapKey(keyPath: string): Promise<Buffer> {
+  let key: Buffer
+  try {
+    key = await fs.readFile(keyPath)
+  } catch (err) {
+    throw toFilesystemError(err, 'wrapping key file', keyPath, 'read')
+  }
+  if (key.byteLength === GCM_KEY_BYTES) return key
+  key.fill(0)
+  throw new DecryptionError('Invalid wrapping key length', keyPath)
+}
+
+async function repairWrapKey(keyPath: string): Promise<Buffer> {
+  const candidatePath = `${keyPath}.repair`
+  const candidate = crypto.randomBytes(GCM_KEY_BYTES)
+  let published = false
+  let ownsCandidate = false
+  try {
+    ownsCandidate = await writeFileIfAbsent(candidatePath, candidate, 'wrapping key repair')
+    if (!ownsCandidate) return await readValidWrapKey(keyPath)
+
+    // A peer may have repaired the key while this writer was staging its candidate.
+    try {
+      return await readValidWrapKey(keyPath)
+    } catch (err) {
+      if (!(err instanceof DecryptionError)) throw err
+    }
+    try {
+      await fs.rename(candidatePath, keyPath)
+    } catch (err) {
+      throw toFilesystemError(err, 'wrapping key file', keyPath, 'write')
+    }
+    published = true
+    return candidate
+  } finally {
+    if (!published) {
+      candidate.fill(0)
+      if (ownsCandidate) await fs.unlink(candidatePath).catch(() => undefined)
+    }
+  }
 }

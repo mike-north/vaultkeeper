@@ -261,6 +261,18 @@ whether membership is intentional.
   **compile error at the switch site** (the value that should be `never` still has a type, and passing it
   fails to typecheck) rather than a silent fall-through at runtime.
 
+File-backed signing enrollment publishes the complete encrypted identity with
+atomic no-replace semantics. A competing enrollment for the same label receives
+the existing duplicate-key error. Rust hosts provide this operation through
+`HostPlatform::write_file_if_absent`. The default returns a typed unsupported
+error, so enrollment requires a host that implements atomic publication. The
+Node WASM host also provides this primitive through
+`WasmHostPlatform.writeFileIfAbsent` for shared wrapping-key initialization.
+The built-in hosts require filesystem support for same-directory hard links.
+Custom hosts using the sequential wrapping-key fallback must serialize access
+to shared storage externally. Repair of a malformed wrapping key stages one
+candidate and rechecks the current key before replacing it.
+
 **Names under workshop (⚠ owner-flagged, decision deferred — no surface change yet):**
 
 - `VaultResponse` — the "vault"-noun collision above; rename resolved at the tiering pass (§2.3).

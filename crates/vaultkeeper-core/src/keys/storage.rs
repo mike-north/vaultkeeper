@@ -216,37 +216,110 @@ fn decrypt_gcm(key: &[u8], encoded: &str) -> Option<String> {
 ///
 /// A genuine read failure on an *existing, right-length-or-unreadable* key
 /// file (e.g. permission denied) propagates unchanged as the typed
-/// `VaultError` the host produced — only a confirmed-missing file triggers
-/// regeneration, mirroring `FileBackend::get_or_create_key`.
+/// `VaultError` the host produced. A concurrent first writer's complete key
+/// is reused. Repair of an invalid-length key rechecks it before replacement.
 pub(crate) async fn get_or_create_wrap_key(
     host: &dyn HostPlatform,
     wrap_path: &Path,
 ) -> Result<Vec<u8>, VaultError> {
     match host.read_file(wrap_path).await {
         Ok(data) if data.len() == GCM_KEY_BYTES => Ok(data),
-        Ok(_) => generate_and_write_wrap_key(host, wrap_path).await,
+        Ok(mut invalid) => {
+            invalid.zeroize();
+            repair_wrap_key(host, wrap_path).await
+        }
         Err(read_err) => match host.file_exists(wrap_path).await {
-            Ok(false) => generate_and_write_wrap_key(host, wrap_path).await,
-            Ok(true) | Err(_) => Err(read_err),
+            Ok(false) => create_missing_wrap_key(host, wrap_path).await,
+            // A concurrent startup may have published since the failed read.
+            Ok(true) => match host.read_file(wrap_path).await {
+                Ok(key) if key.len() == GCM_KEY_BYTES => Ok(key),
+                Ok(mut invalid) => {
+                    invalid.zeroize();
+                    Err(read_err)
+                }
+                Err(_) => Err(read_err),
+            },
+            Err(_) => Err(read_err),
         },
     }
 }
 
-async fn generate_and_write_wrap_key(
+fn generate_wrap_key() -> Result<zeroize::Zeroizing<Vec<u8>>, VaultError> {
+    let mut key = zeroize::Zeroizing::new(vec![0u8; GCM_KEY_BYTES]);
+    getrandom::fill(&mut key)
+        .map_err(|e| VaultError::Other(format!("Failed to generate wrap key: {e}")))?;
+    Ok(key)
+}
+
+async fn read_valid_wrap_key(
     host: &dyn HostPlatform,
     wrap_path: &Path,
 ) -> Result<Vec<u8>, VaultError> {
-    let mut key = vec![0u8; GCM_KEY_BYTES];
-    getrandom::fill(&mut key)
-        .map_err(|e| VaultError::Other(format!("Failed to generate wrap key: {e}")))?;
-    // Zeroize on a failed write too — this freshly generated key is real key
-    // material, and an early `?` return would otherwise drop it un-wiped,
-    // leaving it resident in memory after a failed persistence attempt.
-    if let Err(err) = host.write_file(wrap_path, &key, 0o600).await {
-        key.zeroize();
-        return Err(err);
+    let mut key = host.read_file(wrap_path).await?;
+    if key.len() == GCM_KEY_BYTES {
+        return Ok(key);
     }
-    Ok(key)
+    key.zeroize();
+    Err(VaultError::Decryption {
+        message: "Invalid wrapping key length".to_string(),
+        path: wrap_path.display().to_string(),
+    })
+}
+
+async fn create_missing_wrap_key(
+    host: &dyn HostPlatform,
+    wrap_path: &Path,
+) -> Result<Vec<u8>, VaultError> {
+    let mut key = generate_wrap_key()?;
+    match host.write_file_if_absent(wrap_path, &key, 0o600).await {
+        Ok(true) => Ok(std::mem::take(&mut *key)),
+        Ok(false) => read_valid_wrap_key(host, wrap_path).await,
+        // Legacy hosts retain their existing key-state behavior. Signing
+        // enrollment requires atomic publication and cannot succeed on them.
+        Err(VaultError::LockingNotSupported { .. }) => {
+            host.write_file(wrap_path, &key, 0o600).await?;
+            Ok(std::mem::take(&mut *key))
+        }
+        Err(err) => Err(err),
+    }
+}
+
+async fn repair_wrap_key(host: &dyn HostPlatform, wrap_path: &Path) -> Result<Vec<u8>, VaultError> {
+    let mut candidate_path = wrap_path.as_os_str().to_os_string();
+    candidate_path.push(".repair");
+    let candidate_path = Path::new(&candidate_path);
+    let mut candidate = generate_wrap_key()?;
+
+    match host
+        .write_file_if_absent(candidate_path, &candidate, 0o600)
+        .await
+    {
+        Ok(true) => {}
+        Ok(false) => return read_valid_wrap_key(host, wrap_path).await,
+        Err(VaultError::LockingNotSupported { .. }) => {
+            host.write_file(wrap_path, &candidate, 0o600).await?;
+            return Ok(std::mem::take(&mut *candidate));
+        }
+        Err(err) => return Err(err),
+    }
+
+    // The candidate path serializes repairers. Recheck under that ownership
+    // so a delayed writer cannot replace a key already repaired by its peer.
+    let result = match host.read_file(wrap_path).await {
+        Ok(existing) if existing.len() == GCM_KEY_BYTES => Ok(existing),
+        Ok(mut invalid) => {
+            invalid.zeroize();
+            match host.rename_file(candidate_path, wrap_path).await {
+                // Rename consumes our candidate. A new writer may now own the
+                // candidate path, so avoid touching that path after success.
+                Ok(()) => return Ok(std::mem::take(&mut *candidate)),
+                Err(err) => Err(err),
+            }
+        }
+        Err(err) => Err(err),
+    };
+    let _ = host.delete_file(candidate_path).await;
+    result
 }
 
 /// Outcome of attempting to decode the persisted `keys.enc` envelope.

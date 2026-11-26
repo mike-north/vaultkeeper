@@ -6,8 +6,11 @@
  */
 
 import { execFile } from 'node:child_process'
+import { randomUUID } from 'node:crypto'
 import {
   access,
+  link,
+  open,
   mkdir,
   readdir,
   readFile,
@@ -138,6 +141,37 @@ export function createNodeHost(configDirOverride?: string): WasmHostPlatform {
         }
       } catch (err) {
         throw toHostFilesystemError(err, path)
+      }
+    },
+
+    async writeFileIfAbsent(path: string, content: Uint8Array, mode: number): Promise<boolean> {
+      const dir = dirname(path)
+      const temp = join(dir, `.vk-${randomUUID()}.tmp`)
+      let file: Awaited<ReturnType<typeof open>>
+      try {
+        await mkdir(dir, { recursive: true, mode: 0o700 })
+        file = await open(temp, 'wx', mode)
+      } catch (err) {
+        throw toHostFilesystemError(err, path)
+      }
+      try {
+        try {
+          await file.writeFile(content)
+          if (osPlatform() !== 'win32') await file.chmod(mode)
+        } finally {
+          await file.close()
+        }
+        try {
+          await link(temp, path)
+        } catch (err) {
+          if (isErrnoException(err) && err.code === 'EEXIST') return false
+          throw err
+        }
+        return true
+      } catch (err) {
+        throw toHostFilesystemError(err, path)
+      } finally {
+        await unlink(temp).catch(() => undefined)
       }
     },
 

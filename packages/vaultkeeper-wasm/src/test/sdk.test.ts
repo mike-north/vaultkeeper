@@ -19,6 +19,7 @@ import { chmod, readFile, writeFile } from 'node:fs/promises'
 import { createHash } from 'node:crypto'
 import {
   VaultKeeper,
+  createNodeHost,
   VaultError,
   SecretNotFoundError,
   DecryptionError,
@@ -132,6 +133,25 @@ describe('@vaultkeeper/wasm SDK', () => {
       const vault = await createTestVault(dir)
       assert.ok(vault)
       vault.dispose()
+    })
+  })
+
+  it('atomically publishes one complete file across independent Node hosts', async () => {
+    await withTempDir(async (dir) => {
+      const first = createNodeHost(dir)
+      const second = createNodeHost(dir)
+      const file = join(dir, 'published')
+      const firstContent = Buffer.from('first')
+      const secondContent = Buffer.from('second')
+
+      const [firstPublished, secondPublished] = await Promise.all([
+        first.writeFileIfAbsent?.(file, firstContent, 0o600),
+        second.writeFileIfAbsent?.(file, secondContent, 0o600),
+      ])
+      assert.equal(typeof firstPublished, 'boolean')
+      assert.equal(typeof secondPublished, 'boolean')
+      assert.notEqual(firstPublished, secondPublished)
+      assert.deepEqual(await readFile(file), firstPublished ? firstContent : secondContent)
     })
   })
 

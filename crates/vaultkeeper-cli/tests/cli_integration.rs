@@ -1266,6 +1266,30 @@ mod session_mint {
                 code: None,
             })
         }
+        async fn write_file_if_absent(
+            &self,
+            path: &Path,
+            content: &[u8],
+            _mode: u32,
+        ) -> Result<bool, VaultError> {
+            use std::io::Write;
+
+            let error = |e| VaultError::Filesystem {
+                message: format!("publish {}: {e}", path.display()),
+                path: path.display().to_string(),
+                permission: "write".to_string(),
+                code: None,
+            };
+            let parent = path.parent().expect("test file has a parent");
+            std::fs::create_dir_all(parent).map_err(error)?;
+            let mut staged = tempfile::NamedTempFile::new_in(parent).map_err(error)?;
+            staged.write_all(content).map_err(error)?;
+            match staged.persist_noclobber(path) {
+                Ok(_) => Ok(true),
+                Err(e) if e.error.kind() == std::io::ErrorKind::AlreadyExists => Ok(false),
+                Err(e) => Err(error(e.error)),
+            }
+        }
         async fn file_exists(&self, path: &Path) -> Result<bool, VaultError> {
             Ok(path.exists())
         }

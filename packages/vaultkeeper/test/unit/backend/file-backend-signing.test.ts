@@ -97,6 +97,54 @@ describe('FileBackend signing contract', () => {
     expect(pubAfter.kid).toBe(pubBefore.kid)
   })
 
+  it('returns one successful enrollment whose public key survives reopening', async () => {
+    async function enroll(writer: FileBackend) {
+      await writer.generateSigningKey(ID, 'EdDSA')
+      return writer.getPublicKey(ID)
+    }
+
+    const [first, second] = await Promise.allSettled([
+      enroll(backend),
+      enroll(new FileBackend(storageDir)),
+    ])
+    const [winner, loser] = first.status === 'fulfilled' ? [first, second] : [second, first]
+    expect(winner.status).toBe('fulfilled')
+    expect(loser.status).toBe('rejected')
+    if (winner.status === 'fulfilled' && loser.status === 'rejected') {
+      expect(loser.reason).toBeInstanceOf(SigningKeyAlreadyExistsError)
+      expect(await new FileBackend(storageDir).getPublicKey(ID)).toEqual(winner.value)
+    }
+  })
+
+  it('uses a single wrapping key when different labels are created in a fresh store', async () => {
+    const other = new FileBackend(storageDir)
+    const otherId = 'signing-key:other'
+    await Promise.all([
+      backend.generateSigningKey(ID, 'EdDSA'),
+      other.generateSigningKey(otherId, 'EdDSA'),
+    ])
+
+    const reopened = new FileBackend(storageDir)
+    const [first, second] = await Promise.all([
+      reopened.getPublicKey(ID),
+      reopened.getPublicKey(otherId),
+    ])
+    expect(first.kid).not.toBe(second.kid)
+  })
+
+  it('does not replace a repaired wrapping key while another enrollment is using it', async () => {
+    await fs.writeFile(path.join(storageDir, '.key'), Buffer.alloc(1))
+    const other = new FileBackend(storageDir)
+    const results = await Promise.allSettled([
+      backend.generateSigningKey(ID, 'EdDSA'),
+      other.generateSigningKey(ID, 'EdDSA'),
+    ])
+
+    expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(1)
+    const reopened = new FileBackend(storageDir)
+    expect((await reopened.getPublicKey(ID)).algorithm).toBe('EdDSA')
+  })
+
   it('a non-ENOENT probe failure surfaces a typed FilesystemError, never a silent overwrite', async () => {
     // Make the signing-key directory path a regular FILE so that probing for a
     // key underneath it fails with ENOTDIR (a non-ENOENT error) rather than

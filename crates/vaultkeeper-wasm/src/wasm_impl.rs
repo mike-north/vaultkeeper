@@ -28,6 +28,7 @@ use vaultkeeper_core::{ClaimsKind, ExecutableTrustRequiredReason, VaultClaims, V
 ///   `options` is `{ stdin?, env?, cwd? }` (issue #239)
 /// - `readFile(path)` → `Promise<Uint8Array>`
 /// - `writeFile(path, content, mode)` → `Promise<void>`
+/// - `writeFileIfAbsent?(path, content, mode)` → `Promise<boolean>`
 /// - `fileExists(path)` → `Promise<boolean>`
 /// - `deleteFile(path)` → `Promise<void>`
 /// - `renameFile(from, to)` → `Promise<void>`
@@ -409,6 +410,41 @@ impl HostPlatform for JsHostPlatform {
             .map_err(|e| fs_rejection_to_vault_error(&e, path, "write"))?;
 
         Ok(())
+    }
+
+    async fn write_file_if_absent(
+        &self,
+        path: &Path,
+        content: &[u8],
+        mode: u32,
+    ) -> Result<bool, VaultError> {
+        let name = "writeFileIfAbsent";
+        let callback = Reflect::get(&self.host, &JsValue::from_str(name))
+            .map_err(|e| fs_rejection_to_vault_error(&e, path, "write"))?;
+        if callback.is_undefined() {
+            return Err(VaultError::LockingNotSupported {
+                message: format!(
+                    "Atomic file creation is not supported for {}",
+                    path.display()
+                ),
+            });
+        }
+        let callback = callback
+            .dyn_into::<Function>()
+            .map_err(|_| js_err("writeFileIfAbsent is not a function"))?;
+        let js_path = JsValue::from_str(&path.to_string_lossy());
+        let js_content = Uint8Array::from(content);
+        let js_mode = JsValue::from_f64(f64::from(mode));
+        let promise = callback.call3(&self.host, &js_path, js_content.as_ref(), &js_mode);
+        let result = match promise {
+            Ok(promise) => JsFuture::from(Promise::from(promise)).await,
+            Err(err) => Err(err),
+        };
+        js_content.fill(0, 0, js_content.length());
+        let result = result.map_err(|e| fs_rejection_to_vault_error(&e, path, "write"))?;
+        result
+            .as_bool()
+            .ok_or_else(|| js_err("writeFileIfAbsent must resolve to a boolean"))
     }
 
     async fn file_exists(&self, path: &Path) -> Result<bool, VaultError> {

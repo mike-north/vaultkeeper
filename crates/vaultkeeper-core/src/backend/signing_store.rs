@@ -20,13 +20,13 @@
 //!
 //! Mirrors [`super::file::FileBackend`]'s `aes-gcm` + `base64ct` envelope
 //! discipline exactly: `iv:authTag:ciphertext` (each part base64), atomic
-//! write-to-temp-then-rename via [`HostPlatform::rename_file`]. Kept
+//! atomic no-replace publication via [`HostPlatform::write_file_if_absent`]. Kept
 //! self-contained (its own `encrypt_gcm`/`decrypt_gcm`, mirroring
 //! `crate::keys::storage`'s documented rationale) rather than reaching into
 //! `file.rs`'s private helpers, which keeps this module's on-disk contract
 //! independently reviewable.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use aes_gcm::aead::Aead;
 use aes_gcm::{Aes256Gcm, KeyInit, Nonce};
@@ -177,26 +177,6 @@ async fn get_signing_seal_key(host: &dyn HostPlatform) -> Result<Vec<u8>, VaultE
     Ok(seal_key)
 }
 
-/// Atomic write-to-temp-then-rename, mirroring `keys::storage::save_key_state`.
-async fn write_atomic(
-    host: &dyn HostPlatform,
-    dest: &Path,
-    content: &[u8],
-) -> Result<(), VaultError> {
-    let mut suffix = [0u8; 4];
-    getrandom::fill(&mut suffix)
-        .map_err(|e| VaultError::Other(format!("Failed to generate temp suffix: {e}")))?;
-    let suffix_hex: String = suffix.iter().map(|b| format!("{b:02x}")).collect();
-    let file_name = dest
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or("signing-key");
-    let tmp_path = dest.with_file_name(format!("{file_name}.{suffix_hex}.tmp"));
-
-    host.write_file(&tmp_path, content, 0o600).await?;
-    host.rename_file(&tmp_path, dest).await
-}
-
 /// Load and decrypt the PKCS#8 private key for `id`, or
 /// [`VaultError::SigningKeyNotFound`] when no signing key exists under `id`.
 async fn load_signing_key(host: &dyn HostPlatform, id: &str) -> Result<SigningKey, VaultError> {
@@ -272,11 +252,11 @@ pub(crate) async fn generate_signing_key(
         Err(e) => return Err(e),
     }
 
-    let mut seed = [0u8; 32];
-    getrandom::fill(&mut seed)
+    let mut seed = zeroize::Zeroizing::new([0u8; 32]);
+    getrandom::fill(seed.as_mut())
         .map_err(|e| VaultError::Other(format!("Failed to generate signing key: {e}")))?;
     let signing_key = SigningKey::from_bytes(&seed);
-    seed.zeroize();
+    drop(seed);
 
     let pem = signing_key
         .to_pkcs8_pem(LineEnding::LF)
@@ -287,7 +267,17 @@ pub(crate) async fn generate_signing_key(
     seal_key.zeroize();
     let envelope = envelope?;
 
-    write_atomic(host, &path, envelope.as_bytes()).await
+    if host
+        .write_file_if_absent(&path, envelope.as_bytes(), 0o600)
+        .await?
+    {
+        Ok(())
+    } else {
+        Err(VaultError::SigningKeyAlreadyExists {
+            message: format!("Signing key already exists: {id}"),
+            id: id.to_string(),
+        })
+    }
 }
 
 /// Return the public half of the signing key stored under `id`.
@@ -332,6 +322,7 @@ mod tests {
     use super::*;
     use crate::backend::{ExecOptions, ExecOutput, Platform};
     use std::collections::{HashMap, HashSet};
+    use std::path::Path;
     use std::sync::Mutex;
 
     struct TestHost {
@@ -339,10 +330,9 @@ mod tests {
         config_dir: PathBuf,
         deny_write: Mutex<HashSet<PathBuf>>,
         /// Deny every write whose parent directory equals this path,
-        /// regardless of filename — used to fail an atomic write's
-        /// unpredictable-suffix temp file without needing to guess the
-        /// random suffix `write_atomic` generates.
+        /// regardless of filename.
         deny_write_under: Mutex<Option<PathBuf>>,
+        missing_key_barrier: Option<tokio::sync::Barrier>,
     }
 
     impl TestHost {
@@ -352,6 +342,7 @@ mod tests {
                 config_dir: PathBuf::from("/test/config"),
                 deny_write: Mutex::new(HashSet::new()),
                 deny_write_under: Mutex::new(None),
+                missing_key_barrier: None,
             }
         }
     }
@@ -401,21 +392,39 @@ mod tests {
             Ok(())
         }
         async fn file_exists(&self, path: &Path) -> Result<bool, VaultError> {
-            Ok(self.files.lock().unwrap().contains_key(path))
+            let exists = self.files.lock().unwrap().contains_key(path);
+            if !exists && let Some(barrier) = &self.missing_key_barrier {
+                barrier.wait().await;
+            }
+            Ok(exists)
         }
         async fn delete_file(&self, path: &Path) -> Result<(), VaultError> {
             self.files.lock().unwrap().remove(path);
             Ok(())
         }
-        async fn rename_file(&self, from: &Path, to: &Path) -> Result<(), VaultError> {
-            let data = self
-                .files
-                .lock()
-                .unwrap()
-                .remove(from)
-                .ok_or_else(|| VaultError::Other(format!("Not found: {}", from.display())))?;
-            self.files.lock().unwrap().insert(to.to_path_buf(), data);
-            Ok(())
+        async fn write_file_if_absent(
+            &self,
+            path: &Path,
+            content: &[u8],
+            _mode: u32,
+        ) -> Result<bool, VaultError> {
+            use std::collections::hash_map::Entry;
+
+            if self.deny_write_under.lock().unwrap().as_deref() == path.parent() {
+                return Err(VaultError::Filesystem {
+                    message: format!("Permission denied writing {}", path.display()),
+                    path: path.display().to_string(),
+                    permission: "write".to_string(),
+                    code: None,
+                });
+            }
+            match self.files.lock().unwrap().entry(path.to_path_buf()) {
+                Entry::Occupied(_) => Ok(false),
+                Entry::Vacant(entry) => {
+                    entry.insert(content.to_vec());
+                    Ok(true)
+                }
+            }
         }
         async fn list_dir(&self, path: &Path) -> Result<Vec<String>, VaultError> {
             let files = self.files.lock().unwrap();
@@ -491,6 +500,39 @@ mod tests {
             .await
             .unwrap_err();
         assert!(matches!(err, VaultError::SigningKeyAlreadyExists { id, .. } if id == "dup"));
+    }
+
+    #[tokio::test]
+    async fn concurrent_creation_has_one_winner_whose_public_key_is_persisted() {
+        // Gate both the absent identity probe and the absent wrapping-key probe.
+        let host = TestHost {
+            missing_key_barrier: Some(tokio::sync::Barrier::new(2)),
+            ..TestHost::new()
+        };
+        let id = "concurrent-key";
+        let enroll = || async {
+            generate_signing_key(&host, id, SigningAlgorithm::EdDsa).await?;
+            get_public_key(&host, id).await
+        };
+        let (first, second) = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            tokio::join!(enroll(), enroll())
+        })
+        .await
+        .expect("both enrollment attempts must finish");
+        let (winner, loser) = match (first, second) {
+            (Ok(key), Err(err)) | (Err(err), Ok(key)) => (key, err),
+            outcome => panic!("expected one successful enrollment, got {outcome:?}"),
+        };
+        assert!(matches!(loser, VaultError::SigningKeyAlreadyExists { .. }));
+
+        let reopened = TestHost {
+            files: Mutex::new(std::mem::take(&mut *host.files.lock().unwrap())),
+            ..TestHost::new()
+        };
+        let persisted = get_public_key(&reopened, id).await.unwrap();
+        assert_eq!(winner.public_key_pem, persisted.public_key_pem);
+        assert_eq!(winner.kid, persisted.kid);
+        assert_eq!(winner.algorithm, persisted.algorithm);
     }
 
     // -----------------------------------------------------------------
@@ -628,25 +670,13 @@ mod tests {
     // signing/ file readable as a key.
     // -----------------------------------------------------------------
 
-    /// Structural guarantee: `write_atomic` only ever populates the temp
-    /// path via `write_file`, and only ever populates `dest` via
-    /// `rename_file`. So a write failure on the temp step can never leave a
-    /// partial/garbage entry at `dest` — `dest` is either fully absent or
-    /// (after a completed rename) fully the finished envelope. This test
-    /// forces that failure directly (denying the exact temp path
-    /// `write_atomic` will use) and asserts `dest` was never touched, and
-    /// that the signing-key API surfaces the failure to read it back as
-    /// `SigningKeyNotFound`, not a garbage key.
     #[tokio::test]
     async fn interrupted_write_leaves_no_partial_signing_file_readable_as_a_key() {
         let host = TestHost::new();
         let final_path = signing_key_path(&host, "interrupted");
-        assert!(!host.file_exists(&final_path).await.unwrap());
 
-        // Deny every write under signing/ (the temp file's random suffix is
-        // unpredictable, so intercept by directory rather than exact path).
         *host.deny_write_under.lock().unwrap() = final_path.parent().map(Path::to_path_buf);
-        let err = write_atomic(&host, &final_path, b"envelope-bytes")
+        let err = generate_signing_key(&host, "interrupted", SigningAlgorithm::EdDsa)
             .await
             .unwrap_err();
         assert!(matches!(err, VaultError::Filesystem { .. }));
@@ -656,8 +686,6 @@ mod tests {
         assert!(matches!(err, VaultError::SigningKeyNotFound { .. }));
     }
 
-    /// A *successful* atomic write leaves no leftover `*.tmp` file behind —
-    /// the temp path is consumed by the rename, not merely copied.
     #[tokio::test]
     async fn successful_write_leaves_no_leftover_temp_file() {
         let host = TestHost::new();

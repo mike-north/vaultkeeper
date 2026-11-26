@@ -216,6 +216,67 @@ impl HostPlatform for NativeHostPlatform {
         Ok(())
     }
 
+    async fn write_file_if_absent(
+        &self,
+        path: &Path,
+        content: &[u8],
+        mode: u32,
+    ) -> Result<bool, VaultError> {
+        use std::io::{ErrorKind, Write};
+        use std::sync::atomic::{AtomicU64, Ordering};
+
+        static NEXT_TEMP: AtomicU64 = AtomicU64::new(0);
+
+        let error = |e| VaultError::Filesystem {
+            message: format!("Failed to publish {}: {e}", path.display()),
+            path: path.display().to_string(),
+            permission: "write".to_string(),
+            code: None,
+        };
+        let parent = path.parent().filter(|p| !p.as_os_str().is_empty());
+        if let Some(parent) = parent {
+            create_dir_all_secure(parent).map_err(error)?;
+        }
+
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(mode);
+        }
+        let _ = mode;
+
+        let (temp, mut file) = loop {
+            let counter = NEXT_TEMP.fetch_add(1, Ordering::Relaxed);
+            let temp = path.with_file_name(format!(".vk-{}-{counter}.tmp", std::process::id()));
+            match options.open(&temp) {
+                Ok(file) => break (temp, file),
+                Err(e) if e.kind() == ErrorKind::AlreadyExists => continue,
+                Err(e) => return Err(error(e)),
+            }
+        };
+
+        let written = file.write_all(content);
+        #[cfg(unix)]
+        let written = written.and_then(|()| {
+            use std::os::unix::fs::PermissionsExt;
+            file.set_permissions(std::fs::Permissions::from_mode(mode))
+        });
+        drop(file);
+        let published =
+            written
+                .map_err(error)
+                .and_then(|()| match std::fs::hard_link(&temp, path) {
+                    Ok(()) => Ok(true),
+                    Err(e) if e.kind() == ErrorKind::AlreadyExists => Ok(false),
+                    Err(e) => Err(error(e)),
+                });
+        // Publication is the commit point. Cleanup cannot turn it into a failure.
+        let _ = std::fs::remove_file(&temp);
+        published
+    }
+
     async fn file_exists(&self, path: &Path) -> Result<bool, VaultError> {
         // `Path::exists()` swallows every error (including EACCES) and
         // reports `false`, which would let a permission failure masquerade
@@ -723,7 +784,7 @@ mod tests {
     /// Signing-key private material (issue #289) is sealed under
     /// `<config_dir>/signing/`, a directory `FileBackend::generate_signing_key`
     /// creates the same way every other storage directory is created — via
-    /// `write_file`'s implicit parent-dir creation. Mirrors the `file/`-dir
+    /// the host's implicit parent-dir creation. Mirrors the `file/`-dir
     /// permission tests above: driven through the real production path
     /// (`FileBackend` + `NativeHostPlatform`, not the generic `write_file`
     /// helper directly), this proves `signing/` itself, not just an
@@ -752,6 +813,39 @@ mod tests {
             mode, 0o700,
             "freshly created signing/ dir must be 0o700, got {mode:o}"
         );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn racing_signing_creators_agree_with_a_reopened_native_store() {
+        use std::sync::Arc;
+        use tokio::sync::Barrier;
+        use vaultkeeper_core::backend::{FileBackend, SigningBackend};
+        use vaultkeeper_core::types::SigningAlgorithm;
+
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        let enroll = |barrier: Arc<Barrier>, backend: FileBackend| async move {
+            barrier.wait().await;
+            backend
+                .generate_signing_key("release", SigningAlgorithm::EdDsa)
+                .await?;
+            backend.get_public_key("release").await
+        };
+        let barrier = Arc::new(Barrier::new(2));
+        let open = || FileBackend::new(Arc::new(NativeHostPlatform::new(root.clone())));
+        let first = tokio::spawn(enroll(Arc::clone(&barrier), open()));
+        let second = tokio::spawn(enroll(barrier, open()));
+
+        let (winner, loser) = match (first.await.unwrap(), second.await.unwrap()) {
+            (Ok(key), Err(err)) | (Err(err), Ok(key)) => (key, err),
+            outcome => panic!("expected one successful enrollment, got {outcome:?}"),
+        };
+        assert!(matches!(loser, VaultError::SigningKeyAlreadyExists { .. }));
+        let persisted = open().get_public_key("release").await.unwrap();
+        assert_eq!(winner.public_key_pem, persisted.public_key_pem);
+        assert_eq!(winner.kid, persisted.kid);
+        assert_eq!(winner.algorithm, persisted.algorithm);
+        assert_eq!(fs::read_dir(root.join("signing")).unwrap().count(), 1);
     }
 
     /// Non-Unix (Windows) sanity check: `create_dir_all_secure` still
