@@ -635,12 +635,10 @@ async fn cmd_run_profile(
         // launched command (that would require resolving `command[0]` to a
         // real file path — via `$PATH` — and hashing it, mirroring
         // `VaultKeeper::setup`'s `executable_path`/TOFU flow). Until that
-        // lands, a `materialize: "lease"` entry whose resolved trust tier is
-        // `sigstore`/`registry` is refused by `resolve_profile` itself
-        // (`VaultError::ExecutableTrustRequired`) rather than silently
-        // minted with an incoherent "dev" exe marker — see the PR
-        // description for the tracked follow-up.
-        executable_hash: None,
+        // lands, raw and lease entries requiring `sigstore`/`registry`,
+        // including `--set` entries inheriting that default, are refused by
+        // `resolve_profile` before retrieving the secret.
+        executable_identity: None,
     };
 
     let resolved = match resolve_profile(&plan.profile, &resolve_options).await {
@@ -805,7 +803,7 @@ async fn cmd_run_token(
         let resolve_options = ResolveOptions {
             backend: &backend,
             key_manager: vault.key_manager(),
-            executable_hash: None,
+            executable_identity: None,
         };
         let resolved = match resolve_profile(&plan.profile, &resolve_options).await {
             Ok(r) => r,
