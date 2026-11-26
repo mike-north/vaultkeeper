@@ -21,6 +21,7 @@
 
 import * as fs from 'node:fs/promises'
 import * as path from 'node:path'
+import { randomUUID } from 'node:crypto'
 import { encryptGcm, decryptGcm, getOrCreateWrapKey } from '../util/at-rest.js'
 import { toFilesystemError } from '../errors.js'
 import type { KeyMaterial, KeyStateSnapshot } from './types.js'
@@ -184,19 +185,28 @@ export async function saveKeyState(configDir: string, snapshot: KeyStateSnapshot
   }
 
   const statePath = path.join(configDir, KEY_STATE_FILE)
-  const tmpPath = `${statePath}.${String(process.pid)}.tmp`
-  // Keep the write and the rename in separate try/catch blocks so the reported
-  // FilesystemError path matches whichever step actually failed: the temp file
-  // on a write failure (e.g. EACCES/ENOSPC creating it), the final state file
-  // on a rename failure. A single shared catch would always blame `statePath`.
+  // Each save exclusively owns its staging file until it publishes the snapshot.
+  const tmpPath = `${statePath}.${String(process.pid)}.${randomUUID()}.tmp`
+  let stage: fs.FileHandle
   try {
-    await fs.writeFile(tmpPath, envelope, { encoding: 'utf8', mode: 0o600 })
+    stage = await fs.open(tmpPath, 'wx', 0o600)
   } catch (err) {
     throw toFilesystemError(err, 'key state file', tmpPath, 'write')
   }
+
+  let errorPath = tmpPath
   try {
+    try {
+      await stage.writeFile(envelope, 'utf8')
+    } finally {
+      await stage.close()
+    }
+    errorPath = statePath
     await fs.rename(tmpPath, statePath)
   } catch (err) {
-    throw toFilesystemError(err, 'key state file', statePath, 'write')
+    // Only clean up a path this save successfully created. Preserve the
+    // underlying write or rename error if cleanup also fails.
+    await fs.unlink(tmpPath).catch(() => undefined)
+    throw toFilesystemError(err, 'key state file', errorPath, 'write')
   }
 }

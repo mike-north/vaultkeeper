@@ -14,8 +14,38 @@ import * as fs from 'node:fs/promises'
 import * as os from 'node:os'
 import * as path from 'node:path'
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
+import { FilesystemError } from '../../../src/errors.js'
 import { loadKeyState, saveKeyState } from '../../../src/keys/storage.js'
 import type { KeyMaterial, KeyStateSnapshot } from '../../../src/keys/types.js'
+
+const renameBarrier = vi.hoisted(() => ({
+  enabled: false,
+  pending: new Array<{ source: string; release: (fail?: boolean) => void }>(),
+}))
+
+vi.mock('node:fs/promises', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs/promises')>()
+  return {
+    ...actual,
+    rename: async (...args: Parameters<typeof actual.rename>): Promise<void> => {
+      if (renameBarrier.enabled) {
+        const fail = await new Promise<boolean>((resolve) => {
+          renameBarrier.pending.push({
+            source: String(args[0]),
+            release: (fail = false) => {
+              resolve(fail)
+            },
+          })
+        })
+        if (fail) {
+          await actual.rename(args[0], path.join(String(args[1]), 'missing', 'keys.enc'))
+          return
+        }
+      }
+      await actual.rename(...args)
+    },
+  }
+})
 
 const CREATED_AT = new Date('2024-01-15T10:30:00.000Z')
 
@@ -61,6 +91,79 @@ describe('saveKeyState / loadKeyState round-trip', () => {
     const loaded = await loadKeyState(dir)
     expect(loaded?.previous?.id).toBe('k-1-aaaa')
     expect(loaded?.gracePeriodExpiresAt).toBe(snapshot.gracePeriodExpiresAt)
+  })
+
+  it('publishes each complete snapshot from its own staging file', async () => {
+    const initial = { current: makeKey('k-initial', 0x10) }
+    const first = { current: makeKey('k-first', 0x11) }
+    const second = { current: makeKey('k-second', 0x22) }
+    await saveKeyState(dir, initial)
+
+    renameBarrier.enabled = true
+    const saves: Promise<void>[] = []
+    try {
+      saves.push(saveKeyState(dir, first))
+      await vi.waitFor(() => {
+        expect(renameBarrier.pending).toHaveLength(1)
+      })
+      saves.push(saveKeyState(dir, second))
+      await vi.waitFor(() => {
+        expect(renameBarrier.pending).toHaveLength(2)
+      })
+
+      expect(await loadKeyState(dir)).toEqual(initial)
+      const [firstStage, secondStage] = renameBarrier.pending
+      expect(firstStage).toBeDefined()
+      expect(secondStage).toBeDefined()
+
+      firstStage?.release()
+      await saves[0]
+      expect(await loadKeyState(dir)).toEqual(first)
+      await expect(fs.stat(firstStage?.source ?? '')).rejects.toMatchObject({ code: 'ENOENT' })
+      await expect(fs.stat(secondStage?.source ?? '')).resolves.toBeDefined()
+
+      secondStage?.release()
+      await saves[1]
+      expect(await loadKeyState(dir)).toEqual(second)
+      await expect(fs.stat(secondStage?.source ?? '')).rejects.toMatchObject({ code: 'ENOENT' })
+    } finally {
+      renameBarrier.enabled = false
+      for (const stage of renameBarrier.pending.splice(0)) stage.release()
+      await Promise.allSettled(saves)
+    }
+  })
+
+  it('cleans up a failed rename while leaving the other save staged', async () => {
+    const initial = { current: makeKey('k-initial', 0x10) }
+    const next = { current: makeKey('k-next', 0x11) }
+    await saveKeyState(dir, initial)
+
+    renameBarrier.enabled = true
+    const saves = [saveKeyState(dir, next), saveKeyState(dir, next)]
+    const completed = Promise.allSettled(saves)
+    try {
+      await vi.waitFor(() => {
+        expect(renameBarrier.pending).toHaveLength(2)
+      })
+      const [failedStage, survivingStage] = renameBarrier.pending
+      failedStage?.release(true)
+      await vi.waitFor(async () => {
+        await expect(fs.stat(failedStage?.source ?? '')).rejects.toMatchObject({ code: 'ENOENT' })
+      })
+      await expect(fs.stat(survivingStage?.source ?? '')).resolves.toBeDefined()
+      expect(await loadKeyState(dir)).toEqual(initial)
+
+      survivingStage?.release()
+      const results = await completed
+      expect(results).toContainEqual({ status: 'fulfilled', value: undefined })
+      const failure = results.find((result) => result.status === 'rejected')
+      expect(failure?.reason).toBeInstanceOf(FilesystemError)
+      expect(await loadKeyState(dir)).toEqual(next)
+    } finally {
+      renameBarrier.enabled = false
+      for (const stage of renameBarrier.pending.splice(0)) stage.release()
+      await completed
+    }
   })
 })
 
