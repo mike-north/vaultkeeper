@@ -135,6 +135,11 @@ a printed lease on stdout. This is unavoidable and permitted, because a lease is
 **capability**, not a raw secret; but it still warrants care — a lease authorizes use, so it must be handled
 deliberately and never logged casually.
 
+The macOS Keychain backend updates an existing credential in its owning keychain. A rejected
+update leaves the prior value in place. The stdin write must fit on one `security -i` input line.
+An ID containing a line break or NUL, or a command exceeding the tool's byte limit, fails before
+the credential is written.
+
 **G7 — Exit-code taxonomy.** `0` success; `1` a typed operational failure (the `VaultError` surface, §2.1);
 `2` reserved for clap usage errors; `run` **propagates the child's exit code**, and a signal-terminated
 child yields `128+N`. Advisory commands that cannot "fail" (`profile lint`) exit `0` on any successfully

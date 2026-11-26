@@ -56,6 +56,8 @@ export function execCommandFull(
     })
     let stdout = ''
     let stderr = ''
+    // A child can close its pipe before consuming the full input.
+    let stdinFailed = false
     // Undefined when no timeoutMs was given, or once the timer has fired.
     // Tracked so 'close'/'error' can clear it — otherwise an already-settled
     // promise still leaves the timer pending, which keeps the event loop
@@ -63,8 +65,8 @@ export function execCommandFull(
     // process (regression: PR #164 review, issue #127).
     let timeoutHandle: ReturnType<typeof setTimeout> | undefined
 
-    proc.stdout?.on('data', (data: Buffer) => {
-      stdout += data.toString()
+    proc.stdout?.setEncoding('utf8').on('data', (data: string) => {
+      stdout += data
     })
 
     proc.stderr?.on('data', (data: Buffer) => {
@@ -72,8 +74,10 @@ export function execCommandFull(
     })
 
     if (options?.stdin !== undefined && proc.stdin) {
-      proc.stdin.write(options.stdin)
-      proc.stdin.end()
+      proc.stdin.on('error', () => {
+        stdinFailed = true
+      })
+      proc.stdin.end(options.stdin)
     }
 
     if (options?.timeoutMs !== undefined) {
@@ -90,6 +94,10 @@ export function execCommandFull(
     proc.on('close', (code) => {
       if (timeoutHandle !== undefined) {
         clearTimeout(timeoutHandle)
+      }
+      if (stdinFailed && code === 0) {
+        reject(new ExecError(`Failed to write stdin for '${command}'`, command))
+        return
       }
       resolve({ stdout, stderr, exitCode: code ?? 1 })
     })

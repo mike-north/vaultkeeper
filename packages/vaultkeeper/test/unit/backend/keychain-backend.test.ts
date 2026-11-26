@@ -8,7 +8,7 @@ vi.mock('../../../src/util/exec.js', () => ({
 
 import { execCommand, execCommandFull } from '../../../src/util/exec.js'
 import { KeychainBackend } from '../../../src/backend/keychain-backend.js'
-import { SecretNotFoundError } from '../../../src/errors.js'
+import { ExecError, SecretNotFoundError } from '../../../src/errors.js'
 
 const mockExecCommand = vi.mocked(execCommand)
 const mockExecCommandFull = vi.mocked(execCommandFull)
@@ -17,22 +17,73 @@ function makeResult(exitCode: number, stdout = '', stderr = ''): ExecCommandResu
   return { exitCode, stdout, stderr }
 }
 
+/** Keep the original item in a non-default keychain. */
+function mockKeychain() {
+  const path = '/test/team clés.keychain-db'
+  const metadata = `keychain: 0x${Buffer.from(path).toString('hex')}  "/test/display"\nversion: 512\n`
+  let entry: string | undefined
+  let shadow: string | undefined
+  let rejected = false
+  mockExecCommandFull.mockImplementation((_cmd, args, options) => {
+    if (args[0] === 'find-generic-password') {
+      return Promise.resolve(
+        entry === undefined
+          ? makeResult(44)
+          : makeResult(0, args.includes('-w') ? entry : metadata),
+      )
+    }
+    if (args[0] === 'delete-generic-password') {
+      entry = undefined
+      return Promise.resolve(makeResult(0))
+    }
+    const write =
+      /^add-generic-password (-U )?-a "vaultkeeper" -s "vaultkeeper:my-secret" -w "([^"]*)"(?: "([^"]+)")?\n$/.exec(
+        options?.stdin ?? '',
+      )
+    if (args[0] !== '-i' || write === null) return Promise.resolve(makeResult(2))
+    const [, update, value, target] = write
+    if (rejected && update !== undefined && target !== path) {
+      // security can report success after a fallback add in the default keychain.
+      shadow = value
+      return Promise.resolve(makeResult(0))
+    }
+    if (rejected || (entry !== undefined && target !== path)) {
+      return Promise.resolve(makeResult(45, '', `update rejected: ${value ?? ''}`))
+    }
+    entry = value
+    return Promise.resolve(makeResult(0))
+  })
+  // Model the old write too, so the regression test reaches the read on main.
+  mockExecCommand.mockImplementation((_cmd, args) => {
+    if (rejected) return Promise.reject(new ExecError('update rejected', 'security'))
+    entry = args.at(-1)
+    return Promise.resolve('')
+  })
+  return {
+    rejectWrites: () => {
+      rejected = true
+    },
+    hasShadow: () => shadow !== undefined,
+  }
+}
+
 describe('KeychainBackend', () => {
   let backend: KeychainBackend
 
   beforeEach(() => {
     backend = new KeychainBackend()
-    vi.clearAllMocks()
+    vi.resetAllMocks()
   })
 
   describe('isAvailable', () => {
     it('should return true on darwin when security succeeds', async () => {
       const originalPlatform = process.platform
       Object.defineProperty(process, 'platform', { value: 'darwin', configurable: true })
-      mockExecCommandFull.mockResolvedValue(makeResult(0, 'SecureTransport-55471.20.5'))
+      mockExecCommandFull.mockResolvedValue(makeResult(0, '"/test/login.keychain-db"\n'))
 
       const result = await backend.isAvailable()
       expect(result).toBe(true)
+      expect(mockExecCommandFull).toHaveBeenCalledWith('security', ['list-keychains'])
 
       Object.defineProperty(process, 'platform', { value: originalPlatform, configurable: true })
     })
@@ -60,46 +111,104 @@ describe('KeychainBackend', () => {
   })
 
   describe('store', () => {
-    it('should delete existing entry then add new one', async () => {
-      mockExecCommandFull.mockResolvedValue(makeResult(0))
-      mockExecCommand.mockResolvedValue('')
+    it('preserves the exact prior credential if replacement fails', async () => {
+      const keychain = mockKeychain()
+      const prior = 'still-valid-🔐\ncredential'
+      await backend.store('my-secret', prior)
+      keychain.rejectWrites()
 
-      await backend.store('my-secret', 'secret-value')
+      await expect(backend.store('my-secret', 'rejected')).rejects.toThrow(ExecError)
+      await expect(backend.retrieve('my-secret')).resolves.toBe(prior)
+      expect(keychain.hasShadow()).toBe(false)
+    })
 
-      // Delete call
-      expect(mockExecCommandFull).toHaveBeenCalledWith('security', [
-        'delete-generic-password',
-        '-a',
-        'vaultkeeper',
-        '-s',
-        'vaultkeeper:my-secret',
-      ])
-
-      // Add call - check base64 encoding
-      const encoded = Buffer.from('secret-value', 'utf8').toString('base64')
-      expect(mockExecCommand).toHaveBeenCalledWith('security', [
-        'add-generic-password',
-        '-a',
-        'vaultkeeper',
-        '-s',
-        'vaultkeeper:my-secret',
-        '-w',
-        encoded,
+    it('returns only the successful replacement and keeps the write off argv', async () => {
+      mockKeychain()
+      await backend.store('my-secret', 'prior')
+      const replacement = 'replacement-🔐\nvalue'
+      await backend.store('my-secret', replacement)
+      await expect(backend.retrieve('my-secret')).resolves.toBe(replacement)
+      expect(mockExecCommand).not.toHaveBeenCalled()
+      expect(mockExecCommandFull.mock.calls.map(([, args]) => args[0])).toEqual([
+        'find-generic-password',
+        '-i',
+        'find-generic-password',
+        '-i',
+        'find-generic-password',
       ])
     })
 
-    it('should base64-encode the secret value', async () => {
-      mockExecCommandFull.mockResolvedValue(makeResult(0))
-      mockExecCommand.mockResolvedValue('')
+    it('preserves the winning credential when two creates see an empty keychain', async () => {
+      mockKeychain()
+      const first = backend.store('my-secret', 'winner')
+      const second = backend.store('my-secret', 'duplicate')
+      await Promise.all([
+        expect(first).resolves.toBeUndefined(),
+        expect(second).rejects.toThrow(ExecError),
+      ])
+      await expect(backend.retrieve('my-secret')).resolves.toBe('winner')
+    })
 
-      const secret = 'my-special-secret-with-special-chars: !@#$'
-      await backend.store('test-id', secret)
-
-      const encoded = Buffer.from(secret, 'utf8').toString('base64')
-      expect(mockExecCommand).toHaveBeenCalledWith(
-        'security',
-        expect.arrayContaining(['-w', encoded]),
+    it('stops if security could not initialize the lookup', async () => {
+      mockExecCommandFull.mockResolvedValueOnce(
+        makeResult(44, '', 'security: SecKeychainSearchCreateFromAttributes: failed'),
       )
+      await expect(backend.store('my-secret', 'value')).rejects.toThrow(ExecError)
+      expect(mockExecCommandFull).toHaveBeenCalledTimes(1)
+    })
+
+    it('quotes service names and writes an explicit empty password', async () => {
+      mockExecCommandFull.mockResolvedValueOnce(makeResult(44)).mockResolvedValueOnce(makeResult(0))
+      await backend.store('id "with quotes" and \\', '')
+      expect(mockExecCommandFull).toHaveBeenLastCalledWith('security', ['-i'], {
+        stdin:
+          'add-generic-password -a "vaultkeeper" -s "vaultkeeper:id \\"with quotes\\" and \\\\" -w ""\n',
+      })
+    })
+
+    it.each(['split\nline', 'carriage\rreturn', 'embedded\0nul'])(
+      'rejects IDs that cannot be represented on one line',
+      async (id) => {
+        await expect(backend.store(id, 'value')).rejects.toThrow(ExecError)
+        expect(mockExecCommandFull).not.toHaveBeenCalled()
+      },
+    )
+
+    it('rejects oversized input before the lookup', async () => {
+      await expect(backend.store('my-secret', '🔐'.repeat(1024))).rejects.toThrow(/line limit/i)
+      await expect(backend.store('a'.repeat(300_000), 'value')).rejects.toThrow(/line limit/i)
+      expect(mockExecCommandFull).not.toHaveBeenCalled()
+    })
+
+    it('rejects a command enlarged by escaping before the write', async () => {
+      mockExecCommandFull.mockResolvedValueOnce(makeResult(44))
+      await expect(backend.store('"'.repeat(2048), '')).rejects.toThrow(/line limit/i)
+      expect(mockExecCommandFull).toHaveBeenCalledTimes(1)
+    })
+
+    it('stops if the owning keychain cannot be identified safely', async () => {
+      mockExecCommandFull.mockResolvedValueOnce(makeResult(0, 'unexpected metadata'))
+      await expect(backend.store('my-secret', 'replacement')).rejects.toThrow(ExecError)
+      expect(mockExecCommandFull).toHaveBeenCalledTimes(1)
+    })
+
+    it('reports a native failure even if the status wrapped to exit zero', async () => {
+      mockExecCommandFull
+        .mockResolvedValueOnce(makeResult(44))
+        .mockResolvedValueOnce(makeResult(0, '', 'add-generic-password: returned -25600\n'))
+      await expect(backend.store('my-secret', 'value')).rejects.toThrow(ExecError)
+    })
+
+    it('omits credential-bearing diagnostics from errors', async () => {
+      const secret = 'fake-sensitive-value'
+      const encoded = Buffer.from(secret).toString('base64')
+      mockExecCommandFull
+        .mockResolvedValueOnce(makeResult(44))
+        .mockResolvedValueOnce(makeResult(1, '', `${secret} ${encoded}`))
+      const pending = backend.store('my-secret', secret)
+      await expect(pending).rejects.toThrow(ExecError)
+      await expect(pending).rejects.not.toThrow(secret)
+      await expect(pending).rejects.not.toThrow(encoded)
     })
   })
 

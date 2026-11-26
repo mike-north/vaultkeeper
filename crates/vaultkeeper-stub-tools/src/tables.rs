@@ -370,7 +370,7 @@ pub fn op() -> BehaviorTable {
 }
 
 /// `security` (macOS Keychain) — a minimal probe/version table. The real
-/// `KeychainBackend` drives `security -i` with a multi-command stdin script
+/// `KeychainBackend` drives `security -i` with a credential on stdin
 /// (see `crates/vaultkeeper-core/src/backend/keychain.rs`); modeling that
 /// interactive-script mode is out of scope for this table (`secret-tool` and
 /// `ykman`/`op` above already exercise every StubTool axis end to end).

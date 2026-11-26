@@ -80,6 +80,14 @@ describe('execCommandFull', () => {
     expect(result.exitCode).toBe(0)
   })
 
+  it('reports an interrupted stdin write even if the child exits zero', async () => {
+    await expect(
+      execCommandFull(process.execPath, ['-e', 'process.exit(0)'], {
+        stdin: 'x'.repeat(1024 * 1024),
+      }),
+    ).rejects.toThrow(ExecError)
+  })
+
   it('wraps ENOENT spawn error in PluginNotFoundError', async () => {
     await expect(
       execCommandFull('this-binary-absolutely-does-not-exist-anywhere', ['--version']),

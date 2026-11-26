@@ -8,95 +8,24 @@
 //! implementation are mutually readable because the naming scheme below is
 //! byte-for-byte identical to the TS backend's.
 //!
-//! # The `store` argv-leak problem, and its resolution (issue #290)
+//! # Store transport and replacement
 //!
-//! The TS backend's `store()` passes the base64-encoded secret as
-//! `security add-generic-password ... -w <encoded>` — a plain argv command.
-//! That puts the secret in this process's argv, visible to `ps`/Activity
-//! Monitor for the (brief) lifetime of the child process. `security`'s
-//! direct `-w` flag has no stdin channel: `-w <value>` always puts `<value>`
-//! in argv, and `-w` with no value falls back to an interactive `getpass()`
-//! TTY prompt that ignores piped stdin (verified empirically: piping a
-//! command stream at a bare trailing `-w` produces `password data for new
-//! item: retype password for new item:` prompt text and does not read the
-//! intended value).
+//! Each write sends a single command over `security -i` stdin. Base64 keeps
+//! the credential on one line. Quoting preserves literal service names
+//! and paths. Line breaks and NULs cannot be represented safely in the
+//! interactive stream, and the command must fit the tool's input buffer.
 //!
-//! **Resolution:** `security -i` ("interactive mode") reads *multiple*
-//! commands from stdin, one per line, until EOF — see `man security`. Run as
-//! `security -i` with no other argv, the OS-visible argv is just `security
-//! -i`; the entire `add-generic-password ... -w <value>` command instead
-//! rides the stdin command stream, never touching argv. This was verified
-//! directly before implementation:
-//!
-//! ```text
-//! $ printf 'add-generic-password -a t -s vk-spike -w dGVzdA==\n' | security -i
-//! $ security find-generic-password -a t -s vk-spike -w
-//! dGVzdA==
-//! ```
-//!
-//! The value came back byte-for-byte, confirming `-w <value>` is parsed off
-//! the `-i` stdin stream rather than diverted to the TTY prompt. `store()`
-//! stays a plain [`HostPlatform::exec`] call (which already carries stdin) —
-//! no Security.framework FFI, no host split, no wasm-portability loss.
-//!
-//! base64-encoding the secret before it enters the stdin script is
-//! *load-bearing* and is kept unchanged from the TS backend: the base64 alphabet
-//! (`A-Za-z0-9+/=`) contains no character `security -i`'s command tokenizer
-//! treats specially, so `-w <base64>` is always exactly one clean token
-//! regardless of what bytes the underlying secret contains.
-//!
-//! ## Scope: only `store` uses the command stream
-//!
-//! `retrieve` (`find-generic-password -w`, secret on stdout only),
-//! `delete`/`exists` (no secret in argv at all), and `list`
-//! (`dump-keychain` + parse) are all argv-safe as plain `security <args...>`
-//! exec calls — porting them 1:1 from the TS backend needs no `-i` handling.
-//!
-//! ## Quoting the account/service tokens in the `-i` stdin script
-//!
-//! Unlike a plain argv call, the `-i` stdin stream is *tokenized by
-//! `security` itself* (its own quoting rules, not the shell's). The account
-//! (`vaultkeeper`, a fixed constant) and service (`vaultkeeper:<id>`, where
-//! `<id>` is caller-supplied) are embedded as double-quoted tokens with `\`
-//! and `"` backslash-escaped, verified empirically to round-trip service
-//! names containing spaces, embedded double quotes, and embedded backslashes
-//! correctly through `security -i`. An embedded newline (`\n` or `\r`) in
-//! `<id>` cannot be escaped by this scheme — it would prematurely terminate
-//! the current `-i` command line and let an attacker-controlled `id` inject
-//! arbitrary follow-on `security -i` subcommands. `id` values (and a NUL
-//! byte, which no `security` command can represent at all) are therefore
-//! **enforced** to be single-line: every public method on this backend
-//! rejects such an `id` with a typed [`VaultError`] before issuing any
-//! subprocess call at all.
-//!
-//! ## Coordination with #270
-//!
-//! The TS `KeychainBackend`'s argv leak is also tracked as standalone defect
-//! #270. This Rust-core port supersedes it with the `security -i` design
-//! described above; #270 is left open to apply the equivalent fix to the TS
-//! implementation, which this PR does not touch.
-//!
-//! ## Known edge cases
-//!
-//! - **Non-atomic overwrite window.** `store()`'s `-i` script is
-//!   `delete-generic-password` immediately followed by `add-generic-password`
-//!   *within the same `security -i` process*, but `security` still executes
-//!   them as two separate Keychain operations, not one transaction. If the
-//!   delete succeeds but the add then fails (e.g. the keychain is locked or
-//!   disk-full partway through), the old secret is already gone and the new
-//!   one was never written — the entry is left missing, not merely stale.
-//! - **Cross-process store/store race.** Two processes calling `store()` for
-//!   the same `id` at the same time can both pass their own delete before
-//!   either add runs, then both add succeed (each against an
-//!   already-cleared slot) or one add fails with "item already exists" if it
-//!   loses the race to the other's add — `security` provides no
-//!   compare-and-swap primitive this backend could use to serialize the two
-//!   Keychain writes.
+//! A metadata lookup finds the first matching item using the same search
+//! order as retrieval. For an existing item, `add-generic-password -U`
+//! updates it in its owning keychain. If the update is rejected, the tool's
+//! fallback add is subject to the duplicate check in that same keychain.
+//! New items use a regular add in the default keychain.
 
 use crate::backend::types::{ExecOptions, HostPlatform, ListableBackend, Platform, SecretBackend};
 use crate::errors::VaultError;
 use base64ct::{Base64, Encoding};
 use std::sync::Arc;
+use zeroize::{Zeroize, Zeroizing};
 
 /// Keychain account used for every vaultkeeper-managed entry. Must match the
 /// TS backend's `ACCOUNT` exactly.
@@ -105,6 +34,22 @@ const ACCOUNT: &str = "vaultkeeper";
 /// Service name prefix applied to every vaultkeeper-managed entry. Must
 /// match the TS backend's `SERVICE_PREFIX` exactly.
 const SERVICE_PREFIX: &str = "vaultkeeper:";
+
+/// Low byte of errSecItemNotFound in the process exit code.
+const ITEM_NOT_FOUND_EXIT: i32 = 44;
+
+/// Reserve two bytes for the newline and NUL in security's 4096-byte input buffer.
+const MAX_INTERACTIVE_COMMAND_BYTES: usize = 4094;
+
+fn check_command_size(bytes: usize) -> Result<(), VaultError> {
+    if bytes > MAX_INTERACTIVE_COMMAND_BYTES {
+        return Err(VaultError::Exec {
+            message: "Keychain write exceeds the security command line limit".to_owned(),
+            command: "security".to_owned(),
+        });
+    }
+    Ok(())
+}
 
 /// macOS Keychain secret backend, driven entirely through `security(1)`
 /// subprocess calls via [`HostPlatform::exec`].
@@ -146,9 +91,10 @@ impl KeychainBackend {
     /// True if `stderr` carries the [`Self::LOCKED_KEYCHAIN_STDERR_SIGNATURE`]
     /// for a locked keychain that can't be read non-interactively.
     fn is_locked_keychain_error(stderr: &[u8]) -> bool {
-        String::from_utf8_lossy(stderr)
-            .to_lowercase()
-            .contains(Self::LOCKED_KEYCHAIN_STDERR_SIGNATURE)
+        let signature = Self::LOCKED_KEYCHAIN_STDERR_SIGNATURE.as_bytes();
+        stderr
+            .windows(signature.len())
+            .any(|bytes| bytes.eq_ignore_ascii_case(signature))
     }
 
     /// Reject an `id` containing a newline (`\n`/`\r`) or NUL byte before
@@ -189,6 +135,71 @@ impl KeychainBackend {
         quoted
     }
 
+    fn write_error(message: &str, stderr: &[u8]) -> VaultError {
+        if Self::is_locked_keychain_error(stderr) {
+            VaultError::BackendLocked {
+                message: "macOS Keychain is locked and cannot be written non-interactively"
+                    .to_owned(),
+                interactive: true,
+            }
+        } else {
+            VaultError::Exec {
+                message: message.to_owned(),
+                command: "security".to_owned(),
+            }
+        }
+    }
+
+    async fn store_target(&self, service: &str) -> Result<Option<String>, VaultError> {
+        let output = self
+            .host
+            .exec(
+                "security",
+                &["find-generic-password", "-a", ACCOUNT, "-s", service],
+                ExecOptions::default(),
+            )
+            .await?;
+        if Self::is_locked_keychain_error(&output.stderr) {
+            return Err(Self::write_error(
+                "Failed to locate the macOS Keychain item",
+                &output.stderr,
+            ));
+        }
+        // security can report item-not-found after failing to initialize the search.
+        let search_error = b"SecKeychainSearchCreateFromAttributes:";
+        if output
+            .stderr
+            .windows(search_error.len())
+            .any(|bytes| bytes == search_error)
+        {
+            return Err(Self::write_error(
+                "Failed to locate the macOS Keychain item",
+                &output.stderr,
+            ));
+        }
+        match output.exit_code {
+            ITEM_NOT_FOUND_EXIT => Ok(None),
+            0 => {
+                let target = std::str::from_utf8(&output.stdout)
+                    .ok()
+                    .and_then(|metadata| metadata.split_once('\n'))
+                    .and_then(|(line, _)| line.strip_prefix("keychain: "))
+                    .and_then(Self::parse_printed_buffer)
+                    .filter(|path| path.starts_with('/') && !path.contains(['\n', '\r', '\0']));
+                target.map(Some).ok_or_else(|| {
+                    Self::write_error(
+                        "Failed to identify the keychain containing the item",
+                        &output.stderr,
+                    )
+                })
+            }
+            _ => Err(Self::write_error(
+                "Failed to locate the macOS Keychain item",
+                &output.stderr,
+            )),
+        }
+    }
+
     /// Parse a `security dump-keychain` attribute line for the
     /// `0x00000007 <blob>=...` (service name) attribute, returning the raw
     /// UTF-8 string value regardless of which of `security`'s two display
@@ -213,7 +224,10 @@ impl KeychainBackend {
     /// never emits anything after the closing quote on a `<blob>` line
     /// (verified empirically: no trailing whitespace or content follows).
     fn parse_service_attribute_line(line: &str) -> Option<String> {
-        let rest = line.trim_start().strip_prefix("0x00000007 <blob>=")?;
+        Self::parse_printed_buffer(line.trim_start().strip_prefix("0x00000007 <blob>=")?)
+    }
+
+    fn parse_printed_buffer(rest: &str) -> Option<String> {
         if let Some(hex) = rest.strip_prefix("0x") {
             let hex_digits: String = hex.chars().take_while(|c| c.is_ascii_hexdigit()).collect();
             if hex_digits.is_empty() || !hex_digits.len().is_multiple_of(2) {
@@ -262,11 +276,6 @@ impl SecretBackend for KeychainBackend {
         if self.host.platform() != Platform::Darwin {
             return false;
         }
-        // `security version` is not a real subcommand (verified empirically
-        // to always fail with "unknown command"), unlike the TS backend's
-        // probe which relies on it. `list-keychains` is a real, read-only,
-        // side-effect-free command that both confirms `security` is on PATH
-        // and that it can actually talk to the keychain subsystem.
         match self
             .host
             .exec("security", &["list-keychains"], ExecOptions::default())
@@ -280,32 +289,24 @@ impl SecretBackend for KeychainBackend {
     async fn store(&self, id: &str, secret: &str) -> Result<(), VaultError> {
         Self::reject_multiline_id(id)?;
         let service = Self::service_name(id);
-        let account_token = Self::quote_for_interactive_stream(ACCOUNT);
+        let encoded_bytes = secret.len().div_ceil(3).saturating_mul(4);
+        check_command_size(service.len().saturating_add(encoded_bytes))?;
+        let target = self.store_target(&service).await?;
         let service_token = Self::quote_for_interactive_stream(&service);
-        let encoded = Base64::encode_string(secret.as_bytes());
-
-        // Single `security -i` process for the whole store operation (both
-        // the pre-delete of any existing entry and the fresh add), so the
-        // secret's only appearance anywhere is on this one process's stdin.
-        // `security -i`'s overall exit code reflects the *last* command run
-        // in the stream, so a failing pre-delete (no prior entry) followed
-        // by a successful add still yields exit code 0 — verified
-        // empirically (see module docs).
-        // `encoded` is quoted so an empty secret still yields a value token
-        // (`-w ""`): a bare trailing `-w` would flip `security` into its
-        // interactive getpass prompt and hang a non-interactive caller.
-        // Base64 output never contains `"`/`\`/newline, so plain quoting is
-        // exact (no escaping needed) — enforced by the debug_assert below.
-        debug_assert!(
-            !encoded.contains(['"', '\\', '\n', '\r']),
-            "base64 output must be quote-safe"
-        );
-        let script = format!(
-            "delete-generic-password -a {account_token} -s {service_token}\n\
-             add-generic-password -a {account_token} -s {service_token} -w \"{encoded}\"\n"
-        );
-
-        let output = self
+        let (update_flag, keychain) = match target {
+            Some(path) => (
+                " -U",
+                format!(" {}", Self::quote_for_interactive_stream(&path)),
+            ),
+            None => ("", String::new()),
+        };
+        let prefix =
+            format!("add-generic-password{update_flag} -a \"{ACCOUNT}\" -s {service_token} -w \"");
+        let suffix = format!("\"{keychain}\n");
+        check_command_size(prefix.len() + encoded_bytes + suffix.len() - 1)?;
+        let encoded = Zeroizing::new(Base64::encode_string(secret.as_bytes()));
+        let script = Zeroizing::new(format!("{prefix}{}{suffix}", encoded.as_str()));
+        let mut output = self
             .host
             .exec(
                 "security",
@@ -316,41 +317,25 @@ impl SecretBackend for KeychainBackend {
                 },
             )
             .await?;
-        if output.exit_code != 0 {
-            // Deliberately does NOT embed `output.stderr` here, unlike every
-            // other error path in this file. Every other `security`
-            // subprocess in this backend is invoked with an argv-only
-            // command (no stdin secret involved), so its stderr is safe to
-            // surface verbatim for diagnostics. This is the one process
-            // whose stdin carries the secret (in `encoded`, base64-encoded)
-            // — verified empirically that real `security -i`'s stderr never
-            // echoes the command line or `-w` value back (only a status
-            // line like `add-generic-password: returned -25299`), but that
-            // is an unenforced behavioral property of a third-party binary,
-            // not a contract this backend can rely on. Omitting stderr here
-            // entirely removes any path for a future `security` version (or
-            // an unanticipated error mode) to leak the secret or its base64
-            // encoding into a `VaultError` message that might be logged.
-            // Locked-keychain detection mirrors retrieve/delete/exists —
-            // still without embedding stderr (the signature check reads it,
-            // the error message never includes it).
-            if Self::is_locked_keychain_error(&output.stderr) {
-                return Err(VaultError::BackendLocked {
-                    message: format!(
-                        "macOS Keychain is locked and cannot be written non-interactively for {id}"
-                    ),
-                    interactive: true,
-                });
-            }
-            return Err(VaultError::Exec {
-                message: format!(
-                    "security add-generic-password failed with exit code {}",
-                    output.exit_code
-                ),
-                command: "security".to_string(),
-            });
-        }
-        Ok(())
+        // Interactive mode reports a full OSStatus even when the process exit code wraps to zero.
+        let status = b"add-generic-password: returned ";
+        let result = if output.exit_code != 0
+            || output
+                .stderr
+                .windows(status.len())
+                .any(|bytes| bytes == status)
+            || Self::is_locked_keychain_error(&output.stderr)
+        {
+            Err(Self::write_error(
+                "macOS Keychain write failed",
+                &output.stderr,
+            ))
+        } else {
+            Ok(())
+        };
+        output.stdout.zeroize();
+        output.stderr.zeroize();
+        result
     }
 
     async fn retrieve(&self, id: &str) -> Result<String, VaultError> {
@@ -492,17 +477,17 @@ mod tests {
         stdin: Option<Vec<u8>>,
     }
 
-    /// Test double for `HostPlatform` that fakes a macOS Keychain in memory,
-    /// keyed by service name, and records every subprocess invocation for
-    /// argv inspection. Understands the `security -i` stdin command stream
-    /// well enough to execute `delete-generic-password`/`add-generic-password`
-    /// lines against its in-memory store, mirroring the real tool's
-    /// behavior verified empirically before implementation.
+    /// A non-default keychain printed in security's hex format.
+    const TEST_KEYCHAIN_PATH: &str = "/test/team clés.keychain-db";
+
+    /// In-memory Keychain with invocation tracking and failure injection.
     struct TestHost {
         config_dir: PathBuf,
         /// service -> secret (raw bytes as returned by `-w`, i.e. base64 text)
         entries: Mutex<std::collections::HashMap<String, String>>,
         calls: Mutex<Vec<RecordedExec>>,
+        reject_writes: std::sync::atomic::AtomicBool,
+        shadow_item: std::sync::atomic::AtomicBool,
         list_keychains_unavailable: bool,
         platform: Platform,
     }
@@ -513,16 +498,15 @@ mod tests {
                 config_dir: PathBuf::from("/test/config"),
                 entries: Mutex::new(std::collections::HashMap::new()),
                 calls: Mutex::new(Vec::new()),
+                reject_writes: false.into(),
+                shadow_item: false.into(),
                 list_keychains_unavailable: false,
                 platform: Platform::Darwin,
             })
         }
 
         /// Minimal re-implementation of `security -i`'s per-line tokenizer,
-        /// just enough to parse the two command shapes this backend ever
-        /// sends: `delete-generic-password -a <tok> -s <tok>` and
-        /// `add-generic-password -a <tok> -s <tok> -w <value>`, where `<tok>`
-        /// may be a double-quoted, backslash-escaped token.
+        /// including double-quoted, backslash-escaped tokens.
         fn tokenize(line: &str) -> Vec<String> {
             let mut tokens = Vec::new();
             let mut chars = line.chars().peekable();
@@ -579,12 +563,29 @@ mod tests {
                         }
                     }
                     Some("add-generic-password") => {
-                        let service = tokens.get(4).expect("service token").clone();
-                        let value = tokens.get(6).expect("-w value token").clone();
+                        let update = tokens.get(1).is_some_and(|value| value == "-U");
+                        let offset = usize::from(update);
+                        let service = tokens.get(4 + offset).expect("service token").clone();
+                        let value = tokens.get(6 + offset).expect("-w value token").clone();
+                        let target = tokens.get(7 + offset).map(String::as_str);
                         let mut entries = self.entries.lock().unwrap();
-                        if let std::collections::hash_map::Entry::Vacant(e) = entries.entry(service)
+                        let exists = entries.contains_key(&service);
+                        if self
+                            .reject_writes
+                            .load(std::sync::atomic::Ordering::Relaxed)
                         {
-                            e.insert(value);
+                            if update && exists && target != Some(TEST_KEYCHAIN_PATH) {
+                                self.shadow_item
+                                    .store(true, std::sync::atomic::Ordering::Relaxed);
+                                last_exit_code = 0;
+                            } else {
+                                last_exit_code = 45;
+                            }
+                            stderr.extend_from_slice(
+                                b"security: SecKeychainItemModifyContent: denied\n",
+                            );
+                        } else if !exists || (update && target == Some(TEST_KEYCHAIN_PATH)) {
+                            entries.insert(service, value);
                             last_exit_code = 0;
                         } else {
                             last_exit_code = 45;
@@ -646,7 +647,12 @@ mod tests {
                             stdout: if wants_value {
                                 format!("{value}\n").into_bytes()
                             } else {
-                                Vec::new()
+                                let hex: String = TEST_KEYCHAIN_PATH
+                                    .bytes()
+                                    .map(|b| format!("{b:02X}"))
+                                    .collect();
+                                format!("keychain: 0x{hex}  \"/test/display\"\nversion: 512\n")
+                                    .into_bytes()
                             },
                             stderr: Vec::new(),
                             exit_code: 0,
@@ -744,27 +750,30 @@ mod tests {
     // as a single `security -i` process ─────────────────────────────────
 
     #[tokio::test]
-    async fn store_issues_a_single_security_interactive_process() {
+    async fn store_issues_one_security_write() {
         let host = TestHost::new();
         let backend = KeychainBackend::new(host.clone());
         backend.store("my-secret", "secret-value").await.unwrap();
 
         let calls = host.calls.lock().unwrap();
-        assert_eq!(calls.len(), 1, "store should issue exactly one exec call");
+        assert_eq!(calls.len(), 2);
         assert_eq!(calls[0].cmd, "security");
-        assert_eq!(calls[0].args, vec!["-i"]);
+        assert_eq!(
+            calls[0].args,
+            [
+                "find-generic-password",
+                "-a",
+                ACCOUNT,
+                "-s",
+                "vaultkeeper:my-secret"
+            ]
+        );
+        assert_eq!(calls[1].cmd, "security");
+        assert_eq!(calls[1].args, ["-i"]);
     }
 
     #[tokio::test]
-    async fn store_overwrites_an_existing_entry_via_the_pre_delete_line() {
-        // Regression coverage for the load-bearing `delete-generic-password`
-        // line that precedes `add-generic-password` in store()'s -i script:
-        // without it, a second store() for the same id would fail with the
-        // real `security`'s "item already exists" error (verified
-        // empirically — see module docs), since add-generic-password alone
-        // never overwrites. TestHost's `run_interactive_script` mirrors
-        // that duplicate-add failure, so this test genuinely fails if the
-        // pre-delete line is removed.
+    async fn store_overwrites_an_existing_entry() {
         let host = TestHost::new();
         let backend = KeychainBackend::new(host.clone());
 
@@ -780,6 +789,40 @@ mod tests {
             "second-value",
             "the second store must have replaced the first value"
         );
+    }
+
+    #[tokio::test]
+    async fn store_preserves_the_prior_credential_when_update_fails() {
+        let host = TestHost::new();
+        let backend = KeychainBackend::new(host.clone());
+        let prior = "still-valid-🔐\ncredential";
+        backend.store("id", prior).await.unwrap();
+        host.reject_writes
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+
+        assert!(matches!(
+            backend.store("id", "rejected").await,
+            Err(VaultError::Exec { .. })
+        ));
+        assert_eq!(backend.retrieve("id").await.unwrap(), prior);
+        assert!(!host.shadow_item.load(std::sync::atomic::Ordering::Relaxed));
+    }
+
+    #[tokio::test]
+    async fn oversized_replacements_preserve_the_prior_credential() {
+        let host = TestHost::new();
+        let backend = KeychainBackend::new(host.clone());
+        backend.store("id", "prior").await.unwrap();
+        assert!(matches!(
+            backend.store("id", &"🔐".repeat(1024)).await,
+            Err(VaultError::Exec { .. })
+        ));
+        assert!(matches!(
+            backend.store(&"a".repeat(300_000), "value").await,
+            Err(VaultError::Exec { .. })
+        ));
+        assert_eq!(host.calls.lock().unwrap().len(), 2);
+        assert_eq!(backend.retrieve("id").await.unwrap(), "prior");
     }
 
     #[tokio::test]
@@ -803,9 +846,9 @@ mod tests {
                 call.args
             );
         }
-        let stdin = calls[0]
-            .stdin
-            .as_ref()
+        let stdin = calls
+            .iter()
+            .find_map(|call| call.stdin.as_ref())
             .expect("store's exec call must carry stdin");
         let script = String::from_utf8_lossy(stdin);
         assert!(
@@ -1456,9 +1499,16 @@ mod tests {
             async fn exec(
                 &self,
                 _cmd: &str,
-                _args: &[&str],
+                args: &[&str],
                 _options: ExecOptions<'_>,
             ) -> Result<ExecOutput, VaultError> {
+                if args.first() == Some(&"find-generic-password") {
+                    return Ok(ExecOutput {
+                        stdout: Vec::new(),
+                        stderr: Vec::new(),
+                        exit_code: 44,
+                    });
+                }
                 let encoded = Base64::encode_string(SENTINEL.as_bytes());
                 Ok(ExecOutput {
                     stdout: Vec::new(),
@@ -1573,6 +1623,8 @@ mod tests {
             config_dir: PathBuf::from("/test/config"),
             entries: Mutex::new(std::collections::HashMap::new()),
             calls: Mutex::new(Vec::new()),
+            reject_writes: false.into(),
+            shadow_item: false.into(),
             list_keychains_unavailable: false,
             platform: Platform::Linux,
         });
@@ -1593,6 +1645,8 @@ mod tests {
             config_dir: PathBuf::from("/test/config"),
             entries: Mutex::new(std::collections::HashMap::new()),
             calls: Mutex::new(Vec::new()),
+            reject_writes: false.into(),
+            shadow_item: false.into(),
             list_keychains_unavailable: true,
             platform: Platform::Darwin,
         });
