@@ -7,7 +7,8 @@
  */
 
 import type { VaultClaims, SigningClaims } from './types.js'
-import { AuthorizationDeniedError } from '../errors.js'
+import { AuthorizationDeniedError, TokenExpiredError } from '../errors.js'
+import { getTokenExpiryError } from '../jwe/claims.js'
 
 /**
  * The claims a capability token can wrap: either an ordinary secret's
@@ -54,7 +55,12 @@ export class CapabilityToken {
 }
 
 /** Internal storage for claims — inaccessible outside the module closure. */
-const claimsStore = new WeakMap<CapabilityToken, StoredClaims>()
+type CapabilityEntry =
+  | { kind: 'jwe'; claims: VaultClaims; deadline: number }
+  | { kind: 'signing'; claims: SigningClaims }
+  | { kind: 'expired'; deadline: number }
+
+const claimsStore = new WeakMap<CapabilityToken, CapabilityEntry>()
 
 /**
  * Create a capability token that wraps secret `claims`.
@@ -64,7 +70,7 @@ const claimsStore = new WeakMap<CapabilityToken, StoredClaims>()
  */
 export function createCapabilityToken(claims: VaultClaims): CapabilityToken {
   const token = new CapabilityToken()
-  claimsStore.set(token, claims)
+  claimsStore.set(token, { kind: 'jwe', claims, deadline: claims.exp })
   return token
 }
 
@@ -78,23 +84,39 @@ export function createCapabilityToken(claims: VaultClaims): CapabilityToken {
  */
 export function createSigningCapabilityToken(claims: SigningClaims): CapabilityToken {
   const token = new CapabilityToken()
-  claimsStore.set(token, claims)
+  claimsStore.set(token, { kind: 'signing', claims })
   return token
 }
 
 /**
- * Retrieve the claims associated with `token`.
+ * Retrieve the claims associated with `token` while its authority is live.
  *
  * @throws {AuthorizationDeniedError} if the token was not created by this
  *   module (i.e. it has no claims entry in the store).
+ * @throws {TokenExpiredError} if the JWE deadline has been reached.
  * @internal
  */
-export function validateCapabilityToken(token: CapabilityToken): StoredClaims {
-  const claims = claimsStore.get(token)
-  if (claims === undefined) {
+export function validateCapabilityToken(
+  token: CapabilityToken,
+  nowSec = Date.now() / 1000,
+): StoredClaims {
+  const entry = claimsStore.get(token)
+  if (entry === undefined) {
     throw new AuthorizationDeniedError('Invalid or unrecognized capability token')
   }
-  return claims
+  if (entry.kind === 'signing') {
+    return entry.claims
+  }
+  if (entry.kind === 'expired') {
+    throw new TokenExpiredError(`Token expired at ${String(entry.deadline)}`, false)
+  }
+  const expiryError = getTokenExpiryError(entry.deadline, nowSec)
+  if (expiryError !== undefined) {
+    // Drop the claims and prevent a backwards clock correction from reviving them.
+    claimsStore.set(token, { kind: 'expired', deadline: entry.deadline })
+    throw expiryError
+  }
+  return entry.claims
 }
 
 /**

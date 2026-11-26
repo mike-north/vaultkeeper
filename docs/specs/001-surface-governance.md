@@ -205,6 +205,10 @@ on reflection, recorded to close the question.
   only through a one-time `SecretAccessor.read()`, a signing key never egresses (sign happens backend-side),
   and passing the wrong token kind to `getSecret`/`sign` is a typed refusal. This opacity is a load-bearing
   security property, not an ergonomic detail — no future API may add a token accessor that returns claims.
+  A TypeScript capability redeemed from a JWE retains its deadline. At or after that deadline,
+  `getSecret` and an outstanding accessor's first `read` refuse with `TokenExpiredError` before
+  releasing plaintext. Delegated `fetch` and `exec` refuse with the same error before dispatch
+  if any supplied capability has expired.
 - **L3 — Typed failures only.** Every thrown error is a subclass of `VaultError`. Plain `Error` is never
   thrown across the public boundary; new failure modes add a `VaultError` subclass, exported from `index.ts`.
 - **L4 — Minimal runtime dependency.** The `vaultkeeper` TS library's only runtime dependency is `jose`;

@@ -41,6 +41,7 @@ function redactSecretMaterial(
  * @param secrets - A single secret string (replaces `{{secret}}`) or a
  *   name-to-value map (replaces `{{secret:name}}`)
  * @param request - The fetch request template with placeholders
+ * @param beforeDispatch - Lease check before handing the prepared request to fetch
  * @returns The fetch Response
  * @throws {FetchError} If the URL is malformed or the underlying network
  *   request fails (e.g. DNS failure, connection refused, TLS error).
@@ -49,38 +50,36 @@ function redactSecretMaterial(
 export async function delegatedFetch(
   secrets: string | Record<string, string>,
   request: FetchRequest,
+  beforeDispatch?: () => void,
 ): Promise<Response> {
-  const url = resolvePlaceholders(request.url, secrets)
-  const headers =
-    request.headers !== undefined
-      ? resolvePlaceholdersInRecord(request.headers, secrets)
-      : undefined
-  const body = request.body !== undefined ? resolvePlaceholders(request.body, secrets) : undefined
-
+  const { url: urlTemplate, headers, body, method } = request
+  const url = resolvePlaceholders(urlTemplate, secrets)
   const init: RequestInit = {}
-  if (request.method !== undefined) {
-    init.method = request.method
+  if (method !== undefined) {
+    init.method = method
   }
   if (headers !== undefined) {
-    init.headers = headers
+    init.headers = resolvePlaceholdersInRecord(headers, secrets)
   }
   if (body !== undefined) {
-    init.body = body
+    init.body = resolvePlaceholders(body, secrets)
   }
 
+  const dispatch = fetch
+  beforeDispatch?.()
   try {
-    return await fetch(url, init)
+    return await dispatch(url, init)
   } catch (error) {
     const rawDetail = error instanceof Error ? error.message : String(error)
     // The underlying error's message can embed the placeholder-resolved URL
     // (with the injected secret) — e.g. `getaddrinfo ENOTFOUND <secret-host>`.
     // Redact the resolved URL and every secret value before including it, and
-    // report the unresolved template (`request.url`), never the resolved `url`,
+    // report the unresolved template (`urlTemplate`), never the resolved `url`,
     // so no secret is echoed into the thrown message or the `url` field. The
     // original error is deliberately not attached as `cause`: its message
     // cannot be redacted in place and would reintroduce the leak.
     const secretValues = typeof secrets === 'string' ? [secrets] : Object.values(secrets)
-    const detail = redactSecretMaterial(rawDetail, url, request.url, secretValues)
-    throw new FetchError(`Fetch failed for ${request.url}: ${detail}`, request.url)
+    const detail = redactSecretMaterial(rawDetail, url, urlTemplate, secretValues)
+    throw new FetchError(`Fetch failed for ${urlTemplate}: ${detail}`, urlTemplate)
   }
 }
