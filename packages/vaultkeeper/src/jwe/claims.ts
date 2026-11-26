@@ -10,54 +10,56 @@ import {
   UsageLimitExceededError,
   VaultError,
 } from '../errors.js'
+import { tokenExpiryTime } from './expiry-clock.js'
+
+/** Size at which the blocklist attempts to reclaim expired entries. */
+const BLOCKLIST_SWEEP_THRESHOLD = 10_000
+
+/** Process-local denial records, keyed by JTI and retained through expiry. */
+const blocklist = new Map<string, number>()
+
+/** Whole second of the last pressure sweep, limiting full scans under load. */
+let lastBlocklistSweep: number | undefined
 
 /**
- * Maximum number of JTIs the in-memory blocklist will retain.
- * When the cap is reached, the oldest inserted entry is evicted (FIFO/LRU).
- * This prevents unbounded growth for long-running processes.
- */
-const BLOCKLIST_MAX_SIZE = 10_000
-
-/**
- * In-memory blocklist for revoked token JTIs. This is process-local and non-persistent.
- * For production use, a distributed blocklist (e.g., Redis) should be layered on top.
- *
- * A Map is used instead of a Set because Map preserves insertion order, which
- * allows O(1) eviction of the oldest entry (first key in iteration order).
- * The map values are always `true` — only the keys matter for lookup.
- */
-const blocklist = new Map<string, true>()
-
-/**
- * Adds a JTI to the in-memory blocklist, preventing further use of that token.
- * If the blocklist has reached its maximum size, the oldest entry is evicted first.
+ * Blocks a JTI without evicting other live denials.
  *
  * @param jti - The unique token ID to block
+ * @param expiresAt - Epoch second when the denial can be discarded. Defaults
+ *   to an indefinite denial. Repeated blocks can only extend the denial.
  * @internal
  */
-export function blockToken(jti: string): void {
-  if (blocklist.has(jti)) {
-    // Already blocked — re-inserting would not change insertion order in Map,
-    // so we delete and re-add to refresh the recency position.
-    blocklist.delete(jti)
-  } else if (blocklist.size >= BLOCKLIST_MAX_SIZE) {
-    // Evict the oldest entry (first key in insertion-order iteration).
-    const oldestKey = blocklist.keys().next().value
-    if (oldestKey !== undefined) {
-      blocklist.delete(oldestKey)
+export function blockToken(jti: string, expiresAt = Number.POSITIVE_INFINITY): void {
+  const now = tokenExpiryTime()
+  const sweepSecond = Math.floor(now)
+  if (blocklist.size >= BLOCKLIST_SWEEP_THRESHOLD && lastBlocklistSweep !== sweepSecond) {
+    for (const [blockedJti, expiry] of blocklist) {
+      if (expiry <= now) {
+        blocklist.delete(blockedJti)
+      }
     }
+    lastBlocklistSweep = sweepSecond
   }
-  blocklist.set(jti, true)
+  if (expiresAt > now) {
+    blocklist.set(jti, Math.max(blocklist.get(jti) ?? expiresAt, expiresAt))
+  }
 }
 
 /**
- * Returns true if the given JTI has been blocked.
+ * Returns true if the given JTI has a live denial.
  *
  * @param jti - The unique token ID to check
+ * @param now - Authorization time snapshot, shared with the claim expiry check
  * @internal
  */
-export function isBlocked(jti: string): boolean {
-  return blocklist.has(jti)
+export function isBlocked(jti: string, now = tokenExpiryTime()): boolean {
+  const expiry = blocklist.get(jti)
+  if (expiry === undefined) return false
+  if (expiry <= now) {
+    blocklist.delete(jti)
+    return false
+  }
+  return true
 }
 
 /**
@@ -67,16 +69,15 @@ export function isBlocked(jti: string): boolean {
  */
 export function clearBlocklist(): void {
   blocklist.clear()
+  lastBlocklistSweep = undefined
 }
 
 /**
- * Check the inclusive JWE cutoff, including fractional NumericDates.
+ * Check the inclusive JWE cutoff against the caller's clock snapshot, including
+ * fractional NumericDates. Keep whole-second diagnostics for whole-second deadlines.
  * @internal
  */
-export function getTokenExpiryError(
-  exp: number,
-  nowSec = Date.now() / 1000,
-): TokenExpiredError | undefined {
+export function getTokenExpiryError(exp: number, nowSec: number): TokenExpiredError | undefined {
   if (nowSec >= exp) {
     const reportedNow = Number.isInteger(exp) ? Math.floor(nowSec) : nowSec
     return new TokenExpiredError(
@@ -111,6 +112,7 @@ export function getTokenExpiryError(
  *
  * @param claims - VaultClaims payload to validate
  * @param usedCount - How many times the token has been used already (for `use` limit checking)
+ * @param now - Authorization time snapshot, shared with usage reclamation
  * @throws TokenExpiredError if the token is expired
  * @throws TokenRevokedError if the token has been blocked
  * @throws UsageLimitExceededError if the usage count has been exhausted
@@ -118,7 +120,7 @@ export function getTokenExpiryError(
  * @throws UnreachableError if `kty` is present but not a recognized
  * {@link ClaimsKind}
  */
-export function validateClaims(claims: VaultClaims, usedCount = 0): void {
+export function validateClaims(claims: VaultClaims, usedCount = 0, now = tokenExpiryTime()): void {
   // Validate required string fields shared by every claims kind.
   if (claims.jti.trim() === '') {
     throw new VaultError('Invalid token: jti must not be empty')
@@ -198,13 +200,13 @@ export function validateClaims(claims: VaultClaims, usedCount = 0): void {
     throw new VaultError('Invalid token: iat must not be after exp')
   }
 
-  const expiryError = getTokenExpiryError(claims.exp)
+  const expiryError = getTokenExpiryError(claims.exp, now)
   if (expiryError !== undefined) {
     throw expiryError
   }
 
   // Check blocklist
-  if (isBlocked(claims.jti)) {
+  if (isBlocked(claims.jti, now)) {
     throw new TokenRevokedError(`Token ${claims.jti} has been revoked`)
   }
 

@@ -258,6 +258,16 @@ whether membership is intentional.
   `ExecutableTrustRequiredError`, `IdentityMismatchError`.
 - **Secrets & access tokens:** `store`, `delete`, `secretExists`, `authorize`, `getSecret`, `CapabilityToken`,
   `SecretAccessor`, `SecretTokenMap`, `AccessorConsumedError`, `SecretNotFoundError`.
+  The TypeScript `authorize` shares volatile accounting for 10,000 finite-use tokens across vaults using the
+  same loaded module. It keeps tracked budgets through expiry and rejects a first finite-use authorization
+  with `AuthorizationDeniedError` when every slot is live. Unlimited-use authorizations require no slot.
+  JWE redemption, reclamation, and capability use share an expiry clock that honors fractional
+  seconds and advances with elapsed time when the wall clock is set back. Expired tokens stay
+  expired, and newly issued tokens continue to age. Separate processes maintain independent budgets.
+  The Rust core uses the same elapsed-time rule per vault for whole-second JWE claims and handles.
+  A JWE minted during clock correction carries the issuing instance's absolute timestamps. Other
+  processes evaluate those timestamps against their own clocks, so clock skew can change the
+  recipient's effective validity window.
 - **Delegated access patterns:** `fetch` returns a detached `Response` with the server's body stream,
   numeric `status`, `ok`, and `redirected` flag. Native Fetch returns `redirected` as false because
   delegated redirects are rejected. The response and its clones start with empty
@@ -274,8 +284,9 @@ whether membership is intentional.
   `SigningBackend`, `isSigningBackend`, and the signing error family.
   TypeScript in-process capabilities from `authorize` and `authorizeSigningKey` are bound to the
   issuing `VaultKeeper` instance, including when instances share configuration or backend storage.
-  A different instance rejects them with `AuthorizationDeniedError` before backend selection or
-  delegated work. For `fetch` and `exec`, the issuer requirement applies to every token in a map.
+  A different instance rejects them with `AuthorizationDeniedError` before evaluating their expiry,
+  selecting a backend, or dispatching delegated work. For `fetch` and `exec`, the issuer requirement
+  applies to every token in a map.
 - **Backends & registry:** `SecretBackend`, `ListableBackend`, `PresenceCapableBackend`, `BackendRegistry`,
   `BackendConfig`, `BackendFactory`, `BackendSetupFactory`, `BackendCapabilities`, `getBackendCapabilities`,
   `isListableBackend`, `isPresenceCapableBackend`, `defaultBackendType`, `platformNativeBackendType`,
