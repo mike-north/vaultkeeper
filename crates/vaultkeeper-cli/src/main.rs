@@ -3,6 +3,7 @@
 //! Matches the command surface and output format of the TypeScript CLI.
 
 mod host;
+mod usage;
 
 use clap::{ArgGroup, Parser, Subcommand};
 use host::NativeHostPlatform;
@@ -750,6 +751,14 @@ async fn cmd_run_token(
     // depth, not the only guard).
     if claims.kty == Some(vaultkeeper_core::ClaimsKind::SigningKey) {
         stderr_diag("Error: token does not authorize a secret value");
+        return 1;
+    }
+
+    // Reserve the durable budget before the process-local handle can expose
+    // its secret.
+    if let Err(e) = usage::reserve(host.config_dir(), &claims).await {
+        vault.release_handle(&handle);
+        stderr_diag(&format!("Error: Failed to authorize token: {e}"));
         return 1;
     }
 

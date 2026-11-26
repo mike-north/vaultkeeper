@@ -69,6 +69,14 @@ range. "Secrets" = does a secret value transit this command, and by what channel
 | `session mint` | `PROFILE` | `--entry <e>` | — | **JWE lease → stdout** | lease (capability, not secret) | 0 / 1 |
 | `session revoke` | — | `--jti <j>` \| `--key <k>` (xor) | — | confirmation | — | 0 / 1 |
 
+**Finite-use JWE admission (issue #381).** Native `run --token` and its `exec` alias share one
+persistent budget per token ID and config directory. Each admission spends one use before
+the CLI can read its secret, including when the child subsequently fails to launch. Concurrent native
+invocations reserve uses atomically, and exhaustion is a typed operational failure. Unlimited tokens
+and `--dry-run` do not use the ledger. Keep the ledger with the keys in a trusted config tree.
+The TypeScript CLI uses the SDK's process-local accounting. Each TypeScript invocation starts with
+the full token budget, including when it shares key material with the native CLI.
+
 **In review / designed, not landed** (env-epic-spec.md §4, lease lane #298–#300) — rows tracked here so the
 grammar review covers them before they land:
 

@@ -12,11 +12,14 @@
 
 #![cfg(unix)]
 
-use std::fs;
-use std::io::Read;
+use std::fs::{self, OpenOptions};
+use std::io::{BufRead, BufReader, Read, Write};
+use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt, symlink};
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::{Command, Output, Stdio};
 use std::sync::Arc;
+use std::time::Duration;
 use tempfile::TempDir;
 use vaultkeeper_core::backend::{ExecOptions, ExecOutput, HostPlatform, Platform};
 use vaultkeeper_core::errors::VaultError;
@@ -131,11 +134,15 @@ fn write_config(dir: &TempDir) {
 /// token, the simplest kind `authorize()` accepts) embedding `secret_value`,
 /// persisting key material to `dir` so a CLI subprocess pointed at the same
 /// config dir can decrypt it.
-async fn mint_token(dir: &TempDir, secret_value: &str) -> String {
+async fn mint_token_with_limit(
+    dir: &TempDir,
+    secret_value: &str,
+    use_limit: Option<u64>,
+) -> (String, String) {
     let host = Arc::new(RealFsHost {
         config_dir: dir.path().to_path_buf(),
     });
-    let vault = VaultKeeper::init(
+    let mut vault = VaultKeeper::init(
         host.as_ref(),
         Some(VaultKeeperOptions {
             skip_doctor: true,
@@ -144,14 +151,14 @@ async fn mint_token(dir: &TempDir, secret_value: &str) -> String {
     )
     .await
     .expect("failed to init vault for minting");
-    vault
+    let token = vault
         .setup(
             host.as_ref(),
             "run-token-uat-secret",
             secret_value,
             Some(&SetupOptions {
                 ttl_minutes: None,
-                use_limit: None,
+                use_limit,
                 executable_path: None,
                 skip_trust: Some(true),
                 trust_tier: None,
@@ -159,7 +166,266 @@ async fn mint_token(dir: &TempDir, secret_value: &str) -> String {
             }),
         )
         .await
-        .expect("failed to mint token")
+        .expect("failed to mint token");
+    let (handle, claims, _) = vault
+        .authorize(&token)
+        .expect("minted token must authorize");
+    vault.release_handle(&handle);
+    let fingerprint = vaultkeeper_core::identity::hash::hash_bytes(claims.jti.as_bytes());
+    (token, fingerprint)
+}
+
+async fn mint_token(dir: &TempDir, secret_value: &str) -> String {
+    mint_token_with_limit(dir, secret_value, None).await.0
+}
+
+/// Exercise real authorization while keeping the fixture secret out of argv.
+fn run_finite_token(dir: &TempDir, token: &str, verb: &str) -> Command {
+    let mut command = Command::new(vk_bin());
+    command
+        .env("VAULTKEEPER_CONFIG_DIR", dir.path())
+        .args([verb, "--token", token])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    command
+}
+
+fn admit(dir: &TempDir, token: &str, verb: &str) -> Command {
+    let mut command = run_finite_token(dir, token, verb);
+    command.args(["--", "sh", "-c", "true"]);
+    command
+}
+
+fn assert_exhausted(output: &Output, limit: u64) {
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains(&format!("usage limit of {limit} exceeded")),
+        "{stderr}"
+    );
+}
+
+#[tokio::test]
+async fn finite_use_budget_survives_restart_and_serializes_concurrent_admission() {
+    let dir = TempDir::new().unwrap();
+    write_config(&dir);
+    let (token, fingerprint) = mint_token_with_limit(&dir, "finite-secret", Some(3)).await;
+    let first = admit(&dir, &token, "run").output().unwrap();
+    assert!(
+        first.status.success(),
+        "{}",
+        String::from_utf8_lossy(&first.stderr)
+    );
+
+    // The first process has exited. Hold the ledger lock as new contenders start.
+    let ledger = dir.path().join("token-usage");
+    fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(&ledger)
+        .unwrap();
+    let gate = OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .mode(0o600)
+        .read(true)
+        .write(true)
+        .open(ledger.join(format!("{fingerprint}.lock")))
+        .unwrap();
+    gate.lock().unwrap();
+    let mut children: Vec<_> = (0..8)
+        .map(|_| admit(&dir, &token, "run").spawn().unwrap())
+        .collect();
+    tokio::time::sleep(Duration::from_millis(750)).await;
+    let exited_while_locked = children
+        .iter_mut()
+        .any(|child| child.try_wait().unwrap().is_some());
+    drop(gate);
+
+    let mut successes = 0;
+    for child in children {
+        let output = child.wait_with_output().unwrap();
+        if output.status.success() {
+            successes += 1;
+        } else {
+            assert_exhausted(&output, 3);
+        }
+    }
+    assert_eq!(
+        successes, 2,
+        "the first invocation spent one of the three uses"
+    );
+    assert!(
+        !exited_while_locked,
+        "admission must wait for the ledger writer"
+    );
+    assert_exhausted(&admit(&dir, &token, "exec").output().unwrap(), 3);
+}
+
+#[test]
+fn usage_lock_owner_fixture() {
+    let Some(lock_path) = std::env::var_os("VAULTKEEPER_UAT_USAGE_LOCK") else {
+        return;
+    };
+    let lock = OpenOptions::new()
+        .create_new(true)
+        .mode(0o600)
+        .read(true)
+        .write(true)
+        .open(lock_path)
+        .unwrap();
+    lock.lock().unwrap();
+    println!("ledger lock acquired");
+    std::io::stdout().flush().unwrap();
+    // Closing the pipe also releases the fixture if its parent fails early.
+    std::io::copy(&mut std::io::stdin().lock(), &mut std::io::sink()).unwrap();
+}
+
+#[tokio::test]
+async fn killed_lock_owner_leaves_unspent_budget_available() {
+    let dir = TempDir::new().unwrap();
+    write_config(&dir);
+    let (token, fingerprint) = mint_token_with_limit(&dir, "finite-secret", Some(1)).await;
+    let ledger = dir.path().join("token-usage");
+    fs::DirBuilder::new().mode(0o700).create(&ledger).unwrap();
+    let lock_path = ledger.join(format!("{fingerprint}.lock"));
+    let mut owner = Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", "usage_lock_owner_fixture", "--nocapture"])
+        .env("VAULTKEEPER_UAT_USAGE_LOCK", &lock_path)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let acquired = BufReader::new(owner.stdout.take().unwrap())
+        .lines()
+        .any(|line| line.unwrap() == "ledger lock acquired");
+    assert!(acquired, "fixture exited before it acquired the lock");
+    fs::write(ledger.join(format!("{fingerprint}.json.tmp")), b"partial").unwrap();
+    owner.kill().unwrap();
+    assert!(!owner.wait().unwrap().success());
+    assert!(
+        lock_path.is_file(),
+        "the killed owner left the lock inode behind"
+    );
+
+    let recovered = admit(&dir, &token, "run").output().unwrap();
+    assert!(
+        recovered.status.success(),
+        "{}",
+        String::from_utf8_lossy(&recovered.stderr)
+    );
+    assert_exhausted(&admit(&dir, &token, "run").output().unwrap(), 1);
+}
+
+#[tokio::test]
+async fn token_ledger_is_owner_only_with_permissive_umask() {
+    let dir = TempDir::new().unwrap();
+    write_config(&dir);
+    let (token, fingerprint) = mint_token_with_limit(&dir, "finite-secret", Some(1)).await;
+    let mut command = admit(&dir, &token, "run");
+    // SAFETY: umask only changes the forked child's mask and is async-signal-safe.
+    unsafe {
+        command.pre_exec(|| {
+            libc::umask(0);
+            Ok(())
+        });
+    }
+    let output = command.output().unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let ledger = dir.path().join("token-usage");
+    let mode = |path: &Path| fs::metadata(path).unwrap().permissions().mode() & 0o777;
+    assert_eq!(mode(&ledger), 0o700);
+    for extension in ["lock", "json"] {
+        let path = ledger.join(format!("{fingerprint}.{extension}"));
+        assert_eq!(mode(&path), 0o600);
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o666)).unwrap();
+        let refused = admit(&dir, &token, "run").output().unwrap();
+        assert_eq!(refused.status.code(), Some(1));
+        assert!(String::from_utf8_lossy(&refused.stderr).contains("owner-only token usage file"));
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+    }
+}
+
+#[tokio::test]
+async fn finite_token_refuses_writable_or_redirected_ledger() {
+    let dir = TempDir::new().unwrap();
+    write_config(&dir);
+    let (token, _) = mint_token_with_limit(&dir, "finite-secret", Some(1)).await;
+    let ledger = dir.path().join("token-usage");
+    fs::create_dir(&ledger).unwrap();
+    fs::set_permissions(&ledger, fs::Permissions::from_mode(0o777)).unwrap();
+    let output = admit(&dir, &token, "run").output().unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("owner-only token usage directory"));
+
+    fs::remove_dir(&ledger).unwrap();
+    let redirected = dir.path().join("redirected");
+    fs::DirBuilder::new()
+        .mode(0o700)
+        .create(&redirected)
+        .unwrap();
+    symlink(&redirected, &ledger).unwrap();
+    let output = admit(&dir, &token, "run").output().unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("owner-only token usage directory"));
+    assert_eq!(fs::read_dir(redirected).unwrap().count(), 0);
+}
+
+#[tokio::test]
+async fn corrupt_usage_state_fails_closed_without_echoing_its_contents() {
+    let dir = TempDir::new().unwrap();
+    write_config(&dir);
+    let (token, fingerprint) = mint_token_with_limit(&dir, "finite-secret", Some(1)).await;
+    let first = admit(&dir, &token, "run").output().unwrap();
+    assert!(
+        first.status.success(),
+        "{}",
+        String::from_utf8_lossy(&first.stderr)
+    );
+
+    let contents = br#"{"uses":"contents-must-stay-private","expiresAt":1}"#;
+    let state = dir
+        .path()
+        .join("token-usage")
+        .join(format!("{fingerprint}.json"));
+    fs::write(&state, contents).unwrap();
+    let output = admit(&dir, &token, "run").output().unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("Token usage state") && stderr.contains("is corrupt"));
+    assert!(!stderr.contains("contents-must-stay-private"));
+    assert_eq!(fs::read(state).unwrap(), contents);
+}
+
+#[tokio::test]
+async fn dry_run_leaves_budget_unspent_and_failed_launch_spends_it() {
+    let dir = TempDir::new().unwrap();
+    write_config(&dir);
+    let (token, _) = mint_token_with_limit(&dir, "finite-secret", Some(1)).await;
+    let plan = run_finite_token(&dir, &token, "run")
+        .arg("--dry-run")
+        .output()
+        .unwrap();
+    assert!(
+        plan.status.success(),
+        "{}",
+        String::from_utf8_lossy(&plan.stderr)
+    );
+    assert!(!dir.path().join("token-usage").exists());
+
+    let failed = run_finite_token(&dir, &token, "run")
+        .arg("--")
+        .arg(dir.path().join("missing-child"))
+        .output()
+        .unwrap();
+    assert_eq!(failed.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&failed.stderr).contains("Failed to launch command"));
+    assert_exhausted(&admit(&dir, &token, "run").output().unwrap(), 1);
 }
 
 // ─── AC1: run --token matches exec --token byte-for-byte ─────────
