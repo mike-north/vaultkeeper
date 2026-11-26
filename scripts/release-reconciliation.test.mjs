@@ -11,7 +11,7 @@ const npmUrl = 'https://registry.npmjs.org/%40vaultkeeper%2Fwasm/0.5.0'
 const coreUrl = 'https://index.crates.io/va/ul/vaultkeeper-core'
 const cliUrl = 'https://index.crates.io/va/ul/vaultkeeper-cli'
 
-function releaseFixture(t, { cargo = '0.5.0', wasm = cargo } = {}) {
+function releaseFixture(t, { cargo = '0.5.0', wasm = cargo, laterTip = false } = {}) {
   const cwd = mkdtempSync(join(tmpdir(), 'vaultkeeper-release-'))
   t.after(() => rmSync(cwd, { recursive: true, force: true }))
   const git = (...args) => execFileSync('git', args, { cwd, encoding: 'utf8' }).trim()
@@ -35,11 +35,26 @@ function releaseFixture(t, { cargo = '0.5.0', wasm = cargo } = {}) {
   }
 
   commitVersions('0.4.0', '0.4.0')
-  const commit = commitVersions(cargo, wasm)
+  let commit = commitVersions(cargo, wasm)
+  if (laterTip) commit = commitVersions(cargo, wasm)
   // The Changesets checkout can move beyond the push under evaluation.
   commitVersions('0.6.0', '0.6.0')
   return { cwd, commit, publishedPackages: [] }
 }
+
+test('a later push tip preserves the release for initial publication and a full rerun', async (t) => {
+  const fixture = releaseFixture(t, { laterTip: true })
+  const publishedPackages = [{ name: '@vaultkeeper/wasm', version: '0.5.0' }]
+  const initial = registry({ coreVersions: ['0.5.0'] })
+  assert.deepEqual(
+    await missingCrates({ ...fixture, request: initial.request, publishedPackages }),
+    ['vaultkeeper-cli'],
+  )
+  assert.deepEqual(initial.urls, [coreUrl, cliUrl])
+  const rerun = registry({ coreVersions: ['0.5.0'] })
+  assert.deepEqual(await missingCrates({ ...fixture, request: rerun.request }), ['vaultkeeper-cli'])
+  assert.deepEqual(rerun.urls, [npmUrl, coreUrl, cliUrl])
+})
 
 function registry({ npmStatus = 200, coreVersions = [], cliVersions = [], coreStatus } = {}) {
   const urls = []
@@ -121,6 +136,8 @@ test('the workflow uses the reconciliation outputs for the job and each crate', 
     'utf8',
   )
   assert.match(workflow, /run: node scripts\/release-reconciliation\.mjs >> "\$GITHUB_OUTPUT"/)
+  assert.match(workflow, /core-missing: \$\{\{ steps\.release-state\.outputs\.core-missing \}\}/)
+  assert.match(workflow, /cli-missing: \$\{\{ steps\.release-state\.outputs\.cli-missing \}\}/)
   assert.match(
     workflow,
     /publish-crates:\n[^\n]*\n[^\n]*\n    if: needs\.release\.outputs\.core-missing == 'true' \|\| needs\.release\.outputs\.cli-missing == 'true'/,
