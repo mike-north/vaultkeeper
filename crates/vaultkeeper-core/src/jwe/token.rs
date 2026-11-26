@@ -21,7 +21,7 @@ use std::sync::Mutex;
 
 use super::types::VaultJweHeader;
 
-/// Maximum number of JTIs the blocklist will retain (matches TS implementation).
+/// Bounds the number of JTIs retained in the Rust process-wide blocklist.
 const BLOCKLIST_MAX_SIZE: usize = 10_000;
 
 /// In-memory blocklist for revoked token JTIs.

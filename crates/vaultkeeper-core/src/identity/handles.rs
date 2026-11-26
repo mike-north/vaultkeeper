@@ -31,17 +31,13 @@
 //!
 //! # Lifetime / eviction policy (AC4 — flagged open design item)
 //!
-//! Every handle is evicted by exactly one of three paths:
+//! Handles leave the table by explicit release, expiry, or capacity eviction:
 //!
 //! 1. **Explicit release** ([`HandleTable::release`]) — the primary, cheap
 //!    path. A caller that is done with a handle (e.g. the TS wasm bridge,
 //!    once its `CapabilityToken` wrapper is finished with it) releases it
 //!    immediately rather than waiting on the paths below.
-//! 2. **Usage-limit exhaustion** — governed by the *token's own*
-//!    `use_limit` claim, tracked by the finite-use table (see
-//!    below), exactly as `VaultKeeper::authorize()` already blocked
-//!    over-used JWEs before this issue.
-//! 3. **Expiry sweep** — each handle carries an `expires_at: Option<u64>`
+//! 2. **Expiry sweep** — each handle carries an `expires_at: Option<u64>`
 //!    (Unix seconds) supplied by the caller at insert time.
 //!    [`HandleTable::resolve_secret_claims`]/`resolve_signing_claims`/
 //!    `read_secret` all check it lazily (no background timer — this table
@@ -51,19 +47,12 @@
 //!    never resolvable past its `expires_at`, whether or not anyone calls
 //!    `sweep_expired` first.
 //!
-//! As a defense-in-depth backstop against unbounded growth from callers that
-//! never release and never expire, [`HANDLE_TABLE_MAX_SIZE`] caps the table
-//! at 10,000 live entries with FIFO eviction of the oldest handle — the same
-//! intent as the TypeScript `usageCounts` map's `USAGE_MAP_MAX_SIZE` guard
-//! (`packages/vaultkeeper/src/vault.ts`), though not byte-for-byte identical:
-//! this table evicts the oldest entry *before* inserting once
-//! `len() >= HANDLE_TABLE_MAX_SIZE`, so it never holds more than 10,000
-//! entries, whereas the TypeScript map inserts first and evicts only once
-//! `size > USAGE_MAP_MAX_SIZE`, so it can momentarily hold 10,001 entries
-//! before trimming back down. The one-entry threshold difference is
-//! immaterial to the guard's purpose (bounding otherwise-unbounded growth);
-//! it is called out here only so a reader diffing the two implementations
-//! line-by-line does not mistake it for a bug.
+//! 3. **Capacity eviction** — [`HANDLE_TABLE_MAX_SIZE`] bounds handle storage.
+//!    A new handle evicts the oldest inserted handle when the table is full.
+//!
+//! A token's `use_limit` governs future authorizations. Already-issued
+//! handles retain their own lifetime, and removing a handle leaves its token's
+//! finite-use budget in place through expiry.
 //!
 //! ## Why `expires_at` must stay caller-supplied, not hardcoded — and where
 //! ## that stops applying to signing handles (issue #282)
@@ -149,15 +138,10 @@ use super::expiry_clock::ExpiryClock;
 use crate::errors::VaultError;
 use crate::types::{SigningClaims, VaultClaims};
 
-/// Maximum number of live entries [`HandleTable`] (both the handle map and
-/// the legacy JTI usage-count map) will retain. When their cap is reached, the oldest
-/// inserted entry is evicted (FIFO) to make room. Finite authorization budgets
-/// instead remain until expiry and refuse new entries at capacity. Same intent as the
-/// TypeScript `USAGE_MAP_MAX_SIZE` guard (`packages/vaultkeeper/src/vault.ts`)
-/// — see the module docs for the one-entry eviction-threshold difference
-/// between the two — this is the defense-in-depth backstop against unbounded
-/// growth described in the module docs, not the primary eviction mechanism
-/// (release/expiry/usage-limit are).
+/// Independent entry cap for the handle map, legacy JTI counters, and finite
+/// authorization budgets. The handle map and legacy counters evict their
+/// oldest entries when full. Finite authorization budgets remain until expiry
+/// and refuse new entries while all slots are live.
 pub const HANDLE_TABLE_MAX_SIZE: usize = 10_000;
 
 /// Opaque handle identifier returned by [`HandleTable::insert_secret`] or by
@@ -324,7 +308,7 @@ struct HandleEntry {
     /// Unix-seconds absolute expiry. `None` means this handle carries no
     /// core-imposed expiry of its own (see the module-level "Why
     /// `expires_at` must stay caller-supplied" note) — eviction then relies
-    /// on explicit release, usage-limit exhaustion, or the FIFO size cap.
+    /// on explicit release or the FIFO size cap.
     expires_at: Option<u64>,
 }
 

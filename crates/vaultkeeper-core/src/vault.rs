@@ -1,6 +1,6 @@
 //! VaultKeeper main struct — wires together all vaultkeeper subsystems.
 
-use zeroize::Zeroizing;
+use zeroize::{Zeroize, Zeroizing};
 
 use crate::backend::{
     ApprovalContext, HostPlatform, PresenceOperation, SecretBackend, SigningBackend,
@@ -178,7 +178,6 @@ pub(crate) fn build_and_mint_claims(
     // success or error — so this helper never leaves a second unzeroized
     // heap copy behind (the caller owns the lifetime of its own copy).
     if let Some(val) = claims.val.as_mut() {
-        use zeroize::Zeroize;
         val.zeroize();
     }
     token
@@ -1051,9 +1050,9 @@ impl VaultKeeper {
     /// — the raw secret never leaves core memory through this return value.
     /// It stays behind the returned handle, in a [`Zeroizing`] buffer, until
     /// [`VaultKeeper::read_secret`] consumes it exactly once. The handle's
-    /// lifetime is bound to the token's own `exp`/`use_limit` claims, not to
-    /// any interactive session — see `crate::identity::handles` for the full
-    /// eviction-policy rationale.
+    /// expiry comes from the token's `exp` claim. Its `use_limit` governs
+    /// future authorizations. See `crate::identity::handles` for the other
+    /// ways an issued handle can leave the table.
     ///
     /// Refuses a signing-key lease (`kty: SigningKey`) with
     /// [`VaultError::AuthorizationDenied`] (issue #300, AC5's "wrong kind, or
@@ -1066,7 +1065,7 @@ impl VaultKeeper {
         &mut self,
         jwe: &str,
     ) -> Result<(HandleId, VaultClaims, VaultResponse), VaultError> {
-        let (claims, is_current) = self.decrypt_claims(jwe)?;
+        let (mut claims, is_current) = self.decrypt_claims(jwe)?;
 
         if claims.kty == Some(ClaimsKind::SigningKey) {
             return Err(wrong_claims_kind_error("secret token", "signing-key lease"));
@@ -1078,10 +1077,12 @@ impl VaultKeeper {
 
         let response = self.prepare_response(&claims, is_current)?;
 
-        // Increment usage count
+        // A capacity refusal cannot hand the value off to the handle table's
+        // zeroizing storage, so scrub the decrypted allocation before returning.
         let new_usage = if claims.use_limit.is_some() {
             self.handle_table
-                .charge_finite_usage(&claims.jti, claims.exp, now)?
+                .charge_finite_usage(&claims.jti, claims.exp, now)
+                .inspect_err(|_| claims.val.zeroize())?
         } else {
             0
         };
