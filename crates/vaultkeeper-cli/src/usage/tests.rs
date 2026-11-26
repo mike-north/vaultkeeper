@@ -130,9 +130,8 @@ async fn revoke_key_cannot_finish_between_snapshot_read_and_usage_commit() {
         state
     };
     assert_eq!(super::read_usage(&counter).unwrap(), 1);
-    assert_eq!(
-        before_commit,
-        Poll::Pending,
+    assert!(
+        matches!(before_commit, Poll::Pending),
         "emergency revocation finished before the old key's admission committed"
     );
     assert_eq!(revocation.await, 0);

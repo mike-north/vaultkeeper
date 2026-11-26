@@ -16,8 +16,29 @@ use vaultkeeper_core::types::VaultClaims;
 
 use crate::host::create_dir_all_secure;
 
+#[cfg(test)]
+mod tests;
+
 /// Limit how long a stalled writer can block a launcher.
 const LOCK_WAIT: Duration = Duration::from_secs(10);
+
+/// Stable lock file shared by native admissions and encryption-key changes.
+const KEY_ADMISSION_LOCK: &str = ".token-admission.lock";
+
+/// Admissions for different tokens can share the key-state read lock. Usage
+/// updates for the same JTI and changes to the encryption keys are exclusive.
+enum LockAccess {
+    Shared,
+    Exclusive,
+}
+
+/// Hold across native key initialization and mutation. Keep the lock outside
+/// the usage ledger so an unreadable ledger cannot prevent key revocation.
+pub(crate) async fn lock_key_changes(config_dir: &Path) -> Result<File, VaultError> {
+    create_dir_all_secure(config_dir)
+        .map_err(|error| fs_error(config_dir, "create config directory for key lock", error))?;
+    acquire_lock(&config_dir.join(KEY_ADMISSION_LOCK), LockAccess::Exclusive).await
+}
 
 #[derive(Deserialize, Serialize)]
 struct UsageState {
@@ -42,10 +63,13 @@ pub(crate) async fn reserve(
     let fingerprint = vaultkeeper_core::identity::hash::hash_bytes(claims.jti.as_bytes());
     let state_path = directory.join(format!("{fingerprint}.json"));
     let lock_path = directory.join(format!("{fingerprint}.lock"));
-    let _lock = acquire_lock(&lock_path).await?;
+    let _lock = acquire_lock(&lock_path, LockAccess::Exclusive).await?;
 
-    // Admission reads the persisted key state inside the usage lock, so a
-    // revocation completed while this launcher waited takes effect here.
+    // Take the per-token lock first so a launcher waiting for its budget
+    // never delays key changes. Hold the shared key lock through the durable
+    // commit to order admission against native rotation and revocation.
+    let _key_lock = acquire_lock(&config_dir.join(KEY_ADMISSION_LOCK), LockAccess::Shared).await?;
+
     check_key_eligibility(host, token, authorized_keys).await?;
 
     // The token can expire while admission waits or reads key state.
@@ -170,7 +194,7 @@ fn is_owner_controlled(metadata: &fs::Metadata, denied_mode: u32) -> bool {
 
 /// Writers leave the lock file in place so contenders share one lock across
 /// replacements of the counter. The OS releases the lock on process exit.
-async fn acquire_lock(path: &Path) -> Result<File, VaultError> {
+async fn acquire_lock(path: &Path, access: LockAccess) -> Result<File, VaultError> {
     regular_file_exists(path)?;
     let lock = private_file_options()
         .read(true)
@@ -180,7 +204,11 @@ async fn acquire_lock(path: &Path) -> Result<File, VaultError> {
         .map_err(|error| fs_error(path, "open token usage lock", error))?;
     let deadline = Instant::now() + LOCK_WAIT;
     loop {
-        match lock.try_lock() {
+        let result = match access {
+            LockAccess::Shared => lock.try_lock_shared(),
+            LockAccess::Exclusive => lock.try_lock(),
+        };
+        match result {
             Ok(()) => return Ok(lock),
             Err(TryLockError::Error(error)) => {
                 return Err(fs_error(path, "acquire token usage lock", error));

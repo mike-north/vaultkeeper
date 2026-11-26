@@ -69,15 +69,19 @@ range. "Secrets" = does a secret value transit this command, and by what channel
 | `session mint` | `PROFILE` | `--entry <e>` | — | **JWE lease → stdout** | lease (capability, not secret) | 0 / 1 |
 | `session revoke` | — | `--jti <j>` \| `--key <k>` (xor) | — | confirmation | — | 0 / 1 |
 
+For `run` and `exec`, `--help` and `-h` before the `--` separator show Vaultkeeper help.
+After the separator, both flags pass unchanged to the child.
+
 **Finite-use JWE admission (issue #381).** Native `run --token` and its `exec` alias share one
 persistent budget per token ID and config directory. Each admission spends one use before
 the CLI can read its secret, including when the child subsequently fails to launch. Concurrent native
-invocations reserve uses atomically, and exhaustion is a typed operational failure. At admission,
-the launcher checks the persisted key state and token expiry under the usage lock. If the token's
-encryption key was revoked while the launcher waited, the launcher refuses the token without spending
-a use. A key still in rotation grace remains eligible for tokens that name it in their protected
-header. Unlimited tokens and `--dry-run` do not use the ledger. Keep the ledger with the keys in a
-trusted config tree.
+invocations reserve uses atomically, and exhaustion is a typed operational failure. The launcher checks
+the persisted key state and token expiry after acquiring the per-token usage lock. Native `rotate-key`
+and `revoke-key` are ordered against the key-state check and durable usage commit. If the token's
+encryption key was revoked before that check, the launcher refuses the token without spending a use.
+A key still in rotation grace remains eligible for tokens that name it in their protected header.
+Unlimited tokens and `--dry-run` do not use the ledger. Keep the ledger with the keys in a trusted
+config tree.
 The TypeScript CLI uses the SDK's process-local accounting. Each TypeScript invocation starts with
 the full token budget, including when it shares key material with the native CLI.
 
@@ -217,6 +221,10 @@ on reflection, recorded to close the question.
   only through a one-time `SecretAccessor.read()`, a signing key never egresses (sign happens backend-side),
   and passing the wrong token kind to `getSecret`/`sign` is a typed refusal. This opacity is a load-bearing
   security property, not an ergonomic detail — no future API may add a token accessor that returns claims.
+  A TypeScript capability redeemed from a JWE retains its deadline. At or after that deadline,
+  `getSecret` and an outstanding accessor's first `read` refuse with `TokenExpiredError` before
+  releasing plaintext. Delegated `fetch` and `exec` refuse with the same error before dispatch
+  if any supplied capability has expired.
 - **L3 — Typed failures only.** Every thrown error is a subclass of `VaultError`. Plain `Error` is never
   thrown across the public boundary; new failure modes add a `VaultError` subclass, exported from `index.ts`.
 - **L4 — Minimal runtime dependency.** The `vaultkeeper` TS library's only runtime dependency is `jose`;

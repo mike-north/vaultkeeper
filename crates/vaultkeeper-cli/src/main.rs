@@ -302,8 +302,8 @@ async fn main() {
             Commands::DevMode { path, enable } => cmd_dev_mode(&path, enable).await,
             Commands::Config { action } => cmd_config(action).await,
             Commands::Backend { action } => cmd_backend(action).await,
-            Commands::RotateKey => cmd_rotate_key().await,
-            Commands::RevokeKey => cmd_revoke_key().await,
+            Commands::RotateKey => cmd_change_key(make_host().as_ref(), KeyChange::Rotate).await,
+            Commands::RevokeKey => cmd_change_key(make_host().as_ref(), KeyChange::Revoke).await,
             Commands::Profile { action } => cmd_profile(action).await,
             Commands::Session { action } => cmd_session(action).await,
         },
@@ -1374,39 +1374,23 @@ fn write_config_file(path: &PathBuf, json: &str) -> Result<(), String> {
     Ok(())
 }
 
-async fn cmd_rotate_key() -> i32 {
-    let host = make_host();
-
-    let mut vault = match vaultkeeper_core::VaultKeeper::init(
-        host.as_ref(),
-        Some(vaultkeeper_core::vault::VaultKeeperOptions {
-            skip_doctor: true,
-            ..Default::default()
-        }),
-    )
-    .await
-    {
-        Ok(v) => v,
-        Err(e) => {
-            eprintln!("Error: {e}");
-            return 1;
-        }
-    };
-
-    if let Err(e) = vault.rotate_key(host.as_ref()).await {
-        eprintln!("Error: {e}");
-        return 1;
-    }
-
-    println!("Key rotated successfully.");
-    0
+/// Native operations that change which encryption keys can admit JWE tokens.
+enum KeyChange {
+    Rotate,
+    Revoke,
 }
 
-async fn cmd_revoke_key() -> i32 {
-    let host = make_host();
-
+/// Apply an encryption-key change in the selected native config directory.
+async fn cmd_change_key(host: &NativeHostPlatform, change: KeyChange) -> i32 {
+    let _key_lock = match usage::lock_key_changes(host.config_dir()).await {
+        Ok(lock) => lock,
+        Err(e) => {
+            eprintln!("Error: {e}");
+            return 1;
+        }
+    };
     let mut vault = match vaultkeeper_core::VaultKeeper::init(
-        host.as_ref(),
+        host,
         Some(vaultkeeper_core::vault::VaultKeeperOptions {
             skip_doctor: true,
             ..Default::default()
@@ -1421,12 +1405,16 @@ async fn cmd_revoke_key() -> i32 {
         }
     };
 
-    if let Err(e) = vault.revoke_key(host.as_ref()).await {
+    let (result, confirmation) = match change {
+        KeyChange::Rotate => (vault.rotate_key(host).await, "Key rotated successfully."),
+        KeyChange::Revoke => (vault.revoke_key(host).await, "Key revoked successfully."),
+    };
+    if let Err(e) = result {
         eprintln!("Error: {e}");
         return 1;
     }
 
-    println!("Key revoked successfully.");
+    println!("{confirmation}");
     0
 }
 
