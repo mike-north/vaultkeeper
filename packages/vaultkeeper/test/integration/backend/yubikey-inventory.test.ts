@@ -1,6 +1,6 @@
 /** Concurrent YubiKey writers share the encrypted-record inventory. */
 import { describe, expect, it, vi } from 'vitest'
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -46,9 +46,36 @@ vi.mock('../../../src/util/exec.js', () => ({
 }))
 
 import { YubikeyBackend } from '../../../src/backend/yubikey-backend.js'
+import { FileBackend } from '../../../src/backend/file-backend.js'
 import { FilesystemError } from '../../../src/errors.js'
 
 describe('YubiKey inventory', () => {
+  it('excludes records belonging to the file backend and directories', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'vk-yubikey-inventory-'))
+    try {
+      await new FileBackend(dir).store('foreign', 'value')
+      await mkdir(join(dir, '616c706861.enc'))
+      expect(await new YubikeyBackend(dir).list()).toEqual([])
+      expect(await new FileBackend(dir).retrieve('foreign')).toBe('value')
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('preserves a legacy ID with an unpaired surrogate from metadata', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'vk-yubikey-inventory-'))
+    try {
+      const id = '\ud800'
+      await new YubikeyBackend(dir).store(id, 'value')
+      await writeFile(
+        join(dir, 'metadata.json'),
+        JSON.stringify({ entries: { [id]: join(dir, 'efbfbd.enc') } }),
+      )
+      expect(await new YubikeyBackend(dir).list()).toEqual([id])
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
   it('reports an inaccessible inventory directory as a typed filesystem error', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'vk-yubikey-inventory-'))
     try {
