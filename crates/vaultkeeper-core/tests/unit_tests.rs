@@ -1499,19 +1499,32 @@ mod vault_keeper {
         );
     }
 
+    /// An exhausted token remains denied after blocklist eviction, and the
+    /// denial must scrub the decrypted value before its allocation is freed.
     #[tokio::test]
     async fn finite_budget_survives_usage_and_blocklist_pressure() {
+        use crate::claims_value_probe::{VALUE_LEN, arm, released_zeroed, tracks};
+
         let (host, mut vault) = dev_vault().await;
         let opts = vaultkeeper_core::vault::SetupOptions {
             use_limit: Some(1),
             skip_trust: Some(true),
             ..Default::default()
         };
+        let value = "x".repeat(VALUE_LEN);
         let first = vault
-            .setup(&host, "first", "value", Some(&opts))
+            .setup(&host, "first", &value, Some(&opts))
             .await
             .unwrap();
-        vault.authorize(&first).unwrap();
+
+        // Verify that the probe selects the decrypted value for this token.
+        arm();
+        let (handle, _, _) = vault.authorize(&first).unwrap();
+        let secret = vault.read_secret(&handle).unwrap();
+        assert!(tracks(&secret));
+        drop(secret);
+        assert_eq!(released_zeroed(), Some(true));
+
         for index in 0..10_000 {
             let token = vault
                 .setup(&host, &format!("item-{index}"), "value", Some(&opts))
@@ -1525,13 +1538,14 @@ mod vault_keeper {
         for index in 0..10_001 {
             vaultkeeper_core::jwe::block_token(&format!("pressure-{index}"));
         }
+        arm();
+        let denied = vault.authorize(&first);
+        let zeroed = released_zeroed();
         assert!(
-            matches!(
-                vault.authorize(&first),
-                Err(VaultError::UsageLimitExceeded { .. })
-            ),
+            matches!(denied, Err(VaultError::UsageLimitExceeded { .. })),
             "exhausted token replayed after pressure"
         );
+        assert_eq!(zeroed, Some(true), "refused claim value must be scrubbed");
     }
 
     /// A capacity refusal must scrub the decrypted value before freeing it.

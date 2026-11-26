@@ -1041,6 +1041,38 @@ impl VaultKeeper {
         Ok(response)
     }
 
+    /// Validate the secret-token claims and charge their budget before issuing
+    /// a handle. The caller retains ownership of the decrypted value throughout
+    /// this fallible phase so it can scrub the value on any refusal.
+    fn approve_secret_claims(
+        &mut self,
+        claims: &VaultClaims,
+        is_current: bool,
+    ) -> Result<VaultResponse, VaultError> {
+        if claims.kty == Some(ClaimsKind::SigningKey) {
+            return Err(wrong_claims_kind_error("secret token", "signing-key lease"));
+        }
+
+        let now = self.handle_table.expiry_time();
+        let current_usage = self.handle_table.finite_usage(&claims.jti);
+        validate_claims_at(claims, current_usage, now)?;
+
+        // Preparing a replacement token can fail. Charge only authorizations
+        // whose response can be returned.
+        let response = self.prepare_response(claims, is_current)?;
+
+        if let Some(limit) = claims.use_limit {
+            let new_usage = self
+                .handle_table
+                .charge_finite_usage(&claims.jti, claims.exp, now)?;
+            if new_usage >= limit {
+                block_token(&claims.jti);
+            }
+        }
+
+        Ok(response)
+    }
+
     /// Decrypt a JWE token, validate its claims, and return an opaque
     /// capability [`HandleId`] together with the (secret-redacted) claims and
     /// key status. Tracks per-JTI usage counts and blocks tokens that exceed
@@ -1067,32 +1099,11 @@ impl VaultKeeper {
     ) -> Result<(HandleId, VaultClaims, VaultResponse), VaultError> {
         let (mut claims, is_current) = self.decrypt_claims(jwe)?;
 
-        if claims.kty == Some(ClaimsKind::SigningKey) {
-            return Err(wrong_claims_kind_error("secret token", "signing-key lease"));
-        }
-
-        let now = self.handle_table.expiry_time();
-        let current_usage = self.handle_table.finite_usage(&claims.jti);
-        validate_claims_at(&claims, current_usage, now)?;
-
-        let response = self.prepare_response(&claims, is_current)?;
-
-        // A capacity refusal cannot hand the value off to the handle table's
-        // zeroizing storage, so scrub the decrypted allocation before returning.
-        let new_usage = if claims.use_limit.is_some() {
-            self.handle_table
-                .charge_finite_usage(&claims.jti, claims.exp, now)
-                .inspect_err(|_| claims.val.zeroize())?
-        } else {
-            0
-        };
-
-        // If usage limit reached, block the token for future requests
-        if let Some(limit) = claims.use_limit
-            && new_usage >= limit
-        {
-            block_token(&claims.jti);
-        }
+        // A refusal skips the handoff to zeroizing handle storage. Scrub the
+        // value while this function still owns the decrypted allocation.
+        let response = self
+            .approve_secret_claims(&claims, is_current)
+            .inspect_err(|_| claims.val.zeroize())?;
 
         // The handle's expiry is bound to the token's own `exp` — a
         // long-lived, non-interactively-refreshed token (see the "Why
