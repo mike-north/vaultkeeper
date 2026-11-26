@@ -1,7 +1,5 @@
-/* eslint-disable @typescript-eslint/no-floating-promises -- node:test owns returned promises */
-
 import * as assert from 'node:assert/strict'
-import { spawnSync } from 'node:child_process'
+import { execFileSync, spawnSync } from 'node:child_process'
 import {
   chmod,
   mkdir,
@@ -31,32 +29,36 @@ async function withStorage(run: (directory: string) => Promise<void>): Promise<v
   }
 }
 
-test('legacy descriptors see only old bytes and symlinks are rejected', unixOnly, async () => {
-  await withStorage(async (directory) => {
-    const host = createNodeHost(directory)
-    const target = join(directory, 'key')
-    const link = join(directory, 'link')
-    await writeFile(target, 'old')
-    await chmod(target, 0o666)
-    await symlink(target, link)
-    const previous = await open(target, 'r')
-    try {
-      await assert.rejects(host.writeFile(link, Buffer.from('unexpected'), 0o600), {
-        name: 'HostFilesystemError',
-        path: link,
-      })
-      assert.equal((await stat(target)).mode & 0o777, 0o666)
-      await host.writeFile(target, Buffer.from('replacement'), 0o600)
-      assert.equal(await readFile(target, 'utf8'), 'replacement')
-      assert.equal((await stat(target)).mode & 0o777, 0o600)
-      assert.equal(await previous.readFile('utf8'), 'old')
-    } finally {
-      await previous.close()
-    }
-  })
-})
+await test(
+  'legacy descriptors see only old bytes and symlinks are rejected',
+  unixOnly,
+  async () => {
+    await withStorage(async (directory) => {
+      const host = createNodeHost(directory)
+      const target = join(directory, 'key')
+      const link = join(directory, 'link')
+      await writeFile(target, 'old')
+      await chmod(target, 0o666)
+      await symlink(target, link)
+      const previous = await open(target, 'r')
+      try {
+        await assert.rejects(host.writeFile(link, Buffer.from('unexpected'), 0o600), {
+          name: 'HostFilesystemError',
+          path: link,
+        })
+        assert.equal((await stat(target)).mode & 0o777, 0o666)
+        await host.writeFile(target, Buffer.from('replacement'), 0o600)
+        assert.equal(await readFile(target, 'utf8'), 'replacement')
+        assert.equal((await stat(target)).mode & 0o777, 0o600)
+        assert.equal(await previous.readFile('utf8'), 'old')
+      } finally {
+        await previous.close()
+      }
+    })
+  },
+)
 
-test('concurrent writes publish complete and private files', unixOnly, async () => {
+await test('concurrent writes publish complete and private files', unixOnly, async () => {
   await withStorage(async (directory) => {
     const host = createNodeHost(directory)
     const target = join(directory, 'key')
@@ -69,7 +71,47 @@ test('concurrent writes publish complete and private files', unixOnly, async () 
   })
 })
 
-test('failed or interrupted key writes leave the destination intact', unixOnly, async () => {
+/** Inspect the ACL separately from the mode bits printed on the first line. */
+function aclListing(path: string): string {
+  return execFileSync('/bin/ls', ['-led', path], { encoding: 'utf8' })
+}
+
+/** Prove the fixture has an effective read grant despite an owner-only mode. */
+async function grantInheritedRead(directory: string): Promise<void> {
+  await chmod(directory, 0o755)
+  execFileSync('/bin/chmod', [
+    '+a',
+    'everyone allow read,file_inherit,directory_inherit',
+    directory,
+  ])
+  const probe = join(directory, 'acl-probe')
+  await writeFile(probe, '', { mode: 0o600 })
+  assert.match(aclListing(probe), /everyone inherited allow read/u)
+  await rm(probe)
+}
+
+await test(
+  'published keys exclude inherited read ACLs',
+  { skip: process.platform !== 'darwin' },
+  async () => {
+    await withStorage(async (directory) => {
+      await grantInheritedRead(directory)
+      const parentAcl = aclListing(directory).split('\n').slice(1)
+      const host = createNodeHost(directory)
+      const target = join(directory, 'key')
+      const fixture = Buffer.alloc(32, 1)
+      await host.writeFile(target, fixture, 0o600)
+      assert.deepEqual(await readFile(target), fixture)
+      assert.equal((await stat(target)).mode & 0o777, 0o600)
+      assert.doesNotMatch(aclListing(target), /\n\s*\d+:/u)
+      assert.deepEqual(aclListing(directory).split('\n').slice(1), parentAcl)
+      assert.equal((await stat(directory)).mode & 0o777, 0o755)
+      assert.deepEqual(await readdir(directory), ['key'])
+    })
+  },
+)
+
+await test('failed or interrupted key writes leave the destination intact', unixOnly, async () => {
   const script = `
     import * as assert from 'node:assert/strict'
     import { open } from 'node:fs/promises'
@@ -103,19 +145,23 @@ test('failed or interrupted key writes leave the destination intact', unixOnly, 
       })
     }
   `
-  for (const scenario of ['partial', 'interrupt', 'chmod']) {
+  for (const scenario of ['partial', 'restrictive-umask', 'interrupt', 'chmod']) {
     await withStorage(async (directory) => {
       const physical = join(directory, 'storage')
       const nested = join(physical, 'nested')
       const alias = join(directory, 'alias')
       await mkdir(nested, { recursive: true, mode: 0o755 })
       await symlink(nested, alias)
+      if (scenario === 'interrupt' && process.platform === 'darwin') {
+        await grantInheritedRead(physical)
+      }
       const child = spawnSync(
         '/bin/sh',
         [
           '-c',
-          `umask 000; ulimit -f 1 || exit; trap '' XFSZ; exec "$@"`,
+          `umask "$1"; shift; ulimit -f 1 || exit; trap '' XFSZ; exec "$@"`,
           'vaultkeeper-test',
+          scenario === 'restrictive-umask' ? '0777' : '000',
           process.execPath,
           '--input-type=module',
           '--eval',
@@ -141,9 +187,14 @@ test('failed or interrupted key writes leave the destination intact', unixOnly, 
       )
       assert.equal(staging.length, scenario === 'interrupt' ? 1 : 0)
       for (const entry of staging) {
-        const metadata = await stat(join(physical, entry))
+        const stage = join(physical, entry)
+        const stagedFile = (await stat(stage)).isDirectory() ? join(stage, 'contents') : stage
+        const metadata = await stat(stagedFile)
         assert.equal(metadata.size, 1)
         assert.equal(metadata.mode & 0o777, 0o600)
+        if (process.platform === 'darwin') {
+          assert.doesNotMatch(aclListing(stagedFile), /\n\s*\d+:/u)
+        }
       }
     })
   }

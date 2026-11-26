@@ -111,6 +111,43 @@ fn create_dir_all_secure_unix(path: &Path) -> std::io::Result<()> {
     }
 }
 
+/// Establish a macOS staging directory from which a key can inherit no ACL.
+/// Clearing an ACL on the key inode would be too late because readers could
+/// already have opened it. Only the newly created, empty directory is changed.
+#[cfg(target_os = "macos")]
+fn make_staging_dir_private(path: &Path) -> std::io::Result<()> {
+    use std::fs;
+    use std::io::Error;
+    use std::os::unix::fs::PermissionsExt;
+    use std::process::Command;
+
+    let path = std::path::absolute(path)?;
+    let chmod = |mode| {
+        let output = Command::new("/bin/chmod")
+            .args(["-h", mode])
+            .arg(&path)
+            .output()?;
+        if !output.status.success() {
+            return Err(Error::other(format!(
+                "Could not secure staging directory: {}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            )));
+        }
+        Ok(())
+    };
+    // The ACL utility opens the directory, so restore any owner bits stripped
+    // by umask while the directory is still empty.
+    if fs::symlink_metadata(&path)?.permissions().mode() & 0o777 != 0o700 {
+        chmod("700")?;
+    }
+    chmod("-N")?;
+    let metadata = fs::symlink_metadata(path)?;
+    if !metadata.is_dir() || metadata.permissions().mode() & 0o777 != 0o700 {
+        return Err(Error::other("staging directory is not owner-only"));
+    }
+    Ok(())
+}
+
 /// Publish a complete file with its requested permissions already in effect.
 #[cfg(unix)]
 fn write_file_secure_unix(path: &Path, content: &[u8], mode: u32) -> std::io::Result<()> {
@@ -137,27 +174,50 @@ fn write_file_secure_unix(path: &Path, content: &[u8], mode: u32) -> std::io::Re
         Err(err) => return Err(err),
     }
 
-    // Sibling staging files can be published by rename. Exclusive creation
-    // gives concurrent writers distinct inodes, including after PID reuse.
+    // Stage on the same filesystem for atomic rename. Exclusive creation gives
+    // concurrent writers distinct inodes, including after PID reuse.
     static WRITE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
-    let (staging, mut file) = loop {
+    let (staging, mut file, staging_dir) = loop {
         let sequence = WRITE_SEQUENCE.fetch_add(1, Ordering::Relaxed);
-        let staging = path.with_file_name(format!(
+        let sibling = path.with_file_name(format!(
             ".vaultkeeper-write-{}-{sequence}",
             std::process::id()
         ));
-        if staging == path {
+        if sibling == path {
             continue;
         }
+        #[cfg(target_os = "macos")]
+        let (staging, staging_dir) = {
+            use std::os::unix::fs::DirBuilderExt;
+
+            match fs::DirBuilder::new().mode(0o700).create(&sibling) {
+                Ok(()) => {}
+                Err(err) if err.kind() == ErrorKind::AlreadyExists => continue,
+                Err(err) => return Err(err),
+            }
+            if let Err(err) = make_staging_dir_private(&sibling) {
+                let _ = fs::remove_dir(sibling);
+                return Err(err);
+            }
+            (sibling.join("contents"), Some(sibling))
+        };
+        #[cfg(not(target_os = "macos"))]
+        let (staging, staging_dir): (_, Option<PathBuf>) = (sibling, None);
+
         match OpenOptions::new()
             .write(true)
             .create_new(true)
             .mode(mode)
             .open(&staging)
         {
-            Ok(file) => break (staging, file),
-            Err(err) if err.kind() == ErrorKind::AlreadyExists => continue,
-            Err(err) => return Err(err),
+            Ok(file) => break (staging, file, staging_dir),
+            Err(err) if staging_dir.is_none() && err.kind() == ErrorKind::AlreadyExists => continue,
+            Err(err) => {
+                if let Some(dir) = staging_dir {
+                    let _ = fs::remove_dir(dir);
+                }
+                return Err(err);
+            }
         }
     };
 
@@ -189,6 +249,9 @@ fn write_file_secure_unix(path: &Path, content: &[u8], mode: u32) -> std::io::Re
     })();
     if result.is_err() {
         let _ = fs::remove_file(staging);
+    }
+    if let Some(dir) = staging_dir {
+        let _ = fs::remove_dir(dir);
     }
     result
 }
@@ -676,14 +739,15 @@ mod tests {
         use std::os::unix::fs::PermissionsExt;
         use std::process::Command;
 
-        {
+        for umask in ["000", "0777"] {
             let dir = tempfile::tempdir().unwrap();
             fs::set_permissions(dir.path(), fs::Permissions::from_mode(0o755)).unwrap();
             let child = Command::new("/bin/sh")
                 .args([
                     "-c",
-                    "umask 000; ulimit -c 0; ulimit -f 1 || exit; trap \"$1\" XFSZ; shift; exec \"$@\"",
+                    "umask \"$1\"; shift; ulimit -c 0; ulimit -f 1 || exit; trap \"$1\" XFSZ; shift; exec \"$@\"",
                     "vaultkeeper-test",
+                    umask,
                     "",
                 ])
                 .arg(std::env::current_exe().unwrap())
@@ -710,6 +774,71 @@ mod tests {
         }
     }
 
+    /// Prove the fixture has an effective read grant despite an owner-only mode.
+    #[cfg(target_os = "macos")]
+    fn grant_inherited_read(dir: &Path) {
+        use std::os::unix::fs::PermissionsExt;
+
+        fs::set_permissions(dir, fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(
+            std::process::Command::new("/bin/chmod")
+                .args(["+a", "everyone allow read,file_inherit,directory_inherit"])
+                .arg(dir)
+                .status()
+                .unwrap()
+                .success()
+        );
+        let probe = dir.join("acl-probe");
+        fs::write(&probe, []).unwrap();
+        fs::set_permissions(&probe, fs::Permissions::from_mode(0o600)).unwrap();
+        assert!(acl_listing(&probe).contains("everyone inherited allow read"));
+        fs::remove_file(probe).unwrap();
+    }
+
+    /// Inspect ACL entries separately from the file's Unix mode bits.
+    #[cfg(target_os = "macos")]
+    fn acl_listing(path: &Path) -> String {
+        let output = std::process::Command::new("/bin/ls")
+            .arg("-led")
+            .arg(path)
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
+        String::from_utf8(output.stdout).unwrap()
+    }
+
+    /// Publishing a key within an inheriting directory must preserve owner-only access.
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    async fn secure_write_excludes_inherited_read_acl() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        grant_inherited_read(dir.path());
+        let parent_acl = acl_listing(dir.path());
+        let host = NativeHostPlatform::new(dir.path().to_path_buf());
+        let target = dir.path().join("key");
+        host.write_file(&target, &[1; 32], 0o600).await.unwrap();
+        assert_eq!(fs::read(&target).unwrap(), [1; 32]);
+        assert_eq!(
+            fs::metadata(&target).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        let acl = acl_listing(&target);
+        assert_eq!(acl.lines().count(), 1, "unexpected ACL: {acl}");
+        assert!(
+            acl_listing(dir.path())
+                .lines()
+                .skip(1)
+                .eq(parent_acl.lines().skip(1))
+        );
+        assert_eq!(
+            fs::metadata(dir.path()).unwrap().permissions().mode() & 0o777,
+            0o755
+        );
+        assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 1);
+    }
+
     /// An interrupted write must leave any partial staging inode private and
     /// must not replace the previously published key.
     #[cfg(unix)]
@@ -724,6 +853,8 @@ mod tests {
         let existing = dir.path().join("existing-key");
         fs::write(&existing, b"old fixture").unwrap();
         fs::set_permissions(&existing, fs::Permissions::from_mode(0o600)).unwrap();
+        #[cfg(target_os = "macos")]
+        grant_inherited_read(dir.path());
         let mut child = Command::new("/bin/sh")
             .args(["-c", "umask 000; exec \"$@\"", "vaultkeeper-test"])
             .arg(std::env::current_exe().unwrap())
@@ -737,6 +868,19 @@ mod tests {
             let staging = fs::read_dir(dir.path())
                 .unwrap()
                 .map(|entry| entry.unwrap().path())
+                .filter(|path| {
+                    path.file_name()
+                        .unwrap()
+                        .to_string_lossy()
+                        .starts_with(".vaultkeeper-write-")
+                })
+                .map(|path| {
+                    if path.is_dir() {
+                        path.join("contents")
+                    } else {
+                        path
+                    }
+                })
                 .find(|path| *path != existing && fs::metadata(path).is_ok_and(|m| m.len() > 0));
             if let Some(path) = staging {
                 break Some(path);
@@ -749,9 +893,14 @@ mod tests {
         child.kill().unwrap();
         assert_eq!(child.wait().unwrap().signal(), Some(libc::SIGKILL));
         let staging = staging.expect("child must pause after writing staged bytes");
-        let metadata = fs::metadata(staging).unwrap();
+        let metadata = fs::metadata(&staging).unwrap();
         assert_eq!(metadata.len(), 1024);
         assert_eq!(metadata.permissions().mode() & 0o777, 0o600);
+        #[cfg(target_os = "macos")]
+        {
+            let acl = acl_listing(&staging);
+            assert_eq!(acl.lines().count(), 1, "unexpected ACL: {acl}");
+        }
         assert_eq!(fs::read(&existing).unwrap(), b"old fixture");
         assert_eq!(
             fs::metadata(existing).unwrap().permissions().mode() & 0o777,

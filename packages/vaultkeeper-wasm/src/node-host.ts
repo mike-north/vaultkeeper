@@ -8,9 +8,21 @@
 import { execFile } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { constants } from 'node:fs'
-import { access, mkdir, open, readdir, readFile, rename, unlink, writeFile } from 'node:fs/promises'
+import {
+  access,
+  lstat,
+  mkdir,
+  open,
+  readdir,
+  readFile,
+  rename,
+  rmdir,
+  unlink,
+  writeFile,
+} from 'node:fs/promises'
 import { homedir, platform as osPlatform } from 'node:os'
-import { basename, dirname, join } from 'node:path'
+import { basename, dirname, isAbsolute, join } from 'node:path'
+import { promisify } from 'node:util'
 import type { ExecOptions, HttpFetchRequest, HttpFetchResponse, WasmHostPlatform } from './types.js'
 
 /**
@@ -53,6 +65,27 @@ function toHostFilesystemError(err: unknown, path: string): HostFilesystemError 
 }
 
 /**
+ * Remove inherited macOS ACLs from a new, empty staging directory before
+ * creating the file. Clearing the file's ACL would leave a window for other
+ * users to open it and retain a descriptor that could read later writes.
+ */
+async function makeStagingDirPrivate(directory: string): Promise<void> {
+  // Node has no macOS ACL API. Use the system utility and pass only the path.
+  const operand = isAbsolute(directory) ? directory : `./${directory}`
+  const chmod = promisify(execFile)
+  // The ACL utility opens the directory, so restore any owner bits stripped
+  // by umask while the directory is still empty.
+  if (((await lstat(directory)).mode & 0o777) !== 0o700) {
+    await chmod('/bin/chmod', ['-h', '700', operand])
+  }
+  await chmod('/bin/chmod', ['-h', '-N', operand])
+  const metadata = await lstat(directory)
+  if (!metadata.isDirectory() || (metadata.mode & 0o777) !== 0o700) {
+    throw new HostFilesystemError('Staging directory is not owner-only', directory, undefined)
+  }
+}
+
+/**
  * Publish complete bytes from a fresh inode with the requested permissions.
  * Readers holding the previous inode can only see the previous contents.
  */
@@ -81,24 +114,38 @@ async function writeFileSecureUnix(path: string, content: Uint8Array, mode: numb
     name = `.vaultkeeper-write-${randomUUID()}`
   } while (name === basename(path))
   // Keep the kernel's resolution of parent components such as symlink/..
-  const staging = `${dirname(path)}/${name}`
-  const file = await open(staging, 'wx', mode)
+  const sibling = `${dirname(path)}/${name}`
+  const stagingDir = osPlatform() === 'darwin' ? sibling : undefined
+  const staging = stagingDir === undefined ? sibling : `${stagingDir}/contents`
+  if (stagingDir !== undefined) {
+    await mkdir(stagingDir, { mode: 0o700 })
+  }
   try {
+    if (stagingDir !== undefined) {
+      await makeStagingDirPrivate(stagingDir)
+    }
+    const file = await open(staging, 'wx', mode)
     try {
-      await file.chmod(mode)
-      if (((await file.stat()).mode & 0o777) !== (mode & 0o777)) {
-        throw new HostFilesystemError('Requested permissions were not applied', path, undefined)
+      try {
+        await file.chmod(mode)
+        if (((await file.stat()).mode & 0o777) !== (mode & 0o777)) {
+          throw new HostFilesystemError('Requested permissions were not applied', path, undefined)
+        }
+        await file.writeFile(content)
+      } catch (err) {
+        await file.close().catch(() => undefined)
+        throw err
       }
-      await file.writeFile(content)
+      await file.close()
+      await rename(staging, path)
     } catch (err) {
-      await file.close().catch(() => undefined)
+      await unlink(staging).catch(() => undefined)
       throw err
     }
-    await file.close()
-    await rename(staging, path)
-  } catch (err) {
-    await unlink(staging).catch(() => undefined)
-    throw err
+  } finally {
+    if (stagingDir !== undefined) {
+      await rmdir(stagingDir).catch(() => undefined)
+    }
   }
 }
 
