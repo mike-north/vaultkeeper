@@ -22,7 +22,7 @@ import type {
 } from './types.js'
 import { loadConfig, getDefaultConfigDir } from './config.js'
 import { KeyManager } from './keys/manager.js'
-import { loadKeyState, saveKeyState } from './keys/storage.js'
+import { initializeKeyState, loadKeyState, saveKeyState } from './keys/storage.js'
 import { BackendRegistry } from './backend/registry.js'
 import { isSigningBackend, getBackendCapabilities } from './backend/types.js'
 import type {
@@ -409,7 +409,15 @@ export class VaultKeeper {
         keyManager.hydrate(loaded)
       } else {
         await keyManager.init()
-        await saveKeyState(configDir, keyManager.snapshot())
+        const candidate = keyManager.snapshot()
+        let adopted = false
+        try {
+          const winner = await initializeKeyState(configDir, candidate)
+          adopted = winner === candidate
+          if (!adopted) keyManager.hydrate(winner)
+        } finally {
+          if (!adopted) candidate.current.key.fill(0)
+        }
       }
     } else {
       await keyManager.init()

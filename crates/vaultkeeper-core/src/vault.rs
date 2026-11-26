@@ -376,7 +376,8 @@ impl VaultKeeper {
                 None => {
                     key_manager.init()?;
                     let snapshot = key_manager.snapshot()?;
-                    crate::keys::save_key_state(host, &snapshot).await?;
+                    let winner = crate::keys::storage::initialize_key_state(host, snapshot).await?;
+                    key_manager.hydrate(winner);
                 }
             }
         } else {
@@ -1467,6 +1468,20 @@ mod mint_signing_lease_tests {
                 .unwrap()
                 .insert(path.to_path_buf(), content.to_vec());
             Ok(())
+        }
+        async fn publish_file_if_absent(
+            &self,
+            path: &Path,
+            content: &[u8],
+        ) -> Result<bool, VaultError> {
+            use std::collections::hash_map::Entry;
+            let mut files = self.files.lock().unwrap();
+            if let Entry::Vacant(entry) = files.entry(path.to_path_buf()) {
+                entry.insert(content.to_vec());
+                Ok(true)
+            } else {
+                Ok(false)
+            }
         }
         async fn file_exists(&self, path: &Path) -> Result<bool, VaultError> {
             Ok(self.files.lock().unwrap().contains_key(path))

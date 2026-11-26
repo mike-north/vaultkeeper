@@ -59,6 +59,14 @@ export interface ApprovalContext {
  */
 export interface WasmHostPlatform {
   /**
+   * Atomically publish complete owner-only file contents. Resolve to false
+   * when the destination exists. Required when initializing persistent state.
+   * The content is borrowed until the returned promise settles and may be
+   * cleared afterward. Copy it before retaining it beyond settlement.
+   */
+  publishFileIfAbsent?(path: string, content: Uint8Array): Promise<boolean>
+
+  /**
    * @param options - Optional stdin/env/cwd (issue #239). Omitting `options`
    *   (or all of its fields) preserves the exact pre-#239 exec behavior.
    */
@@ -69,6 +77,7 @@ export interface WasmHostPlatform {
   ): Promise<{ stdout: Uint8Array; stderr: Uint8Array; exitCode: number }>
   readFile(path: string): Promise<Uint8Array>
   writeFile(path: string, content: Uint8Array, mode: number): Promise<void>
+  /** Whether the directory entry exists, including a dangling symlink. */
   fileExists(path: string): Promise<boolean>
   deleteFile(path: string): Promise<void>
   renameFile(from: string, to: string): Promise<void>

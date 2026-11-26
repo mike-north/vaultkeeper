@@ -4,6 +4,8 @@
 
 ## WasmHostPlatform.fileExists() method
 
+Whether the directory entry exists, including a dangling symlink.
+
 **Signature:**
 
 ```typescript

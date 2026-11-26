@@ -444,7 +444,6 @@ export interface WasmHostPlatform {
         stderr: Uint8Array;
         exitCode: number;
     }>;
-    // (undocumented)
     fileExists(path: string): Promise<boolean>;
     httpFetch(request: HttpFetchRequest): Promise<HttpFetchResponse>;
     // (undocumented)
@@ -452,6 +451,7 @@ export interface WasmHostPlatform {
     // (undocumented)
     platform(): string;
     promptApproval?(context: ApprovalContext): Promise<boolean>;
+    publishFileIfAbsent?(path: string, content: Uint8Array): Promise<boolean>;
     // (undocumented)
     readFile(path: string): Promise<Uint8Array>;
     // (undocumented)

@@ -611,6 +611,70 @@ mod argument_validation {
 mod rotate_key {
     use super::*;
 
+    #[cfg(unix)]
+    #[test]
+    fn dangling_state_symlink_does_not_create_a_wrapping_key() {
+        let (mut cmd, dir) = cli_test_env();
+        let state = dir.path().join("keys.enc");
+        std::os::unix::fs::symlink("missing-target", &state).unwrap();
+        cmd.arg("rotate-key").assert().failure();
+        assert_eq!(
+            fs::read_link(state).unwrap(),
+            std::path::Path::new("missing-target")
+        );
+        assert!(!dir.path().join(".keys.wrap").exists());
+    }
+
+    #[test]
+    fn corrupt_non_utf8_state_does_not_create_a_wrapping_key() {
+        let (mut cmd, dir) = cli_test_env();
+        let state = dir.path().join("keys.enc");
+        fs::write(&state, [0xff]).unwrap();
+        cmd.arg("rotate-key").assert().failure();
+        assert_eq!(fs::read(state).unwrap(), [0xff]);
+        assert!(!dir.path().join(".keys.wrap").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn restrictive_umask_keeps_published_keys_readable() {
+        use std::os::unix::fs::PermissionsExt;
+        let (_, dir) = cli_test_env();
+        fs::create_dir(dir.path().join("file")).unwrap();
+        let binary = env!("CARGO_BIN_EXE_vaultkeeper");
+        for args in ["store --name first", "store --name second", "rotate-key"] {
+            let mut cmd = std::process::Command::new("sh");
+            let status = cmd
+                .arg("-c")
+                .arg(format!("umask 400; exec \"$1\" {args}"))
+                .arg("sh")
+                .arg(binary)
+                .env("VAULTKEEPER_CONFIG_DIR", dir.path())
+                .stdin(std::process::Stdio::piped())
+                .spawn()
+                .unwrap();
+            use std::io::Write;
+            let mut child = status;
+            child
+                .stdin
+                .take()
+                .unwrap()
+                .write_all(b"test secret\n")
+                .unwrap();
+            assert!(child.wait().unwrap().success());
+        }
+        for path in ["file/.key", ".keys.wrap", "keys.enc"] {
+            assert_eq!(
+                fs::metadata(dir.path().join(path))
+                    .unwrap()
+                    .permissions()
+                    .mode()
+                    & 0o777,
+                0o600
+            );
+        }
+    }
+
     #[test]
     fn rotate_key_succeeds_with_valid_config() {
         let (mut cmd, _dir) = cli_test_env();
@@ -1265,6 +1329,25 @@ mod session_mint {
                 permission: "write".to_string(),
                 code: None,
             })
+        }
+        async fn publish_file_if_absent(
+            &self,
+            path: &Path,
+            content: &[u8],
+        ) -> Result<bool, VaultError> {
+            use std::io::Write;
+            let publish = || -> std::io::Result<bool> {
+                let parent = path.parent().unwrap();
+                std::fs::create_dir_all(parent)?;
+                let mut temp = tempfile::NamedTempFile::new_in(parent)?;
+                temp.write_all(content)?;
+                match temp.persist_noclobber(path) {
+                    Ok(_) => Ok(true),
+                    Err(err) if err.error.kind() == std::io::ErrorKind::AlreadyExists => Ok(false),
+                    Err(err) => Err(err.error),
+                }
+            };
+            publish().map_err(|err| VaultError::Other(err.to_string()))
         }
         async fn file_exists(&self, path: &Path) -> Result<bool, VaultError> {
             Ok(path.exists())

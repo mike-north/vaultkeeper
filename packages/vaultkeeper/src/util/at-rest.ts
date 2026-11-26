@@ -19,6 +19,8 @@ import * as fs from 'node:fs/promises'
 import * as crypto from 'node:crypto'
 import { toFilesystemError, DecryptionError } from '../errors.js'
 
+import { hasErrorCode, publishFile } from './publish-file.js'
+
 const GCM_IV_BYTES = 12
 const GCM_KEY_BYTES = 32
 const GCM_TAG_LENGTH_BITS = 128
@@ -87,45 +89,36 @@ export function decryptGcm(key: Buffer, encoded: string, path = ''): string {
   }
 }
 
-/**
- * Read the 32-byte wrapping key at `keyPath`, generating and persisting a fresh
- * random one (mode `0o600`) when the file does not yet exist **or** holds a
- * value that is not exactly 32 bytes.
- *
- * @remarks
- * Regenerating on a wrong-length key is safe, not data loss: a wrapping key of
- * the wrong length cannot decrypt anything it previously encrypted (the AES-256
- * cipher requires a 32-byte key), so any ciphertext under a corrupt key is
- * already unrecoverable. Without this guard, a truncated/corrupt key file would
- * make {@link encryptGcm} throw "Invalid key length" on every write, wedging the
- * consumer instead of degrading to a fresh key.
- *
- * The caller is responsible for ensuring the parent directory exists. The
- * returned {@link Buffer} holds key material; zero it after use where practical.
- *
- * @param keyPath - Absolute path to the wrapping-key file.
- * @internal
- */
-export async function getOrCreateWrapKey(keyPath: string): Promise<Buffer> {
-  let existing: Buffer | undefined
-  try {
-    existing = await fs.readFile(keyPath)
-  } catch (err) {
-    if (!(err instanceof Error && 'code' in err && err.code === 'ENOENT')) {
-      throw toFilesystemError(err, 'wrapping key file', keyPath, 'read')
-    }
-  }
-
-  if (existing?.byteLength === GCM_KEY_BYTES) {
-    return existing
-  }
-
-  // Missing or corrupt (wrong length): (re)generate a fresh key in place.
-  const key = crypto.randomBytes(GCM_KEY_BYTES)
-  try {
-    await fs.writeFile(keyPath, key, { mode: 0o600 })
-  } catch (err) {
-    throw toFilesystemError(err, 'wrapping key file', keyPath, 'write')
-  }
+/** Read an existing key without creating a replacement. */
+export async function readWrapKey(keyPath: string): Promise<Buffer> {
+  const key = await readKeyIfPresent(keyPath)
+  if (key === undefined) throw new DecryptionError('Missing key material', keyPath)
   return key
+}
+
+async function readKeyIfPresent(keyPath: string): Promise<Buffer | undefined> {
+  let key: Buffer
+  try {
+    key = await fs.readFile(keyPath)
+  } catch (err) {
+    if (hasErrorCode(err, 'ENOENT')) return undefined
+    throw toFilesystemError(err, 'wrapping key file', keyPath, 'read')
+  }
+  if (key.byteLength === GCM_KEY_BYTES) return key
+  key.fill(0)
+  throw new DecryptionError('Invalid key material: expected 32 bytes', keyPath)
+}
+
+/** Create a key only when absent, or read the complete key published by another writer. */
+export async function getOrCreateWrapKey(keyPath: string): Promise<Buffer> {
+  const existing = await readKeyIfPresent(keyPath)
+  if (existing !== undefined) return existing
+
+  const candidate = crypto.randomBytes(GCM_KEY_BYTES)
+  try {
+    if (await publishFile(keyPath, candidate, 'wrapping key file')) return Buffer.from(candidate)
+  } finally {
+    candidate.fill(0)
+  }
+  return readWrapKey(keyPath)
 }

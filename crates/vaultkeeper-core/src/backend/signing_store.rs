@@ -41,9 +41,10 @@ use zeroize::{Zeroize, Zeroizing};
 use super::file::hex_encode;
 use crate::backend::HostPlatform;
 use crate::errors::VaultError;
-use crate::keys::storage::{KEY_WRAP_FILE, get_or_create_wrap_key};
+use crate::keys::storage::KEY_WRAP_FILE;
 use crate::signing::ed25519::{kid_for_verifying_key, sign as ed25519_sign};
 use crate::types::{SigningAlgorithm, SigningPublicKey};
+use crate::util::persistent_key::{get_or_create_key, read_key};
 
 /// Subdirectory (of the host config dir) holding sealed signing-key private
 /// material. Distinct from `file/` (secrets) and `keys.enc`/`.keys.wrap`
@@ -159,12 +160,19 @@ fn decrypt_gcm(key: &[u8], encoded: &str) -> Result<Zeroizing<String>, VaultErro
 /// material (read-or-create, exactly like `crate::keys::storage`), expanded
 /// under [`HKDF_INFO`] — a namespace no other derivation in this codebase
 /// uses.
-async fn get_signing_seal_key(host: &dyn HostPlatform) -> Result<Vec<u8>, VaultError> {
+async fn get_signing_seal_key(
+    host: &dyn HostPlatform,
+    initialize: bool,
+) -> Result<Vec<u8>, VaultError> {
     let wrap_path = host.config_dir().join(KEY_WRAP_FILE);
-    let mut wrap_key = get_or_create_wrap_key(host, &wrap_path).await?;
+    let wrap_key = if initialize {
+        get_or_create_key(host, &wrap_path).await?
+    } else {
+        read_key(host, &wrap_path).await?
+    };
 
     let hk = Hkdf::<Sha256>::new(None, &wrap_key);
-    wrap_key.zeroize();
+    drop(wrap_key);
 
     let mut seal_key = vec![0u8; GCM_KEY_BYTES];
     // `expand` only fails when the requested output length exceeds HKDF's
@@ -224,7 +232,7 @@ async fn load_signing_key(host: &dyn HostPlatform, id: &str) -> Result<SigningKe
         path: path.display().to_string(),
     })?;
 
-    let mut seal_key = get_signing_seal_key(host).await?;
+    let mut seal_key = get_signing_seal_key(host, false).await?;
     let pem = decrypt_gcm(&seal_key, &envelope);
     seal_key.zeroize();
     let pem: Zeroizing<String> = pem.map_err(|e| VaultError::Decryption {
@@ -282,7 +290,7 @@ pub(crate) async fn generate_signing_key(
         .to_pkcs8_pem(LineEnding::LF)
         .map_err(|e| VaultError::Other(format!("Failed to encode signing key: {e}")))?;
 
-    let mut seal_key = get_signing_seal_key(host).await?;
+    let mut seal_key = get_signing_seal_key(host, true).await?;
     let envelope = encrypt_gcm(&seal_key, &pem);
     seal_key.zeroize();
     let envelope = envelope?;
@@ -400,6 +408,20 @@ mod tests {
                 .insert(path.to_path_buf(), content.to_vec());
             Ok(())
         }
+        async fn publish_file_if_absent(
+            &self,
+            path: &Path,
+            content: &[u8],
+        ) -> Result<bool, VaultError> {
+            use std::collections::hash_map::Entry;
+            let mut files = self.files.lock().unwrap();
+            if let Entry::Vacant(entry) = files.entry(path.to_path_buf()) {
+                entry.insert(content.to_vec());
+                Ok(true)
+            } else {
+                Ok(false)
+            }
+        }
         async fn file_exists(&self, path: &Path) -> Result<bool, VaultError> {
             Ok(self.files.lock().unwrap().contains_key(path))
         }
@@ -443,6 +465,20 @@ mod tests {
     // AC1 — sign_with_key round-trips through the public key; wrong/absent
     // signing-key id returns a typed error, not a panic.
     // -----------------------------------------------------------------
+
+    #[tokio::test]
+    async fn reading_signing_record_does_not_replace_missing_wrapping_key() {
+        let host = TestHost::new();
+        generate_signing_key(&host, "record", SigningAlgorithm::EdDsa)
+            .await
+            .unwrap();
+        let path = host.config_dir().join(KEY_WRAP_FILE);
+        host.delete_file(&path).await.unwrap();
+
+        assert!(matches!(get_public_key(&host, "record").await,
+            Err(VaultError::Decryption { message, .. }) if message.contains("Missing key material")));
+        assert!(!host.file_exists(&path).await.unwrap());
+    }
 
     #[tokio::test]
     async fn sign_with_key_produces_a_signature_verifiable_against_the_public_key() {
@@ -552,18 +588,19 @@ mod tests {
     async fn signing_seal_key_is_hkdf_derived_and_distinct_from_the_raw_wrap_key() {
         let host = TestHost::new();
         let wrap_path = host.config_dir().join(KEY_WRAP_FILE);
-        let wrap_key = get_or_create_wrap_key(&host, &wrap_path).await.unwrap();
-        let seal_key = get_signing_seal_key(&host).await.unwrap();
+        let wrap_key = get_or_create_key(&host, &wrap_path).await.unwrap();
+        let seal_key = get_signing_seal_key(&host, true).await.unwrap();
 
         assert_eq!(seal_key.len(), GCM_KEY_BYTES);
         assert_ne!(
-            seal_key, wrap_key,
+            seal_key.as_slice(),
+            wrap_key.as_slice(),
             "the HKDF-derived seal key must not equal the raw .keys.wrap bytes"
         );
 
         // Deterministic: deriving again from the same wrap material yields
         // the same seal key (HKDF is deterministic given the same IKM/info).
-        let seal_key_again = get_signing_seal_key(&host).await.unwrap();
+        let seal_key_again = get_signing_seal_key(&host, true).await.unwrap();
         assert_eq!(seal_key, seal_key_again);
     }
 

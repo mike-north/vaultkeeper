@@ -65,6 +65,8 @@ Description
 
 </td><td>
 
+Whether the directory entry exists, including a dangling symlink.
+
 
 </td></tr>
 <tr><td>
@@ -104,6 +106,17 @@ Perform an HTTP request through the host's networking stack (issue \#239). [crea
 </td><td>
 
 _(Optional)_ Optional interactive human-approval capability (issue \#239). Absent means "no interactive approval available" — the Rust core treats that as an automatic refusal (fail closed), never an automatic allow. No consumer wires this up yet.
+
+
+</td></tr>
+<tr><td>
+
+[publishFileIfAbsent(path, content)?](./wasm.wasmhostplatform.publishfileifabsent.md)
+
+
+</td><td>
+
+_(Optional)_ Atomically publish complete owner-only file contents. Resolve to false when the destination exists. Required when initializing persistent state. The content is borrowed until the returned promise settles and may be cleared afterward. Copy it before retaining it beyond settlement.
 
 
 </td></tr>

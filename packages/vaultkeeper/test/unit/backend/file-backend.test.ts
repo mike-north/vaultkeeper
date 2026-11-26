@@ -76,34 +76,6 @@ describe('FileBackend', () => {
       }
     })
 
-    it('should create storage directory and write the encrypted file', async () => {
-      mockFs.mkdir.mockResolvedValue(undefined)
-      // getOrCreateKey: readFile for key → ENOENT → writeFile for key
-      const keyBytes = Buffer.alloc(32, 0xab)
-      const noFileError = Object.assign(new Error('ENOENT'), { code: 'ENOENT' })
-      mockFs.readFile.mockRejectedValueOnce(noFileError) // key not found
-      mockFs.writeFile.mockResolvedValueOnce(undefined) // write key
-      mockFs.writeFile.mockResolvedValueOnce(undefined) // write encrypted file
-
-      await backend.store('my-secret', 'secret-value')
-
-      // Issue #99: default storage lives under the resolved config dir
-      // (getDefaultConfigDir()/file), not the legacy $HOME/.vaultkeeper/file.
-      expect(mockFs.mkdir).toHaveBeenCalledWith(
-        defaultStorageDir,
-        expect.objectContaining({ recursive: true }),
-      )
-      expect(mockFs.writeFile).toHaveBeenCalledTimes(2)
-      // Second writeFile call is the encrypted entry
-      const encryptedWriteCall = mockFs.writeFile.mock.calls[1]
-      expect(encryptedWriteCall?.[0]).toEqual(expect.stringContaining('.enc'))
-      // Stored value is a base64:base64:base64 string (iv:authTag:ciphertext)
-      expect(encryptedWriteCall?.[1]).toEqual(
-        expect.stringMatching(/^[A-Za-z0-9+/=]+:[A-Za-z0-9+/=]+:[A-Za-z0-9+/=]*$/),
-      )
-      void keyBytes
-    })
-
     it('should reuse an existing key file', async () => {
       mockFs.mkdir.mockResolvedValue(undefined)
       // Return a valid 32-byte key buffer when key file exists

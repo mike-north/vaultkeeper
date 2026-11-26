@@ -5,10 +5,13 @@
  * expected host platform interface.
  */
 
+import { randomUUID } from 'node:crypto'
 import { execFile } from 'node:child_process'
 import {
-  access,
+  lstat,
   mkdir,
+  link,
+  open,
   readdir,
   readFile,
   rename,
@@ -18,6 +21,7 @@ import {
 } from 'node:fs/promises'
 import { homedir, platform as osPlatform } from 'node:os'
 import { dirname, join } from 'node:path'
+import { VaultError } from './errors.js'
 import type { ExecOptions, HttpFetchRequest, HttpFetchResponse, WasmHostPlatform } from './types.js'
 
 /**
@@ -36,7 +40,7 @@ import type { ExecOptions, HttpFetchRequest, HttpFetchResponse, WasmHostPlatform
  * made with: `writeFile`'s `mkdir` sub-step can fail on a different, more
  * precise directory path than the file path it was nominally about.
  */
-class HostFilesystemError extends Error {
+class HostFilesystemError extends VaultError {
   readonly path: string
   readonly code: string | undefined
 
@@ -143,7 +147,7 @@ export function createNodeHost(configDirOverride?: string): WasmHostPlatform {
 
     async fileExists(path: string): Promise<boolean> {
       try {
-        await access(path)
+        await lstat(path)
         return true
       } catch (err) {
         // Mirror the native host's `file_exists` (crates/vaultkeeper-cli/src/host.rs):
@@ -160,6 +164,34 @@ export function createNodeHost(configDirOverride?: string): WasmHostPlatform {
     async deleteFile(path: string): Promise<void> {
       try {
         await unlink(path)
+      } catch (err) {
+        throw toHostFilesystemError(err, path)
+      }
+    },
+
+    async publishFileIfAbsent(path: string, content: Uint8Array): Promise<boolean> {
+      const staging = `${path}.${randomUUID()}.tmp`
+      try {
+        await mkdir(dirname(path), { recursive: true, mode: 0o700 })
+        const file = await open(staging, 'wx', 0o600)
+        try {
+          try {
+            // Restore owner access removed by umask before any bytes are published.
+            if (osPlatform() !== 'win32') await file.chmod(0o600)
+            await file.writeFile(content)
+          } finally {
+            await file.close()
+          }
+          try {
+            await link(staging, path)
+          } catch (err) {
+            if (isErrnoException(err) && err.code === 'EEXIST') return false
+            throw err
+          }
+          return true
+        } finally {
+          await unlink(staging).catch(() => undefined)
+        }
       } catch (err) {
         throw toHostFilesystemError(err, path)
       }

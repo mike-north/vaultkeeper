@@ -3,7 +3,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use js_sys::{Function, Promise, Reflect, Uint8Array};
+use js_sys::{Function, Object, Promise, Reflect, Symbol, Uint8Array};
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::JsFuture;
 use zeroize::Zeroizing;
@@ -19,6 +19,23 @@ use vaultkeeper_core::jwe::validate_claims;
 use vaultkeeper_core::vault::{SetupOptions, VaultKeeperOptions};
 use vaultkeeper_core::{ClaimsKind, ExecutableTrustRequiredReason, VaultClaims, VaultError};
 
+// The intrinsic typed-array brand getter works across realms and cannot be
+// fooled by an object's own Symbol.toStringTag or a different view type.
+fn is_uint8_array(value: &JsValue) -> bool {
+    let array = Uint8Array::new_with_length(0);
+    let prototype = Object::get_prototype_of(&array);
+    let typed_array_prototype = Object::get_prototype_of(&prototype);
+    let descriptor =
+        Object::get_own_property_descriptor(&typed_array_prototype, &Symbol::to_string_tag());
+    Reflect::get(&descriptor, &JsValue::from_str("get"))
+        .ok()
+        .and_then(|v| v.dyn_into::<Function>().ok())
+        .and_then(|f| f.call0(value).ok())
+        .and_then(|v| v.as_string())
+        .as_deref()
+        == Some("Uint8Array")
+}
+
 // ─── JsHostPlatform ──────────────────────────────────────────────
 
 /// A `HostPlatform` implementation backed by JavaScript callbacks.
@@ -30,6 +47,7 @@ use vaultkeeper_core::{ClaimsKind, ExecutableTrustRequiredReason, VaultClaims, V
 /// - `writeFile(path, content, mode)` → `Promise<void>`
 /// - `fileExists(path)` → `Promise<boolean>`
 /// - `deleteFile(path)` → `Promise<void>`
+/// - `publishFileIfAbsent(path, content)` → `Promise<boolean>`
 /// - `renameFile(from, to)` → `Promise<void>`
 /// - `listDir(path)` → `Promise<string[]>`
 /// - `platform()` → `string` ("darwin"|"linux"|"win32")
@@ -388,7 +406,16 @@ impl HostPlatform for JsHostPlatform {
             .await
             .map_err(|e| fs_rejection_to_vault_error(&e, path, "read"))?;
 
-        Ok(Uint8Array::new(&result).to_vec())
+        if is_uint8_array(&result) {
+            Ok(Uint8Array::new(&result).to_vec())
+        } else {
+            Err(VaultError::Filesystem {
+                message: "readFile() result is not a Uint8Array".to_string(),
+                path: path.display().to_string(),
+                permission: "read".to_string(),
+                code: Some("EINVAL".to_string()),
+            })
+        }
     }
 
     async fn write_file(&self, path: &Path, content: &[u8], mode: u32) -> Result<(), VaultError> {
@@ -430,7 +457,9 @@ impl HostPlatform for JsHostPlatform {
             .await
             .map_err(|e| fs_rejection_to_vault_error(&e, path, "read"))?;
 
-        Ok(result.as_bool().unwrap_or(false))
+        result
+            .as_bool()
+            .ok_or_else(|| js_err("fileExists() result is not a boolean"))
     }
 
     async fn delete_file(&self, path: &Path) -> Result<(), VaultError> {
@@ -447,6 +476,27 @@ impl HostPlatform for JsHostPlatform {
             .map_err(|e| fs_rejection_to_vault_error(&e, path, "write"))?;
 
         Ok(())
+    }
+
+    async fn publish_file_if_absent(
+        &self,
+        path: &Path,
+        content: &[u8],
+    ) -> Result<bool, VaultError> {
+        let publish =
+            get_method(&self.host, "publishFileIfAbsent").map_err(|e| js_err(&format!("{e:?}")))?;
+        let js_path = JsValue::from_str(&path.to_string_lossy());
+        let bytes = Uint8Array::from(content);
+        let called = publish.call2(&self.host, &js_path, bytes.as_ref());
+        let result = match called {
+            Ok(promise) => JsFuture::from(Promise::from(promise)).await,
+            Err(err) => Err(err),
+        };
+        bytes.fill(0, 0, bytes.length());
+        result
+            .map_err(|e| fs_rejection_to_vault_error(&e, path, "write"))?
+            .as_bool()
+            .ok_or_else(|| js_err("publishFileIfAbsent() result is not a boolean"))
     }
 
     async fn rename_file(&self, from: &Path, to: &Path) -> Result<(), VaultError> {
