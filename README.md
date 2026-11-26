@@ -289,7 +289,7 @@ const jwe = await vault.setup('MY_API_KEY', { skipTrust: true })
 // 4. Authorize: decrypt and validate the token
 const { token, vaultResponse } = await vault.authorize(jwe)
 
-// 5a. Delegated fetch — secret injected into the request, never returned
+// 5a. Delegated fetch — VaultKeeper fills the Authorization header
 const { response: httpResponse } = await vault.fetch(token, {
   url: 'https://api.example.com/data',
   headers: { Authorization: 'Bearer {{secret}}' },
@@ -448,7 +448,7 @@ To use the native Linux credential store instead, install `secret-tool` (`sudo a
 
 ### Delegated fetch
 
-The secret is substituted for every `{{secret}}` placeholder in `url`, `headers`, and `body` before the request is sent. The raw secret value is never returned.
+The secret is substituted for every `{{secret}}` placeholder in `url`, `headers`, and `body` before the request is sent. `VaultKeeper.fetch()` rejects HTTP redirects with `FetchError`, including same-origin redirects and requests without placeholders. For other responses, `Response.url` can include substitutions made in the request URL.
 
 ```ts
 const { response } = await vault.fetch(token, {
