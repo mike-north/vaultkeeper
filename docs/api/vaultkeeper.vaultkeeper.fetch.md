@@ -12,6 +12,8 @@ Execute a delegated HTTP fetch, injecting secrets from the token(s).
 
 The delegation covers only the requested URL. Fetch redirect statuses (301, 302, 303, 307, and 308) reject with [FetchError](./vaultkeeper.fetcherror.md)<!-- -->, including same-origin redirects and requests without placeholders.
 
+The response and its clones expose the server's body stream, `status`<!-- -->, `ok`<!-- -->, and `redirected`<!-- -->. The response has type `default`<!-- -->, empty strings for `url` and `statusText`<!-- -->, and initially empty `headers` to keep reflected credentials out of metadata. The body is streamed as received and may contain data the server echoes. Consumers can use `text()`<!-- -->, `json()`<!-- -->, `arrayBuffer()`<!-- -->, and `blob()`<!-- -->. `blob()` initially has no media type, and `formData()` requires a caller-supplied `Content-Type`<!-- -->.
+
 **Signature:**
 
 ```typescript
@@ -77,7 +79,7 @@ The fetch request template with placeholders.
 
 Promise&lt;{ response: Response; vaultResponse: [VaultResponse](./vaultkeeper.vaultresponse.md)<!-- -->; }&gt;
 
-The `Response` from the underlying `fetch()` call, together with the vault metadata (`vaultResponse`<!-- -->). `Response.url` can include substitutions made in the request URL.
+A detached `Response` and the vault metadata (`vaultResponse`<!-- -->).
 
 ## Exceptions
 

@@ -783,10 +783,16 @@ describe('VaultKeeper', () => {
     })
 
     it.each([false, true])(
-      'preserves single-destination fetch policy at dispatch (expired during lookup: %s)',
+      'checks expiry before dispatching and returns a detached response (expired during lookup: %s)',
       async (expiresDuringLookup) => {
         const { vault, token } = await authorizeLease()
-        const dispatch = vi.fn<typeof fetch>().mockResolvedValue(new Response('ok'))
+        const dispatch = vi.fn<typeof fetch>().mockResolvedValue(
+          new Response('ok', {
+            status: 201,
+            statusText: 'synthetic reason phrase',
+            headers: { 'X-Reflected': 'synthetic response metadata' },
+          }),
+        )
         vi.stubGlobal('fetch', dispatch)
         Object.defineProperty(globalThis, 'fetch', {
           configurable: true,
@@ -807,7 +813,11 @@ describe('VaultKeeper', () => {
           await expect(pending).rejects.toThrow(TokenExpiredError)
           expect(dispatch).not.toHaveBeenCalled()
         } else {
-          await expect(pending).resolves.toMatchObject({ response: { status: 200 } })
+          const { response } = await pending
+          expect(response.status).toBe(201)
+          expect(response.statusText).toBe('')
+          expect([...response.headers]).toEqual([])
+          await expect(response.text()).resolves.toBe('ok')
           expect(dispatch).toHaveBeenCalledExactlyOnceWith(url, { redirect: 'error' })
         }
       },

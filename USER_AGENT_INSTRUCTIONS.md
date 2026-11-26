@@ -96,7 +96,7 @@ if (vaultResponse.rotatedJwt !== undefined) {
 
 ### Step 4 — Access (one of three patterns)
 
-Use the `CapabilityToken` with one of the access methods described in section 5. For delegated fetch, `Response.url` can include secret substitutions made in the request URL.
+Use the `CapabilityToken` with one of the access methods described in section 5. Delegated fetch strips response transport metadata, but the server can echo secrets in the body.
 
 ---
 
@@ -158,7 +158,7 @@ There are three access patterns. Choose based on what the secret is used for.
 
 ### 5a. Delegated Fetch
 
-Use when the secret must be sent in an HTTP request (API key in header, bearer token, URL parameter). `VaultKeeper.fetch()` rejects HTTP redirects with `FetchError`, including same-origin redirects and requests without placeholders. The error’s `url` field contains the original request template. For other responses, `Response.url` can include substitutions made in the request URL.
+Use when the secret must be sent in an HTTP request (API key in header, bearer token, URL parameter). `VaultKeeper.fetch()` rejects HTTP redirects with `FetchError`, including same-origin redirects and requests without placeholders. The error’s `url` field contains the original request template. Returned responses have empty `url`, `statusText`, and headers; the server can echo secrets in the body.
 
 ```ts
 const { response, vaultResponse } = await vault.fetch(token, {

@@ -142,14 +142,54 @@ describe('delegatedFetch', () => {
   })
 
   describe('return value', () => {
-    it('returns the Response from fetch', async () => {
-      const expected = makeOkResponse('hello')
-      mockFetch.mockResolvedValueOnce(expected)
-      const request: FetchRequest = { url: 'https://example.com' }
+    it.each([204, 205, 304])('preserves null bodies and numeric status %i', async (status) => {
+      mockFetch.mockResolvedValueOnce(new Response(null, { status }))
 
-      const result = await delegatedFetch('s', request)
+      const result = await delegatedFetch('s', { url: 'https://example.com' })
 
-      expect(result).toBe(expected)
+      expect(result.status).toBe(status)
+      expect(result.ok).toBe(status !== 304)
+      expect(result.body).toBeNull()
+      await expect(result.text()).resolves.toBe('')
+    })
+
+    it('uses only caller-supplied media metadata for body operations', async () => {
+      mockFetch.mockResolvedValueOnce(
+        new Response('name=value', {
+          headers: {
+            'Content-Type': 'application/x-www-form-urlencoded; reflected=synthetic-value',
+          },
+        }),
+      )
+
+      const result = await delegatedFetch('synthetic-value', { url: 'https://example.com' })
+      const blob = await result.clone().blob()
+      expect(blob.type).toBe('')
+      await expect(blob.text()).resolves.toBe('name=value')
+
+      // eslint-disable-next-line @typescript-eslint/no-deprecated -- Verify the documented native URL-encoded body operation.
+      await expect(result.clone().formData()).rejects.toThrow(TypeError)
+      result.headers.set('Content-Type', 'application/x-www-form-urlencoded')
+      // eslint-disable-next-line @typescript-eslint/no-deprecated -- Verify parsing with the caller's media type.
+      const form = await result.clone().formData()
+      expect(form.get('name')).toBe('value')
+      const typedBlob = await result.blob()
+      expect(typedBlob.type).toBe('application/x-www-form-urlencoded')
+      await expect(typedBlob.text()).resolves.toBe('name=value')
+    })
+
+    it('exposes a stream that can fail after the response has been returned', async () => {
+      const stream = new TransformStream<Uint8Array>()
+      const writer = stream.writable.getWriter()
+      mockFetch.mockResolvedValueOnce(new Response(stream.readable))
+
+      const result = await delegatedFetch('s', { url: 'https://example.com' })
+      const interrupted = new FetchError('Synthetic interruption', 'https://example.com')
+      const bodyFailure = expect(result.arrayBuffer()).rejects.toBe(interrupted)
+      await writer.abort(interrupted)
+
+      expect(result.bodyUsed).toBe(true)
+      await bodyFailure
     })
   })
 

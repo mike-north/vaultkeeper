@@ -268,7 +268,11 @@ whether membership is intentional.
   A JWE minted during clock correction carries the issuing instance's absolute timestamps. Other
   processes evaluate those timestamps against their own clocks, so clock skew can change the
   recipient's effective validity window.
-- **Delegated access patterns:** `fetch`; the delegated-launch verb **aligns to `run`** (CLI ubiquitous
+- **Delegated access patterns:** `fetch` returns a detached `Response` with the server's body stream,
+  numeric `status`, `ok`, and `redirected` flag. Native Fetch returns `redirected` as false because
+  delegated redirects are rejected. The response and its clones start with empty
+  `url`, `statusText`, and `headers` so metadata cannot expose injected credentials. The body is streamed
+  as received. The delegated-launch verb **aligns to `run`** (CLI ubiquitous
   language — the library method today named `exec` and its `Exec*` request/result/error types rename to the
   `run` family at the tiering pass, §2.3, so the launcher is spelled `run` in both surfaces), `FetchRequest`,
   `ExecRequest`, `ExecResult`, `redactSecrets`, `REDACTED`, `FetchError`, `ExecError`.

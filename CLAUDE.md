@@ -334,7 +334,7 @@ Tokens are compact JWE strings. The TS library uses the `jose` npm package; the 
 
 ### Access patterns
 
-- Delegated fetch/exec: substitute `{{secret}}` placeholders; the raw secret must never appear in a return value
+- Delegated fetch/exec: substitute `{{secret}}` placeholders. Delegated fetch omits the transport URL, headers, and reason phrase. The server controls the body and can echo the injected secret there. Delegated exec redacts secrets in returned output by default.
 - Controlled direct: use `createSecretAccessor` — wraps the secret in an auto-zeroing `Buffer` accessible only through a one-time `read()` callback
 
 ### Security rules

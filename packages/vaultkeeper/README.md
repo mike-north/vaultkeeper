@@ -85,7 +85,7 @@ const jwe = await vault.setup('MY_API_KEY', { skipTrust: true })
 // 4. Authorize: decrypt and validate the token
 const { token, vaultResponse } = await vault.authorize(jwe)
 
-// 5. Delegated fetch — VaultKeeper fills the Authorization header
+// 5. Delegated fetch — inject the secret and strip transport response metadata
 const { response } = await vault.fetch(token, {
   url: 'https://api.example.com/data',
   headers: { Authorization: 'Bearer {{secret}}' },
@@ -184,7 +184,7 @@ signatures.
 
 ## Delegated fetch redirects
 
-`VaultKeeper.fetch()` rejects HTTP redirects with `FetchError`, including same-origin redirects and requests without placeholders. The error’s `url` field contains the original request template. For other responses, `Response.url` can include substitutions made in the request URL.
+`VaultKeeper.fetch()` rejects HTTP redirects with `FetchError`, including same-origin redirects and requests without placeholders. The error’s `url` field contains the original request template. Returned responses have empty `url`, `statusText`, and headers; the server can echo secrets in the body.
 
 ## Multiple secrets in one request
 
