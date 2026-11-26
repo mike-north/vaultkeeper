@@ -1255,6 +1255,7 @@ export class VaultKeeper {
   // Private helpers
   // ---------------------------------------------------------------------------
 
+  /** Snapshot the authorized secrets and retain their leases for the dispatch boundary. */
   static #resolveSecrets(token: CapabilityToken | SecretTokenMap): {
     secrets: string | Record<string, string>
     beforeDispatch: () => void
@@ -1262,8 +1263,17 @@ export class VaultKeeper {
     const capabilities: CapabilityToken[] = []
     const beforeDispatch = () => {
       const nowSec = Date.now() / 1000
+      let earliest: { token: CapabilityToken; deadline: number } | undefined
       for (const capability of capabilities) {
-        validateCapabilityToken(capability, nowSec)
+        const claims = validateCapabilityToken(capability, nowSec)
+        if ('exp' in claims && (earliest === undefined || claims.exp < earliest.deadline)) {
+          earliest = { token: capability, deadline: claims.exp }
+        }
+      }
+      // The full walk catches leases already observed expired during request preparation.
+      // Resample through the earliest lease afterward so the walk cannot outlive its clock sample.
+      if (earliest !== undefined) {
+        validateCapabilityToken(earliest.token)
       }
     }
 

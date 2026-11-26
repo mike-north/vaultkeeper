@@ -611,6 +611,54 @@ describe('VaultKeeper', () => {
       ).rejects.toThrow(TokenExpiredError)
       expect(spawnSpy).not.toHaveBeenCalled()
     })
+
+    it.each(['fetch', 'exec'])(
+      'denies named %s when the earliest lease expires during the final capability walk',
+      async (operation) => {
+        const { vault, token: earliest } = await authorizeLease()
+        const otherJwe = await vault.setup('my-secret', { skipTrust: true, ttlMinutes: 2 })
+        const { token: other } = await vault.authorize(otherJwe)
+        const fetchSpy = vi.fn(() => Promise.resolve(new Response('ok')))
+        vi.stubGlobal('fetch', fetchSpy)
+        const spawnSpy = vi.mocked(spawn).mockImplementationOnce(() => {
+          throw new VaultError('Unexpected process dispatch')
+        })
+
+        vi.setSystemTime(expiresAt - 1)
+        const advanceDuringFinalCheck = () => {
+          // Dispatch preparation is complete. The first validation sees a live lease, but
+          // continued clock reads must reflect the deadline crossing during validation.
+          vi.spyOn(Date, 'now').mockImplementationOnce(() => {
+            vi.setSystemTime(expiresAt)
+            return expiresAt - 1
+          })
+        }
+        const tokens = { other, earliest, last: other }
+        const pending =
+          operation === 'fetch'
+            ? vault.fetch(tokens, {
+                url: 'https://example.invalid',
+                get headers() {
+                  advanceDuringFinalCheck()
+                  return { 'X-Other': '{{secret:other}}' }
+                },
+              })
+            : vault.exec(tokens, {
+                command: 'unused',
+                env: { SECRET: '{{secret:other}}' },
+                get cwd() {
+                  advanceDuringFinalCheck()
+                  return process.cwd()
+                },
+              })
+
+        await expect(pending).rejects.toThrow(TokenExpiredError)
+        expect(fetchSpy).not.toHaveBeenCalled()
+        expect(spawnSpy).not.toHaveBeenCalled()
+        vi.setSystemTime(expiresAt - 1)
+        expect(() => vault.getSecret(earliest)).toThrow(TokenExpiredError)
+      },
+    )
   })
 
   describe('rotateKey', () => {

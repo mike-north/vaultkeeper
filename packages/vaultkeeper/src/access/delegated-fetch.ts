@@ -65,11 +65,8 @@ export async function delegatedFetch(
     init.body = resolvePlaceholders(body, secrets)
   }
 
-  const dispatch = fetch
-  beforeDispatch?.()
-  try {
-    return await dispatch(url, init)
-  } catch (error) {
+  /** Keep fetch lookup and transport failures on the same redacted error path. */
+  const fetchFailure = (error: unknown): FetchError => {
     const rawDetail = error instanceof Error ? error.message : String(error)
     // The underlying error's message can embed the placeholder-resolved URL
     // (with the injected secret) — e.g. `getaddrinfo ENOTFOUND <secret-host>`.
@@ -80,6 +77,22 @@ export async function delegatedFetch(
     // cannot be redacted in place and would reintroduce the leak.
     const secretValues = typeof secrets === 'string' ? [secrets] : Object.values(secrets)
     const detail = redactSecretMaterial(rawDetail, url, urlTemplate, secretValues)
-    throw new FetchError(`Fetch failed for ${urlTemplate}: ${detail}`, urlTemplate)
+    return new FetchError(`Fetch failed for ${urlTemplate}: ${detail}`, urlTemplate)
+  }
+
+  let dispatch: typeof fetch
+  try {
+    dispatch = fetch
+  } catch (error) {
+    throw fetchFailure(error)
+  }
+
+  // A lease refusal keeps its authorization error type. Resolve dispatch first
+  // because a global getter can run user code before returning the function.
+  beforeDispatch?.()
+  try {
+    return await dispatch(url, init)
+  } catch (error) {
+    throw fetchFailure(error)
   }
 }
