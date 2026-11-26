@@ -242,6 +242,18 @@ SHA-256 hex digest; Dev-tier leases retain the `dev` sentinel.
 
 ### 2.2 The surface by concept (IS)
 
+On Unix, the native CLI and Node/WASM host create a fresh file with mode `0600` for persistent key bytes.
+They verify the mode before writing and publish the complete file by atomic rename. A failed write preserves
+any previous file. Descriptors opened on a previous inode continue to see only the previous bytes.
+The destination must be absent or a writable regular file, and its parent directory must permit replacement.
+On macOS, both hosts clear inherited ACLs from an empty private staging directory before creating the file.
+If the staging directory cannot be secured, they return a filesystem error before writing any key bytes.
+Under Node's permission model, the Node/WASM host uses its vault filesystem grant to set the mode when
+descriptor-based `chmod` is blocked. On macOS, the Node/WASM host also requires the child-process grant to
+clear inherited ACLs before writing.
+This contract assumes the vault owner controls mutation of the storage directory. Reads preserve the
+permissions of legacy keys.
+
 The 88 `@public` symbols group into coherent concepts. The owner reviews whether each grouping is complete and
 whether membership is intentional.
 

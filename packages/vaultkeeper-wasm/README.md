@@ -109,6 +109,13 @@ neither (or both), and a 2-argument `setup(name, value)` call, are compile-time 
 type system enforces the choice, with `ExecutableTrustRequiredError` as a runtime backstop for plain
 JavaScript callers.
 
+## Node permission model
+
+With `skipDoctor: true`, file-backed operation requires read access to the SDK and read/write
+access to the vault directory. On macOS, the SDK also needs `--allow-child-process` so `/bin/chmod`
+can clear inherited ACLs before key creation. With filesystem-only grants on macOS, key writes fail
+with `FilesystemError`.
+
 ## Doctor / preflight checks
 
 `vault.doctor()` runs the same preflight pass as the `vaultkeeper` library and CLI, returning a

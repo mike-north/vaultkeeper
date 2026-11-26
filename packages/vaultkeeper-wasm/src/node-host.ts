@@ -6,18 +6,25 @@
  */
 
 import { execFile } from 'node:child_process'
+import { randomUUID } from 'node:crypto'
+import { constants } from 'node:fs'
 import {
   access,
+  chmod,
+  lstat,
   mkdir,
+  open,
   readdir,
   readFile,
   rename,
+  rmdir,
   unlink,
   writeFile,
-  chmod,
 } from 'node:fs/promises'
+import type { FileHandle } from 'node:fs/promises'
 import { homedir, platform as osPlatform } from 'node:os'
-import { dirname, join } from 'node:path'
+import { basename, dirname, isAbsolute, join } from 'node:path'
+import { promisify } from 'node:util'
 import type { ExecOptions, HttpFetchRequest, HttpFetchResponse, WasmHostPlatform } from './types.js'
 
 /**
@@ -57,6 +64,118 @@ function toHostFilesystemError(err: unknown, path: string): HostFilesystemError 
   const message = err instanceof Error ? err.message : String(err)
   const code = isErrnoException(err) && typeof err.code === 'string' ? err.code : undefined
   return new HostFilesystemError(message, path, code)
+}
+
+/**
+ * Remove inherited macOS ACLs from a new, empty staging directory before
+ * creating the file. Clearing the file's ACL would leave a window for other
+ * users to open it and retain a descriptor that could read later writes.
+ */
+async function makeStagingDirPrivate(directory: string): Promise<void> {
+  // Node has no macOS ACL API. Use the system utility and pass only the path.
+  const operand = isAbsolute(directory) ? directory : `./${directory}`
+  const chmod = promisify(execFile)
+  // The ACL utility opens the directory, so restore any owner bits stripped
+  // by umask while the directory is still empty.
+  if (((await lstat(directory)).mode & 0o777) !== 0o700) {
+    await chmod('/bin/chmod', ['-h', '700', operand])
+  }
+  await chmod('/bin/chmod', ['-h', '-N', operand])
+  const metadata = await lstat(directory)
+  if (!metadata.isDirectory() || (metadata.mode & 0o777) !== 0o700) {
+    throw new HostFilesystemError('Staging directory is not owner-only', directory, undefined)
+  }
+}
+
+/** Establish the requested mode on the open staging inode before any bytes are written. */
+async function applyStagingMode(file: FileHandle, staging: string, mode: number): Promise<void> {
+  try {
+    await file.chmod(mode)
+  } catch (err) {
+    if (!isErrnoException(err) || err.code !== 'ERR_ACCESS_DENIED') {
+      throw err
+    }
+    // Node's permission model can disable descriptor chmod while granting
+    // pathname chmod inside the vault. Only restore bits that umask removed.
+    const opened = await file.stat({ bigint: true })
+    if ((opened.mode & 0o777n) !== BigInt(mode & 0o777)) {
+      // The vault owner controls parent mutations. Check the staging name
+      // still refers to the open inode before a path-based permission change.
+      const named = await lstat(staging, { bigint: true })
+      if (!named.isFile() || named.dev !== opened.dev || named.ino !== opened.ino) {
+        throw new HostFilesystemError(
+          'Staging path no longer names the open file',
+          staging,
+          undefined,
+        )
+      }
+      await chmod(staging, mode)
+    }
+  }
+  if (((await file.stat()).mode & 0o777) !== (mode & 0o777)) {
+    throw new HostFilesystemError('Requested permissions were not applied', staging, undefined)
+  }
+}
+
+/**
+ * Publish complete bytes from a fresh inode with the requested permissions.
+ * Readers holding the previous inode can only see the previous contents.
+ */
+async function writeFileSecureUnix(path: string, content: Uint8Array, mode: number): Promise<void> {
+  // Preserve the existing destination's write-access check without following
+  // symlinks or blocking on a FIFO.
+  const previous = await open(
+    path,
+    constants.O_WRONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
+  ).catch((err: unknown) => {
+    if (isErrnoException(err) && err.code === 'ENOENT') return undefined
+    throw err
+  })
+  if (previous !== undefined) {
+    try {
+      if (!(await previous.stat()).isFile()) {
+        throw new HostFilesystemError('Expected a regular file', path, undefined)
+      }
+    } finally {
+      await previous.close()
+    }
+  }
+
+  let name: string
+  do {
+    name = `.vaultkeeper-write-${randomUUID()}`
+  } while (name === basename(path))
+  // Keep the kernel's resolution of parent components such as symlink/..
+  const sibling = `${dirname(path)}/${name}`
+  const stagingDir = osPlatform() === 'darwin' ? sibling : undefined
+  const staging = stagingDir === undefined ? sibling : `${stagingDir}/contents`
+  if (stagingDir !== undefined) {
+    await mkdir(stagingDir, { mode: 0o700 })
+  }
+  try {
+    if (stagingDir !== undefined) {
+      await makeStagingDirPrivate(stagingDir)
+    }
+    const file = await open(staging, 'wx', mode)
+    try {
+      try {
+        await applyStagingMode(file, staging, mode)
+        await file.writeFile(content)
+      } catch (err) {
+        await file.close().catch(() => undefined)
+        throw err
+      }
+      await file.close()
+      await rename(staging, path)
+    } catch (err) {
+      await unlink(staging).catch(() => undefined)
+      throw err
+    }
+  } finally {
+    if (stagingDir !== undefined) {
+      await rmdir(stagingDir).catch(() => undefined)
+    }
+  }
 }
 
 /**
@@ -131,10 +250,10 @@ export function createNodeHost(configDirOverride?: string): WasmHostPlatform {
         }
       }
       try {
-        await writeFile(path, content)
-        // chmod is a no-op on Windows; skip to avoid errors
-        if (osPlatform() !== 'win32') {
-          await chmod(path, mode)
+        if (osPlatform() === 'win32') {
+          await writeFile(path, content)
+        } else {
+          await writeFileSecureUnix(path, content, mode)
         }
       } catch (err) {
         throw toHostFilesystemError(err, path)

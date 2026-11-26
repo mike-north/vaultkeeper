@@ -4,6 +4,8 @@
 
 ## WasmHostPlatform.writeFile() method
 
+Persist bytes with the given Unix mode, which may protect raw key material. Apply and verify that mode before writing any bytes. ACLs must preserve the requested access restrictions from file creation. The Node host publishes a complete file by atomic replacement on Unix and rejects symlink targets. Hosts on platforms without Unix mode bits may ignore the mode hint.
+
 **Signature:**
 
 ```typescript
