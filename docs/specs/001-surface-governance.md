@@ -240,6 +240,11 @@ whether membership is intentional.
   `ExecutableTrustRequiredError`, `IdentityMismatchError`.
 - **Secrets & access tokens:** `store`, `delete`, `secretExists`, `authorize`, `getSecret`, `CapabilityToken`,
   `SecretAccessor`, `SecretTokenMap`, `AccessorConsumedError`, `SecretNotFoundError`.
+  The TypeScript `authorize` shares volatile accounting for 10,000 finite-use tokens across vaults using the
+  same loaded module. It keeps tracked budgets through expiry and rejects a first finite-use authorization
+  with `AuthorizationDeniedError` when every slot is live. Unlimited-use authorizations require no slot.
+  Claim validation and reclamation use the latest wall-clock second observed by token enforcement so
+  a backward adjustment cannot restore expired tokens. Separate processes maintain independent budgets.
 - **Delegated access patterns:** `fetch`; the delegated-launch verb **aligns to `run`** (CLI ubiquitous
   language — the library method today named `exec` and its `Exec*` request/result/error types rename to the
   `run` family at the tiering pass, §2.3, so the launcher is spelled `run` in both surfaces), `FetchRequest`,

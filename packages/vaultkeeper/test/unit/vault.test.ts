@@ -1,12 +1,14 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { VaultKeeper } from '../../src/vault.js'
+import { VaultKeeper, clearUsageCounts } from '../../src/vault.js'
 import type { VaultConfig } from '../../src/types.js'
 import { BackendRegistry } from '../../src/backend/registry.js'
 import type { SecretBackend } from '../../src/backend/types.js'
-import { clearBlocklist } from '../../src/jwe/claims.js'
+import { blockToken, clearBlocklist } from '../../src/jwe/claims.js'
+import { resetTokenExpiryClockForTests } from '../../src/jwe/expiry-clock.js'
 import {
   UsageLimitExceededError,
   AuthorizationDeniedError,
+  TokenExpiredError,
   SigningNotSupportedError,
   InvalidKeyMaterialError,
   VaultError,
@@ -98,9 +100,12 @@ describe('VaultKeeper', () => {
     // Clear auto-registered builtins so tests can register their own mock backend
     BackendRegistry.clearBackends()
     clearBlocklist()
+    clearUsageCounts()
+    resetTokenExpiryClockForTests()
   })
 
   afterEach(() => {
+    vi.useRealTimers()
     vi.restoreAllMocks()
   })
 
@@ -450,6 +455,67 @@ describe('VaultKeeper', () => {
       const err = await vault.authorize(jwe).catch((e: unknown) => e)
       expect(err).toBeInstanceOf(UsageLimitExceededError)
     })
+
+    it('preserves exhausted live budgets under pressure and reclaims them after expiry', async () => {
+      vi.useFakeTimers()
+      const start = new Date('2026-01-01T00:00:00Z')
+      vi.setSystemTime(start)
+      const vault = await initVault({ 'my-secret': 'synthetic-value' })
+      const exhaustedJwe = await vault.setup('my-secret', {
+        skipTrust: true,
+        ttlMinutes: 1,
+        useLimit: 1,
+      })
+      await vault.authorize(exhaustedJwe)
+
+      const trackedJwe = await vault.setup('my-secret', {
+        skipTrust: true,
+        ttlMinutes: 1,
+        useLimit: 2,
+      })
+      await vault.authorize(trackedJwe)
+
+      const expiresAt = Math.floor(start.getTime() / 1000) + 60
+      for (let index = 0; index < 10_000; index++) {
+        blockToken(`denial-pressure-${String(index)}`, expiresAt)
+      }
+
+      for (let index = 2; index < 10_000; index++) {
+        const jwe = await vault.setup('my-secret', {
+          skipTrust: true,
+          ttlMinutes: 1,
+          useLimit: 1,
+        })
+        await vault.authorize(jwe)
+      }
+
+      const otherVault = await VaultKeeper.init({
+        skipDoctor: true,
+        backend: createMockBackend({ 'my-secret': 'synthetic-value' }),
+      })
+      const refusedJwe = await otherVault.setup('my-secret', {
+        skipTrust: true,
+        ttlMinutes: 1,
+        useLimit: 1,
+      })
+      await expect(otherVault.authorize(refusedJwe)).rejects.toThrow(AuthorizationDeniedError)
+      await expect(vault.authorize(exhaustedJwe)).rejects.toThrow(UsageLimitExceededError)
+      await expect(vault.authorize(trackedJwe)).resolves.toBeDefined()
+
+      const unlimitedJwe = await vault.setup('my-secret', { skipTrust: true })
+      await expect(vault.authorize(unlimitedJwe)).resolves.toBeDefined()
+
+      vi.setSystemTime(new Date('2026-01-01T00:02:00Z'))
+      const reclaimedJwe = await vault.setup('my-secret', {
+        skipTrust: true,
+        ttlMinutes: 1,
+        useLimit: 1,
+      })
+      await expect(vault.authorize(reclaimedJwe)).resolves.toBeDefined()
+
+      vi.setSystemTime(start)
+      await expect(vault.authorize(exhaustedJwe)).rejects.toThrow(TokenExpiredError)
+    }, 60_000)
   })
 
   describe('getSecret', () => {
@@ -468,6 +534,32 @@ describe('VaultKeeper', () => {
   })
 
   describe('rotateKey', () => {
+    it('preserves the remaining use when refreshing a previous-key JWE fails', async () => {
+      const vault = await initVault()
+      const jwe = await vault.setup('my-secret', { skipTrust: true, useLimit: 1 })
+      await vault.rotateKey()
+
+      const refreshFailure = new VaultError('Synthetic refresh failure')
+      vi.spyOn(jweTokenModule, 'createToken').mockRejectedValueOnce(refreshFailure)
+      await expect(vault.authorize(jwe)).rejects.toBe(refreshFailure)
+      await expect(vault.authorize(jwe)).resolves.toMatchObject({
+        vaultResponse: { keyStatus: 'previous' },
+      })
+      await expect(vault.authorize(jwe)).rejects.toThrow(UsageLimitExceededError)
+    })
+
+    it('charges one shared budget across concurrent previous-key authorizations', async () => {
+      const vault = await initVault()
+      const jwe = await vault.setup('my-secret', { skipTrust: true, useLimit: 1 })
+      await vault.rotateKey()
+
+      const results = await Promise.allSettled([vault.authorize(jwe), vault.authorize(jwe)])
+      expect(results.filter(({ status }) => status === 'fulfilled')).toHaveLength(1)
+      const rejected = results.find(({ status }) => status === 'rejected')
+      const reason: unknown = rejected?.reason
+      expect(reason).toBeInstanceOf(UsageLimitExceededError)
+    })
+
     it('should rotate the key and provide rotatedJwt on authorize', async () => {
       const vault = await initVault()
       const jwe = await vault.setup('my-secret', { skipTrust: true })
