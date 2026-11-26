@@ -17,7 +17,10 @@ const tarballDigest = Buffer.alloc(64, 1)
 const noRelease = { missing: [], source: null }
 
 // The event boundaries stay fixed while later commits can change the working checkout.
-function releaseFixture(t, { cargo = '0.5.0', wasm = cargo, laterTip = false } = {}) {
+function releaseFixture(
+  t,
+  { cargo = '0.5.0', wasm = cargo, laterTip = false, splitBump = false, manifestEdit = false } = {},
+) {
   const cwd = mkdtempSync(join(tmpdir(), 'vaultkeeper-release-'))
   t.after(() => rmSync(cwd, { recursive: true, force: true }))
   const git = (...args) => execFileSync('git', args, { cwd, encoding: 'utf8' }).trim()
@@ -25,28 +28,40 @@ function releaseFixture(t, { cargo = '0.5.0', wasm = cargo, laterTip = false } =
   git('config', 'user.name', 'Release Fixture')
   git('config', 'user.email', 'release@example.invalid')
   mkdirSync(join(cwd, 'packages/vaultkeeper-wasm'), { recursive: true })
+  const wasmManifest = join(cwd, 'packages/vaultkeeper-wasm/package.json')
+
+  // Return a SHA that remains usable after another commit changes the working tree.
+  function commitFixture() {
+    git('add', '.')
+    git('commit', '-q', '--allow-empty', '-m', 'Fixture')
+    return git('rev-parse', 'HEAD')
+  }
 
   function commitVersions(cargoVersion, wasmVersion) {
     writeFileSync(
       join(cwd, 'Cargo.toml'),
       `[workspace]\r\n\r\n[workspace.package]\r\nversion = "${cargoVersion}"\r\n`,
     )
-    writeFileSync(
-      join(cwd, 'packages/vaultkeeper-wasm/package.json'),
-      JSON.stringify({ version: wasmVersion }),
-    )
-    git('add', '.')
-    git('commit', '-q', '--allow-empty', '-m', 'Fixture')
-    return git('rev-parse', 'HEAD')
+    writeFileSync(wasmManifest, JSON.stringify({ version: wasmVersion }))
+    return commitFixture()
   }
 
   const before = commitVersions('0.4.0', '0.4.0')
-  let commit = commitVersions(cargo, wasm)
-  const releaseCommit = commit
-  if (laterTip) commit = commitVersions(cargo, wasm)
+  if (splitBump) commitVersions(cargo, '0.4.0')
+  const releaseCommit = commitVersions(cargo, wasm)
+  let docsBefore = releaseCommit
+  if (manifestEdit) {
+    writeFileSync(wasmManifest, JSON.stringify({ version: wasm, description: 'WASM SDK' }))
+    docsBefore = commitFixture()
+  }
+  let commit = docsBefore
+  if (laterTip) {
+    writeFileSync(join(cwd, 'README.md'), 'Documentation follow-up\n')
+    commit = commitFixture()
+  }
   // The Changesets checkout can move beyond the push under evaluation.
   const laterCommit = commitVersions('0.6.0', '0.6.0')
-  return { cwd, before, commit, releaseCommit, laterCommit, publishedPackages: [] }
+  return { cwd, before, commit, releaseCommit, docsBefore, laterCommit, publishedPackages: [] }
 }
 
 test('recovery binds missing crates to the npm source commit', async (t) => {
@@ -67,7 +82,7 @@ test('recovery rejects absent or unrelated npm source evidence', async (t) => {
   }
 })
 
-test('a later push tip preserves the release for initial publication and a full rerun', async (t) => {
+test('one push containing the bump and a docs follow-up supports publication and a full rerun', async (t) => {
   const fixture = releaseFixture(t, { laterTip: true })
   const publishedPackages = [{ name: '@vaultkeeper/wasm', version: '0.5.0' }]
   const initial = registry({ coreVersions: ['0.5.0'] })
@@ -82,6 +97,27 @@ test('a later push tip preserves the release for initial publication and a full 
     source: fixture.commit,
   })
   assert.deepEqual(rerun.urls, [npmUrl, coreUrl, cliUrl])
+})
+
+test('a separate docs push can finish a fresh WASM release when the bump run was skipped', async (t) => {
+  const fixture = releaseFixture(t, { laterTip: true })
+  // The pending bump run was replaced. Changesets published WASM on the docs push.
+  const { request, urls } = registry({ npmStatus: 404 })
+  const publishedPackages = [{ name: '@vaultkeeper/wasm', version: '0.5.0' }]
+  assert.deepEqual(
+    await missingCrates({ ...fixture, before: fixture.releaseCommit, request, publishedPackages }),
+    { missing: ['vaultkeeper-core', 'vaultkeeper-cli'], source: fixture.commit },
+  )
+  assert.deepEqual(urls, [coreUrl, cliUrl])
+})
+
+test('a version-preserving manifest edit between pushes does not hide the synchronized bump', async (t) => {
+  const fixture = releaseFixture(t, { laterTip: true, manifestEdit: true })
+  const { request } = registry({ gitHead: fixture.commit, coreVersions: ['0.5.0'] })
+  assert.deepEqual(
+    await missingCrates({ ...fixture, before: fixture.docsBefore, request, rerun: true }),
+    { missing: ['vaultkeeper-cli'], source: fixture.commit },
+  )
 })
 
 // npm's trusted-publishing provenance ties the exact tarball to the release workflow's commit.
@@ -121,6 +157,34 @@ test('a trusted npm release with provenance and no gitHead can resume publishing
     source: fixture.releaseCommit,
   })
   assert.deepEqual(urls, [npmUrl, provenanceUrl, coreUrl, cliUrl])
+})
+
+test('after the separate docs push published WASM, only its rerun can recover the missing CLI', async (t) => {
+  const fixture = releaseFixture(t, { laterTip: true })
+  const attestations = provenance(fixture.commit)
+  const bump = registry({ attestations })
+  await assert.rejects(
+    missingCrates({
+      ...fixture,
+      commit: fixture.releaseCommit,
+      request: bump.request,
+      rerun: true,
+    }),
+    /outside the release push/,
+  )
+  assert.deepEqual(bump.urls, [npmUrl, provenanceUrl])
+
+  const docs = registry({ attestations, coreVersions: ['0.5.0'] })
+  assert.deepEqual(
+    await missingCrates({
+      ...fixture,
+      before: fixture.releaseCommit,
+      request: docs.request,
+      rerun: true,
+    }),
+    { missing: ['vaultkeeper-cli'], source: fixture.commit },
+  )
+  assert.deepEqual(docs.urls, [npmUrl, provenanceUrl, coreUrl, cliUrl])
 })
 
 test('npm provenance must identify this tarball, workflow, and push', async (t) => {
@@ -215,12 +279,35 @@ test('an ordinary push after the release cannot recover an earlier push', async 
     noRelease,
   )
   assert.deepEqual(urls, [])
+
+  const rerun = registry({ gitHead: fixture.releaseCommit })
+  assert.deepEqual(
+    await missingCrates({
+      ...fixture,
+      before: fixture.releaseCommit,
+      request: rerun.request,
+      rerun: true,
+    }),
+    noRelease,
+  )
+  assert.deepEqual(rerun.urls, [npmUrl])
 })
 
 test('a Cargo-only version bump cannot publish crates', async (t) => {
   const fixture = releaseFixture(t, { wasm: '0.4.0' })
   const { request, urls } = registry()
   assert.deepEqual(await missingCrates({ ...fixture, request }), noRelease)
+  assert.deepEqual(urls, [])
+})
+
+test('a same-version push cannot treat separate Cargo and WASM version changes as a synchronized bump', async (t) => {
+  const fixture = releaseFixture(t, { laterTip: true, splitBump: true })
+  const { request, urls } = registry()
+  const publishedPackages = [{ name: '@vaultkeeper/wasm', version: '0.5.0' }]
+  assert.deepEqual(
+    await missingCrates({ ...fixture, before: fixture.releaseCommit, request, publishedPackages }),
+    noRelease,
+  )
   assert.deepEqual(urls, [])
 })
 
@@ -249,14 +336,14 @@ test('registry errors fail the release instead of scheduling a publish', async (
   await assert.rejects(missingCrates({ ...fixture, request }), /HTTP 503/)
 })
 
-test('the reconciliation entry point emits the validated source and both crate flags', (t) => {
-  const { cwd, before, commit, releaseCommit } = releaseFixture(t, { laterTip: true })
+// Exercise the script with the same environment and output contract as the workflow step.
+function reconciliationOutput({ cwd, before, commit, source, attempt }) {
   const registryMock = join(cwd, 'registry.mjs')
   writeFileSync(
     registryMock,
     `globalThis.fetch = async (url) => {
     if (url === ${JSON.stringify(npmUrl)}) {
-      return Response.json({ name: '@vaultkeeper/wasm', version: '0.5.0', gitHead: '${releaseCommit}' })
+      return Response.json({ name: '@vaultkeeper/wasm', version: '0.5.0', gitHead: '${source}' })
     }
     if (url === ${JSON.stringify(coreUrl)}) {
       return Response.json({ name: 'vaultkeeper-core', vers: '0.5.0' })
@@ -266,13 +353,34 @@ test('the reconciliation entry point emits the validated source and both crate f
   }`,
   )
   const script = fileURLToPath(new URL('./release-reconciliation.mjs', import.meta.url))
+  return execFileSync(process.execPath, ['--import', registryMock, script], {
+    cwd,
+    encoding: 'utf8',
+    env: {
+      ...process.env,
+      GITHUB_SHA: commit,
+      PUSH_BEFORE: before,
+      PUBLISHED_PACKAGES: '[]',
+      GITHUB_RUN_ATTEMPT: attempt,
+    },
+  })
+}
+
+test('the reconciliation entry point emits the validated source and both crate flags', (t) => {
+  const fixture = releaseFixture(t, { laterTip: true })
+  const { releaseCommit } = fixture
   assert.equal(
-    execFileSync(process.execPath, ['--import', registryMock, script], {
-      cwd,
-      encoding: 'utf8',
-      env: { ...process.env, GITHUB_SHA: commit, PUSH_BEFORE: before, PUBLISHED_PACKAGES: '[]' },
-    }),
+    reconciliationOutput({ ...fixture, source: releaseCommit, attempt: '1' }),
     `source=${releaseCommit}\ncore-missing=false\ncli-missing=true\n`,
+  )
+})
+
+test('the reconciliation entry point recognizes a full rerun of the separate docs push', (t) => {
+  const fixture = releaseFixture(t, { laterTip: true })
+  const { commit, releaseCommit } = fixture
+  assert.equal(
+    reconciliationOutput({ ...fixture, before: releaseCommit, source: commit, attempt: '2' }),
+    `source=${commit}\ncore-missing=false\ncli-missing=true\n`,
   )
 })
 

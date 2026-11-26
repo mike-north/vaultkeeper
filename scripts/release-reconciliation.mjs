@@ -1,5 +1,6 @@
-// A release is a synchronized Cargo and WASM version change across the original main push.
-// Only an npm publication tied to that push's source permits publishing absent crate versions.
+// A release pairs a synchronized Cargo and WASM version bump with the npm publication's source.
+// A later main push can publish WASM if it takes the pending bump run's place. In that case,
+// only the publishing push tip can authorize crates publication, including on a full rerun.
 // A crates.io index 404 or an exact version missing from a valid index entry permits publishing.
 import { execFileSync } from 'node:child_process'
 import { pathToFileURL } from 'node:url'
@@ -7,6 +8,7 @@ import { pathToFileURL } from 'node:url'
 // The WASM npm package carries the version shared by the two published Rust crates.
 const wasmName = '@vaultkeeper/wasm'
 const wasmManifest = 'packages/vaultkeeper-wasm/package.json'
+const cargoManifest = 'Cargo.toml'
 const crateNames = ['vaultkeeper-core', 'vaultkeeper-cli']
 const npmRegistry = 'https://registry.npmjs.org'
 const releaseRepository = 'https://github.com/mike-north/vaultkeeper'
@@ -29,11 +31,36 @@ function workspaceVersion(manifest) {
   return version
 }
 
+// Read the two versions that must agree before either crate can be published.
 function versionsAt(commit, cwd) {
   return {
-    cargo: workspaceVersion(readManifest(commit, 'Cargo.toml', cwd)),
+    cargo: workspaceVersion(readManifest(commit, cargoManifest, cwd)),
     wasm: JSON.parse(readManifest(commit, wasmManifest, cwd)).version,
   }
+}
+
+// The version script updates both manifests in the same release commit. For a same-version
+// push, look past manifest edits that kept the version and find the preceding version pair.
+function hasEarlierSynchronizedBump(before, version, cwd) {
+  const manifests = [cargoManifest, wasmManifest]
+  const history = execFileSync(
+    'git',
+    ['log', '--first-parent', '--full-history', '--format=%H', before, '--', ...manifests],
+    { cwd, encoding: 'utf8' },
+  ).trim()
+  for (const revision of history.split('\n')) {
+    const paths = execFileSync('git', ['ls-tree', '--name-only', revision, '--', ...manifests], {
+      cwd,
+      encoding: 'utf8',
+    }).trim()
+    // A version introduced with one of the manifests has no preceding pair to compare.
+    if (paths.split('\n').length !== manifests.length) return false
+    const previous = versionsAt(revision, cwd)
+    if (previous.cargo !== version || previous.wasm !== version) {
+      return previous.cargo !== version && previous.wasm !== version
+    }
+  }
+  return false
 }
 
 // Missing versions are a normal release state. Other registry failures must stop publication.
@@ -121,7 +148,14 @@ function validateSource(source, { before, commit, version, cwd }) {
 }
 
 // Return the crate names that still need publishing and the exact tree they must be built from.
-export async function missingCrates({ before, commit, publishedPackages, cwd, request = fetch }) {
+export async function missingCrates({
+  before,
+  commit,
+  publishedPackages,
+  rerun = false,
+  cwd,
+  request = fetch,
+}) {
   if (
     typeof before !== 'string' ||
     !commitSha.test(before) ||
@@ -135,13 +169,23 @@ export async function missingCrates({ before, commit, publishedPackages, cwd, re
 
   const { cargo: version, wasm } = versionsAt(commit, cwd)
   const previous = versionsAt(before, cwd)
-  if (wasm !== version || previous.cargo === version || previous.wasm === version) {
-    return noRelease
+  if (wasm !== version) return noRelease
+
+  const cargoChanged = previous.cargo !== version
+  const wasmChanged = previous.wasm !== version
+  if (cargoChanged !== wasmChanged) return noRelease
+
+  const fresh = publishedPackages.some((pkg) => pkg.name === wasmName && pkg.version === version)
+  // An ordinary first attempt with no version change or fresh WASM publish needs no lookup.
+  // On a rerun the fresh Changesets output can be gone, so check for the exact npm source.
+  if (!cargoChanged) {
+    if (!fresh && !rerun) return noRelease
+    if (!hasEarlierSynchronizedBump(before, version, cwd)) return noRelease
   }
 
   // A fresh Changesets publish used the checked-out push tip and may precede npm replication.
   let source = commit
-  if (!publishedPackages.some((pkg) => pkg.name === wasmName && pkg.version === version)) {
+  if (!fresh) {
     const url = `${npmRegistry}/${encodeURIComponent(wasmName)}/${encodeURIComponent(version)}`
     const response = await registryResponse(url, request)
     if (response.status === 404) {
@@ -152,7 +196,11 @@ export async function missingCrates({ before, commit, publishedPackages, cwd, re
       throw new TypeError(`Unexpected npm metadata for ${wasmName}@${version}`)
     }
     source = metadata.gitHead ?? (await provenanceSource(metadata, version, request))
-    validateSource(source, { before, commit, version, cwd })
+    if (cargoChanged) {
+      validateSource(source, { before, commit, version, cwd })
+    } else if (source !== commit) {
+      return noRelease
+    }
   }
 
   const results = await Promise.all(
@@ -173,11 +221,17 @@ export async function missingCrates({ before, commit, publishedPackages, cwd, re
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  const { PUSH_BEFORE: before, GITHUB_SHA: commit, PUBLISHED_PACKAGES: published } = process.env
+  const {
+    PUSH_BEFORE: before,
+    GITHUB_SHA: commit,
+    PUBLISHED_PACKAGES: published,
+    GITHUB_RUN_ATTEMPT: attempt,
+  } = process.env
   const { missing, source } = await missingCrates({
     before,
     commit,
     publishedPackages: JSON.parse(published || '[]'),
+    rerun: Number(attempt) > 1,
   })
   process.stdout.write(
     `source=${source ?? ''}\ncore-missing=${missing.includes('vaultkeeper-core')}\ncli-missing=${missing.includes('vaultkeeper-cli')}\n`,
