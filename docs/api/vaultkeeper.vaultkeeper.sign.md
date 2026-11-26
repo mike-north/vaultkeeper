@@ -47,7 +47,7 @@ token
 
 </td><td>
 
-A signing-key `CapabilityToken` from [VaultKeeper.authorizeSigningKey()](./vaultkeeper.vaultkeeper.authorizesigningkey.md)<!-- -->.
+A signing-key `CapabilityToken` issued by this vault instance's [VaultKeeper.authorizeSigningKey()](./vaultkeeper.vaultkeeper.authorizesigningkey.md) method.
 
 
 </td></tr>
@@ -93,7 +93,7 @@ The detached compact JWS and vault metadata.
 
 ## Exceptions
 
-{<!-- -->AuthorizationDeniedError<!-- -->} If `token` is invalid or is not a signing-key token (e.g. an ordinary secret token).
+{<!-- -->AuthorizationDeniedError<!-- -->} If `token` is invalid, was issued by another vault instance, or is the wrong kind of capability. This check runs before selecting or invoking a signing backend.
 
 {<!-- -->SigningNotSupportedError<!-- -->} If the active backend cannot sign.
 
