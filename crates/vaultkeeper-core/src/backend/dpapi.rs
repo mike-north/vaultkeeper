@@ -21,16 +21,10 @@
 //!   — `[System.IO.File]::WriteAllBytes(path, $encrypted)`, matching the TS
 //!   script exactly.
 //!
-//! The `retrieve` script's *stdout* encoding is not part of that shared
-//! on-disk contract (it is purely an implementation-internal channel: no
-//! other implementation ever reads it), so this port deliberately diverges
-//! from the TS script's `Write-Output ([Text.Encoding]::UTF8.GetString(...))`
-//! and instead base64-encodes the decrypted bytes onto stdout. This avoids
-//! the same category of risk the stdin fix addressed on the way in —
-//! terminal/console text-encoding and newline-translation surprises — on the
-//! way out, and is what makes AC2's byte-for-byte round trip (including
-//! embedded newlines) hold unconditionally rather than depending on
-//! PowerShell console encoding configuration.
+//! Both implementations base64-encode decrypted bytes on stdout. This
+//! keeps trimming and console encoding confined to the transport, so
+//! credential whitespace and UTF-8 bytes survive retrieval. The stdout
+//! encoding is independent of the shared on-disk format.
 
 use crate::backend::types::{ExecOptions, HostPlatform, ListableBackend, Platform, SecretBackend};
 use crate::errors::VaultError;
@@ -231,10 +225,6 @@ impl SecretBackend for DpapiBackend {
 
         let entry_literal = Self::ps_string_literal(&entry_path)?;
 
-        // See the module docs: unlike the TS reference script, the decrypted
-        // bytes are base64-encoded onto stdout rather than written as raw
-        // UTF-8 text, so this port's byte-for-byte round trip does not
-        // depend on PowerShell's console text encoding.
         let script = [
             "Add-Type -AssemblyName System.Security".to_string(),
             format!("$encrypted = [System.IO.File]::ReadAllBytes({entry_literal})"),

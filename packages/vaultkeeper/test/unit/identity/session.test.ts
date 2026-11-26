@@ -10,6 +10,8 @@ import {
 import { AuthorizationDeniedError } from '../../../src/errors.js'
 import type { VaultClaims, SigningClaims } from '../../../src/identity/types.js'
 
+const issuer = Symbol('test vault')
+
 function makeClaims(overrides: Partial<VaultClaims> = {}): VaultClaims {
   return {
     jti: 'test-jti-001',
@@ -28,26 +30,26 @@ function makeClaims(overrides: Partial<VaultClaims> = {}): VaultClaims {
 
 describe('CapabilityToken', () => {
   it('is an instance of CapabilityToken', () => {
-    const token = createCapabilityToken(makeClaims())
+    const token = createCapabilityToken(makeClaims(), issuer)
     expect(token).toBeInstanceOf(CapabilityToken)
   })
 
   it('has no enumerable properties exposing claims', () => {
-    const token = createCapabilityToken(makeClaims())
+    const token = createCapabilityToken(makeClaims(), issuer)
     const keys = Object.keys(token)
     expect(keys).toHaveLength(0)
   })
 
   it('toString does not contain claim data', () => {
     const claims = makeClaims({ sub: 'super-secret-path' })
-    const token = createCapabilityToken(claims)
+    const token = createCapabilityToken(claims, issuer)
     const str = token.toString()
     expect(str).not.toContain('super-secret-path')
     expect(str).not.toContain('encrypted-value')
   })
 
   it('cannot be JSON-serialized to reveal claims', () => {
-    const token = createCapabilityToken(makeClaims({ val: 'secret-value' }))
+    const token = createCapabilityToken(makeClaims({ val: 'secret-value' }), issuer)
     const serialized = JSON.stringify(token)
     expect(serialized).not.toContain('secret-value')
   })
@@ -79,15 +81,15 @@ describe('CapabilityToken public surface (issue #74)', () => {
 describe('createCapabilityToken', () => {
   it('creates a distinct token for each call', () => {
     const claims = makeClaims()
-    const t1 = createCapabilityToken(claims)
-    const t2 = createCapabilityToken(claims)
+    const t1 = createCapabilityToken(claims, issuer)
+    const t2 = createCapabilityToken(claims, issuer)
     expect(t1).not.toBe(t2)
   })
 
   it('stores the claims retrievable by validateCapabilityToken', () => {
     const claims = makeClaims({ sub: 'path/to/secret', jti: 'unique-id' })
-    const token = createCapabilityToken(claims)
-    const retrieved = validateCapabilityToken(token)
+    const token = createCapabilityToken(claims, issuer)
+    const retrieved = validateCapabilityToken(token, issuer)
     expect(retrieved).toEqual(claims)
   })
 })
@@ -95,17 +97,31 @@ describe('createCapabilityToken', () => {
 describe('validateCapabilityToken', () => {
   it('returns the exact claims object used to create the token', () => {
     const claims = makeClaims()
-    const token = createCapabilityToken(claims)
-    const result = validateCapabilityToken(token)
+    const token = createCapabilityToken(claims, issuer)
+    const result = validateCapabilityToken(token, issuer)
     expect(result).toEqual(claims)
     expect(result.jti).toBe(claims.jti)
     expect(result.sub).toBe(claims.sub)
   })
 
+  it('rejects lookup without an issuer', () => {
+    const token = createCapabilityToken(makeClaims(), issuer)
+    expect(() => {
+      Reflect.apply(validateCapabilityToken, undefined, [token])
+    }).toThrow('Capability token was issued by another vault instance')
+  })
+
+  it('compares issuer identity even when symbols have the same description', () => {
+    const token = createSigningCapabilityToken(makeSigningClaims(), issuer)
+    expect(() => validateCapabilityToken(token, Symbol(issuer.description))).toThrow(
+      new AuthorizationDeniedError('Capability token was issued by another vault instance'),
+    )
+  })
+
   it('throws AuthorizationDeniedError for a token not created by createCapabilityToken', () => {
     const forgery = new CapabilityToken()
-    expect(() => validateCapabilityToken(forgery)).toThrow(AuthorizationDeniedError)
-    expect(() => validateCapabilityToken(forgery)).toThrow(
+    expect(() => validateCapabilityToken(forgery, issuer)).toThrow(AuthorizationDeniedError)
+    expect(() => validateCapabilityToken(forgery, issuer)).toThrow(
       'Invalid or unrecognized capability token',
     )
   })
@@ -114,18 +130,20 @@ describe('validateCapabilityToken', () => {
     // Simulate an attacker constructing their own CapabilityToken subclass
     class FakeToken extends CapabilityToken {}
     const fake = new FakeToken()
-    expect(() => validateCapabilityToken(fake)).toThrow(AuthorizationDeniedError)
-    expect(() => validateCapabilityToken(fake)).toThrow('Invalid or unrecognized capability token')
+    expect(() => validateCapabilityToken(fake, issuer)).toThrow(AuthorizationDeniedError)
+    expect(() => validateCapabilityToken(fake, issuer)).toThrow(
+      'Invalid or unrecognized capability token',
+    )
   })
 
   it('each token returns its own distinct claims', () => {
     const claimsA = makeClaims({ jti: 'token-a', sub: 'path/a' })
     const claimsB = makeClaims({ jti: 'token-b', sub: 'path/b' })
-    const tokenA = createCapabilityToken(claimsA)
-    const tokenB = createCapabilityToken(claimsB)
+    const tokenA = createCapabilityToken(claimsA, issuer)
+    const tokenB = createCapabilityToken(claimsB, issuer)
 
-    expect(validateCapabilityToken(tokenA).jti).toBe('token-a')
-    expect(validateCapabilityToken(tokenB).jti).toBe('token-b')
+    expect(validateCapabilityToken(tokenA, issuer).jti).toBe('token-a')
+    expect(validateCapabilityToken(tokenB, issuer).jti).toBe('token-b')
   })
 })
 
@@ -139,8 +157,8 @@ describe('isSigningClaims', () => {
   })
 
   it('accepts real claims from createSigningCapabilityToken', () => {
-    const token = createSigningCapabilityToken(makeSigningClaims())
-    expect(isSigningClaims(validateCapabilityToken(token))).toBe(true)
+    const token = createSigningCapabilityToken(makeSigningClaims(), issuer)
+    expect(isSigningClaims(validateCapabilityToken(token, issuer))).toBe(true)
   })
 
   it('rejects ordinary secret claims (no keyType marker)', () => {

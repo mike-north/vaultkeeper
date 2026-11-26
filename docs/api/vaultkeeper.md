@@ -79,11 +79,11 @@ Thrown when no configured backend is available or reachable. Inspect `reason` fo
 
 </td><td>
 
-An opaque handle to authorized secret claims.
+An opaque handle to authorized secret or signing-key claims.
 
-A `CapabilityToken` is produced by [VaultKeeper.authorize()](./vaultkeeper.vaultkeeper.authorize.md) and deliberately exposes no readable data. The underlying claims — including the secret value — are held in a module-private `WeakMap` that this class does not reference, and its private fields keep any property from leaking them (`toString()` returns only a debug identifier). There is intentionally no public API for reading the claims directly.
+[VaultKeeper.authorize()](./vaultkeeper.vaultkeeper.authorize.md) and [VaultKeeper.authorizeSigningKey()](./vaultkeeper.vaultkeeper.authorizesigningkey.md) return tokens bound to the issuing `VaultKeeper` instance. Claims and issuer identity are held outside the token object. `toString()` returns only a debug identifier.
 
-To use the secret, pass the token to a [VaultKeeper](./vaultkeeper.vaultkeeper.md) access method — [VaultKeeper.getSecret()](./vaultkeeper.vaultkeeper.getsecret.md)<!-- -->, [VaultKeeper.fetch()](./vaultkeeper.vaultkeeper.fetch.md)<!-- -->, [VaultKeeper.exec()](./vaultkeeper.vaultkeeper.exec.md)<!-- -->, or [VaultKeeper.sign()](./vaultkeeper.vaultkeeper.sign.md) — which resolve the claims internally.
+Pass a secret token to the issuer's [VaultKeeper.getSecret()](./vaultkeeper.vaultkeeper.getsecret.md)<!-- -->, [VaultKeeper.fetch()](./vaultkeeper.vaultkeeper.fetch.md)<!-- -->, or [VaultKeeper.exec()](./vaultkeeper.vaultkeeper.exec.md) method. Pass a signing token to the issuer's [VaultKeeper.sign()](./vaultkeeper.vaultkeeper.sign.md) method.
 
 
 </td></tr>

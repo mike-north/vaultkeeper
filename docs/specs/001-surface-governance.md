@@ -69,6 +69,10 @@ range. "Secrets" = does a secret value transit this command, and by what channel
 | `session mint` | `PROFILE` | `--entry <e>` | — | **JWE lease → stdout** | lease (capability, not secret) | 0 / 1 |
 | `session revoke` | — | `--jti <j>` \| `--key <k>` (xor) | — | confirmation | — | 0 / 1 |
 
+Native `run` does not yet verify the receiving executable, so it exits 1 for
+raw or lease entries requiring elevated trust, including `--set` entries
+inheriting an elevated default. Dry runs describe the plan without resolving.
+
 For `run` and `exec`, `--help` and `-h` before the `--` separator show Vaultkeeper help.
 After the separator, both flags pass unchanged to the child.
 
@@ -212,6 +216,13 @@ on reflection, recorded to close the question.
 
 ## Part 2 — Library Surface
 
+Rust profile resolution requires caller-supplied verified executable identity
+at least as strong as an entry's `minTrust` before retrieving an elevated-trust
+raw secret or lease. `ResolveOptions::executable_identity` carries the identity
+and achieved tier; the caller must authenticate the evidence and ensure it
+applies to the receiving executable. Elevated identities carry a lowercase
+SHA-256 hex digest; Dev-tier leases retain the `dev` sentinel.
+
 ### 2.1 Organizing principles (SHOULD BE, normative)
 
 - **L1 — Everything through `index.ts`.** The public API is exactly the re-exports of `src/index.ts`; a
@@ -270,6 +281,10 @@ whether membership is intentional.
 - **Signing & leases:** `createSigningKey`, `authorizeSigningKey`, `sign`, `exportPublicKey`,
   `VaultKeeper.verify`, `SigningAlgorithm`, `SigningPublicKey`, `SignRequest`, `SignResult`, `VerifyRequest`,
   `SigningBackend`, `isSigningBackend`, and the signing error family.
+  TypeScript in-process capabilities from `authorize` and `authorizeSigningKey` are bound to the
+  issuing `VaultKeeper` instance, including when instances share configuration or backend storage.
+  A different instance rejects them with `AuthorizationDeniedError` before backend selection or
+  delegated work. For `fetch` and `exec`, the issuer requirement applies to every token in a map.
 - **Backends & registry:** `SecretBackend`, `ListableBackend`, `PresenceCapableBackend`, `BackendRegistry`,
   `BackendConfig`, `BackendFactory`, `BackendSetupFactory`, `BackendCapabilities`, `getBackendCapabilities`,
   `isListableBackend`, `isPresenceCapableBackend`, `defaultBackendType`, `platformNativeBackendType`,
