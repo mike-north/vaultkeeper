@@ -848,6 +848,49 @@ mod tests {
         assert_eq!(fs::read_dir(root.join("signing")).unwrap().count(), 1);
     }
 
+    /// A complete candidate left by an interrupted repair still selects the
+    /// wrapping key for native signing enrollments in the same store.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn signing_enrollment_resumes_interrupted_wrap_key_repair() {
+        use std::sync::Arc;
+        use vaultkeeper_core::backend::{FileBackend, SigningBackend};
+        use vaultkeeper_core::types::SigningAlgorithm;
+
+        let dir = tempfile::tempdir().unwrap();
+        let key_path = dir.path().join(".keys.wrap");
+        let repair_path = dir.path().join(".keys.wrap.repair");
+        let candidate = [0x42; 32];
+        let host = NativeHostPlatform::new(dir.path().to_path_buf());
+        host.write_file(&key_path, &[0], 0o600).await.unwrap();
+        host.write_file(&repair_path, &candidate, 0o600)
+            .await
+            .unwrap();
+
+        let open = || FileBackend::new(Arc::new(NativeHostPlatform::new(dir.path().to_path_buf())));
+        let enroll = |backend: FileBackend, label: &'static str| async move {
+            backend
+                .generate_signing_key(label, SigningAlgorithm::EdDsa)
+                .await
+                .unwrap();
+            backend.get_public_key(label).await.unwrap().kid
+        };
+        let first = tokio::spawn(enroll(open(), "first"));
+        let second = tokio::spawn(enroll(open(), "second"));
+        let (first_kid, second_kid) = (first.await.unwrap(), second.await.unwrap());
+
+        assert!(fs::read(&key_path).unwrap() == candidate);
+        assert!(!repair_path.exists());
+        let reopened = open();
+        assert_eq!(
+            reopened.get_public_key("first").await.unwrap().kid,
+            first_kid
+        );
+        assert_eq!(
+            reopened.get_public_key("second").await.unwrap().kid,
+            second_kid
+        );
+    }
+
     /// Non-Unix (Windows) sanity check: `create_dir_all_secure` still
     /// creates the directory even though POSIX mode bits don't apply there.
     #[cfg(not(unix))]

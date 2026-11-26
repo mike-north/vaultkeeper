@@ -18,7 +18,7 @@
 import * as fs from 'node:fs/promises'
 import * as crypto from 'node:crypto'
 import * as path from 'node:path'
-import { toFilesystemError, DecryptionError } from '../errors.js'
+import { toFilesystemError, DecryptionError, FilesystemError } from '../errors.js'
 
 const GCM_IV_BYTES = 12
 const GCM_KEY_BYTES = 32
@@ -183,32 +183,56 @@ async function readValidWrapKey(keyPath: string): Promise<Buffer> {
   throw new DecryptionError('Invalid wrapping key length', keyPath)
 }
 
+/** Resume any published repair so every writer uses the same selected key. */
 async function repairWrapKey(keyPath: string): Promise<Buffer> {
   const candidatePath = `${keyPath}.repair`
-  const candidate = crypto.randomBytes(GCM_KEY_BYTES)
-  let published = false
-  let ownsCandidate = false
+  let candidate: Buffer = crypto.randomBytes(GCM_KEY_BYTES)
+  let returnCandidate = false
   try {
-    ownsCandidate = await writeFileIfAbsent(candidatePath, candidate, 'wrapping key repair')
-    if (!ownsCandidate) return await readValidWrapKey(keyPath)
+    if (!(await writeFileIfAbsent(candidatePath, candidate, 'wrapping key repair'))) {
+      candidate.fill(0)
+      try {
+        candidate = await readValidWrapKey(candidatePath)
+      } catch (err) {
+        // The selected candidate can disappear after a peer installs it.
+        if (err instanceof FilesystemError && err.code === 'ENOENT') {
+          return await readValidWrapKey(keyPath)
+        }
+        throw err
+      }
+    }
 
-    // A peer may have repaired the key while this writer was staging its candidate.
+    let active: Buffer
     try {
-      return await readValidWrapKey(keyPath)
+      active = await readValidWrapKey(keyPath)
     } catch (err) {
       if (!(err instanceof DecryptionError)) throw err
+      await installWrapKeyRepair(keyPath, candidate)
+      active = candidate
     }
-    try {
-      await fs.rename(candidatePath, keyPath)
-    } catch (err) {
-      throw toFilesystemError(err, 'wrapping key file', keyPath, 'write')
-    }
-    published = true
-    return candidate
+    // Only remove the shared candidate once a complete active key is available.
+    await fs.unlink(candidatePath).catch(() => undefined)
+    returnCandidate = active === candidate
+    return active
   } finally {
-    if (!published) {
-      candidate.fill(0)
-      if (ownsCandidate) await fs.unlink(candidatePath).catch(() => undefined)
-    }
+    if (!returnCandidate) candidate.fill(0)
+  }
+}
+
+/** Install a private copy of the selected key so a delayed writer cannot rename a reused candidate path. */
+async function installWrapKeyRepair(keyPath: string, candidate: Buffer): Promise<void> {
+  const stagedPath = `${keyPath}.repair-${crypto.randomUUID()}.tmp`
+  if (!(await writeFileIfAbsent(stagedPath, candidate, 'wrapping key repair'))) {
+    throw new FilesystemError(
+      'Wrapping key repair staging path already exists',
+      stagedPath,
+      'write',
+    )
+  }
+  try {
+    await fs.rename(stagedPath, keyPath)
+  } catch (err) {
+    await fs.unlink(stagedPath).catch(() => undefined)
+    throw toFilesystemError(err, 'wrapping key file', keyPath, 'write')
   }
 }

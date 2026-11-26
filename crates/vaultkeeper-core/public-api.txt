@@ -854,7 +854,7 @@ pub fn vaultkeeper_core::profile::validate_profile_name(&str) -> core::result::R
 pub mod vaultkeeper_core::resolve
 pub struct vaultkeeper_core::resolve::ResolveOptions<'a>
 pub vaultkeeper_core::resolve::ResolveOptions::backend: &'a dyn vaultkeeper_core::backend::SecretBackend
-pub vaultkeeper_core::resolve::ResolveOptions::executable_hash: core::option::Option<alloc::string::String>
+pub vaultkeeper_core::resolve::ResolveOptions::executable_identity: core::option::Option<vaultkeeper_core::identity::IdentityInfo>
 pub vaultkeeper_core::resolve::ResolveOptions::key_manager: &'a vaultkeeper_core::keys::KeyManager
 pub async fn vaultkeeper_core::resolve::resolve_profile(&vaultkeeper_core::profile::loader::LoadedProfile, &vaultkeeper_core::resolve::ResolveOptions<'_>) -> core::result::Result<vaultkeeper_core::resolve::ResolvedEnv, vaultkeeper_core::errors::VaultError>
 pub type vaultkeeper_core::resolve::ResolvedEnv = std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>
@@ -1270,7 +1270,7 @@ pub vaultkeeper_core::PreflightResult::ready: bool
 pub vaultkeeper_core::PreflightResult::warnings: alloc::vec::Vec<alloc::string::String>
 pub struct vaultkeeper_core::ResolveOptions<'a>
 pub vaultkeeper_core::ResolveOptions::backend: &'a dyn vaultkeeper_core::backend::SecretBackend
-pub vaultkeeper_core::ResolveOptions::executable_hash: core::option::Option<alloc::string::String>
+pub vaultkeeper_core::ResolveOptions::executable_identity: core::option::Option<vaultkeeper_core::identity::IdentityInfo>
 pub vaultkeeper_core::ResolveOptions::key_manager: &'a vaultkeeper_core::keys::KeyManager
 pub struct vaultkeeper_core::RunPlan
 pub vaultkeeper_core::RunPlan::ad_hoc: alloc::collections::btree::set::BTreeSet<alloc::string::String>

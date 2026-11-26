@@ -120,7 +120,7 @@ Decrypt a JWE, validate claims, verify executable identity, and return an opaque
 
 Mint a signing-key capability token for the key named `name`<!-- -->.
 
-The returned token carries only `{ kid, backendRef, keyType: 'signing-key' }` — never any key material — and is accepted only by [VaultKeeper.sign()](./vaultkeeper.vaultkeeper.sign.md)<!-- -->. Passing it to `getSecret`<!-- -->/`fetch`<!-- -->/`exec` is rejected.
+The returned token carries only `{ kid, backendRef, keyType: 'signing-key' }` — never any key material — and is accepted only by this vault instance's [VaultKeeper.sign()](./vaultkeeper.vaultkeeper.sign.md) method. Passing it to `getSecret`<!-- -->/`fetch`<!-- -->/`exec` is rejected.
 
 
 </td></tr>
@@ -272,7 +272,7 @@ Report the [BackendCapabilities](./vaultkeeper.backendcapabilities.md) of the ac
 
 Create a controlled-direct `SecretAccessor` from a capability token.
 
-The accessor wraps the secret in a single-use, auto-zeroing `Buffer`<!-- -->. The secret is accessible only through the `read()` callback and is zeroed immediately after the callback returns.
+The accessor wraps the secret in a single-use, auto-zeroing `Buffer`<!-- -->. The secret is accessible only through the `read()` callback while the JWE is live and is zeroed immediately after the callback returns.
 
 
 </td></tr>

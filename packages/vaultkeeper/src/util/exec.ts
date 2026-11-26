@@ -3,6 +3,7 @@
  */
 
 import { spawn } from 'node:child_process'
+import { collectUtf8 } from './collect-utf8.js'
 import { PluginNotFoundError, ExecError } from '../errors.js'
 
 /** Options for command execution. */
@@ -54,22 +55,14 @@ export function execCommandFull(
     const proc = spawn(command, args, {
       stdio: [options?.stdin !== undefined ? 'pipe' : 'ignore', 'pipe', 'pipe'],
     })
-    let stdout = ''
-    let stderr = ''
+    const stdout = collectUtf8(proc.stdout)
+    const stderr = collectUtf8(proc.stderr)
     // Undefined when no timeoutMs was given, or once the timer has fired.
     // Tracked so 'close'/'error' can clear it — otherwise an already-settled
     // promise still leaves the timer pending, which keeps the event loop
     // alive until it fires and calls proc.kill() on an already-exited
     // process (regression: PR #164 review, issue #127).
     let timeoutHandle: ReturnType<typeof setTimeout> | undefined
-
-    proc.stdout?.on('data', (data: Buffer) => {
-      stdout += data.toString()
-    })
-
-    proc.stderr?.on('data', (data: Buffer) => {
-      stderr += data.toString()
-    })
 
     if (options?.stdin !== undefined && proc.stdin) {
       proc.stdin.write(options.stdin)
@@ -82,6 +75,8 @@ export function execCommandFull(
         // reset to undefined so the later 'close'/'error' handler's guard
         // matches reality instead of calling clearTimeout on a stale handle.
         timeoutHandle = undefined
+        stdout.discard()
+        stderr.discard()
         proc.kill('SIGTERM')
         reject(new ExecError(`Command timed out after ${String(options.timeoutMs)}ms`, command))
       }, options.timeoutMs)
@@ -91,10 +86,16 @@ export function execCommandFull(
       if (timeoutHandle !== undefined) {
         clearTimeout(timeoutHandle)
       }
-      resolve({ stdout, stderr, exitCode: code ?? 1 })
+      resolve({
+        stdout: stdout.finish(),
+        stderr: stderr.finish(),
+        exitCode: code ?? 1,
+      })
     })
 
     proc.on('error', (error) => {
+      stdout.discard()
+      stderr.discard()
       if (timeoutHandle !== undefined) {
         clearTimeout(timeoutHandle)
       }

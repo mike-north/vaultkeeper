@@ -284,6 +284,8 @@ async fn create_missing_wrap_key(
     }
 }
 
+/// A published candidate selects the key for all repairers, including those
+/// resuming after the first repairer stopped before installing it.
 async fn repair_wrap_key(host: &dyn HostPlatform, wrap_path: &Path) -> Result<Vec<u8>, VaultError> {
     let mut candidate_path = wrap_path.as_os_str().to_os_string();
     candidate_path.push(".repair");
@@ -295,7 +297,16 @@ async fn repair_wrap_key(host: &dyn HostPlatform, wrap_path: &Path) -> Result<Ve
         .await
     {
         Ok(true) => {}
-        Ok(false) => return read_valid_wrap_key(host, wrap_path).await,
+        Ok(false) => match read_valid_wrap_key(host, candidate_path).await {
+            Ok(selected) => {
+                candidate.zeroize();
+                *candidate = selected;
+            }
+            Err(err) => {
+                // A peer may have installed the key and removed its candidate.
+                return read_valid_wrap_key(host, wrap_path).await.or(Err(err));
+            }
+        },
         Err(VaultError::LockingNotSupported { .. }) => {
             host.write_file(wrap_path, &candidate, 0o600).await?;
             return Ok(std::mem::take(&mut *candidate));
@@ -303,22 +314,44 @@ async fn repair_wrap_key(host: &dyn HostPlatform, wrap_path: &Path) -> Result<Ve
         Err(err) => return Err(err),
     }
 
-    // The candidate path serializes repairers. Recheck under that ownership
-    // so a delayed writer cannot replace a key already repaired by its peer.
-    let result = match host.read_file(wrap_path).await {
-        Ok(existing) if existing.len() == GCM_KEY_BYTES => Ok(existing),
-        Ok(mut invalid) => {
-            invalid.zeroize();
-            match host.rename_file(candidate_path, wrap_path).await {
-                // Rename consumes our candidate. A new writer may now own the
-                // candidate path, so avoid touching that path after success.
-                Ok(()) => return Ok(std::mem::take(&mut *candidate)),
-                Err(err) => Err(err),
-            }
+    let mut active = match read_valid_wrap_key(host, wrap_path).await {
+        Ok(existing) => zeroize::Zeroizing::new(existing),
+        Err(VaultError::Decryption { .. }) => {
+            install_wrap_key_repair(host, wrap_path, &candidate).await?;
+            candidate
         }
-        Err(err) => Err(err),
+        Err(err) => return Err(err),
     };
+    // A complete active key must exist before any writer removes the candidate.
     let _ = host.delete_file(candidate_path).await;
+    Ok(std::mem::take(&mut *active))
+}
+
+/// Install a private copy so delayed repairers cannot rename a reused shared
+/// candidate path. Every copy eligible for installation holds the same key.
+async fn install_wrap_key_repair(
+    host: &dyn HostPlatform,
+    wrap_path: &Path,
+    candidate: &[u8],
+) -> Result<(), VaultError> {
+    let mut staged_path = wrap_path.as_os_str().to_os_string();
+    staged_path.push(format!(".repair-{}.tmp", uuid::Uuid::new_v4()));
+    let staged_path = Path::new(&staged_path);
+    if !host
+        .write_file_if_absent(staged_path, candidate, 0o600)
+        .await?
+    {
+        return Err(VaultError::Filesystem {
+            message: "Wrapping key repair staging path already exists".to_string(),
+            path: staged_path.display().to_string(),
+            permission: "write".to_string(),
+            code: Some("EEXIST".to_string()),
+        });
+    }
+    let result = host.rename_file(staged_path, wrap_path).await;
+    if result.is_err() {
+        let _ = host.delete_file(staged_path).await;
+    }
     result
 }
 

@@ -146,13 +146,25 @@ describe('FileBackend signing contract', () => {
   })
 
   it('recovers an interrupted wrapping-key repair and keeps the selected key', async () => {
-    const candidate = crypto.randomBytes(32)
-    await fs.writeFile(path.join(storageDir, '.key'), Buffer.alloc(1))
-    await fs.writeFile(path.join(storageDir, '.key.repair'), candidate)
-    await backend.generateSigningKey(ID, 'EdDSA')
-    const publicKey = await backend.getPublicKey(ID)
-    expect(await fs.readFile(path.join(storageDir, '.key'))).toEqual(candidate)
-    expect(await new FileBackend(storageDir).getPublicKey(ID)).toEqual(publicKey)
+    const keyPath = path.join(storageDir, '.key')
+    const candidatePath = `${keyPath}.repair`
+    const candidate = Buffer.alloc(32, 0x42)
+    await fs.writeFile(keyPath, Buffer.alloc(1))
+    await fs.writeFile(candidatePath, candidate, { mode: 0o600 })
+
+    // Both enrollments must finish using the candidate selected before the interruption.
+    const other = new FileBackend(storageDir)
+    const otherId = 'signing-key:other'
+    await Promise.all([
+      backend.generateSigningKey(ID, 'EdDSA'),
+      other.generateSigningKey(otherId, 'EdDSA'),
+    ])
+
+    expect(await fs.readFile(keyPath)).toEqual(candidate)
+    expect(await fs.readdir(storageDir)).not.toContain('.key.repair')
+    const reopened = new FileBackend(storageDir)
+    expect(await reopened.getPublicKey(ID)).toEqual(await backend.getPublicKey(ID))
+    expect(await reopened.getPublicKey(otherId)).toEqual(await other.getPublicKey(otherId))
   })
 
   it('a non-ENOENT probe failure surfaces a typed FilesystemError, never a silent overwrite', async () => {
