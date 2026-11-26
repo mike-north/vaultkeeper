@@ -172,45 +172,17 @@ pub trait HostPlatform: Send + Sync {
     ///
     /// A caller that loses the race (the file already exists) gets
     /// [`VaultError::Filesystem`] with `permission: "lock"` and, when the
-    /// host can supply one, `code: Some("EEXIST".to_string())` — that is the
-    /// specific shape callers match on to distinguish "someone else holds
-    /// this lock right now" from a genuine I/O failure (wrong permissions,
-    /// disk full, etc., which propagate as `Filesystem` with a different or
-    /// absent `code` and must not be treated as contention). The caller
-    /// decides whether to retry, and whether a sufficiently old lock counts
-    /// as abandoned and eligible for takeover — this primitive itself has no
-    /// concept of staleness.
+    /// host can supply one, `code: Some("EEXIST".to_string())`, for contention.
     ///
-    /// # Default implementation — fails closed, not a silent no-op
-    ///
-    /// The default implementation refuses with the dedicated
-    /// [`VaultError::LockingNotSupported`] variant (not `VaultError::Other`,
-    /// which callers must be able to treat as a genuine failure rather than
-    /// this specific "no locking on this host" signal) rather than silently
-    /// succeeding. A
-    /// permissive no-op default here (e.g. always returning `Ok(())`) would
-    /// let two overlapping writers on a host that never overrode this method
-    /// both believe they hold an exclusive lock — recreating exactly the
-    /// last-writer-wins bug issue #322 exists to fix, just one layer up.
-    /// Hosts that don't override this — every existing `HostPlatform`
-    /// implementation as of this change, including the WASM/JS bridge (see
-    /// `JsHostPlatform`'s doc comment in `crates/vaultkeeper-wasm` for why)
-    /// — fall back to the pre-existing, explicitly-documented
-    /// sequential-ordering-only guarantee documented on
-    /// `keys::storage::mutate_revocation_state`: writes are still correct
-    /// and fail-closed on a corrupt store, they just don't gain
-    /// cross-process mutual exclusion. `NativeHostPlatform`
-    /// (`crates/vaultkeeper-cli/src/host.rs`) overrides this with a real
-    /// `O_EXCL` file create.
+    /// The default returns [`VaultError::LockingNotSupported`]. Hosts must
+    /// implement exclusive creation and lock removal for persisted key-state
+    /// writes. Opening an existing store for reads does not require locking.
     async fn try_create_lock_file(&self, path: &Path, content: &[u8]) -> Result<(), VaultError> {
         let _ = content;
         Err(VaultError::LockingNotSupported {
             message: format!(
                 "Exclusive lock-file creation is not supported by this host platform \
-                 (requested {}). Locking is opt-in per host (see \
-                 HostPlatform::try_create_lock_file); the caller must proceed under the \
-                 pre-existing sequential-ordering-only guarantee rather than assume mutual \
-                 exclusion.",
+                 (requested {}). Key-state writes require locking.",
                 path.display()
             ),
         })

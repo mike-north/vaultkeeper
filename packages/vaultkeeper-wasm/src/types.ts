@@ -71,6 +71,11 @@ export interface WasmHostPlatform {
   writeFile(path: string, content: Uint8Array, mode: number): Promise<void>
   fileExists(path: string): Promise<boolean>
   deleteFile(path: string): Promise<void>
+  /**
+   * Create a lock file exclusively with owner-only permissions. Reject with
+   * code `EEXIST` if the path already exists. Required for key-state writes.
+   */
+  tryCreateLockFile?(path: string, content: Uint8Array): Promise<void>
   renameFile(from: string, to: string): Promise<void>
   listDir(path: string): Promise<string[]>
   platform(): string

@@ -369,19 +369,13 @@ impl VaultKeeper {
             }
         }
 
-        let mut key_manager = KeyManager::new();
-        if persist_keys {
-            match crate::keys::load_key_state(host).await? {
-                Some(snapshot) => key_manager.hydrate(snapshot),
-                None => {
-                    key_manager.init()?;
-                    let snapshot = key_manager.snapshot()?;
-                    crate::keys::save_key_state(host, &snapshot).await?;
-                }
-            }
+        let key_manager = if persist_keys {
+            crate::keys::storage::initialize_key_manager(host).await?
         } else {
-            key_manager.init()?;
-        }
+            let mut manager = KeyManager::new();
+            manager.init()?;
+            manager
+        };
 
         Ok(Self {
             config: cfg,
@@ -422,41 +416,33 @@ impl VaultKeeper {
     pub async fn rotate_key(&mut self, host: &dyn HostPlatform) -> Result<(), VaultError> {
         let grace_period_ms =
             u64::from(self.config.key_rotation.grace_period_days) * 24 * 60 * 60 * 1000;
-        self.key_manager.rotate_key(grace_period_ms)?;
-        self.persist_key_state(host).await
+        self.update_key_manager(host, |manager| manager.rotate_key(grace_period_ms))
+            .await
     }
 
     /// Emergency key revocation, then persist the new state so a later
     /// process picks up the revocation (see `keys::storage`).
     pub async fn revoke_key(&mut self, host: &dyn HostPlatform) -> Result<(), VaultError> {
-        self.key_manager.revoke_key()?;
-        self.persist_key_state(host).await
+        self.update_key_manager(host, KeyManager::revoke_key).await
     }
 
-    /// Persist the current key state to the config dir when persistence is
-    /// enabled. A no-op for injected-config instances (in-memory keys).
-    async fn persist_key_state(&mut self, host: &dyn HostPlatform) -> Result<(), VaultError> {
-        if !self.persist_keys {
-            return Ok(());
+    async fn update_key_manager(
+        &mut self,
+        host: &dyn HostPlatform,
+        mutate: impl FnOnce(&mut KeyManager) -> Result<(), VaultError>,
+    ) -> Result<(), VaultError> {
+        if self.persist_keys {
+            self.key_manager = crate::keys::storage::mutate_key_manager(host, mutate).await?;
+            Ok(())
+        } else {
+            mutate(&mut self.key_manager)
         }
-        let snapshot = self.key_manager.snapshot()?;
-        crate::keys::save_key_state(host, &snapshot).await
     }
 
     // --- Lease revocation store (issue #298) -------------------------------
 
-    /// `session revoke --jti <JTI>` — revoke a single outstanding lease.
-    /// Read-modify-write, wrapped in the advisory cross-process lock
-    /// [`crate::keys::mutate_revocation_state`] acquires (issue #322): on a
-    /// host that implements locking (native), a `rotateKey`/`revokeKey` call
-    /// whose read-modify-write window genuinely overlaps this one loses
-    /// neither writer's own portion of `keys.enc`; on a host that doesn't
-    /// (see that function's doc comment for exactly which hosts and why),
-    /// this still holds only when the two calls are *sequenced* one after
-    /// the other. Also sweeps every `jti` entry already past its own `exp`
-    /// before persisting (AC4) — bounded growth by construction. `exp` is
-    /// the revoked token's own expiry, so the entry can never outlive the
-    /// token it revokes.
+    /// Revoke an outstanding lease under the shared key-state lock, sweeping
+    /// expired entries before persisting the revocation.
     pub async fn revoke_lease_jti(
         &mut self,
         host: &dyn HostPlatform,
@@ -1467,6 +1453,25 @@ mod mint_signing_lease_tests {
                 .unwrap()
                 .insert(path.to_path_buf(), content.to_vec());
             Ok(())
+        }
+        async fn try_create_lock_file(
+            &self,
+            path: &Path,
+            content: &[u8],
+        ) -> Result<(), VaultError> {
+            use std::collections::hash_map::Entry;
+            match self.files.lock().unwrap().entry(path.to_path_buf()) {
+                Entry::Vacant(entry) => {
+                    entry.insert(content.to_vec());
+                    Ok(())
+                }
+                Entry::Occupied(_) => Err(VaultError::Filesystem {
+                    message: "Lock already held".to_string(),
+                    path: path.display().to_string(),
+                    permission: "lock".to_string(),
+                    code: Some("EEXIST".to_string()),
+                }),
+            }
         }
         async fn file_exists(&self, path: &Path) -> Result<bool, VaultError> {
             Ok(self.files.lock().unwrap().contains_key(path))

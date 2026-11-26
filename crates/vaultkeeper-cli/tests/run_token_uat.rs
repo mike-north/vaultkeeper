@@ -72,6 +72,20 @@ impl HostPlatform for RealFsHost {
             code: None,
         })
     }
+    async fn try_create_lock_file(&self, path: &Path, _content: &[u8]) -> Result<(), VaultError> {
+        std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(path)
+            .map(|_| ())
+            .map_err(|err| VaultError::Filesystem {
+                message: err.to_string(),
+                path: path.display().to_string(),
+                permission: "lock".to_string(),
+                code: (err.kind() == std::io::ErrorKind::AlreadyExists)
+                    .then(|| "EEXIST".to_string()),
+            })
+    }
     async fn file_exists(&self, path: &Path) -> Result<bool, VaultError> {
         Ok(path.exists())
     }

@@ -338,6 +338,25 @@ loop across every surface artifact.
 
 ---
 
+### Shared token-key persistence
+
+Native Rust, TypeScript and WASM writers serialize initialization, rotation and
+revocation through exclusive creation of `keys.enc.lock` in the config
+directory. Rotation and revocation load authoritative state while holding the
+lock and publish via an atomic rename. Key-state updates preserve the lease
+revocation metadata, including exact 64-bit counter values. The Rust snapshot
+save API only creates an absent store.
+
+Custom native and WASM hosts must implement exclusive lock-file creation and
+atomic rename to write persisted key state. An existing store can be opened for
+reads without the lock primitive. For WASM, `tryCreateLockFile` must reject with
+code `EEXIST` on contention. Upgrade all writers sharing a config directory
+before relying on these guarantees.
+
+Lock age does not indicate whether the owner is still running. If a crash leaves
+a lock file behind, stop every writer using that config directory before
+manually removing `keys.enc.lock`.
+
 ## Part 3 — Enforcement artifacts & vocabulary governance
 
 The gates in §1.4/§2.5 rest on **committed surface artifacts** whose diffs make change visible. Part 3

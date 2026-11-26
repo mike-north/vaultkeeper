@@ -76,6 +76,21 @@ impl HostPlatform for TestHost {
             .insert(path.to_path_buf(), content.to_vec());
         Ok(())
     }
+    async fn try_create_lock_file(&self, path: &Path, content: &[u8]) -> Result<(), VaultError> {
+        use std::collections::hash_map::Entry;
+        match self.files.lock().unwrap().entry(path.to_path_buf()) {
+            Entry::Vacant(entry) => {
+                entry.insert(content.to_vec());
+                Ok(())
+            }
+            Entry::Occupied(_) => Err(VaultError::Filesystem {
+                message: "Lock already held".to_string(),
+                path: path.display().to_string(),
+                permission: "lock".to_string(),
+                code: Some("EEXIST".to_string()),
+            }),
+        }
+    }
     async fn file_exists(&self, path: &Path) -> Result<bool, VaultError> {
         Ok(self.files.lock().unwrap().contains_key(path))
     }

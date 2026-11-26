@@ -456,6 +456,7 @@ export interface WasmHostPlatform {
     readFile(path: string): Promise<Uint8Array>;
     // (undocumented)
     renameFile(from: string, to: string): Promise<void>;
+    tryCreateLockFile?(path: string, content: Uint8Array): Promise<void>;
     // (undocumented)
     writeFile(path: string, content: Uint8Array, mode: number): Promise<void>;
 }
