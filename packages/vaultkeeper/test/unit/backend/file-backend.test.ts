@@ -8,6 +8,7 @@ vi.mock('node:fs/promises', () => ({
   unlink: vi.fn(),
   readFile: vi.fn(),
   readdir: vi.fn(),
+  realpath: vi.fn(),
   writeFile: vi.fn(),
 }))
 
@@ -403,10 +404,12 @@ describe('FileBackend', () => {
   })
 
   describe('delete', () => {
+    const explicitBackend = new FileBackend(defaultStorageDir)
+
     it('should unlink the encrypted file', async () => {
       mockFs.unlink.mockResolvedValue(undefined)
 
-      await backend.delete('my-secret')
+      await explicitBackend.delete('my-secret')
 
       expect(mockFs.unlink).toHaveBeenCalledWith(expect.stringContaining('.enc'))
     })
@@ -427,7 +430,7 @@ describe('FileBackend', () => {
 
       let caught: unknown
       try {
-        await backend.delete('protected')
+        await explicitBackend.delete('protected')
       } catch (err) {
         caught = err
       }
@@ -451,7 +454,7 @@ describe('FileBackend', () => {
 
       let caught: unknown
       try {
-        await backend.delete('protected')
+        await explicitBackend.delete('protected')
       } catch (err) {
         caught = err
       }
@@ -466,13 +469,14 @@ describe('FileBackend', () => {
 
     // Same operation-label bug on the legacy-location delete path.
     it('should describe a non-ENOENT unlink failure on the legacy path as a delete', async () => {
-      const legacyBackendForDelete = new FileBackend()
-      const noFileError = Object.assign(new Error('ENOENT'), { code: 'ENOENT' })
+      const configDir = path.join(os.tmpdir(), 'vk-config')
+      const legacyBackendForDelete = new FileBackend(undefined, configDir)
+      const legacyDir = path.join(os.homedir(), '.vaultkeeper', 'file')
+      mockFs.realpath
+        .mockResolvedValueOnce(path.join(configDir, 'file'))
+        .mockResolvedValueOnce(legacyDir)
       const permError = Object.assign(new Error('EPERM'), { code: 'EPERM' })
-      // Two unlink attempts in order: the primary path misses (ENOENT) so the
-      // delete falls through to the legacy path, which then fails with EPERM.
-      // Scope each rejection with *Once so neither leaks into later tests.
-      mockFs.unlink.mockRejectedValueOnce(noFileError).mockRejectedValueOnce(permError)
+      mockFs.unlink.mockRejectedValueOnce(permError)
 
       let caught: unknown
       try {
@@ -485,7 +489,11 @@ describe('FileBackend', () => {
       if (caught instanceof FilesystemError) {
         expect(caught.permission).toBe('delete')
         expect(caught.message).toContain('Failed to delete secret file')
+        expect(path.dirname(caught.path)).toBe(legacyDir)
+        expect(caught.code).toBe('EPERM')
+        expect(caught.cause).toBe(permError)
       }
+      expect(mockFs.unlink).toHaveBeenCalledTimes(1)
     })
   })
 

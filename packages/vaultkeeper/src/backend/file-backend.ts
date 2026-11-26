@@ -12,14 +12,12 @@
  * Encrypted file format (all parts base64-encoded, colon-separated):
  *   <iv>:<authTag>:<ciphertext>
  *
- * @remarks Back-compat (issue #99)
- * Prior to this fix, the default storage directory was
- * `$HOME/.vaultkeeper/file`, independent of the resolved config directory.
- * When no explicit `path` is configured, reads (`retrieve`/`exists`/`delete`/
- * `list`) transparently fall back to that legacy location if an entry is not
- * found under the new default, so secrets stored there before this change
- * remain reachable. Writes (`store`) always target the new location — the
- * legacy directory is never written to going forward.
+ * @remarks Back-compat (issues #99 and #392)
+ * When no explicit `path` is configured, `retrieve` and `exists` fall back to
+ * the former default, `$HOME/.vaultkeeper/file`, and `list` includes IDs from
+ * both directories. `store` targets the current directory. `delete` clears
+ * both lookup locations, so deleting a newer record cannot expose a retired
+ * record with the same ID.
  */
 
 import * as fs from 'node:fs/promises'
@@ -66,7 +64,7 @@ function displayKeyName(id: string): string {
 }
 
 /**
- * Pre-#99 default storage directory, kept as a read-only fallback.
+ * Pre-#99 default storage directory, kept for lookup and deletion of legacy secrets.
  *
  * @remarks
  * Computed lazily (not as a module-level constant) so it reflects
@@ -94,6 +92,23 @@ function resolveStorageDir(configuredPath?: string, configDir?: string): string 
     return configuredPath
   }
   return path.join(configDir ?? getDefaultConfigDir(), STORAGE_DIR_NAME)
+}
+
+async function sameStorageDirectory(first: string, second: string): Promise<boolean> {
+  if (first === second) {
+    return true
+  }
+
+  try {
+    const [firstRealPath, secondRealPath] = await Promise.all([
+      fs.realpath(first),
+      fs.realpath(second),
+    ])
+    return firstRealPath === secondRealPath
+  } catch {
+    // Let unlink handle missing directories and report errors for the entry path.
+    return false
+  }
 }
 
 function getEntryPath(storageDir: string, id: string): string {
@@ -141,9 +156,8 @@ export class FileBackend implements ListableBackend, SigningBackend {
   /** Directory holding encrypted signing-key private material. */
   readonly #signingDir: string
   /**
-   * Pre-#99 default storage directory, consulted as a read-only fallback
-   * when `storageDir` was not explicitly configured. `undefined` when an
-   * explicit `storageDir` was given — an explicit path never falls back.
+   * Legacy lookup and deletion directory for the default backend. An explicit
+   * `storageDir` limits all operations to that directory.
    */
   readonly #legacyStorageDir: string | undefined
 
@@ -229,30 +243,33 @@ export class FileBackend implements ListableBackend, SigningBackend {
   }
 
   async delete(id: string): Promise<void> {
-    const entryPath = getEntryPath(this.#storageDir, id)
-
-    try {
-      await fs.unlink(entryPath)
-      return
-    } catch (err) {
-      if (!(err instanceof Error && 'code' in err && err.code === 'ENOENT')) {
-        throw toFilesystemError(err, 'secret file', entryPath, 'delete')
-      }
+    const storageDirs = [this.#storageDir]
+    // Aliases share one entry. A second unlink could erase a concurrent replacement.
+    if (
+      this.#legacyStorageDir !== undefined &&
+      !(await sameStorageDirectory(this.#storageDir, this.#legacyStorageDir))
+    ) {
+      // Keep the current entry in place until the retired copy is gone. This
+      // protects readers between unlinks and when the legacy unlink fails.
+      storageDirs.unshift(this.#legacyStorageDir)
     }
 
-    if (this.#legacyStorageDir !== undefined) {
-      const legacyEntryPath = getEntryPath(this.#legacyStorageDir, id)
+    let deleted = false
+    for (const storageDir of storageDirs) {
+      const entryPath = getEntryPath(storageDir, id)
       try {
-        await fs.unlink(legacyEntryPath)
-        return
+        await fs.unlink(entryPath)
+        deleted = true
       } catch (err) {
         if (!(err instanceof Error && 'code' in err && err.code === 'ENOENT')) {
-          throw toFilesystemError(err, 'secret file', legacyEntryPath, 'delete')
+          throw toFilesystemError(err, 'secret file', entryPath, 'delete')
         }
       }
     }
 
-    throw new SecretNotFoundError(`Secret not found in file store: ${id}`)
+    if (!deleted) {
+      throw new SecretNotFoundError(`Secret not found in file store: ${id}`)
+    }
   }
 
   async exists(id: string): Promise<boolean> {
