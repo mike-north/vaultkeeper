@@ -194,7 +194,7 @@ describe('FileBackend signing contract', () => {
 
   it('recovers an interrupted wrapping-key repair and keeps the selected key', async () => {
     const keyPath = path.join(storageDir, '.key')
-    const candidatePath = `${keyPath}.r`
+    const candidatePath = path.join(storageDir, '.k.r')
     const candidate = Buffer.alloc(32, 0x42)
     await fs.writeFile(keyPath, Buffer.alloc(1))
     await fs.writeFile(candidatePath, candidate, { mode: 0o600 })

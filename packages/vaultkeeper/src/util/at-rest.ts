@@ -88,11 +88,42 @@ export function decryptGcm(key: Buffer, encoded: string, path = ''): string {
   }
 }
 
-/** Signing requires no-replace publication. Ordinary storage can also use sequential filesystems. */
-type Publication = 'atomic' | 'sequential-fallback'
+/**
+ * Signing requires no-replace publication. Ordinary storage can also use sequential filesystems.
+ * @internal
+ */
+export type WrapKeyPublication = 'atomic' | 'sequential-fallback'
 
 /** A rename consumes the stage. Other outcomes leave it to clean up. */
 type StagedPublication = 'linked' | 'exists' | 'renamed'
+
+/** Reserve a private sibling on the same filesystem as the destination. */
+async function openPrivateStage(
+  dest: string,
+  resource: string,
+): Promise<{ temp: string; file: Awaited<ReturnType<typeof fs.open>> }> {
+  const dir = path.dirname(dest)
+  for (let attempt = 0; ; attempt++) {
+    const regular = attempt === 0
+    // Preserve the four-byte budget of .key and .enc at the path limit. The
+    // compact name has no dot, so it cannot name a live key, repair or entry.
+    const name = regular
+      ? `.${crypto.randomBytes(9).toString('base64url')}`
+      : crypto.randomBytes(3).toString('base64url')
+    const temp = path.join(dir, name)
+    try {
+      return { temp, file: await fs.open(temp, 'wx', 0o600) }
+    } catch (err) {
+      if (err instanceof Error && 'code' in err) {
+        if (regular && err.code === 'ENAMETOOLONG') continue
+        // The compact namespace has fewer names. Retry a collision without
+        // touching the other writer's file, while bounding the attempts.
+        if (!regular && err.code === 'EEXIST' && attempt < 3) continue
+      }
+      throw toFilesystemError(err, resource, dest, 'write')
+    }
+  }
+}
 
 /** Give the publisher exclusive ownership of a complete, owner-only sibling file. */
 async function withPrivateStage(
@@ -101,16 +132,7 @@ async function withPrivateStage(
   resource: string,
   publish: (temp: string) => Promise<StagedPublication>,
 ): Promise<StagedPublication> {
-  // Match the 13-byte staging basename for keys.enc so wrapping-key
-  // publication fits wherever the key state can be saved.
-  const temp = path.join(path.dirname(dest), `.${crypto.randomBytes(9).toString('base64url')}`)
-  let file: Awaited<ReturnType<typeof fs.open>>
-  try {
-    file = await fs.open(temp, 'wx', 0o600)
-  } catch (err) {
-    throw toFilesystemError(err, resource, dest, 'write')
-  }
-
+  const { temp, file } = await openPrivateStage(dest, resource)
   let result: StagedPublication | undefined
   try {
     try {
@@ -140,7 +162,7 @@ export async function writeFileIfAbsent(
   dest: string,
   content: string | Buffer,
   resource: string,
-  publication: Publication = 'atomic',
+  publication: WrapKeyPublication = 'atomic',
 ): Promise<boolean> {
   const result = await withPrivateStage(dest, content, resource, async (temp) => {
     try {
@@ -192,11 +214,14 @@ export async function writeFileIfAbsent(
  * @param keyPath - Absolute path to the wrapping-key file.
  * @param publication - Whether initial creation or repair requires atomic
  * no-replace publication. Signing must use the atomic mode.
+ * @param candidatePath - The selected repair candidate's stable sibling path.
+ * The default suffix matches Rust for shared `.keys.wrap` repairs.
  * @internal
  */
 export async function getOrCreateWrapKey(
   keyPath: string,
-  publication: Publication = 'sequential-fallback',
+  publication: WrapKeyPublication = 'sequential-fallback',
+  candidatePath = `${keyPath}.r`,
 ): Promise<Buffer> {
   let existing: Buffer | undefined
   try {
@@ -210,7 +235,7 @@ export async function getOrCreateWrapKey(
   if (existing?.byteLength === GCM_KEY_BYTES) return existing
   if (existing !== undefined) {
     existing.fill(0)
-    return repairWrapKey(keyPath, publication)
+    return repairWrapKey(keyPath, candidatePath, publication)
   }
 
   const key = crypto.randomBytes(GCM_KEY_BYTES)
@@ -238,10 +263,11 @@ async function readValidWrapKey(keyPath: string): Promise<Buffer> {
 }
 
 /** Resume any published repair so every writer uses the same selected key. */
-async function repairWrapKey(keyPath: string, publication: Publication): Promise<Buffer> {
-  // Rust uses the same short suffix so both runtimes can finish each other's
-  // repairs of a shared .keys.wrap, including in long config paths.
-  const candidatePath = `${keyPath}.r`
+async function repairWrapKey(
+  keyPath: string,
+  candidatePath: string,
+  publication: WrapKeyPublication,
+): Promise<Buffer> {
   let candidate: Buffer = crypto.randomBytes(GCM_KEY_BYTES)
   let returnCandidate = false
   try {

@@ -40,9 +40,12 @@ import { encryptGcm, decryptGcm, getOrCreateWrapKey, writeFileIfAbsent } from '.
 import { getDefaultConfigDir } from '../config.js'
 import type { ListableBackend, SigningBackend } from './types.js'
 import type { SigningAlgorithm, SigningPublicKey } from '../types.js'
+import type { WrapKeyPublication } from '../util/at-rest.js'
 
 const STORAGE_DIR_NAME = 'file'
 const KEY_FILE = '.key'
+/** All writers select the same repair candidate, with the same path budget as `.key`. */
+const KEY_REPAIR_FILE = '.k.r'
 /**
  * Subdirectory (under the secret storage dir) holding encrypted signing-key
  * private material. Kept separate from the `.enc` secret files so a signing key
@@ -119,8 +122,16 @@ async function ensureStorageDir(storageDir: string): Promise<void> {
   }
 }
 
-async function getOrCreateKey(storageDir: string): Promise<Buffer> {
-  return getOrCreateWrapKey(path.join(storageDir, KEY_FILE))
+/** Ordinary secrets and signing identities share one wrapping key and repair candidate. */
+async function getOrCreateKey(
+  storageDir: string,
+  publication: WrapKeyPublication = 'sequential-fallback',
+): Promise<Buffer> {
+  return getOrCreateWrapKey(
+    path.join(storageDir, KEY_FILE),
+    publication,
+    path.join(storageDir, KEY_REPAIR_FILE),
+  )
 }
 
 /**
@@ -324,7 +335,7 @@ export class FileBackend implements ListableBackend, SigningBackend {
       }
       throw toFilesystemError(err, 'signing key', keyPath, 'read')
     }
-    const wrapKey = await getOrCreateWrapKey(path.join(this.#storageDir, KEY_FILE), 'atomic')
+    const wrapKey = await getOrCreateKey(this.#storageDir, 'atomic')
     try {
       return decryptGcm(wrapKey, encoded)
     } catch (err) {
@@ -381,7 +392,7 @@ export class FileBackend implements ListableBackend, SigningBackend {
 
     const { privateKey } = crypto.generateKeyPairSync('ed25519')
     const pkcs8Pem = privateKey.export({ type: 'pkcs8', format: 'pem' }).toString()
-    const wrapKey = await getOrCreateWrapKey(path.join(this.#storageDir, KEY_FILE), 'atomic')
+    const wrapKey = await getOrCreateKey(this.#storageDir, 'atomic')
     let encrypted: string
     try {
       encrypted = encryptGcm(wrapKey, pkcs8Pem)
