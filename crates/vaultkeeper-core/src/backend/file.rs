@@ -768,6 +768,28 @@ mod tests {
     // SigningBackend (issue #289)
     // -----------------------------------------------------------------
 
+    /// A configured secret directory must not put an enrolled signing key
+    /// at risk when both resources use the same identifier.
+    #[tokio::test]
+    async fn configured_signing_directory_preserves_enrolled_key() {
+        let host = make_test_host();
+        let backend = FileBackend {
+            storage_dir: Some(host.config_dir.join("signing")),
+            host,
+        };
+        backend
+            .generate_signing_key("shared", SigningAlgorithm::EdDsa)
+            .await
+            .unwrap();
+        let before = backend.get_public_key("shared").await.unwrap();
+        backend.store("shared", "secret").await.unwrap();
+        assert_eq!(backend.retrieve("shared").await.unwrap(), "secret");
+        backend.delete("shared").await.unwrap();
+        let after = backend.get_public_key("shared").await.unwrap();
+        assert_eq!(before.public_key_pem, after.public_key_pem);
+        backend.sign_with_key("shared", b"message").await.unwrap();
+    }
+
     /// AC1/AC2: `sign_with_key` on `FileBackend` produces a signature
     /// verifiable against the enrolled key's public half, and the private
     /// key never surfaces through `SecretBackend::retrieve` for the same id
