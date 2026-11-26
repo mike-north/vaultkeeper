@@ -42,7 +42,7 @@ describe('Key rotation e2e', () => {
     })
 
     // Setup with the original key
-    const originalJwe = await vault.setup('db-pass', { executablePath: 'dev' })
+    const originalJwe = await vault.setup('db-pass', { skipTrust: true })
 
     // Rotate the key
     await vault.rotateKey()
@@ -77,7 +77,7 @@ describe('Key rotation e2e', () => {
       configDir: '/tmp/vk-rotation',
     })
 
-    const jwe = await vault.setup('api-token', { executablePath: 'dev' })
+    const jwe = await vault.setup('api-token', { skipTrust: true })
 
     // Revoke
     await vault.revokeKey()
@@ -98,7 +98,7 @@ describe('Key rotation e2e', () => {
     await vault.revokeKey()
 
     // New setup with the new key should work
-    const jwe = await vault.setup('new-secret', { executablePath: 'dev' })
+    const jwe = await vault.setup('new-secret', { skipTrust: true })
     const { token, vaultResponse } = await vault.authorize(jwe)
     expect(vaultResponse.keyStatus).toBe('current')
 
@@ -125,7 +125,7 @@ describe('Key rotation e2e', () => {
     await expect(vault.rotateKey()).rejects.toThrow(/rotation.*already in progress/i)
 
     // JWEs created after the first rotation should use the current key
-    const jwe = await vault.setup('secret', { executablePath: 'dev' })
+    const jwe = await vault.setup('secret', { skipTrust: true })
     const { vaultResponse } = await vault.authorize(jwe)
     expect(vaultResponse.keyStatus).toBe('current')
   })

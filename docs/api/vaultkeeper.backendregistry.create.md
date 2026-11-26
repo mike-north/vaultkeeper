@@ -9,7 +9,7 @@ Create a backend instance by type.
 **Signature:**
 
 ```typescript
-static create(type: string, config?: BackendConfig): SecretBackend;
+static create(type: string, config?: BackendConfig, configDir?: string): SecretBackend;
 ```
 
 ## Parameters
@@ -59,6 +59,22 @@ config
 </td><td>
 
 _(Optional)_ Optional backend configuration forwarded to the factory
+
+
+</td></tr>
+<tr><td>
+
+configDir
+
+
+</td><td>
+
+string
+
+
+</td><td>
+
+_(Optional)_ Optional resolved config directory forwarded to the factory, so file-based backends can default their storage under it
 
 
 </td></tr>

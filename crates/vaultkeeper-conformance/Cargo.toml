@@ -16,5 +16,13 @@ regex = "1"
 name = "export-conformance"
 path = "src/export.rs"
 
+[[bin]]
+name = "export-backend-conformance"
+path = "src/export_backend.rs"
+
+[[bin]]
+name = "export-stub-scenarios"
+path = "src/export_stub_scenarios.rs"
+
 [dev-dependencies]
 tempfile = "3"

@@ -4,12 +4,38 @@
 
 ```ts
 
+import { BackendCapabilities } from 'vaultkeeper';
+import { Buffer as Buffer_2 } from 'node:buffer';
 import { ListableBackend } from 'vaultkeeper';
+import { PresenceCapableBackend } from 'vaultkeeper';
+import { PresenceOperation } from 'vaultkeeper';
+import { SetupOptionsBase } from 'vaultkeeper';
+import { SigningAlgorithm } from 'vaultkeeper';
+import { SigningBackend } from 'vaultkeeper';
+import { SigningPublicKey } from 'vaultkeeper';
 import { VaultKeeper } from 'vaultkeeper';
 
 // @public
-export class InMemoryBackend implements ListableBackend {
+export type FaultMode = 'backend-unavailable' | 'key-absent' | 'permission-denied' | 'session-expired';
+
+// @public
+export interface FaultOptions {
+    persistent?: boolean;
+}
+
+// @public
+export class FaultPlan<Operation extends string = string> {
+    clear(operation: Operation): void;
+    clearAll(): void;
+    consume(operation: Operation): FaultMode | undefined;
+    inject(operation: Operation, mode: FaultMode, options?: FaultOptions): void;
+}
+
+// @public
+export class InMemoryBackend implements ListableBackend, SigningBackend, PresenceCapableBackend {
     clear(): void;
+    clearAllFaults(): void;
+    clearFault(operation: InMemoryBackendFaultOperation): void;
     // (undocumented)
     delete(id: string): Promise<void>;
     // (undocumented)
@@ -17,11 +43,19 @@ export class InMemoryBackend implements ListableBackend {
     // (undocumented)
     exists(id: string): Promise<boolean>;
     // (undocumented)
+    generateSigningKey(id: string, algorithm: SigningAlgorithm): Promise<void>;
+    getCapabilities(): Promise<BackendCapabilities>;
+    // (undocumented)
+    getPublicKey(id: string): Promise<SigningPublicKey>;
+    injectFault(operation: InMemoryBackendFaultOperation, mode: FaultMode, options?: FaultOptions): void;
+    // (undocumented)
     isAvailable(): Promise<boolean>;
     // (undocumented)
     list(): Promise<string[]>;
     // (undocumented)
     retrieve(id: string): Promise<string>;
+    // (undocumented)
+    signWithKey(id: string, data: Buffer_2): Promise<Buffer_2>;
     get size(): number;
     // (undocumented)
     store(id: string, secret: string): Promise<void>;
@@ -30,17 +64,84 @@ export class InMemoryBackend implements ListableBackend {
 }
 
 // @public
+export type InMemoryBackendFaultOperation = 'store' | 'retrieve' | 'delete' | 'exists' | 'list' | 'generateSigningKey' | 'getPublicKey' | 'signWithKey';
+
+// @public
+export type PresenceSimulatorArmedOutcome = Exclude<PresenceSimulatorOutcome, 'not-capable'>;
+
+// @public
+export class PresenceSimulatorBackend implements ListableBackend, SigningBackend, PresenceCapableBackend {
+    armPresence(operation: PresenceOperation, outcome: PresenceSimulatorArmedOutcome): void;
+    // (undocumented)
+    delete(id: string): Promise<void>;
+    // (undocumented)
+    readonly displayName = "Presence Simulator Backend (test-only)";
+    // (undocumented)
+    exists(id: string): Promise<boolean>;
+    static forTesting(options?: PresenceSimulatorBackendOptions): PresenceSimulatorBackend;
+    // (undocumented)
+    generateSigningKey(id: string, algorithm: SigningAlgorithm): Promise<void>;
+    getCapabilities(): Promise<BackendCapabilities>;
+    // (undocumented)
+    getPublicKey(id: string): Promise<SigningPublicKey>;
+    // (undocumented)
+    isAvailable(): Promise<boolean>;
+    // (undocumented)
+    list(): Promise<string[]>;
+    // (undocumented)
+    retrieve(id: string): Promise<string>;
+    // (undocumented)
+    signWithKey(id: string, data: Buffer_2): Promise<Buffer_2>;
+    // (undocumented)
+    store(id: string, secret: string): Promise<void>;
+    // (undocumented)
+    readonly type = "presence-simulator";
+}
+
+// @public
+export interface PresenceSimulatorBackendOptions {
+    operations?: PresenceSimulatorOperationOutcomes;
+}
+
+// @public
+export interface PresenceSimulatorOperationOutcomes {
+    delete?: PresenceSimulatorOutcome;
+    read?: PresenceSimulatorOutcome;
+    sign?: PresenceSimulatorOutcome;
+    store?: PresenceSimulatorOutcome;
+}
+
+// @public
+export type PresenceSimulatorOutcome = 'grant' | 'refuse' | 'timeout' | 'not-capable';
+
+// @public
 export class TestVault {
     readonly backend: InMemoryBackend;
     static create(options?: TestVaultOptions): Promise<TestVault>;
+    delete(name: string): Promise<void>;
     readonly keeper: VaultKeeper;
     reset(): void;
+    setup(name: string, options?: TestVaultSetupOptions): Promise<string>;
+    signCeremony(name: string, payload: string | Buffer_2, algorithm?: SigningAlgorithm): Promise<TestVaultSignCeremonyResult>;
+    store(name: string, value: string): Promise<void>;
 }
 
 // @public
 export interface TestVaultOptions {
     trustTier?: 1 | 2 | 3 | undefined;
     ttlMinutes?: number | undefined;
+}
+
+// @public
+export interface TestVaultSetupOptions extends SetupOptionsBase {
+    executablePath?: string | undefined;
+    skipTrust?: boolean | undefined;
+}
+
+// @public
+export interface TestVaultSignCeremonyResult {
+    jws: string;
+    publicKey: SigningPublicKey;
 }
 
 // (No @packageDocumentation comment for this package)

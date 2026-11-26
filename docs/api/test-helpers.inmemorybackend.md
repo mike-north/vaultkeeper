@@ -9,13 +9,13 @@ A fully in-memory `SecretBackend` for testing.
 **Signature:**
 
 ```typescript
-declare class InMemoryBackend implements ListableBackend 
+declare class InMemoryBackend implements ListableBackend, SigningBackend, PresenceCapableBackend 
 ```
-**Implements:** [ListableBackend](./vaultkeeper.listablebackend.md)
+**Implements:** [ListableBackend](./vaultkeeper.listablebackend.md)<!-- -->, [SigningBackend](./vaultkeeper.signingbackend.md)<!-- -->, [PresenceCapableBackend](./vaultkeeper.presencecapablebackend.md)
 
 ## Remarks
 
-This backend stores secrets in a plain `Map` and has no external dependencies. It is suitable for unit, integration, and e2e tests.
+This backend stores secrets in a plain `Map` and has no external dependencies. It is suitable for unit, integration, and e2e tests. It also implements `SigningBackend` (real in-memory Ed25519 keys — the private key never leaves the backend) and `PresenceCapableBackend` (reports no presence by default), and offers deterministic per-operation fault injection via [InMemoryBackend.injectFault()](./test-helpers.inmemorybackend.injectfault.md) for exercising a consumer's error-handling paths without hardware.
 
 ## Properties
 
@@ -129,7 +129,35 @@ Description
 
 </td><td>
 
-Remove all stored secrets. Useful for test teardown.
+Remove all stored secrets and signing keys, and disarm any armed faults. Useful for full test teardown/reset between cases.
+
+
+</td></tr>
+<tr><td>
+
+[clearAllFaults()](./test-helpers.inmemorybackend.clearallfaults.md)
+
+
+</td><td>
+
+
+</td><td>
+
+Remove all armed faults, regardless of mode or operation. Useful for test teardown.
+
+
+</td></tr>
+<tr><td>
+
+[clearFault(operation)](./test-helpers.inmemorybackend.clearfault.md)
+
+
+</td><td>
+
+
+</td><td>
+
+Remove an armed fault for `operation`<!-- -->, if any. Safe to call when no fault is armed.
 
 
 </td></tr>
@@ -156,6 +184,60 @@ Remove all stored secrets. Useful for test teardown.
 
 </td><td>
 
+
+
+</td></tr>
+<tr><td>
+
+[generateSigningKey(id, algorithm)](./test-helpers.inmemorybackend.generatesigningkey.md)
+
+
+</td><td>
+
+
+</td><td>
+
+
+
+</td></tr>
+<tr><td>
+
+[getCapabilities()](./test-helpers.inmemorybackend.getcapabilities.md)
+
+
+</td><td>
+
+
+</td><td>
+
+Report this instance's `BackendCapabilities`<!-- -->.
+
+
+</td></tr>
+<tr><td>
+
+[getPublicKey(id)](./test-helpers.inmemorybackend.getpublickey.md)
+
+
+</td><td>
+
+
+</td><td>
+
+
+
+</td></tr>
+<tr><td>
+
+[injectFault(operation, mode, options)](./test-helpers.inmemorybackend.injectfault.md)
+
+
+</td><td>
+
+
+</td><td>
+
+Arm a deterministic fault for the next matching call to `operation`<!-- -->.
 
 
 </td></tr>
@@ -188,6 +270,19 @@ Remove all stored secrets. Useful for test teardown.
 <tr><td>
 
 [retrieve(id)](./test-helpers.inmemorybackend.retrieve.md)
+
+
+</td><td>
+
+
+</td><td>
+
+
+
+</td></tr>
+<tr><td>
+
+[signWithKey(id, data)](./test-helpers.inmemorybackend.signwithkey.md)
 
 
 </td><td>

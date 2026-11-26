@@ -69,10 +69,7 @@ export async function* createYubikeySetup(): AsyncGenerator<SetupQuestion, Setup
   const choices = await listDevices()
 
   if (choices.length === 0) {
-    throw new SetupError(
-      'No YubiKey devices found. Connect a YubiKey and try again.',
-      'ykman',
-    )
+    throw new SetupError('No YubiKey devices found. Connect a YubiKey and try again.', 'ykman')
   }
 
   let selectedSerial: string

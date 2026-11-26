@@ -5,6 +5,7 @@
 export { delegatedFetch } from './delegated-fetch.js'
 export { delegatedExec } from './delegated-exec.js'
 export { createSecretAccessor } from './controlled-direct.js'
+export { redactSecrets, REDACTED } from './redact.js'
 export type {
   FetchRequest,
   ExecRequest,

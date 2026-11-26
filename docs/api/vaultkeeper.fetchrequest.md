@@ -6,7 +6,7 @@
 
 Request for delegated HTTP fetch.
 
-String values in `url`<!-- -->, `headers`<!-- -->, and `body` may include the placeholder `{{secret}}`<!-- -->, which is replaced with the actual secret value immediately before the request is sent.
+String values in `url`<!-- -->, `headers`<!-- -->, and `body` may include the placeholder `{{secret}}` (single-token mode) or `{{secret:name}}` (multi-token mode), which are replaced with actual secret values immediately before the request is sent.
 
 **Signature:**
 
@@ -52,7 +52,7 @@ string \| undefined
 
 </td><td>
 
-_(Optional)_ Request body. May contain `{{secret}}`<!-- -->, which is replaced with the secret value before the request is sent.
+_(Optional)_ Request body. May contain `{{secret}}` or `{{secret:name}}`<!-- -->, which is replaced with the secret value before the request is sent.
 
 
 </td></tr>
@@ -71,7 +71,7 @@ Record&lt;string, string&gt; \| undefined
 
 </td><td>
 
-_(Optional)_ Request headers. Any header value may contain `{{secret}}`<!-- -->, which is replaced with the secret value before the request is sent.
+_(Optional)_ Request headers. Any header value may contain `{{secret}}` or `{{secret:name}}`<!-- -->, which is replaced with the secret value before the request is sent.
 
 
 </td></tr>
@@ -109,7 +109,7 @@ string
 
 </td><td>
 
-The target URL. May contain `{{secret}}` which is replaced with the secret value before the fetch is executed (e.g. for API-key-in-URL patterns).
+The target URL. May contain `{{secret}}` or `{{secret:name}}` which is replaced with the secret value before the fetch is executed.
 
 
 </td></tr>

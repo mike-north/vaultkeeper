@@ -9,5 +9,5 @@ Individual check results, one per dependency inspected.
 **Signature:**
 
 ```typescript
-checks: PreflightCheck[];
+checks: ScopedPreflightCheck[];
 ```

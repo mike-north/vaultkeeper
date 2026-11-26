@@ -21,8 +21,8 @@ declare class TestVault
 
 ```ts
 const vault = await TestVault.create()
-await vault.backend.store('my-secret', 'hunter2')
-const jwe = await vault.keeper.setup('my-secret')
+await vault.store('my-secret', 'hunter2')
+const jwe = await vault.setup('my-secret')
 const { token } = await vault.keeper.authorize(jwe)
 ```
 
@@ -129,6 +129,20 @@ Create a new TestVault, ready for use.
 </td></tr>
 <tr><td>
 
+[delete(name)](./test-helpers.testvault.delete.md)
+
+
+</td><td>
+
+
+</td><td>
+
+Delete a secret from the test backend.
+
+
+</td></tr>
+<tr><td>
+
 [reset()](./test-helpers.testvault.reset.md)
 
 
@@ -137,7 +151,49 @@ Create a new TestVault, ready for use.
 
 </td><td>
 
-Reset the test vault by clearing all stored secrets.
+Reset the test vault by clearing all stored secrets, signing keys, and any armed faults on the underlying backend.
+
+
+</td></tr>
+<tr><td>
+
+[setup(name, options)](./test-helpers.testvault.setup.md)
+
+
+</td><td>
+
+
+</td><td>
+
+Mint a JWE for a stored secret via the wrapped keeper.
+
+
+</td></tr>
+<tr><td>
+
+[signCeremony(name, payload, algorithm)](./test-helpers.testvault.signceremony.md)
+
+
+</td><td>
+
+
+</td><td>
+
+Run the full production signing ceremony — `createSigningKey` → `authorizeSigningKey` → `sign` — through the wrapped keeper in one call.
+
+
+</td></tr>
+<tr><td>
+
+[store(name, value)](./test-helpers.testvault.store.md)
+
+
+</td><td>
+
+
+</td><td>
+
+Store a secret in the test backend.
 
 
 </td></tr>

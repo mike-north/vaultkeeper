@@ -4,7 +4,7 @@
 
 ## FetchRequest.url property
 
-The target URL. May contain `{{secret}}` which is replaced with the secret value before the fetch is executed (e.g. for API-key-in-URL patterns).
+The target URL. May contain `{{secret}}` or `{{secret:name}}` which is replaced with the secret value before the fetch is executed.
 
 **Signature:**
 

@@ -9,7 +9,7 @@ Read a stored secret from the backend and mint a JWE token that encapsulates it.
 **Signature:**
 
 ```typescript
-setup(secretName: string, options?: SetupOptions): Promise<string>;
+setup(secretName: string, options: SetupOptions): Promise<string>;
 ```
 
 ## Parameters
@@ -42,7 +42,7 @@ string
 
 </td><td>
 
-Identifier for the secret
+Identifier for the secret. Must not contain `':'` (the reserved `signing-key:` namespace separator).
 
 
 </td></tr>
@@ -58,7 +58,7 @@ options
 
 </td><td>
 
-_(Optional)_ Setup options
+Setup options; must carry exactly one of `executablePath` or `skipTrust: true`
 
 
 </td></tr>
@@ -69,4 +69,36 @@ _(Optional)_ Setup options
 Promise&lt;string&gt;
 
 Compact JWE string
+
+## Exceptions
+
+{<!-- -->VaultError<!-- -->} If `secretName` is empty or contains `':'`<!-- -->.
+
+[ExecutableTrustRequiredError](./vaultkeeper.executabletrustrequirederror.md) If neither `executablePath` nor `skipTrust: true` is provided, if both are, or if `executablePath` is the retired legacy `'dev'` opt-out sentinel (use `skipTrust: true`<!-- -->).
+
+[IdentityMismatchError](./vaultkeeper.identitymismatcherror.md) If `executablePath`<!-- -->'s current hash no longer matches a previously approved value (TOFU conflict).
+
+[FilesystemError](./vaultkeeper.filesystemerror.md) If `executablePath` cannot be read or hashed for verification, or the trust manifest cannot be read or written while recording the executable.
+
+## Remarks
+
+`setup()` requires an explicit executable-trust decision — it has no default and never silently skips verification. Pass `executablePath` (the calling executable's real path) to run trust-on-first-use verification, or `skipTrust: true` to deliberately skip it in development. The [SetupOptions](./vaultkeeper.setupoptions.md) type enforces this choice at compile time (exactly one, and the options argument is required); [ExecutableTrustRequiredError](./vaultkeeper.executabletrustrequirederror.md) is the runtime backstop for untyped callers.
+
+\*\*Seeing a compile error here?\*\* A bare `vault.setup('NAME')` or `vault.setup('NAME', {})` fails to typecheck (e.g. TS2554 "Expected 2 arguments, but got 1" or TS2345 "Argument … is not assignable") precisely because the mandatory trust choice is missing. The fix is to add \*\*exactly one\*\* of `executablePath: '<path>'` (verify the caller — production) or `skipTrust: true` (skip verification — development only). Supplying both fails to typecheck for the same reason.
+
+## Example
+
+
+```ts
+// Production: bind the token to a STABLE executable so a swapped binary is
+// rejected. Point executablePath at a released binary, or process.execPath
+// to trust the Node runtime. Do NOT use process.argv[1] for a compiled entry
+// point — its hash changes on every rebuild, so the next setup() after a
+// recompile throws IdentityMismatchError (use setDevelopmentMode or
+// skipTrust for a frequently-rebuilt local caller).
+const jwe = await vault.setup('MY_API_KEY', { executablePath: '/usr/local/bin/my-tool' })
+
+// Local development: skip verification so rebuilds don't reject the caller.
+const devJwe = await vault.setup('MY_API_KEY', { skipTrust: true })
+```
 

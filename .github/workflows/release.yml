@@ -1,3 +1,9 @@
+# Before a release that bumps a backend's underlying tool/OS/SDK dependency
+# (`security`, the 1Password desktop app/`op`, `ykman`, `secret-tool`/
+# `gnome-keyring`, `powershell`/Windows), run the shared conformance corpus
+# against that backend's real adapter and record the result in the release
+# notes — see docs/manual-tests/manual-residue-register.md for the full
+# per-backend register (issue #312).
 name: Release
 
 on:
@@ -69,7 +75,11 @@ jobs:
 
       - run: pnpm check:lint-ts
 
+      - run: pnpm check:format
+
       - run: pnpm check:api-report
+
+      - run: pnpm check:api-docs
 
       - name: Download Rust binary
         uses: actions/download-artifact@v4
@@ -80,7 +90,16 @@ jobs:
       - name: Make binary executable
         run: chmod +x target/release/vaultkeeper
 
-      - name: Test (including conformance)
+      # Standalone, non-workspace install of the pinned TypeScript compiler
+      # versions used by the consumer-typecheck TS-version matrix (#125).
+      # Kept out of pnpm-workspace.yaml — see that directory's package.json
+      # for why — so it needs its own install step here. Mirrors ci.yml's
+      # step exactly: release validation must run the same matrix as CI,
+      # not silently skip it (#136).
+      - name: Install TS-version matrix compilers
+        run: pnpm --dir packages/vaultkeeper/test/e2e/ts-version-fixtures install --frozen-lockfile --ignore-workspace
+
+      - name: Test (including conformance and TS-version matrix)
         run: pnpm test
 
   release:
@@ -88,6 +107,10 @@ jobs:
     needs: ci
     runs-on: ubuntu-latest
     environment: npm-publish
+    permissions:
+      contents: write
+      pull-requests: write
+      id-token: write
     outputs:
       published: ${{ steps.changesets.outputs.published }}
     steps:
@@ -95,11 +118,21 @@ jobs:
 
       - uses: pnpm/action-setup@v4
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
-          node-version: 22
-          cache: pnpm
+          # Pin and update this intentionally. Trusted publishing currently
+          # requires Node >=22.14.0 and npm >=11.5.1.
+          node-version: '24.14.0'
           registry-url: https://registry.npmjs.org
+          package-manager-cache: false
+
+      - name: Show release toolchain
+        run: node --version && npm --version && pnpm --version
+
+      - name: Manual-residue register reminder
+        run: |
+          echo "::notice::Before publishing a release that bumps a backend's underlying tool/OS/SDK dependency (security, the 1Password desktop app/op, ykman, secret-tool/gnome-keyring, powershell/Windows), run the shared conformance corpus against that backend's real adapter and record the outcome in the release notes, per docs/manual-tests/manual-residue-register.md (issue #312)."
+          echo "See: docs/manual-tests/manual-residue-register.md"
 
       - run: pnpm install --frozen-lockfile
 
@@ -112,7 +145,6 @@ jobs:
           publish: pnpm exec changeset publish
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          NODE_AUTH_TOKEN: ${{ secrets.NODE_AUTH_TOKEN }}
 
   publish-crates:
     name: Publish to crates.io
@@ -127,10 +159,19 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
-      - name: Verify crate packaging
+      # Only vaultkeeper-core can be pre-verified here. Packaging
+      # vaultkeeper-cli requires vaultkeeper-core to already exist on the
+      # crates.io index (its manifest carries `vaultkeeper-core = { path =
+      # "...", version = "<X>" }`, and `cargo package` — even with --no-verify —
+      # resolves that dependency against the registry). At release time the
+      # just-bumped core version has not been published yet, so packaging
+      # cli here always failed with "no matching package named
+      # vaultkeeper-core found". cli packaging is instead exercised by its
+      # own publish step below, which retries to absorb index propagation
+      # after core is published.
+      - name: Verify vaultkeeper-core packaging
         run: |
           cargo package -p vaultkeeper-core --no-verify
-          cargo package -p vaultkeeper-cli --no-verify
 
       - name: Publish vaultkeeper-core
         run: |

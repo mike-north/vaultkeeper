@@ -2,7 +2,7 @@
  * Types for the executable identity and trust layer.
  */
 
-import type { TrustTier, VaultClaims } from '../types.js'
+import type { TrustTier, VaultClaims, SigningClaims } from '../types.js'
 
 export type { TrustTier }
 
@@ -31,8 +31,41 @@ export interface TrustVerificationResult {
    * When true, the caller must prompt for re-approval before proceeding.
    */
   tofuConflict: boolean
+  /**
+   * Hashes already recorded in the trust manifest for this namespace at the
+   * time of verification, in approval order (empty on a first encounter). On a
+   * {@link TrustVerificationResult.tofuConflict}, these are the previously
+   * approved values that the current on-disk hash no longer matches.
+   */
+  approvedHashes: string[]
   /** Human-readable description of how trust was established. */
   reason: string
+}
+
+/**
+ * Result of the verify-only phase of trust verification (see
+ * {@link verifyTrustPending}). No manifest write has happened yet — pass this
+ * to {@link commitTrust} once the caller's operation has actually succeeded to
+ * persist the pending update, or discard it to leave the manifest untouched.
+ * @internal
+ */
+export interface PendingTrust extends TrustVerificationResult {
+  /**
+   * The namespace/hash entry to add to the manifest once the caller's
+   * operation succeeds, or `undefined` when this verification has nothing to
+   * record — a registry (Tier 2) match, a TOFU conflict, or dev-mode bypass
+   * never write.
+   *
+   * {@link commitTrust} reloads the manifest from disk at commit time and
+   * unions this entry in, rather than persisting a snapshot captured during
+   * verification. That matters because verification and commit are not
+   * atomic: another process could approve a *different* executable (or the
+   * same one) in between. Persisting a stale snapshot would silently drop
+   * that concurrent write; merging preserves it.
+   */
+  readonly pendingWrite: { readonly namespace: string; readonly hash: string } | undefined
+  /** Directory {@link commitTrust} writes to, if `pendingWrite` is present. */
+  readonly configDir: string
 }
 
 /**
@@ -75,5 +108,5 @@ export interface TrustManifestEntry {
  */
 export type TrustManifest = Map<string, TrustManifestEntry>
 
-/** Re-export `VaultClaims` for use in session module. */
-export type { VaultClaims }
+/** Re-export claim shapes for use in the session module. */
+export type { VaultClaims, SigningClaims }

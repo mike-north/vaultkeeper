@@ -1,22 +1,13 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import * as os from 'node:os'
 import * as fs from 'node:fs/promises'
+import * as os from 'node:os'
 import * as path from 'node:path'
-
-// Mock node:os so we can control homedir() per-test.
-// vi.spyOn cannot patch ESM namespace exports at runtime.
-vi.mock('node:os', async (importOriginal) => {
-  const actual = await importOriginal<typeof os>()
-  return {
-    ...actual,
-    homedir: vi.fn(() => actual.homedir()),
-  }
-})
 
 describe('configCommand', () => {
   let stderrOutput: string
   let stdoutOutput: string
   let tempDir: string
+  let configDir: string
 
   beforeEach(async () => {
     stderrOutput = ''
@@ -29,9 +20,11 @@ describe('configCommand', () => {
       stdoutOutput += String(chunk)
       return true
     })
-    // Create a fresh temp directory and redirect homedir to it
+    // Create a fresh temp directory to isolate this test's config dir.
+    // configCommand no longer derives a default path from os.homedir() —
+    // it operates directly on whatever configDir is passed in.
     tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'vaultkeeper-config-test-'))
-    vi.mocked(os.homedir).mockReturnValue(tempDir)
+    configDir = path.join(tempDir, '.config', 'vaultkeeper')
   })
 
   afterEach(async () => {
@@ -43,21 +36,21 @@ describe('configCommand', () => {
   describe('init subcommand', () => {
     it('should create config.json and return 0', async () => {
       const { configCommand } = await import('../../../src/commands/config.js')
-      const code = await configCommand(['init'])
+      const code = await configCommand(['init'], configDir)
       expect(code).toBe(0)
     })
 
     it('should write success message to stdout', async () => {
       const { configCommand } = await import('../../../src/commands/config.js')
-      await configCommand(['init'])
+      await configCommand(['init'], configDir)
       expect(stdoutOutput).toContain('Config created at')
       expect(stdoutOutput).toContain('config.json')
     })
 
     it('should create config.json with valid JSON content', async () => {
       const { configCommand } = await import('../../../src/commands/config.js')
-      await configCommand(['init'])
-      const configPath = path.join(tempDir, '.config', 'vaultkeeper', 'config.json')
+      await configCommand(['init'], configDir)
+      const configPath = path.join(configDir, 'config.json')
       const content = await fs.readFile(configPath, 'utf8')
       const parsed: unknown = JSON.parse(content)
       expect(parsed).toMatchObject({ version: 1 })
@@ -65,69 +58,183 @@ describe('configCommand', () => {
 
     it('should return 1 when config already exists', async () => {
       const { configCommand } = await import('../../../src/commands/config.js')
-      await configCommand(['init'])
-      const code = await configCommand(['init'])
+      await configCommand(['init'], configDir)
+      const code = await configCommand(['init'], configDir)
       expect(code).toBe(1)
     })
 
     it('should write error to stderr when config already exists', async () => {
       const { configCommand } = await import('../../../src/commands/config.js')
-      await configCommand(['init'])
+      await configCommand(['init'], configDir)
       stderrOutput = ''
-      await configCommand(['init'])
+      await configCommand(['init'], configDir)
       expect(stderrOutput).toContain('Config already exists at')
+    })
+
+    // Issue #97: without --force, config init must keep its current
+    // non-destructive refusal even though --force now exists as an option.
+    it('should still refuse without --force even after a prior successful init (regression: issue #97)', async () => {
+      const { configCommand } = await import('../../../src/commands/config.js')
+      await configCommand(['init'], configDir)
+      const configPath = path.join(configDir, 'config.json')
+      const before = await fs.readFile(configPath, 'utf8')
+
+      const code = await configCommand(['init'], configDir)
+
+      expect(code).toBe(1)
+      const after = await fs.readFile(configPath, 'utf8')
+      expect(after).toBe(before)
+    })
+
+    // Issue #97: config init --force overwrites an existing valid config.
+    it('should overwrite an existing config with --force and return 0', async () => {
+      const { configCommand } = await import('../../../src/commands/config.js')
+      await configCommand(['init'], configDir)
+      // Reset the captured buffer so this assertion validates only the
+      // forced init's own output, not output accumulated from the first
+      // (unforced) init above.
+      stdoutOutput = ''
+      const code = await configCommand(['init', '--force'], configDir)
+      expect(code).toBe(0)
+      expect(stdoutOutput).toContain('Config created at')
+    })
+
+    // Issue #97 repro: config init --force recovers from a corrupt config.json.
+    it('should overwrite a corrupt/unparseable config.json with --force and return 0 (issue #97 repro)', async () => {
+      const { configCommand } = await import('../../../src/commands/config.js')
+      await fs.mkdir(configDir, { recursive: true })
+      const configPath = path.join(configDir, 'config.json')
+      await fs.writeFile(configPath, '{ not valid json', 'utf8')
+
+      const code = await configCommand(['init', '--force'], configDir)
+
+      expect(code).toBe(0)
+      const content = await fs.readFile(configPath, 'utf8')
+      const parsed: unknown = JSON.parse(content)
+      expect(parsed).toMatchObject({ version: 1 })
+    })
+
+    // Issue #97 acceptance criterion 4: --backend interaction preserved
+    // under --force.
+    it('should honor --backend when combined with --force', async () => {
+      const { configCommand } = await import('../../../src/commands/config.js')
+      await configCommand(['init'], configDir)
+      const code = await configCommand(['init', '--force', '--backend', 'file'], configDir)
+      expect(code).toBe(0)
+      const configPath = path.join(configDir, 'config.json')
+      const content = await fs.readFile(configPath, 'utf8')
+      const parsed: unknown = JSON.parse(content)
+      expect(parsed).toMatchObject({ backends: [{ type: 'file', enabled: true }] })
     })
   })
 
   describe('show subcommand', () => {
     it('should output config content and return 0 when config exists', async () => {
       const { configCommand } = await import('../../../src/commands/config.js')
-      await configCommand(['init'])
+      await configCommand(['init'], configDir)
       stdoutOutput = ''
-      const code = await configCommand(['show'])
+      const code = await configCommand(['show'], configDir)
       expect(code).toBe(0)
     })
 
     it('should write config content to stdout', async () => {
       const { configCommand } = await import('../../../src/commands/config.js')
-      await configCommand(['init'])
+      await configCommand(['init'], configDir)
       stdoutOutput = ''
-      await configCommand(['show'])
+      await configCommand(['show'], configDir)
       const parsed: unknown = JSON.parse(stdoutOutput)
       expect(parsed).toMatchObject({ version: 1 })
     })
 
-    it('should return 1 when config does not exist', async () => {
+    // No-config story (issue #68): commands that need config fall back to
+    // platform defaults and say so — never an error, and never exit non-zero
+    // — uniformly across store/delete/exec/config show/doctor. `config show`
+    // previously erred with "No config file found" and exit 1; it now prints
+    // the resolved default config and exits 0, matching the other commands.
+    it('should return 0 and print platform defaults when config does not exist (regression: issue #68 uniform no-config story)', async () => {
       const { configCommand } = await import('../../../src/commands/config.js')
-      const code = await configCommand(['show'])
-      expect(code).toBe(1)
+      const code = await configCommand(['show'], configDir)
+      expect(code).toBe(0)
     })
 
-    it('should write error to stderr when config does not exist', async () => {
+    it('should write default config JSON to stdout when no config file exists', async () => {
       const { configCommand } = await import('../../../src/commands/config.js')
-      await configCommand(['show'])
-      expect(stderrOutput.length).toBeGreaterThan(0)
+      await configCommand(['show'], configDir)
+      const parsed: unknown = JSON.parse(stdoutOutput)
+      expect(parsed).toMatchObject({ version: 1 })
     })
 
-    it('should show a user-friendly message when no config file exists', async () => {
+    it('should show a user-friendly default-backend message when no config file exists', async () => {
       const { configCommand } = await import('../../../src/commands/config.js')
-      await configCommand(['show'])
+      await configCommand(['show'], configDir)
       expect(stderrOutput).toContain('No config file found')
-      expect(stderrOutput).toContain('vaultkeeper config init')
+      expect(stderrOutput).toContain('using the default backend (file)')
+      // Issue #98: the hint spells out --backend, and the default is file.
+      expect(stderrOutput).toContain('vaultkeeper config init --backend file')
+    })
+
+    // Issue #114: the remediation must be CLI-native ("run `vaultkeeper
+    // config init --force`"), never the library's "install @vaultkeeper/cli"
+    // text — this CLI is already installed.
+    it('should exit non-zero with a parse error, path, location, and remediation hint on invalid JSON (issue #68)', async () => {
+      await fs.mkdir(configDir, { recursive: true })
+      await fs.writeFile(path.join(configDir, 'config.json'), '{ bad json', 'utf8')
+      const { configCommand } = await import('../../../src/commands/config.js')
+      const code = await configCommand(['show'], configDir)
+      expect(code).toBe(1)
+      expect(stdoutOutput).toBe('')
+      expect(stderrOutput).toContain(path.join(configDir, 'config.json'))
+      expect(stderrOutput).toMatch(/line \d+, column \d+/)
+      expect(stderrOutput).toContain('vaultkeeper config init --force')
+      expect(stderrOutput).not.toContain('install @vaultkeeper/cli')
+    })
+
+    it('never dumps invalid JSON with exit 0 (regression: issue #68 repro)', async () => {
+      await fs.mkdir(configDir, { recursive: true })
+      await fs.writeFile(path.join(configDir, 'config.json'), '{ bad json', 'utf8')
+      const { configCommand } = await import('../../../src/commands/config.js')
+      const code = await configCommand(['show'], configDir)
+      expect(code).not.toBe(0)
+      expect(stdoutOutput).not.toContain('bad json')
+    })
+
+    // Issue #114: the CLI's own message no longer echoes the library's
+    // field-level *reason* verbatim (that text lives only in `.message`,
+    // alongside the library's "install @vaultkeeper/cli" remediation — issue
+    // #100); it instead builds a CLI-native message from the error's
+    // remediation-free structured fields (path; also location for a parse
+    // error). Issue #137: the failing field's *name* (`ConfigValidationError
+    // .field`, itself a structured, remediation-free field) is restored —
+    // #129 dropped the field-level detail entirely with no replacement, so
+    // this re-asserts it via the structured field rather than `.message`.
+    it('exits non-zero with a CLI-native remediation, path, failing field, and recovery command on structurally invalid config', async () => {
+      await fs.mkdir(configDir, { recursive: true })
+      await fs.writeFile(
+        path.join(configDir, 'config.json'),
+        JSON.stringify({ version: 99 }),
+        'utf8',
+      )
+      const { configCommand } = await import('../../../src/commands/config.js')
+      const code = await configCommand(['show'], configDir)
+      expect(code).toBe(1)
+      expect(stderrOutput).toContain(path.join(configDir, 'config.json'))
+      expect(stderrOutput).toContain('`version`')
+      expect(stderrOutput).toContain('vaultkeeper config init --force')
+      expect(stderrOutput).not.toContain('install @vaultkeeper/cli')
     })
   })
 
   describe('--help / -h', () => {
     it('should print usage and return 0 for --help', async () => {
       const { configCommand } = await import('../../../src/commands/config.js')
-      const code = await configCommand(['--help'])
+      const code = await configCommand(['--help'], configDir)
       expect(code).toBe(0)
       expect(stdoutOutput).toContain('Usage: vaultkeeper config')
     })
 
     it('should print usage and return 0 for -h', async () => {
       const { configCommand } = await import('../../../src/commands/config.js')
-      const code = await configCommand(['-h'])
+      const code = await configCommand(['-h'], configDir)
       expect(code).toBe(0)
       expect(stdoutOutput).toContain('Usage: vaultkeeper config')
     })
@@ -136,19 +243,19 @@ describe('configCommand', () => {
   describe('missing/unknown subcommand', () => {
     it('should return 2 when no subcommand given', async () => {
       const { configCommand } = await import('../../../src/commands/config.js')
-      const code = await configCommand([])
+      const code = await configCommand([], configDir)
       expect(code).toBe(2)
     })
 
     it('should return 2 for unknown subcommand', async () => {
       const { configCommand } = await import('../../../src/commands/config.js')
-      const code = await configCommand(['unknown'])
+      const code = await configCommand(['unknown'], configDir)
       expect(code).toBe(2)
     })
 
     it('should write usage to stderr for missing subcommand', async () => {
       const { configCommand } = await import('../../../src/commands/config.js')
-      await configCommand([])
+      await configCommand([], configDir)
       expect(stderrOutput).toContain('Usage: vaultkeeper config')
     })
   })

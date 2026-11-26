@@ -1,43 +1,43 @@
 //! Configuration loading, validation, and defaults.
 
+use crate::backend::Platform;
 use crate::errors::VaultError;
 use crate::types::{BackendConfig, KeyRotationPolicy, TrustTier, VaultConfig, VaultDefaults};
 
+/// The zero-config default backend type — the `file` backend, on every
+/// platform.
+///
+/// This is deliberately **not** platform-native (`keychain` on macOS, `dpapi`
+/// on Windows): a missing config must never silently target the real OS
+/// keychain/credential store (see #98). Explicit configuration may still
+/// select `keychain`/`dpapi`/`secret-tool` — this only governs the fallback
+/// used when no config file exists. Mirrors `defaultBackendType()` in
+/// `packages/vaultkeeper/src/config.ts`.
+pub const DEFAULT_BACKEND_TYPE: &str = "file";
+
+/// Return the zero-config default backend type for a given platform.
+///
+/// Always [`DEFAULT_BACKEND_TYPE`], regardless of `platform` — see
+/// [`DEFAULT_BACKEND_TYPE`] for why. The `platform` parameter exists so
+/// regression tests can iterate every [`Platform`] arm explicitly rather than
+/// relying on `cfg!(target_os = ...)`, which only exercises one arm per host
+/// (#98 / #235).
+#[must_use]
+pub fn default_backend_type_for_platform(_platform: Platform) -> &'static str {
+    DEFAULT_BACKEND_TYPE
+}
+
 /// Return the default configuration when no config file exists.
 ///
-/// The default backend is chosen based on the target platform:
-/// - macOS: `keychain` (Keychain Services)
-/// - Windows: `dpapi` (Data Protection API)
-/// - Linux / other Unix: `file` (encrypted file backend)
-///
-/// The `file` backend is preferred over `secret-tool` on Linux because
-/// `secret-tool` requires `libsecret-tools` which is not universally installed.
+/// The zero-config default backend is always [`DEFAULT_BACKEND_TYPE`]
+/// (`file`) — see its docs for why the platform is never consulted here.
 pub fn default_config() -> VaultConfig {
-    let backend = if cfg!(target_os = "macos") {
-        BackendConfig {
-            backend_type: "keychain".to_string(),
-            enabled: true,
-            plugin: None,
-            path: None,
-            options: None,
-        }
-    } else if cfg!(target_os = "windows") {
-        BackendConfig {
-            backend_type: "dpapi".to_string(),
-            enabled: true,
-            plugin: None,
-            path: None,
-            options: None,
-        }
-    } else {
-        // Linux and other Unix-like systems.
-        BackendConfig {
-            backend_type: "file".to_string(),
-            enabled: true,
-            plugin: None,
-            path: None,
-            options: None,
-        }
+    let backend = BackendConfig {
+        backend_type: DEFAULT_BACKEND_TYPE.to_string(),
+        enabled: true,
+        plugin: None,
+        path: None,
+        options: None,
     };
 
     VaultConfig {

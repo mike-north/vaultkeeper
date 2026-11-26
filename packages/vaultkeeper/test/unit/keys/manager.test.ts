@@ -48,9 +48,7 @@ describe('KeyManager.generateKey', () => {
     const a = mgr.generateKey()
     const b = mgr.generateKey()
     // Keys should not share the same raw bytes (astronomically unlikely).
-    expect(Buffer.from(a.key).toString('hex')).not.toBe(
-      Buffer.from(b.key).toString('hex'),
-    )
+    expect(Buffer.from(a.key).toString('hex')).not.toBe(Buffer.from(b.key).toString('hex'))
   })
 })
 
@@ -102,8 +100,12 @@ describe('KeyManager before init', () => {
 
   it('rotateKey throws SetupError if not initialized', () => {
     const mgr = makeManager()
-    expect(() => { mgr.rotateKey(1000) }).toThrow(SetupError)
-    expect(() => { mgr.rotateKey(1000) }).toThrow('KeyManager has not been initialized')
+    expect(() => {
+      mgr.rotateKey(1000)
+    }).toThrow(SetupError)
+    expect(() => {
+      mgr.rotateKey(1000)
+    }).toThrow('KeyManager has not been initialized')
   })
 })
 
@@ -201,7 +203,66 @@ describe('KeyManager.rotateKey — concurrent rotation guard', () => {
     const mgr = await makeInitializedManager()
     mgr.rotateKey(5_000)
 
-    expect(() => { mgr.rotateKey(5_000) }).toThrowError(RotationInProgressError)
+    expect(() => {
+      mgr.rotateKey(5_000)
+    }).toThrowError(RotationInProgressError)
+  })
+
+  // Regression: RotationInProgressError previously surfaced only the bare
+  // "A key rotation is already in progress" message with no next step,
+  // unlike the CLI's other domain errors, which name actionable remediation.
+  it('includes actionable next-step guidance (revoke-key / grace period) in the message', async () => {
+    const mgr = await makeInitializedManager()
+    mgr.rotateKey(5_000)
+
+    try {
+      mgr.rotateKey(5_000)
+      expect.unreachable('rotateKey should have thrown RotationInProgressError')
+    } catch (err) {
+      expect(err).toBeInstanceOf(RotationInProgressError)
+      const message = err instanceof Error ? err.message : String(err)
+      expect(message).toContain('revoke-key')
+      expect(message).toContain('grace period')
+    }
+  })
+
+  it('appends a separating period to a message with no trailing punctuation', () => {
+    const err = new RotationInProgressError('A key rotation is already in progress')
+    expect(err.message).toBe(
+      'A key rotation is already in progress. Either wait for the current grace period to ' +
+        "elapse before rotating again, or run 'vaultkeeper revoke-key' (or call revokeKey()) " +
+        'to invalidate the previous key immediately and clear the grace period.',
+    )
+  })
+
+  // Regression: appending ". Either ..." unconditionally to a message that
+  // already ends in sentence punctuation (e.g. from the WASM error mapper)
+  // produced double punctuation ("already in progress.. Either ...").
+  it('does not double up punctuation when the message already ends in a period', () => {
+    const err = new RotationInProgressError('A key rotation is already in progress.')
+    expect(err.message).not.toContain('..')
+    expect(err.message).toBe(
+      'A key rotation is already in progress. Either wait for the current grace period to ' +
+        "elapse before rotating again, or run 'vaultkeeper revoke-key' (or call revokeKey()) " +
+        'to invalidate the previous key immediately and clear the grace period.',
+    )
+  })
+
+  // Regression: an empty or whitespace-only message (possible from the WASM
+  // error mapper) previously left a bare leading period — ". Either wait ..."
+  // — before the next-step guidance. It should be omitted entirely instead.
+  it('omits the leading period for an empty or whitespace-only message', () => {
+    const emptyMessage = new RotationInProgressError('')
+    const whitespaceMessage = new RotationInProgressError('   ')
+
+    for (const err of [emptyMessage, whitespaceMessage]) {
+      expect(err.message.startsWith('. ')).toBe(false)
+      expect(err.message).toBe(
+        'Either wait for the current grace period to elapse before rotating again, ' +
+          "or run 'vaultkeeper revoke-key' (or call revokeKey()) to invalidate the previous key " +
+          'immediately and clear the grace period.',
+      )
+    }
   })
 
   it('allows a new rotation after the grace period expires', async () => {
@@ -210,7 +271,9 @@ describe('KeyManager.rotateKey — concurrent rotation guard', () => {
 
     vi.advanceTimersByTime(1_001)
 
-    expect(() => { mgr.rotateKey(1_000) }).not.toThrow()
+    expect(() => {
+      mgr.rotateKey(1_000)
+    }).not.toThrow()
   })
 })
 
@@ -259,12 +322,16 @@ describe('KeyManager.revokeKey', () => {
     mgr.rotateKey(1_000)
     mgr.revokeKey()
 
-    expect(() => { mgr.rotateKey(1_000) }).not.toThrow()
+    expect(() => {
+      mgr.rotateKey(1_000)
+    }).not.toThrow()
   })
 
   it('can be called without a prior rotation', async () => {
     const mgr = await makeInitializedManager()
-    expect(() => { mgr.revokeKey() }).not.toThrow()
+    expect(() => {
+      mgr.revokeKey()
+    }).not.toThrow()
     expect(mgr.getPreviousKey()).toBeUndefined()
   })
 })
@@ -272,6 +339,80 @@ describe('KeyManager.revokeKey', () => {
 // ---------------------------------------------------------------------------
 // findKeyById
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// hydrate / snapshot — cross-process state (issue #59)
+// ---------------------------------------------------------------------------
+
+describe('KeyManager.snapshot / hydrate', () => {
+  it('round-trips the current key into a fresh manager', async () => {
+    const mgr = await makeInitializedManager()
+    const current = mgr.getCurrentKey()
+
+    const restored = makeManager()
+    restored.hydrate(mgr.snapshot())
+
+    expect(restored.getCurrentKey().id).toBe(current.id)
+    expect(Buffer.from(restored.getCurrentKey().key).toString('hex')).toBe(
+      Buffer.from(current.key).toString('hex'),
+    )
+  })
+
+  it('a snapshot taken mid-grace-period restores the previous key and the rotation guard', async () => {
+    const mgr = await makeInitializedManager()
+    const original = mgr.getCurrentKey()
+    mgr.rotateKey(60_000)
+
+    const restored = makeManager()
+    restored.hydrate(mgr.snapshot())
+
+    // Previous key and grace state survive into the new manager…
+    expect(restored.findKeyById(original.id)?.id).toBe(original.id)
+    expect(restored.isInGracePeriod()).toBe(true)
+    // …so a second rotation is rejected across the "process" boundary.
+    expect(() => {
+      restored.rotateKey(60_000)
+    }).toThrow(RotationInProgressError)
+  })
+
+  it('does not restore an already-expired grace period (previous key dropped)', async () => {
+    vi.useFakeTimers()
+    try {
+      const mgr = await makeInitializedManager()
+      const original = mgr.getCurrentKey()
+      mgr.rotateKey(5_000)
+      const snap = mgr.snapshot()
+
+      // Time passes beyond the grace period before the next manager loads it.
+      vi.advanceTimersByTime(5_001)
+
+      const restored = makeManager()
+      restored.hydrate(snap)
+      expect(restored.isInGracePeriod()).toBe(false)
+      expect(restored.findKeyById(original.id)).toBeUndefined()
+      // A fresh rotation is permitted again.
+      expect(() => {
+        restored.rotateKey(5_000)
+      }).not.toThrow()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('snapshot omits the previous key once the grace period has expired', async () => {
+    vi.useFakeTimers()
+    try {
+      const mgr = await makeInitializedManager()
+      mgr.rotateKey(5_000)
+      vi.advanceTimersByTime(5_001)
+      const snap = mgr.snapshot()
+      expect(snap.previous).toBeUndefined()
+      expect(snap.gracePeriodExpiresAt).toBeUndefined()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+})
 
 describe('KeyManager.findKeyById', () => {
   it('finds the current key by id', async () => {

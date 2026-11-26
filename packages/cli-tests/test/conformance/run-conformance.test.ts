@@ -16,13 +16,9 @@ import * as os from 'node:os'
 import * as path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, it, expect } from 'vitest'
+import { matchesOutput, type OutputMatcher } from './matches-output.js'
 
 // ─── Types mirroring the Rust ConformanceCase / OutputMatcher ────
-
-interface OutputMatcher {
-  type: 'Any' | 'Exact' | 'Contains' | 'Regex' | 'JsonContains'
-  value?: string | Record<string, unknown>
-}
 
 interface ConformanceCase {
   name: string
@@ -32,6 +28,9 @@ interface ConformanceCase {
   expectedExitCode: number
   expectedStdout: OutputMatcher
   expectedStderr: OutputMatcher
+  expectedConfigFile: OutputMatcher | null
+  /** [path relative to the config dir, content] pairs, written before running. */
+  extraFiles: [string, string][]
 }
 
 // ─── Load cases ──────────────────────────────────────────────────
@@ -83,60 +82,27 @@ const DEFAULT_CONFIG = JSON.stringify(
   2,
 )
 
-// ─── Output matching ─────────────────────────────────────────────
+// ─── Fixture path validation ──────────────────────────────────────
 
-function matcherValueAsString(matcher: OutputMatcher): string {
-  if (typeof matcher.value === 'string') return matcher.value
-  return ''
-}
-
-function matchesOutput(matcher: OutputMatcher, output: string): boolean {
-  switch (matcher.type) {
-    case 'Any':
-      return true
-    case 'Exact':
-      return output.trim() === matcherValueAsString(matcher).trim()
-    case 'Contains':
-      return output.includes(matcherValueAsString(matcher))
-    case 'Regex': {
-      let pattern = matcherValueAsString(matcher)
-      let flags = ''
-      // Translate Rust inline (?s) flag to JS 's' flag (dotall mode)
-      if (pattern.startsWith('(?s)')) {
-        pattern = pattern.slice(4)
-        flags = 's'
-      }
-      return new RegExp(pattern, flags).test(output)
-    }
-    case 'JsonContains': {
-      try {
-        const parsed: unknown = JSON.parse(output)
-        return jsonContains(parsed, matcher.value)
-      } catch {
-        return false
-      }
-    }
-    default:
-      return false
+/**
+ * Reject any `extraFiles` path that is absolute or contains a
+ * parent-directory (`..`) segment, so a malicious/malformed conformance case
+ * can never write outside the case's isolated temp directory.
+ */
+function validateExtraFilePath(relPath: string): void {
+  if (path.isAbsolute(relPath)) {
+    throw new Error(`extraFiles path ${JSON.stringify(relPath)} must be relative, not absolute`)
   }
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === 'object' && !Array.isArray(value)
-}
-
-function jsonContains(haystack: unknown, needle: unknown): boolean {
-  if (isRecord(haystack) && isRecord(needle)) {
-    return Object.entries(needle).every(
-      ([k, v]) => k in haystack && jsonContains(haystack[k], v),
+  // Mirrors the Rust runner's `Component::Normal`-only rule: every segment
+  // must be a plain name, so '.', '..', and empty segments are all rejected.
+  const segments = relPath.split(/[/\\]/)
+  const isSafeRelative =
+    segments.length > 0 && segments.every((s) => s !== '' && s !== '.' && s !== '..')
+  if (!isSafeRelative) {
+    throw new Error(
+      `extraFiles path ${JSON.stringify(relPath)} must be relative and contain no '.', '..', or empty path segments`,
     )
   }
-  if (Array.isArray(haystack) && Array.isArray(needle)) {
-    return needle.every((nv: unknown) =>
-      haystack.some((hv: unknown) => jsonContains(hv, nv)),
-    )
-  }
-  return haystack === needle
 }
 
 // ─── Run a single case ───────────────────────────────────────────
@@ -145,71 +111,133 @@ interface RunResult {
   stdout: string
   stderr: string
   exitCode: number
+  /** Contents of config.json after the run, or null if it doesn't exist. */
+  configFileContent: string | null
 }
 
 async function runCase(testCase: ConformanceCase): Promise<RunResult> {
-  const configDir = await fs.mkdtemp(
-    path.join(os.tmpdir(), 'vk-conformance-'),
-  )
+  const configDir = await fs.mkdtemp(path.join(os.tmpdir(), 'vk-conformance-'))
+  const configPath = path.join(configDir, 'config.json')
 
   try {
     if (testCase.needsConfig) {
-      await fs.writeFile(
-        path.join(configDir, 'config.json'),
-        DEFAULT_CONFIG + '\n',
-        { mode: 0o600 },
-      )
+      await fs.writeFile(configPath, DEFAULT_CONFIG + '\n', {
+        mode: 0o600,
+      })
     }
 
-    return await new Promise<RunResult>((resolve) => {
-      const bin = RUST_BIN
-      if (!bin) throw new Error('Rust binary not found')
+    for (const [relPath, content] of testCase.extraFiles) {
+      validateExtraFilePath(relPath)
+      const filePath = path.join(configDir, relPath)
+      await fs.mkdir(path.dirname(filePath), { recursive: true })
+      await fs.writeFile(filePath, content)
+    }
 
-      // Substitute __SELF_BINARY__ with the actual vaultkeeper binary path
-      const args = testCase.command.map((arg) =>
-        arg === '__SELF_BINARY__' ? bin : arg,
-      )
+    const { stdout, stderr, exitCode } = await new Promise<Omit<RunResult, 'configFileContent'>>(
+      (resolve) => {
+        const bin = RUST_BIN
+        if (!bin) throw new Error('Rust binary not found')
 
-      const child = execFile(
-        bin,
-        args,
-        {
-          timeout: 15_000,
-          env: {
-            ...process.env,
-            VAULTKEEPER_CONFIG_DIR: configDir,
+        // Substitute __SELF_BINARY__ with the actual vaultkeeper binary path
+        const args = testCase.command.map((arg) => (arg === '__SELF_BINARY__' ? bin : arg))
+
+        const child = execFile(
+          bin,
+          args,
+          {
+            timeout: 15_000,
+            env: {
+              ...process.env,
+              VAULTKEEPER_CONFIG_DIR: configDir,
+            },
           },
-        },
-        (error, stdout, stderr) => {
-          let exitCode = 0
-          if (error !== null) {
-            // Node's ExecException puts the exit code in `code` as a number
-            // when the process exits non-zero
-            exitCode =
-              typeof error.code === 'number' ? error.code : 1
-          }
-          resolve({ stdout, stderr, exitCode })
-        },
-      )
+          (error, stdout, stderr) => {
+            let exitCode = 0
+            if (error !== null) {
+              // Node's ExecException puts the exit code in `code` as a number
+              // when the process exits non-zero
+              exitCode = typeof error.code === 'number' ? error.code : 1
+            }
+            resolve({ stdout, stderr, exitCode })
+          },
+        )
 
-      if (child.stdin !== null) {
-        // Ignore EPIPE — the child may exit before we finish writing
-        // (e.g., clap rejecting args before reading stdin). This race
-        // is more common on Node 20 than 22.
-        // eslint-disable-next-line @typescript-eslint/no-empty-function -- suppress EPIPE from child exiting before stdin write completes
-        child.stdin.on('error', () => {})
-        if (testCase.stdin !== null) {
-          child.stdin.write(testCase.stdin)
+        if (child.stdin !== null) {
+          // Ignore EPIPE — the child may exit before we finish writing
+          // (e.g., clap rejecting args before reading stdin). This race
+          // is more common on Node 20 than 22.
+          // eslint-disable-next-line @typescript-eslint/no-empty-function -- suppress EPIPE from child exiting before stdin write completes
+          child.stdin.on('error', () => {})
+          if (testCase.stdin !== null) {
+            child.stdin.write(testCase.stdin)
+          }
+          child.stdin.end()
         }
-        child.stdin.end()
-      }
-    })
+      },
+    )
+
+    let configFileContent: string | null = null
+    if (testCase.expectedConfigFile !== null) {
+      configFileContent = await fs.readFile(configPath, 'utf8').catch(() => null)
+    }
+
+    return { stdout, stderr, exitCode, configFileContent }
   } finally {
     await fs.rm(configDir, { recursive: true, force: true })
   }
 }
 
 // ─── Test suite ──────────────────────────────────────────────────
+
+describe('validateExtraFilePath', () => {
+  it('accepts a plain relative path', () => {
+    expect(() => {
+      validateExtraFilePath('profiles/empty-profile.json')
+    }).not.toThrow()
+  })
+
+  it('rejects an absolute path', () => {
+    expect(() => {
+      validateExtraFilePath('/etc/passwd')
+    }).toThrow(/must be relative/)
+  })
+
+  it('rejects a parent-directory traversal', () => {
+    expect(() => {
+      validateExtraFilePath('../../etc/passwd')
+    }).toThrow(/\.\./)
+  })
+
+  it('rejects a parent-directory segment in the middle of the path', () => {
+    expect(() => {
+      validateExtraFilePath('profiles/../../escape.json')
+    }).toThrow(/\.\./)
+  })
+
+  it('rejects an empty path', () => {
+    expect(() => {
+      validateExtraFilePath('')
+    }).toThrow()
+  })
+
+  it("rejects a leading './' current-directory segment", () => {
+    expect(() => {
+      validateExtraFilePath('./profiles/x.json')
+    }).toThrow(/'\.'/)
+  })
+
+  it("rejects a './' segment in the middle of the path", () => {
+    expect(() => {
+      validateExtraFilePath('a/./b')
+    }).toThrow(/'\.'/)
+  })
+
+  it('rejects a doubled path separator (empty segment)', () => {
+    expect(() => {
+      validateExtraFilePath('a//b')
+    }).toThrow(/empty/)
+  })
+})
 
 // Skip the entire suite when the Rust binary isn't available (e.g., in CI
 // where only the TypeScript packages are built).
@@ -221,10 +249,7 @@ describe.skipIf(RUST_BIN === null)('Rust CLI conformance', () => {
       const errors: string[] = []
 
       // Check exit code (-1 means don't check)
-      if (
-        testCase.expectedExitCode !== -1 &&
-        result.exitCode !== testCase.expectedExitCode
-      ) {
+      if (testCase.expectedExitCode !== -1 && result.exitCode !== testCase.expectedExitCode) {
         errors.push(
           `exit code: expected ${String(testCase.expectedExitCode)}, got ${String(result.exitCode)}`,
         )
@@ -240,6 +265,16 @@ describe.skipIf(RUST_BIN === null)('Rust CLI conformance', () => {
         errors.push(
           `stderr mismatch: expected ${JSON.stringify(testCase.expectedStderr)}, got ${JSON.stringify(result.stderr.slice(0, 200))}`,
         )
+      }
+
+      if (testCase.expectedConfigFile !== null) {
+        if (result.configFileContent === null) {
+          errors.push('config file mismatch: expected config.json to exist, but it was not found')
+        } else if (!matchesOutput(testCase.expectedConfigFile, result.configFileContent)) {
+          errors.push(
+            `config file mismatch: expected ${JSON.stringify(testCase.expectedConfigFile)}, got ${JSON.stringify(result.configFileContent.slice(0, 300))}`,
+          )
+        }
       }
 
       if (errors.length > 0) {

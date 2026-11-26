@@ -1,25 +1,33 @@
 {
   "name": "@vaultkeeper/cli-test-helpers",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "CLI test utilities for vaultkeeper",
+  "homepage": "https://github.com/mike-north/vaultkeeper#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mike-north/vaultkeeper.git",
+    "directory": "packages/cli-test-helpers"
+  },
+  "bugs": "https://github.com/mike-north/vaultkeeper/issues",
   "type": "module",
   "main": "./dist/index.cjs",
   "module": "./dist/index.js",
-  "types": "./dist/cli-test-helpers-public.d.ts",
   "exports": {
     ".": {
       "import": {
-        "types": "./dist/cli-test-helpers-public.d.ts",
+        "types": "./dist/index.d.ts",
         "default": "./dist/index.js"
       },
       "require": {
-        "types": "./dist/cli-test-helpers-public.d.ts",
+        "types": "./dist/index.d.cts",
         "default": "./dist/index.cjs"
       }
     }
   },
   "files": [
-    "dist"
+    "dist",
+    "LICENSE",
+    "README.md"
   ],
   "engines": {
     "node": ">=20.0.0"

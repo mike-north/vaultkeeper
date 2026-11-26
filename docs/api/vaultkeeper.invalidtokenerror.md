@@ -4,7 +4,7 @@
 
 ## InvalidTokenError class
 
-Thrown when a JWE string cannot be parsed because it is structurally malformed (e.g. wrong number of segments, invalid Base64URL header, or unparseable JSON header).
+Thrown when a JWE string is invalid or cannot be processed — for example, it is structurally malformed (wrong number of segments, invalid Base64URL), decryption fails (wrong key, tampered ciphertext), or the decrypted payload does not match the expected claims schema.
 
 **Signature:**
 

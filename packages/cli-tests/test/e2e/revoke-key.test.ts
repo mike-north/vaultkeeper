@@ -22,10 +22,8 @@ describe('revoke-key', () => {
   it('should revoke key or fail with doctor error', async () => {
     env = await createCliTestEnv()
     const result = await env.run(['revoke-key'])
-    const succeeded =
-      result.exitCode === 0 && result.stdout.includes('revoked successfully')
-    const doctorFailed =
-      result.exitCode === 1 && result.stderr.includes('System not ready')
+    const succeeded = result.exitCode === 0 && result.stdout.includes('revoked successfully')
+    const doctorFailed = result.exitCode === 1 && result.stderr.includes('System not ready')
     expect(succeeded || doctorFailed).toBe(true)
   })
 })

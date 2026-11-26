@@ -1,42 +1,72 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { delegatedExec } from '../../../src/access/delegated-exec.js'
 import { ExecError } from '../../../src/errors.js'
 import type { ExecRequest } from '../../../src/access/types.js'
 
+// spawn is wrapped (not replaced) so every other test in this file still
+// spawns real child processes — only the guardrail test below asserts
+// against call count.
+vi.mock('node:child_process', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:child_process')>()
+  return { ...actual, spawn: vi.fn(actual.spawn) }
+})
+
+import { spawn } from 'node:child_process'
+
+const mockSpawn = vi.mocked(spawn)
+
+beforeEach(() => {
+  mockSpawn.mockClear()
+})
+
 describe('delegatedExec', () => {
-  describe('args placeholder replacement', () => {
-    it('replaces {{secret}} in command args', async () => {
+  describe('args placeholder guardrail', () => {
+    // Regression test for issue #70: {{secret}} in args was silently
+    // substituted, exposing the plaintext secret on the process command
+    // line (visible via `ps`). This must throw ExecError before spawning,
+    // exactly like the command field does.
+    it('rejects with ExecError when {{secret}} is used in args, without spawning', async () => {
       const request: ExecRequest = {
         command: 'echo',
         args: ['{{secret}}'],
+        env: {},
       }
 
-      const result = await delegatedExec('hello', request)
+      const promise = delegatedExec('hello', request)
 
-      expect(result.stdout.trim()).toBe('hello')
-      expect(result.exitCode).toBe(0)
+      await expect(promise).rejects.toThrow(ExecError)
+      await expect(promise).rejects.toThrow(/placeholders are not supported in the args field/)
+      expect(mockSpawn).not.toHaveBeenCalled()
     })
 
-    it('replaces multiple occurrences in a single arg', async () => {
+    it('rejects with ExecError when {{secret}} appears alongside static text in an arg', async () => {
       const request: ExecRequest = {
         command: 'sh',
         args: ['-c', 'echo {{secret}}-{{secret}}'],
       }
 
-      const result = await delegatedExec('x', request)
-
-      expect(result.stdout.trim()).toBe('x-x')
+      await expect(delegatedExec('x', request)).rejects.toThrow(ExecError)
     })
 
-    it('replaces placeholders in multiple args', async () => {
+    it('rejects with ExecError when {{secret}} appears in any element of a multi-arg array', async () => {
       const request: ExecRequest = {
         command: 'sh',
-        args: ['-c', 'echo {{secret}} static {{secret}}'],
+        args: ['-c', 'echo static', '{{secret}}'],
       }
 
-      const result = await delegatedExec('val', request)
+      await expect(delegatedExec('val', request)).rejects.toThrow(ExecError)
+    })
 
-      expect(result.stdout.trim()).toBe('val static val')
+    it('rejects with ExecError when {{secret:name}} is used in args', async () => {
+      const request: ExecRequest = {
+        command: 'sh',
+        args: ['-c', 'echo {{secret:greeting}}'],
+      }
+
+      const promise = delegatedExec({ greeting: 'hello' }, request)
+
+      await expect(promise).rejects.toThrow(ExecError)
+      await expect(promise).rejects.toThrow(/placeholders are not supported in the args field/)
     })
 
     it('handles empty args array', async () => {
@@ -60,11 +90,14 @@ describe('delegatedExec', () => {
   })
 
   describe('env placeholder replacement', () => {
+    // These assert on the raw injected value, so they opt out of the
+    // default output redaction (issue #189) to observe the secret directly.
     it('replaces {{secret}} in env values', async () => {
       const request: ExecRequest = {
         command: 'sh',
         args: ['-c', 'echo $MY_SECRET'],
         env: { MY_SECRET: '{{secret}}' },
+        redact: false,
       }
 
       const result = await delegatedExec('envval', request)
@@ -79,6 +112,7 @@ describe('delegatedExec', () => {
         command: 'sh',
         args: ['-c', 'echo $INJECTED_VAR'],
         env: { INJECTED_VAR: '{{secret}}' },
+        redact: false,
       }
 
       const result = await delegatedExec('merged', request)
@@ -149,29 +183,6 @@ describe('delegatedExec', () => {
   })
 
   describe('named-secret mode (Record)', () => {
-    it('replaces {{secret:name}} in args', async () => {
-      const request: ExecRequest = {
-        command: 'sh',
-        args: ['-c', 'echo {{secret:greeting}}'],
-      }
-
-      const result = await delegatedExec({ greeting: 'hello' }, request)
-
-      expect(result.stdout.trim()).toBe('hello')
-      expect(result.exitCode).toBe(0)
-    })
-
-    it('replaces multiple named secrets in args', async () => {
-      const request: ExecRequest = {
-        command: 'sh',
-        args: ['-c', 'echo {{secret:a}}-{{secret:b}}'],
-      }
-
-      const result = await delegatedExec({ a: 'x', b: 'y' }, request)
-
-      expect(result.stdout.trim()).toBe('x-y')
-    })
-
     it('replaces named secrets in env values', async () => {
       const request: ExecRequest = {
         command: 'sh',
@@ -180,14 +191,88 @@ describe('delegatedExec', () => {
           API_KEY: '{{secret:apiKey}}',
           DB_PASS: '{{secret:dbPass}}',
         },
+        // Assert on the raw injected values — opt out of default redaction.
+        redact: false,
       }
 
-      const result = await delegatedExec(
-        { apiKey: 'key123', dbPass: 'pass456' },
-        request,
-      )
+      const result = await delegatedExec({ apiKey: 'key123', dbPass: 'pass456' }, request)
 
       expect(result.stdout.trim()).toBe('key123 pass456')
+    })
+  })
+
+  describe('output redaction (issue #189)', () => {
+    // The security guarantee: a delegated command that echoes the injected
+    // secret must NOT leak it back through ExecResult.stdout. By default the
+    // captured output is scrubbed to [REDACTED].
+    it('redacts the injected secret from stdout by default', async () => {
+      const request: ExecRequest = {
+        command: 'sh',
+        args: ['-c', 'echo "value is $S"'],
+        env: { S: '{{secret}}' },
+      }
+
+      const result = await delegatedExec('sk_live_FAKE', request)
+
+      expect(result.stdout).not.toContain('sk_live_FAKE')
+      expect(result.stdout).toContain('[REDACTED]')
+      expect(result.stdout.trim()).toBe('value is [REDACTED]')
+    })
+
+    it('redacts the injected secret from stderr by default', async () => {
+      const request: ExecRequest = {
+        command: 'sh',
+        args: ['-c', 'echo "leak $S" >&2'],
+        env: { S: '{{secret}}' },
+      }
+
+      const result = await delegatedExec('sk_live_FAKE', request)
+
+      expect(result.stderr).not.toContain('sk_live_FAKE')
+      expect(result.stderr).toContain('[REDACTED]')
+    })
+
+    it('returns raw, unredacted output when redact is false', async () => {
+      const request: ExecRequest = {
+        command: 'sh',
+        args: ['-c', 'echo "value is $S"'],
+        env: { S: '{{secret}}' },
+        redact: false,
+      }
+
+      const result = await delegatedExec('sk_live_FAKE', request)
+
+      expect(result.stdout.trim()).toBe('value is sk_live_FAKE')
+      expect(result.stdout).not.toContain('[REDACTED]')
+    })
+
+    it('redacts all injected values in multi-secret (named) mode', async () => {
+      const request: ExecRequest = {
+        command: 'sh',
+        args: ['-c', 'echo "$API and $DB"'],
+        env: { API: '{{secret:apiKey}}', DB: '{{secret:dbPass}}' },
+      }
+
+      const result = await delegatedExec({ apiKey: 'key-AAA', dbPass: 'pass-BBB' }, request)
+
+      expect(result.stdout).not.toContain('key-AAA')
+      expect(result.stdout).not.toContain('pass-BBB')
+      expect(result.stdout.trim()).toBe('[REDACTED] and [REDACTED]')
+    })
+
+    it('redacts a secret value even when it appears in output but was not injected via that run', async () => {
+      // A named secret present in the token map is scrubbed from output even if
+      // the command surfaces it from another source — redaction is conservative.
+      const request: ExecRequest = {
+        command: 'sh',
+        args: ['-c', 'echo "only $API"; echo "leaked pass-BBB"'],
+        env: { API: '{{secret:apiKey}}' },
+      }
+
+      const result = await delegatedExec({ apiKey: 'key-AAA', dbPass: 'pass-BBB' }, request)
+
+      expect(result.stdout).not.toContain('key-AAA')
+      expect(result.stdout).not.toContain('pass-BBB')
     })
   })
 
@@ -223,7 +308,7 @@ describe('delegatedExec', () => {
     it('rejects with ExecError when a named placeholder references an unknown secret', async () => {
       const request: ExecRequest = {
         command: 'echo',
-        args: ['{{secret:missing}}'],
+        env: { MISSING: '{{secret:missing}}' },
       }
 
       await expect(delegatedExec({ apiKey: 'val' }, request)).rejects.toThrow(ExecError)

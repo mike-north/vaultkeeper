@@ -81,9 +81,7 @@ describe('saveManifest', () => {
 
   it('writes a readable JSON file', async () => {
     await withTempDir(async (dir) => {
-      const manifest: TrustManifest = new Map([
-        ['tool', { hashes: ['hash1'], trustTier: 3 }],
-      ])
+      const manifest: TrustManifest = new Map([['tool', { hashes: ['hash1'], trustTier: 3 }]])
       await saveManifest(dir, manifest)
       const raw = await fs.readFile(path.join(dir, 'trust-manifest.json'), 'utf8')
       const parsed: unknown = JSON.parse(raw)

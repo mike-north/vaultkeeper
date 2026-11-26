@@ -8,10 +8,12 @@ Read the secret value via a callback.
 
 The `buf` argument is a temporary `Buffer` containing the secret encoded as UTF-8. The buffer is zeroed immediately after the callback returns, so callers must not store a reference to it beyond the callback scope.
 
+The callback's return value is passed through, so a caller-derived result (for example `buf.toString()` or a hash) flows out of `read()`<!-- -->: `const digest = accessor.read((buf) => sha256(buf))`<!-- -->. To preserve the zero-copy, auto-zeroing contract, derive a new value inside the callback — never return the raw `buf` itself, which is zeroed before `read()` returns.
+
 **Signature:**
 
 ```typescript
-read(callback: (buf: Buffer) => void): void;
+read<T>(callback: (buf: Buffer) => T): T;
 ```
 
 ## Parameters
@@ -39,12 +41,12 @@ callback
 
 </td><td>
 
-(buf: Buffer) =&gt; void
+(buf: Buffer) =&gt; T
 
 
 </td><td>
 
-Function that receives the secret buffer.
+Function that receives the secret buffer and returns a caller-derived value.
 
 
 </td></tr>
@@ -52,7 +54,9 @@ Function that receives the secret buffer.
 
 **Returns:**
 
-void
+T
+
+Whatever the callback returns.
 
 ## Exceptions
 

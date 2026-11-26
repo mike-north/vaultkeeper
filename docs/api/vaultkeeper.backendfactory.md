@@ -9,11 +9,11 @@ Factory function for creating a SecretBackend instance.
 **Signature:**
 
 ```typescript
-type BackendFactory = (config?: BackendConfig) => SecretBackend;
+type BackendFactory = (config?: BackendConfig, configDir?: string) => SecretBackend;
 ```
 **References:** [BackendConfig](./vaultkeeper.backendconfig.md)<!-- -->, [SecretBackend](./vaultkeeper.secretbackend.md)
 
 ## Remarks
 
-Factories may optionally accept a [BackendConfig](./vaultkeeper.backendconfig.md) to configure the backend from the user's vaultkeeper config file. Factories that do not need configuration can ignore the parameter.
+Factories may optionally accept a [BackendConfig](./vaultkeeper.backendconfig.md) to configure the backend from the user's vaultkeeper config file, and the resolved config directory (the same directory config and key material are read from) so file-based backends can default their storage under it. Factories that do not need either can ignore the parameters.
 

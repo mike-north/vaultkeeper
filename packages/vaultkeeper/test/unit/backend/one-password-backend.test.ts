@@ -94,8 +94,14 @@ import { OnePasswordBackend } from '../../../src/backend/one-password-backend.js
 import {
   SecretNotFoundError,
   BackendLockedError,
+  BackendUnavailableError,
   AuthorizationDeniedError,
+  PluginNotFoundError,
+  ConfigValidationError,
+  PresenceDeclinedError,
+  PresenceTimeoutError,
 } from '../../../src/errors.js'
+import { PRESENCE_WRITE_TIMEOUT_MS } from '../../../src/backend/one-password-constants.js'
 
 // ---- Test helpers ----
 
@@ -202,6 +208,11 @@ interface MockChildProcess {
     on: (event: string, cb: (chunk: Buffer) => void) => void
   }
   on: (event: string, cb: (...args: unknown[]) => void) => void
+  /** Only present on write-path mocks; retrieve never writes to stdin. */
+  stdin?: {
+    write: (chunk: string, encoding?: string) => void
+    end: () => void
+  }
 }
 
 interface WorkerProcessOptions {
@@ -214,9 +225,8 @@ interface WorkerProcessOptions {
  * Set up a mock child process whose stdout/stderr emit `data` and then fires `close`.
  */
 function makeWorkerProcess(stdoutDataOrOptions: string | WorkerProcessOptions): MockChildProcess {
-  const opts: WorkerProcessOptions = typeof stdoutDataOrOptions === 'string'
-    ? { stdout: stdoutDataOrOptions }
-    : stdoutDataOrOptions
+  const opts: WorkerProcessOptions =
+    typeof stdoutDataOrOptions === 'string' ? { stdout: stdoutDataOrOptions } : stdoutDataOrOptions
   const stdoutData = opts.stdout ?? ''
   const stderrData = opts.stderr ?? ''
   const exitCode = opts.exitCode ?? 0
@@ -270,10 +280,15 @@ function makeWorkerErrorProcess(spawnErr: Error): MockChildProcess {
 
   const stdout = { on: vi.fn() }
   const stderr = { on: vi.fn() }
+  // Present so a write-path spawn error (store, which writes to stdin before
+  // the 'error' event fires) doesn't throw on a missing `.stdin` — retrieve
+  // and delete never touch it.
+  const stdin = { on: vi.fn(), write: vi.fn(), end: vi.fn() }
 
   const proc: MockChildProcess = {
     stdout,
     stderr,
+    stdin,
     on: vi.fn((event: string, cb: (...args: unknown[]) => void) => {
       if (event === 'error') errorListeners.push(cb)
     }),
@@ -282,6 +297,89 @@ function makeWorkerErrorProcess(spawnErr: Error): MockChildProcess {
   setTimeout(() => {
     for (const listener of errorListeners) {
       listener(spawnErr)
+    }
+  }, 0)
+
+  return proc
+}
+
+/** Records what a mock write-worker's stdin received, for argv-hygiene assertions. */
+interface StdinRecorder {
+  writes: string[]
+  ended: boolean
+}
+
+interface MockWriteChildProcess extends MockChildProcess {
+  stdin: {
+    write: (chunk: string, encoding?: string) => void
+    end: () => void
+  }
+}
+
+/**
+ * Set up a mock child process for the `store`/`delete` write path — same
+ * stdout/stderr/close wiring as {@link makeWorkerProcess}, plus a `stdin` that
+ * records what was written so tests can assert the secret value travelled via
+ * stdin, never argv.
+ */
+function makeWorkerWriteProcess(
+  stdoutDataOrOptions: string | WorkerProcessOptions,
+  stdinRecorder?: StdinRecorder,
+): MockWriteChildProcess {
+  const opts: WorkerProcessOptions =
+    typeof stdoutDataOrOptions === 'string' ? { stdout: stdoutDataOrOptions } : stdoutDataOrOptions
+  const stdoutData = opts.stdout ?? ''
+  const stderrData = opts.stderr ?? ''
+  const exitCode = opts.exitCode ?? 0
+
+  const stdoutListeners: ((chunk: Buffer) => void)[] = []
+  const stderrListeners: ((chunk: Buffer) => void)[] = []
+  const closeListeners: ((...args: unknown[]) => void)[] = []
+
+  const stdout = {
+    on: vi.fn((event: string, cb: (chunk: Buffer) => void) => {
+      if (event === 'data') stdoutListeners.push(cb)
+    }),
+  }
+  const stderr = {
+    on: vi.fn((event: string, cb: (chunk: Buffer) => void) => {
+      if (event === 'data') stderrListeners.push(cb)
+    }),
+  }
+  const stdin = {
+    on: vi.fn(),
+    write: vi.fn((chunk: string) => {
+      stdinRecorder?.writes.push(chunk)
+    }),
+    end: vi.fn(() => {
+      if (stdinRecorder !== undefined) {
+        stdinRecorder.ended = true
+      }
+    }),
+  }
+
+  const proc: MockWriteChildProcess = {
+    stdout,
+    stderr,
+    stdin,
+    on: vi.fn((event: string, cb: (...args: unknown[]) => void) => {
+      if (event === 'close') closeListeners.push(cb)
+    }),
+  }
+
+  setTimeout(() => {
+    if (stdoutData !== '') {
+      for (const listener of stdoutListeners) {
+        listener(Buffer.from(stdoutData, 'utf8'))
+      }
+    }
+    if (stderrData !== '') {
+      for (const listener of stderrListeners) {
+        listener(Buffer.from(stderrData, 'utf8'))
+      }
+    }
+    for (const listener of closeListeners) {
+      listener(exitCode)
     }
   }, 0)
 
@@ -315,6 +413,25 @@ describe('OnePasswordBackend', () => {
       ).toThrow('per-access mode requires desktop biometric authentication')
     })
 
+    // Regression: issue #127 — this previously threw a plain `Error`,
+    // breaking instanceof-based handling. It must now throw a typed
+    // ConfigValidationError naming the offending options field.
+    it('should throw a typed ConfigValidationError when per-access mode is combined with serviceAccountToken', () => {
+      try {
+        new OnePasswordBackend({
+          vault: VAULT_ID,
+          serviceAccountToken: 'token',
+          accessMode: 'per-access',
+        })
+        expect.unreachable('constructor should have thrown')
+      } catch (err) {
+        if (!(err instanceof ConfigValidationError)) {
+          throw err
+        }
+        expect(err.field).toBe('options.accessMode')
+      }
+    })
+
     it('should throw when both account and serviceAccountToken are provided', () => {
       expect(
         () =>
@@ -324,6 +441,25 @@ describe('OnePasswordBackend', () => {
             serviceAccountToken: 'token',
           }),
       ).toThrow('account and serviceAccountToken are mutually exclusive')
+    })
+
+    // Regression: issue #127 — this previously threw a plain `Error`,
+    // breaking instanceof-based handling. It must now throw a typed
+    // ConfigValidationError naming the offending options field.
+    it('should throw a typed ConfigValidationError when both account and serviceAccountToken are provided', () => {
+      try {
+        new OnePasswordBackend({
+          vault: VAULT_ID,
+          account: 'my-account',
+          serviceAccountToken: 'token',
+        })
+        expect.unreachable('constructor should have thrown')
+      } catch (err) {
+        if (!(err instanceof ConfigValidationError)) {
+          throw err
+        }
+        expect(err.field).toBe('options.serviceAccountToken')
+      }
     })
   })
 
@@ -456,9 +592,14 @@ describe('OnePasswordBackend', () => {
       const putArg: unknown = mockPut.mock.calls[0]?.[0]
       expect(putArg).toMatchObject({ id: 'item-1' })
       // Verify the password field was updated — check fields independently to avoid nested matchers
-      const putFields: unknown = putArg !== null && typeof putArg === 'object' && 'fields' in putArg ? putArg.fields : undefined
+      const putFields: unknown =
+        putArg !== null && typeof putArg === 'object' && 'fields' in putArg
+          ? putArg.fields
+          : undefined
       expect(putFields).toEqual(
-        expect.arrayContaining([expect.objectContaining({ title: 'password', value: 'new-value' })]),
+        expect.arrayContaining([
+          expect.objectContaining({ title: 'password', value: 'new-value' }),
+        ]),
       )
     })
 
@@ -480,9 +621,18 @@ describe('OnePasswordBackend', () => {
 
       expect(mockPut).toHaveBeenCalledTimes(1)
       const putArg: unknown = mockPut.mock.calls[0]?.[0]
-      const putFields: unknown = putArg !== null && typeof putArg === 'object' && 'fields' in putArg ? putArg.fields : undefined
+      const putFields: unknown =
+        putArg !== null && typeof putArg === 'object' && 'fields' in putArg
+          ? putArg.fields
+          : undefined
       expect(putFields).toEqual(
-        expect.arrayContaining([expect.objectContaining({ title: 'password', value: 'new-value', fieldType: 'Concealed' })]),
+        expect.arrayContaining([
+          expect.objectContaining({
+            title: 'password',
+            value: 'new-value',
+            fieldType: 'Concealed',
+          }),
+        ]),
       )
     })
 
@@ -576,26 +726,6 @@ describe('OnePasswordBackend', () => {
       expect(mockCreateClient).not.toHaveBeenCalled()
     })
 
-    it('should use session client for store in per-access mode', async () => {
-      const backend = makePerAccessBackend()
-      mockList.mockResolvedValue([])
-
-      await backend.store('my-secret', 'val')
-
-      expect(mockCreateClient).toHaveBeenCalledTimes(1)
-      expect(mockSpawn).not.toHaveBeenCalled()
-    })
-
-    it('should use session client for delete in per-access mode', async () => {
-      const backend = makePerAccessBackend()
-      mockList.mockResolvedValue([makeOverview('item-1', 'my-secret')])
-
-      await backend.delete('my-secret')
-
-      expect(mockCreateClient).toHaveBeenCalledTimes(1)
-      expect(mockSpawn).not.toHaveBeenCalled()
-    })
-
     it('should use session client for exists in per-access mode', async () => {
       const backend = makePerAccessBackend()
       mockList.mockResolvedValue([makeOverview('item-1', 'my-secret')])
@@ -642,18 +772,35 @@ describe('OnePasswordBackend', () => {
 
     it('should throw SecretNotFoundError for unknown worker error code (default case)', async () => {
       const backend = makePerAccessBackend()
-      const proc = makeWorkerProcess(JSON.stringify({ error: 'something weird', code: 'INTERNAL' }))
+      // An unrecognized code (not one of the explicitly handled ones) falls
+      // through to the default branch.
+      const proc = makeWorkerProcess(
+        JSON.stringify({ error: 'something weird', code: 'SOMETHING_UNKNOWN' }),
+      )
       mockSpawn.mockReturnValue(proc)
 
       await expect(backend.retrieve('my-secret')).rejects.toBeInstanceOf(SecretNotFoundError)
     })
 
-    it('should throw Error with worker path when spawn itself errors', async () => {
+    // Regression: issue #127 — this previously rejected with a plain `Error`,
+    // breaking instanceof-based handling. It must now reject with a typed
+    // BackendUnavailableError.
+    it('should throw a typed BackendUnavailableError with worker path when spawn itself errors', async () => {
       const backend = makePerAccessBackend()
       const proc = makeWorkerErrorProcess(new Error('spawn ENOENT'))
       mockSpawn.mockReturnValue(proc)
 
-      await expect(backend.retrieve('my-secret')).rejects.toThrow('Failed to spawn 1Password per-access worker')
+      try {
+        await backend.retrieve('my-secret')
+        expect.unreachable('retrieve should have rejected')
+      } catch (err) {
+        if (!(err instanceof BackendUnavailableError)) {
+          throw err
+        }
+        expect(err.message).toContain('Failed to spawn 1Password per-access worker')
+        expect(err.reason).toBe('worker-spawn-failed')
+        expect(err.attempted).toEqual(['1password'])
+      }
     })
 
     it('should throw SecretNotFoundError when worker returns unparseable output', async () => {
@@ -674,10 +821,16 @@ describe('OnePasswordBackend', () => {
 
     it('should throw Error with stderr when worker crashes with no stdout', async () => {
       const backend = makePerAccessBackend()
-      const proc = makeWorkerProcess({ stdout: '', stderr: 'Error: Cannot find module @1password/sdk', exitCode: 1 })
+      const proc = makeWorkerProcess({
+        stdout: '',
+        stderr: 'Error: Cannot find module @1password/sdk',
+        exitCode: 1,
+      })
       mockSpawn.mockReturnValue(proc)
 
-      await expect(backend.retrieve('my-secret')).rejects.toThrow('Cannot find module @1password/sdk')
+      await expect(backend.retrieve('my-secret')).rejects.toThrow(
+        'Cannot find module @1password/sdk',
+      )
     })
 
     it('should throw Error with exit code when worker crashes with no stdout or stderr', async () => {
@@ -686,6 +839,294 @@ describe('OnePasswordBackend', () => {
       mockSpawn.mockReturnValue(proc)
 
       await expect(backend.retrieve('my-secret')).rejects.toThrow('exit code 137')
+    })
+
+    // Regression: issue #127 — a worker crash with no stdout previously
+    // rejected with a plain `Error`, breaking instanceof-based handling. It
+    // must now reject with a typed BackendUnavailableError.
+    it('should throw a typed BackendUnavailableError when worker crashes with no stdout', async () => {
+      const backend = makePerAccessBackend()
+      const proc = makeWorkerProcess({ stdout: '', stderr: '', exitCode: 137 })
+      mockSpawn.mockReturnValue(proc)
+
+      try {
+        await backend.retrieve('my-secret')
+        expect.unreachable('retrieve should have rejected')
+      } catch (err) {
+        if (!(err instanceof BackendUnavailableError)) {
+          throw err
+        }
+        expect(err.reason).toBe('worker-crashed')
+        expect(err.attempted).toEqual(['1password'])
+      }
+    })
+
+    // Regression for https://github.com/mike-north/vaultkeeper/issues/113: when
+    // the optional @1password/sdk peer is absent, the per-access worker reports
+    // a PLUGIN_NOT_FOUND code that the backend must surface as a typed
+    // PluginNotFoundError naming the missing dependency — not a raw crash.
+    it('should throw PluginNotFoundError when worker reports the SDK is missing', async () => {
+      const backend = makePerAccessBackend()
+      const proc = makeWorkerProcess(
+        JSON.stringify({
+          error: '1Password SDK (@1password/sdk) is not installed',
+          code: 'PLUGIN_NOT_FOUND',
+        }),
+      )
+      mockSpawn.mockReturnValue(proc)
+
+      const error = await backend.retrieve('my-secret').catch((err: unknown) => err)
+      expect(error).toBeInstanceOf(PluginNotFoundError)
+      expect(error).toMatchObject({ plugin: '@1password/sdk' })
+    })
+
+    // Regression for https://github.com/mike-north/vaultkeeper/issues/113: a
+    // present-but-broken SDK makes the worker report an INTERNAL failure with
+    // the real load error. The backend must classify that as a backend problem
+    // — NOT a missing plugin (reinstall hint) and NOT a missing secret — while
+    // preserving the worker's real detail.
+    it('should reject INTERNAL worker failures as a backend error preserving the detail', async () => {
+      const backend = makePerAccessBackend()
+      const proc = makeWorkerProcess(
+        JSON.stringify({
+          error: 'Failed to load 1Password SDK: Error: native binding failed',
+          code: 'INTERNAL',
+        }),
+      )
+      mockSpawn.mockReturnValue(proc)
+
+      const error = await backend.retrieve('my-secret').catch((err: unknown) => err)
+      expect(error).toBeInstanceOf(BackendUnavailableError)
+      expect(error).not.toBeInstanceOf(PluginNotFoundError)
+      expect(error).not.toBeInstanceOf(SecretNotFoundError)
+      // The real load error text is preserved, not swapped for a "reinstall" hint.
+      expect(error instanceof Error ? error.message : '').toContain('native binding failed')
+    })
+  })
+
+  // ---- store (per-access mode) — issue #211 ----
+
+  describe('store — per-access mode', () => {
+    it('should spawn a worker forcing a fresh action instead of using the session client', async () => {
+      const backend = makePerAccessBackend()
+      const proc = makeWorkerWriteProcess(JSON.stringify({ ok: true }))
+      mockSpawn.mockReturnValue(proc)
+
+      await backend.store('my-secret', 'hunter2')
+
+      expect(mockSpawn).toHaveBeenCalledTimes(1)
+      expect(mockCreateClient).not.toHaveBeenCalled()
+    })
+
+    // Regression: issue #211 — before the write path existed, per-access store
+    // silently routed through the cached session client, so a
+    // --require-presence-per-use store never forced a fresh action. This pins
+    // the fix: store must go through the worker in per-access mode.
+    it('should force a fresh action for each store call (two stores spawn two workers)', async () => {
+      const backend = makePerAccessBackend()
+      mockSpawn
+        .mockReturnValueOnce(makeWorkerWriteProcess(JSON.stringify({ ok: true })))
+        .mockReturnValueOnce(makeWorkerWriteProcess(JSON.stringify({ ok: true })))
+
+      await backend.store('a', '1')
+      await backend.store('b', '2')
+
+      expect(mockSpawn).toHaveBeenCalledTimes(2)
+    })
+
+    it('should deliver the secret value via stdin, never as a spawn argument (argv hygiene)', async () => {
+      const backend = makePerAccessBackend()
+      const stdinRecorder: StdinRecorder = { writes: [], ended: false }
+      const proc = makeWorkerWriteProcess(JSON.stringify({ ok: true }), stdinRecorder)
+      mockSpawn.mockReturnValue(proc)
+
+      await backend.store('my-secret', 'super-secret-value')
+
+      // The secret must never appear among the spawn arguments.
+      const spawnArgs: unknown = mockSpawn.mock.calls[0]?.[1]
+      expect(Array.isArray(spawnArgs)).toBe(true)
+      if (Array.isArray(spawnArgs)) {
+        for (const arg of spawnArgs) {
+          expect(arg).not.toContain('super-secret-value')
+        }
+      }
+      // It travelled over stdin instead, and stdin was closed.
+      expect(stdinRecorder.writes.join('')).toBe('super-secret-value')
+      expect(stdinRecorder.ended).toBe(true)
+    })
+
+    it('should pass the store op and secret id as spawn arguments', async () => {
+      const backend = makePerAccessBackend()
+      const proc = makeWorkerWriteProcess(JSON.stringify({ ok: true }))
+      mockSpawn.mockReturnValue(proc)
+
+      await backend.store('my-secret', 'v')
+
+      const spawnArgs: unknown = mockSpawn.mock.calls[0]?.[1]
+      expect(spawnArgs).toEqual(
+        expect.arrayContaining([
+          expect.stringContaining('one-password-worker'),
+          'my-secret',
+          'store',
+        ]),
+      )
+    })
+
+    it('should throw PresenceDeclinedError when the worker reports PRESENCE_DECLINED', async () => {
+      const backend = makePerAccessBackend()
+      const proc = makeWorkerWriteProcess(
+        JSON.stringify({ error: 'presence action declined', code: 'PRESENCE_DECLINED' }),
+      )
+      mockSpawn.mockReturnValue(proc)
+
+      await expect(backend.store('my-secret', 'v')).rejects.toBeInstanceOf(PresenceDeclinedError)
+    })
+
+    it('should throw PresenceTimeoutError with the configured timeout when the worker reports PRESENCE_TIMEOUT', async () => {
+      const backend = makePerAccessBackend()
+      const proc = makeWorkerWriteProcess(
+        JSON.stringify({ error: 'no fresh action within window', code: 'PRESENCE_TIMEOUT' }),
+      )
+      mockSpawn.mockReturnValue(proc)
+
+      const error = await backend.store('my-secret', 'v').catch((err: unknown) => err)
+      expect(error).toBeInstanceOf(PresenceTimeoutError)
+      if (error instanceof PresenceTimeoutError) {
+        expect(error.timeoutMs).toBe(PRESENCE_WRITE_TIMEOUT_MS)
+        expect(error.backendType).toBe('1password')
+      }
+      expect(error).not.toBeInstanceOf(PresenceDeclinedError)
+    })
+
+    it('should throw BackendLockedError when the worker reports LOCKED', async () => {
+      const backend = makePerAccessBackend()
+      const proc = makeWorkerWriteProcess(JSON.stringify({ error: 'locked', code: 'LOCKED' }))
+      mockSpawn.mockReturnValue(proc)
+
+      await expect(backend.store('my-secret', 'v')).rejects.toBeInstanceOf(BackendLockedError)
+    })
+
+    it('should throw PluginNotFoundError when the worker reports PLUGIN_NOT_FOUND', async () => {
+      const backend = makePerAccessBackend()
+      const proc = makeWorkerWriteProcess(
+        JSON.stringify({ error: 'SDK not installed', code: 'PLUGIN_NOT_FOUND' }),
+      )
+      mockSpawn.mockReturnValue(proc)
+
+      await expect(backend.store('my-secret', 'v')).rejects.toBeInstanceOf(PluginNotFoundError)
+    })
+
+    it('should throw a typed BackendUnavailableError when the worker reports INTERNAL', async () => {
+      const backend = makePerAccessBackend()
+      const proc = makeWorkerWriteProcess(
+        JSON.stringify({ error: 'unexpected failure', code: 'INTERNAL' }),
+      )
+      mockSpawn.mockReturnValue(proc)
+
+      const error = await backend.store('my-secret', 'v').catch((err: unknown) => err)
+      expect(error).toBeInstanceOf(BackendUnavailableError)
+      expect(error instanceof Error ? error.message : '').toContain('unexpected failure')
+    })
+
+    it('should throw a typed BackendUnavailableError when worker output is unparseable', async () => {
+      const backend = makePerAccessBackend()
+      const proc = makeWorkerWriteProcess('not-valid-json{{')
+      mockSpawn.mockReturnValue(proc)
+
+      await expect(backend.store('my-secret', 'v')).rejects.toBeInstanceOf(BackendUnavailableError)
+    })
+
+    // Regression for the PR #222 review thread (comment 3592005272): a
+    // malformed worker response carrying BOTH `ok: false` and an error/code
+    // pair passes the response-shape guard via its failure branch. The
+    // success narrowing must check ok's VALUE, not mere key presence — this
+    // response is a failed write and must never be classified as success.
+    it('treats an { ok: false, error, code } worker response as a failure, never success', async () => {
+      const backend = makePerAccessBackend()
+      const proc = makeWorkerWriteProcess(
+        JSON.stringify({ ok: false, error: 'write exploded', code: 'INTERNAL' }),
+      )
+      mockSpawn.mockReturnValue(proc)
+
+      await expect(backend.store('my-secret', 'v')).rejects.toBeInstanceOf(BackendUnavailableError)
+    })
+
+    it('should throw a typed BackendUnavailableError when the worker crashes with no stdout', async () => {
+      const backend = makePerAccessBackend()
+      const proc = makeWorkerWriteProcess({ stdout: '', stderr: '', exitCode: 137 })
+      mockSpawn.mockReturnValue(proc)
+
+      const error = await backend.store('my-secret', 'v').catch((err: unknown) => err)
+      expect(error).toBeInstanceOf(BackendUnavailableError)
+      if (error instanceof BackendUnavailableError) {
+        expect(error.reason).toBe('worker-crashed')
+      }
+    })
+
+    it('should throw a typed BackendUnavailableError when spawn itself errors', async () => {
+      const backend = makePerAccessBackend()
+      const proc = makeWorkerErrorProcess(new Error('spawn ENOENT'))
+      mockSpawn.mockReturnValue(proc)
+
+      const error = await backend.store('my-secret', 'v').catch((err: unknown) => err)
+      expect(error).toBeInstanceOf(BackendUnavailableError)
+      if (error instanceof BackendUnavailableError) {
+        expect(error.reason).toBe('worker-spawn-failed')
+      }
+    })
+  })
+
+  // ---- delete (per-access mode) — issue #211 ----
+
+  describe('delete — per-access mode', () => {
+    it('should spawn a worker forcing a fresh action instead of using the session client', async () => {
+      const backend = makePerAccessBackend()
+      const proc = makeWorkerWriteProcess(JSON.stringify({ ok: true }))
+      mockSpawn.mockReturnValue(proc)
+
+      await backend.delete('my-secret')
+
+      expect(mockSpawn).toHaveBeenCalledTimes(1)
+      expect(mockCreateClient).not.toHaveBeenCalled()
+    })
+
+    it('should not write anything to stdin (no secret value to send)', async () => {
+      const stdinRecorder: StdinRecorder = { writes: [], ended: false }
+      const backend = makePerAccessBackend()
+      const proc = makeWorkerWriteProcess(JSON.stringify({ ok: true }), stdinRecorder)
+      mockSpawn.mockReturnValue(proc)
+
+      await backend.delete('my-secret')
+
+      expect(stdinRecorder.writes).toEqual([])
+    })
+
+    it('should throw SecretNotFoundError when the worker reports NOT_FOUND', async () => {
+      const backend = makePerAccessBackend()
+      const proc = makeWorkerWriteProcess(JSON.stringify({ error: 'not found', code: 'NOT_FOUND' }))
+      mockSpawn.mockReturnValue(proc)
+
+      await expect(backend.delete('missing')).rejects.toBeInstanceOf(SecretNotFoundError)
+    })
+
+    it('should throw PresenceDeclinedError when the worker reports PRESENCE_DECLINED', async () => {
+      const backend = makePerAccessBackend()
+      const proc = makeWorkerWriteProcess(
+        JSON.stringify({ error: 'presence action declined', code: 'PRESENCE_DECLINED' }),
+      )
+      mockSpawn.mockReturnValue(proc)
+
+      await expect(backend.delete('my-secret')).rejects.toBeInstanceOf(PresenceDeclinedError)
+    })
+
+    it('should throw PresenceTimeoutError when the worker reports PRESENCE_TIMEOUT', async () => {
+      const backend = makePerAccessBackend()
+      const proc = makeWorkerWriteProcess(
+        JSON.stringify({ error: 'no fresh action within window', code: 'PRESENCE_TIMEOUT' }),
+      )
+      mockSpawn.mockReturnValue(proc)
+
+      await expect(backend.delete('my-secret')).rejects.toBeInstanceOf(PresenceTimeoutError)
     })
   })
 
@@ -791,24 +1232,25 @@ describe('OnePasswordBackend', () => {
   // ---- createClient timeout ----
 
   describe('session timeout', () => {
-    it(
-      'should throw BackendLockedError when createClient hangs beyond the session timeout',
-      async () => {
-        // createClient never resolves — simulates the known beta SDK hang
-        mockCreateClient.mockReturnValue(new Promise<never>(() => { /* intentionally pending */ }))
+    // 2s test timeout keeps this well under the global 5s default while leaving
+    // ample room over the backend's 10ms sessionTimeoutMs.
+    it('should throw BackendLockedError when createClient hangs beyond the session timeout', async () => {
+      // createClient never resolves — simulates the known beta SDK hang
+      mockCreateClient.mockReturnValue(
+        new Promise<never>(() => {
+          /* intentionally pending */
+        }),
+      )
 
-        // Use a very short timeout (10ms) so the test runs in real time without fake timers
-        const backend = new OnePasswordBackend({
-          vault: VAULT_ID,
-          account: ACCOUNT_NAME,
-          sessionTimeoutMs: 10,
-        })
+      // Use a very short timeout (10ms) so the test runs in real time without fake timers
+      const backend = new OnePasswordBackend({
+        vault: VAULT_ID,
+        account: ACCOUNT_NAME,
+        sessionTimeoutMs: 10,
+      })
 
-        await expect(backend.store('any-key', 'any-val')).rejects.toBeInstanceOf(BackendLockedError)
-      },
-      // Give this test 2s to avoid the global 5s default being a problem
-      2000,
-    )
+      await expect(backend.store('any-key', 'any-val')).rejects.toBeInstanceOf(BackendLockedError)
+    }, 2000)
   })
 
   // ---- vault scoping ----

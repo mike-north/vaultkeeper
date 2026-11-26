@@ -9,7 +9,7 @@ Constructs a new instance of the `FilesystemError` class
 **Signature:**
 
 ```typescript
-constructor(message: string, filePath: string, permission: string);
+constructor(message: string, filePath: string, permission: string, cause?: unknown);
 ```
 
 ## Parameters
@@ -42,6 +42,8 @@ string
 
 </td><td>
 
+Human-readable description of the failure.
+
 
 </td></tr>
 <tr><td>
@@ -56,6 +58,8 @@ string
 
 </td><td>
 
+The path of the file or directory that caused the error.
+
 
 </td></tr>
 <tr><td>
@@ -69,6 +73,24 @@ string
 
 
 </td><td>
+
+The file operation or access mode being attempted, for example 'read', 'write', 'delete', or 'rwx'. See the `permission` property for why this need not indicate an actual permission problem.
+
+
+</td></tr>
+<tr><td>
+
+cause
+
+
+</td><td>
+
+unknown
+
+
+</td><td>
+
+_(Optional)_ The underlying error that was caught, if any. Recorded as the standard `Error.cause` and used to populate `code` when it exposes a string errno code.
 
 
 </td></tr>

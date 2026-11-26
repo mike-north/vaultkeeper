@@ -2,12 +2,7 @@
  * Re-exported types for the access patterns module.
  */
 
-export type {
-  FetchRequest,
-  ExecRequest,
-  ExecResult,
-  SecretAccessor,
-} from '../types.js'
+export type { FetchRequest, ExecRequest, ExecResult, SecretAccessor } from '../types.js'
 
 /**
  * Result from a delegated fetch call.

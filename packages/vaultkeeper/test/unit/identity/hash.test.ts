@@ -3,8 +3,12 @@ import * as fs from 'node:fs/promises'
 import * as os from 'node:os'
 import * as path from 'node:path'
 import { hashExecutable } from '../../../src/identity/hash.js'
+import { FilesystemError } from '../../../src/errors.js'
 
-async function withTempFile(content: string, fn: (filePath: string) => Promise<void>): Promise<void> {
+async function withTempFile(
+  content: string,
+  fn: (filePath: string) => Promise<void>,
+): Promise<void> {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'vaultkeeper-hash-'))
   const filePath = path.join(dir, 'test-binary')
   try {
@@ -61,5 +65,25 @@ describe('hashExecutable', () => {
 
   it('rejects with an error for a non-existent file', async () => {
     await expect(hashExecutable('/does/not/exist/at/all.bin')).rejects.toThrow()
+  })
+
+  // Regression: issue #133 — the read-stream error path throws a typed
+  // FilesystemError; the errno code and the original stream error must
+  // survive as `code`/`cause` (not just as text embedded in the message).
+  it('rejects with a typed FilesystemError carrying the ENOENT code and cause for a non-existent file', async () => {
+    let caught: unknown
+    try {
+      await hashExecutable('/does/not/exist/at/all.bin')
+    } catch (err) {
+      caught = err
+    }
+
+    expect(caught).toBeInstanceOf(FilesystemError)
+    if (caught instanceof FilesystemError) {
+      expect(caught.path).toBe('/does/not/exist/at/all.bin')
+      expect(caught.permission).toBe('read')
+      expect(caught.code).toBe('ENOENT')
+      expect(caught.cause).toBeInstanceOf(Error)
+    }
   })
 })

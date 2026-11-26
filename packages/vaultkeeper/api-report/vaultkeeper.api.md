@@ -4,6 +4,10 @@
 
 ```ts
 
+/// <reference types="node" />
+
+import { Buffer as Buffer_2 } from 'node:buffer';
+
 // @public
 export class AccessorConsumedError extends VaultError {
     constructor(message: string);
@@ -12,6 +16,12 @@ export class AccessorConsumedError extends VaultError {
 // @public
 export class AuthorizationDeniedError extends VaultError {
     constructor(message: string);
+}
+
+// @public
+export interface BackendCapabilities {
+    readonly presenceEnforcedOperations?: readonly PresenceOperation[];
+    readonly presencePerUse: boolean;
 }
 
 // @public
@@ -24,7 +34,7 @@ export interface BackendConfig {
 }
 
 // @public
-export type BackendFactory = (config?: BackendConfig) => SecretBackend;
+export type BackendFactory = (config?: BackendConfig, configDir?: string) => SecretBackend;
 
 // @public
 export class BackendLockedError extends VaultError {
@@ -38,7 +48,7 @@ export class BackendRegistry {
     static clearBackends(): void;
     // @internal
     static clearSetups(): void;
-    static create(type: string, config?: BackendConfig): SecretBackend;
+    static create(type: string, config?: BackendConfig, configDir?: string): SecretBackend;
     static getAvailableTypes(): Promise<string[]>;
     static getSetup(type: string): BackendSetupFactory | undefined;
     static getTypes(): string[];
@@ -64,6 +74,29 @@ export class CapabilityToken {
 }
 
 // @public
+export class ConfigParseError extends VaultError {
+    constructor(message: string, path: string, location: string | undefined);
+    readonly location: string | undefined;
+    readonly path: string;
+}
+
+// @public
+export class ConfigValidationError extends VaultError {
+    constructor(message: string, field: string, configFilePath?: string);
+    readonly configFilePath: string | undefined;
+    readonly field: string;
+}
+
+// @public
+export class DecryptionError extends VaultError {
+    constructor(message: string, path: string);
+    readonly path: string;
+}
+
+// @public
+export function defaultBackendType(): string;
+
+// @public
 export class DeviceNotPresentError extends VaultError {
     constructor(message: string, timeoutMs: number);
     readonly timeoutMs: number;
@@ -81,6 +114,7 @@ export interface ExecRequest {
     command: string;
     cwd?: string | undefined;
     env?: Record<string, string> | undefined;
+    redact?: boolean | undefined;
 }
 
 // @public
@@ -88,6 +122,27 @@ export interface ExecResult {
     exitCode: number;
     stderr: string;
     stdout: string;
+}
+
+// @public
+export class ExecutableTrustRequiredError extends VaultError {
+    constructor(message: string, reason: 'missing-choice' | 'conflicting-choice' | 'legacy-dev-sentinel');
+    readonly reason: 'missing-choice' | 'conflicting-choice' | 'legacy-dev-sentinel';
+}
+
+// @public
+export interface ExecutableTrustStatus {
+    approvedHashes: readonly string[];
+    hash: string;
+    hashMismatch: boolean;
+    reason: string;
+    trusted: boolean;
+}
+
+// @public
+export class FetchError extends VaultError {
+    constructor(message: string, url: string);
+    readonly url: string;
 }
 
 // @public
@@ -100,10 +155,20 @@ export interface FetchRequest {
 
 // @public
 export class FilesystemError extends VaultError {
-    constructor(message: string, filePath: string, permission: string);
+    constructor(message: string, filePath: string, permission: string, cause?: unknown);
+    readonly code: string | undefined;
     readonly path: string;
     readonly permission: string;
 }
+
+// @public
+export function getBackendCapabilities(backend: SecretBackend): Promise<BackendCapabilities>;
+
+// @public
+export function getDefaultConfigDir(): string;
+
+// @public
+export function getPlatformDefaultConfigDir(): string;
 
 // @public
 export class IdentityMismatchError extends VaultError {
@@ -120,12 +185,23 @@ export class InvalidAlgorithmError extends VaultError {
 }
 
 // @public
+export class InvalidKeyMaterialError extends VaultError {
+    constructor(message: string);
+}
+
+// @public
 export class InvalidTokenError extends VaultError {
     constructor(message: string);
 }
 
 // @public
 export function isListableBackend(backend: SecretBackend): backend is ListableBackend;
+
+// @public
+export function isPresenceCapableBackend(backend: SecretBackend): backend is PresenceCapableBackend;
+
+// @public
+export function isSigningBackend(backend: SecretBackend): backend is SigningBackend;
 
 // @public
 export class KeyRevokedError extends VaultError {
@@ -146,7 +222,20 @@ export interface ListableBackend extends SecretBackend {
 }
 
 // @public
+export function loadConfig(configDir?: string): Promise<VaultConfig>;
+
+// @public
+export class NotCapableError extends VaultError {
+    constructor(message: string, backendType: string, capability: string);
+    readonly backendType: string;
+    readonly capability: string;
+}
+
+// @public
 export type Platform = 'darwin' | 'win32' | 'linux';
+
+// @public
+export function platformNativeBackendType(): string;
 
 // @public
 export class PluginNotFoundError extends VaultError {
@@ -157,6 +246,7 @@ export class PluginNotFoundError extends VaultError {
 
 // @public
 export interface PreflightCheck {
+    error?: PreflightCheckError | undefined;
     name: string;
     reason?: string | undefined;
     status: PreflightCheckStatus;
@@ -164,15 +254,61 @@ export interface PreflightCheck {
 }
 
 // @public
-export type PreflightCheckStatus = 'ok' | 'missing' | 'version-unsupported';
+export interface PreflightCheckError {
+    backendType?: string | undefined;
+    code?: string | undefined;
+    configPath: string;
+    field?: string | undefined;
+    kind: PreflightCheckErrorKind;
+    knownBackendTypes?: readonly string[] | undefined;
+    location?: string | undefined;
+}
+
+// @public
+export type PreflightCheckErrorKind = 'config-parse' | 'config-validation' | 'config-unknown-backend' | 'config-read';
+
+// @public
+export type PreflightCheckStatus = 'ok' | 'missing' | 'version-unsupported' | 'invalid';
 
 // @public
 export interface PreflightResult {
-    checks: PreflightCheck[];
+    checks: ScopedPreflightCheck[];
     nextSteps: string[];
     ready: boolean;
     warnings: string[];
 }
+
+// @public
+export interface PresenceCapableBackend extends SecretBackend {
+    getCapabilities(): Promise<BackendCapabilities>;
+}
+
+// @public
+export class PresenceDeclinedError extends VaultError {
+    constructor(message: string, backendType: string);
+    readonly backendType: string;
+}
+
+// @public
+export type PresenceOperation = 'read' | 'store' | 'delete' | 'sign';
+
+// @public
+export interface PresenceRequirementOptions {
+    requirePresencePerUse?: boolean | undefined;
+}
+
+// @public
+export class PresenceTimeoutError extends VaultError {
+    constructor(message: string, backendType: string, timeoutMs: number);
+    readonly backendType: string;
+    readonly timeoutMs: number;
+}
+
+// @public
+export const REDACTED = "[REDACTED]";
+
+// @public
+export function redactSecrets(text: string, secrets: readonly string[], replacement?: string): string;
 
 // @public
 export class RotationInProgressError extends VaultError {
@@ -185,12 +321,18 @@ export function runDoctor(options?: RunDoctorOptions): Promise<PreflightResult>;
 // @public
 export interface RunDoctorOptions {
     backends?: BackendConfig[];
+    configDir?: string;
     platform?: Platform;
 }
 
 // @public
+export interface ScopedPreflightCheck extends PreflightCheck {
+    required: boolean;
+}
+
+// @public
 export interface SecretAccessor {
-    read(callback: (buf: Buffer) => void): void;
+    read<T>(callback: (buf: Buffer_2) => T): T;
 }
 
 // @public
@@ -225,9 +367,17 @@ export class SetupError extends VaultError {
 }
 
 // @public
-export interface SetupOptions {
+export type SetupOptions = SetupOptionsBase & ({
+    executablePath: string;
+    skipTrust?: never;
+} | {
+    skipTrust: true;
+    executablePath?: never;
+});
+
+// @public
+export interface SetupOptionsBase extends PresenceRequirementOptions {
     backendType?: string | undefined;
-    executablePath?: string | undefined;
     trustTier?: TrustTier | undefined;
     ttlMinutes?: number | undefined;
     useLimit?: number | null | undefined;
@@ -246,15 +396,56 @@ export interface SetupResult {
 }
 
 // @public
+export type SigningAlgorithm = 'EdDSA';
+
+// @public
+export interface SigningBackend extends SecretBackend {
+    generateSigningKey(id: string, algorithm: SigningAlgorithm): Promise<void>;
+    getPublicKey(id: string): Promise<SigningPublicKey>;
+    signWithKey(id: string, data: Buffer_2): Promise<Buffer_2>;
+}
+
+// @public
+export class SigningKeyAlreadyExistsError extends VaultError {
+    constructor(message: string, keyName: string);
+    readonly keyName: string;
+}
+
+// @public
+export class SigningKeyNotFoundError extends VaultError {
+    constructor(message: string, keyName: string);
+    readonly keyName: string;
+}
+
+// @public
+export class SigningNotSupportedError extends VaultError {
+    constructor(message: string, backendType: string, builtInSigningBackends: string[]);
+    readonly backendType: string;
+    readonly builtInSigningBackends: string[];
+}
+
+// @public
+export interface SigningPublicKey {
+    algorithm: SigningAlgorithm;
+    kid: string;
+    publicKeyPem: string;
+}
+
+// @public
 export interface SignRequest {
-    algorithm?: string | undefined;
-    data: string | Buffer;
+    payload: string | Buffer_2;
 }
 
 // @public
 export interface SignResult {
-    algorithm: string;
-    signature: string;
+    jws: string;
+}
+
+// @public
+export class TestDoubleMisuseError extends VaultError {
+    constructor(message: string, doubleName: string, detectedEnvironment: string);
+    readonly detectedEnvironment: string;
+    readonly doubleName: string;
 }
 
 // @public
@@ -270,6 +461,19 @@ export class TokenRevokedError extends VaultError {
 
 // @public
 export type TrustTier = 1 | 2 | 3;
+
+// @public
+export class UnknownBackendTypeError extends ConfigValidationError {
+    constructor(message: string, field: string, backendType: string, knownTypes: string[], configFilePath?: string);
+    readonly backendType: string;
+    readonly knownTypes: string[];
+}
+
+// @public
+export class UnreachableError extends VaultError {
+    constructor(value: never, detail?: string);
+    readonly describedValue: string;
+}
 
 // @public
 export class UsageLimitExceededError extends VaultError {
@@ -299,36 +503,45 @@ export class VaultError extends Error {
 
 // @public
 export class VaultKeeper {
+    get activeBackendType(): string;
+    approveExecutable(executablePath: string): Promise<ExecutableTrustStatus>;
     authorize(jwe: string): Promise<{
         token: CapabilityToken;
         vaultResponse: VaultResponse;
     }>;
-    delete(name: string): Promise<void>;
+    authorizeSigningKey(name: string): Promise<CapabilityToken>;
+    checkExecutableTrust(executablePath: string): Promise<ExecutableTrustStatus>;
+    createSigningKey(name: string, algorithm: SigningAlgorithm): Promise<SigningPublicKey>;
+    delete(name: string, options?: PresenceRequirementOptions): Promise<void>;
     static doctor(options?: RunDoctorOptions): Promise<PreflightResult>;
     exec(token: CapabilityToken | SecretTokenMap, request: ExecRequest): Promise<{
         result: ExecResult;
         vaultResponse: VaultResponse;
     }>;
+    exportPublicKey(name: string): Promise<SigningPublicKey>;
     fetch(token: CapabilityToken | SecretTokenMap, request: FetchRequest): Promise<{
         response: Response;
         vaultResponse: VaultResponse;
     }>;
+    getActiveBackendCapabilities(): Promise<BackendCapabilities>;
     getSecret(token: CapabilityToken): SecretAccessor;
     static init(options?: VaultKeeperOptions): Promise<VaultKeeper>;
     revokeKey(): Promise<void>;
     rotateKey(): Promise<void>;
+    secretExists(name: string): Promise<boolean>;
     setDevelopmentMode(executablePath: string, enabled: boolean): Promise<void>;
-    setup(secretName: string, options?: SetupOptions): Promise<string>;
-    sign(token: CapabilityToken, request: SignRequest): Promise<{
+    setup(secretName: string, options: SetupOptions): Promise<string>;
+    sign(token: CapabilityToken, request: SignRequest, options?: PresenceRequirementOptions): Promise<{
         result: SignResult;
         vaultResponse: VaultResponse;
     }>;
-    store(name: string, value: string): Promise<void>;
-    static verify(request: VerifyRequest): boolean;
+    store(name: string, value: string, options?: PresenceRequirementOptions): Promise<void>;
+    static verify(request: VerifyRequest): Promise<boolean>;
 }
 
 // @public
 export interface VaultKeeperOptions {
+    backend?: SecretBackend | undefined;
     config?: VaultConfig | undefined;
     configDir?: string | undefined;
     skipDoctor?: boolean | undefined;
@@ -342,10 +555,9 @@ export interface VaultResponse {
 
 // @public
 export interface VerifyRequest {
-    algorithm?: string | undefined;
-    data: string | Buffer;
+    jws: string;
+    payload: string | Buffer_2;
     publicKey: string;
-    signature: string;
 }
 
 // (No @packageDocumentation comment for this package)

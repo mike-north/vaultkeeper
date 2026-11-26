@@ -4,7 +4,7 @@
 
 ## FetchRequest.body property
 
-Request body. May contain `{{secret}}`<!-- -->, which is replaced with the secret value before the request is sent.
+Request body. May contain `{{secret}}` or `{{secret:name}}`<!-- -->, which is replaced with the secret value before the request is sent.
 
 **Signature:**
 

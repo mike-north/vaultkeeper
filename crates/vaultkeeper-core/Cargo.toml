@@ -18,6 +18,8 @@ getrandom = { workspace = true }
 rand = { workspace = true }
 uuid = { workspace = true }
 zeroize = { workspace = true }
+ed25519-dalek = { workspace = true }
+hkdf = { workspace = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 js-sys = { workspace = true }
@@ -26,3 +28,12 @@ js-sys = { workspace = true }
 tokio = { workspace = true, features = ["full"] }
 assert_matches = { workspace = true }
 serial_test = { workspace = true }
+# Reuses the shared `store`/`delete` case data (issue #291 AC5) so the
+# real-`secret-tool` conformance test asserts against the exact same
+# name/secret fixture the CLI-level conformance suite already checks,
+# instead of a hand-duplicated approximation.
+vaultkeeper-conformance = { path = "../vaultkeeper-conformance" }
+# StubTool (issue #313): generalizes this file's own ported `TestHost` ykman
+# double onto the shared table-driven fake-CLI engine, as the proof case for
+# the generalization.
+vaultkeeper-stub-tools = { path = "../vaultkeeper-stub-tools" }

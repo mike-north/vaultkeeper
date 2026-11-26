@@ -3,6 +3,7 @@ import * as path from 'node:path'
 import { VaultKeeper } from 'vaultkeeper'
 import { shouldSkipDoctor } from '../skip-doctor.js'
 import { formatError } from '../output.js'
+import { CONFIG_DIR_HELP_OPTION, CONFIG_DIR_HELP_ENV } from '../config-dir.js'
 
 function printDevModeHelp(): void {
   process.stdout.write(
@@ -14,32 +15,54 @@ function printDevModeHelp(): void {
       'Options:\n' +
       '  --script <path>    Path to the script\n' +
       '  --skip-doctor      Skip doctor preflight checks\n' +
+      CONFIG_DIR_HELP_OPTION +
       '  -h, --help         Show this help message\n\n' +
       'Environment variables:\n' +
-      '  VAULTKEEPER_SKIP_DOCTOR=1   Skip doctor preflight checks\n',
+      '  VAULTKEEPER_SKIP_DOCTOR=1   Skip doctor preflight checks\n' +
+      CONFIG_DIR_HELP_ENV,
   )
 }
 
-export async function devModeCommand(args: string[]): Promise<number> {
+export async function devModeCommand(args: string[], configDir: string): Promise<number> {
   // Handle --help / -h before parseArgs.
   if (args.includes('--help') || args.includes('-h')) {
     printDevModeHelp()
     return 0
   }
 
-  const { positionals, values } = parseArgs({
-    args,
-    allowPositionals: true,
-    options: {
-      script: { type: 'string' },
-      'skip-doctor': { type: 'boolean', default: false },
-    },
-    strict: true,
-  })
+  let positionals: string[]
+  let values: { script?: string; 'skip-doctor': boolean }
+  try {
+    ;({ positionals, values } = parseArgs({
+      args,
+      allowPositionals: true,
+      options: {
+        script: { type: 'string' },
+        'skip-doctor': { type: 'boolean', default: false },
+      },
+      strict: true,
+    }))
+  } catch (err) {
+    // Regression: issue #69 — an unrecognized flag previously propagated
+    // uncaught and exited 1 via bin.ts's fatal-error handler instead of the
+    // usage-error exit code 2.
+    if (err instanceof Error) {
+      process.stderr.write(`Error: ${err.message}\n`)
+    }
+    process.stderr.write('Usage: vaultkeeper dev-mode <enable|disable> --script <path>\n')
+    return 2
+  }
 
   const action = positionals[0]
 
-  if ((action !== 'enable' && action !== 'disable') || values.script === undefined) {
+  if (action !== undefined && action !== 'enable' && action !== 'disable') {
+    process.stderr.write(`Error: unknown action "${action}" (expected "enable" or "disable")\n`)
+    process.stderr.write('Usage: vaultkeeper dev-mode <enable|disable> --script <path>\n')
+    // Exit code 2: usage error (invalid action)
+    return 2
+  }
+
+  if (action === undefined || values.script === undefined) {
     process.stderr.write('Error: missing action or --script flag\n')
     process.stderr.write('Usage: vaultkeeper dev-mode <enable|disable> --script <path>\n')
     // Exit code 2: usage error (missing action or --script)
@@ -51,14 +74,12 @@ export async function devModeCommand(args: string[]): Promise<number> {
   const skipDoctor = shouldSkipDoctor(values['skip-doctor'])
 
   try {
-    const vault = await VaultKeeper.init({ skipDoctor })
+    const vault = await VaultKeeper.init({ configDir, skipDoctor })
     await vault.setDevelopmentMode(scriptPath, enabled)
-    process.stdout.write(
-      `Development mode ${enabled ? 'enabled' : 'disabled'} for ${scriptPath}\n`,
-    )
+    process.stdout.write(`Development mode ${enabled ? 'enabled' : 'disabled'} for ${scriptPath}\n`)
     return 0
   } catch (err) {
-    process.stderr.write(`${formatError(err)}\n`)
+    process.stderr.write(`${formatError(err, configDir)}\n`)
     return 1
   }
 }

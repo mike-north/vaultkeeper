@@ -79,7 +79,46 @@ Thrown when no configured backend is available or reachable. Inspect `reason` fo
 
 </td><td>
 
-Opaque capability token. Claims are inaccessible without `validateCapabilityToken`<!-- -->.
+An opaque handle to authorized secret claims.
+
+A `CapabilityToken` is produced by [VaultKeeper.authorize()](./vaultkeeper.vaultkeeper.authorize.md) and deliberately exposes no readable data. The underlying claims — including the secret value — are held in a module-private `WeakMap` that this class does not reference, and its private fields keep any property from leaking them (`toString()` returns only a debug identifier). There is intentionally no public API for reading the claims directly.
+
+To use the secret, pass the token to a [VaultKeeper](./vaultkeeper.vaultkeeper.md) access method — [VaultKeeper.getSecret()](./vaultkeeper.vaultkeeper.getsecret.md)<!-- -->, [VaultKeeper.fetch()](./vaultkeeper.vaultkeeper.fetch.md)<!-- -->, [VaultKeeper.exec()](./vaultkeeper.vaultkeeper.exec.md)<!-- -->, or [VaultKeeper.sign()](./vaultkeeper.vaultkeeper.sign.md) — which resolve the claims internally.
+
+
+</td></tr>
+<tr><td>
+
+[ConfigParseError](./vaultkeeper.configparseerror.md)
+
+
+</td><td>
+
+Thrown when a config file's contents cannot be parsed as JSON.
+
+The `message` already embeds the file path, the parse location (when the underlying `SyntaxError` exposes one), and a remediation hint that either points at `vaultkeeper config init` (via the separate `@vaultkeeper/cli` package — this library ships no CLI of its own) or at repairing/replacing the config directly through this library's JS API — see issues \#68, \#100. `path` and `location` are also exposed individually for callers (e.g. `doctor`<!-- -->) that want to report them as structured fields rather than re-parsing the message.
+
+
+</td></tr>
+<tr><td>
+
+[ConfigValidationError](./vaultkeeper.configvalidationerror.md)
+
+
+</td><td>
+
+Thrown when a config value fails structural or semantic validation (e.g. a whitespace-only `BackendConfig.path`<!-- -->).
+
+
+</td></tr>
+<tr><td>
+
+[DecryptionError](./vaultkeeper.decryptionerror.md)
+
+
+</td><td>
+
+Thrown when an encrypted-at-rest secret entry cannot be decrypted — e.g. the stored ciphertext is truncated/corrupted or the AES-GCM auth tag fails to verify. The message never echoes any part of the secret or key material.
 
 
 </td></tr>
@@ -101,7 +140,33 @@ Thrown when a hardware device (e.g. YubiKey or smart card) required for authenti
 
 </td><td>
 
-Thrown when a delegated `exec()` call fails due to a process-level error (e.g. the command binary is not found or cannot be spawned).
+Thrown when spawning or running a subprocess fails.
+
+This covers a delegated `exec()` call failing due to an invalid request (e.g. a `{{secret}}` placeholder in the `command` field) or a process-level error (e.g. the command binary is not found or cannot be spawned) — and also vaultkeeper's own internal tool invocations (doctor version probes, the keychain/secret-tool/dpapi/yubikey credential helpers), which run through the same subprocess utility. Callers that need to handle only delegated-exec failures should scope their `catch` to the code paths that call `exec()`<!-- -->, not discriminate on this type alone.
+
+
+</td></tr>
+<tr><td>
+
+[ExecutableTrustRequiredError](./vaultkeeper.executabletrustrequirederror.md)
+
+
+</td><td>
+
+Thrown by [VaultKeeper.setup()](./vaultkeeper.vaultkeeper.setup.md) when the caller does not make an unambiguous executable-trust decision.
+
+`setup()` deliberately has no default trust behaviour: the caller must either pass a real `executablePath` (which runs trust-on-first-use verification) or explicitly opt out with `skipTrust: true` (a development-only escape hatch). Supplying neither — or both at once — throws this error rather than silently skipping verification. Passing the retired `'dev'` sentinel as `executablePath` also throws this error. Inspect [ExecutableTrustRequiredError.reason](./vaultkeeper.executabletrustrequirederror.reason.md) to distinguish the cases.
+
+
+</td></tr>
+<tr><td>
+
+[FetchError](./vaultkeeper.fetcherror.md)
+
+
+</td><td>
+
+Thrown when delegated `fetch()` rejects without returning a `Response`<!-- -->. This includes malformed URLs, Fetch redirects, and transport failures.
 
 
 </td></tr>
@@ -112,7 +177,7 @@ Thrown when a delegated `exec()` call fails due to a process-level error (e.g. t
 
 </td><td>
 
-Thrown when a filesystem operation fails due to a permission or access problem (e.g. the config directory is not writable).
+Thrown when a filesystem operation fails. Common causes include a permission or access problem, for example the config directory is not writable, but the underlying failure may be any Node.js errno condition, for example the disk is full or a file was expected but a directory was found. Inspect the code property for the specific errno code when one is available.
 
 
 </td></tr>
@@ -136,7 +201,18 @@ Callers must re-approve the executable before a new token can be issued for it.
 
 </td><td>
 
-Thrown when a caller requests a signing/verification algorithm that is not in the allowed set (e.g. `'md5'`<!-- -->).
+Thrown when a caller requests a signing key algorithm that is not a supported JOSE algorithm identifier. The signing algorithm registry uses strict JOSE identifiers (currently `'EdDSA'`<!-- -->); an unrecognized value is rejected rather than defaulted.
+
+
+</td></tr>
+<tr><td>
+
+[InvalidKeyMaterialError](./vaultkeeper.invalidkeymaterialerror.md)
+
+
+</td><td>
+
+Thrown when signing-key material cannot be parsed. Two paths raise it. During verification, the supplied public key is not a structurally parseable SPKI PEM public key (or a private key was passed where a public key is required); this is an operational fault distinct from a signature that simply does not verify, which returns `false`<!-- -->. During key use, a stored signing key decrypts cleanly but is not valid private key material — corrupt or tampered on disk — when exporting its public half or signing with it (`getPublicKey`<!-- -->/`signWithKey`<!-- -->). The message never echoes any part of the key material.
 
 
 </td></tr>
@@ -147,7 +223,7 @@ Thrown when a caller requests a signing/verification algorithm that is not in th
 
 </td><td>
 
-Thrown when a JWE string cannot be parsed because it is structurally malformed (e.g. wrong number of segments, invalid Base64URL header, or unparseable JSON header).
+Thrown when a JWE string is invalid or cannot be processed — for example, it is structurally malformed (wrong number of segments, invalid Base64URL), decryption fails (wrong key, tampered ciphertext), or the decrypted payload does not match the expected claims schema.
 
 
 </td></tr>
@@ -175,12 +251,45 @@ Thrown when the encryption key that was used to create a JWE has since been rota
 </td></tr>
 <tr><td>
 
+[NotCapableError](./vaultkeeper.notcapableerror.md)
+
+
+</td><td>
+
+Thrown when an operation requires a backend capability (e.g. presence-per-use) that the active backend cannot provide.
+
+
+</td></tr>
+<tr><td>
+
 [PluginNotFoundError](./vaultkeeper.pluginnotfounderror.md)
 
 
 </td><td>
 
 Thrown when a required backend plugin (e.g. a third-party credential manager) is not installed on the current system.
+
+
+</td></tr>
+<tr><td>
+
+[PresenceDeclinedError](./vaultkeeper.presencedeclinederror.md)
+
+
+</td><td>
+
+Thrown when a required fresh, per-use human presence action was explicitly declined by the human (e.g. a biometric or touch prompt was cancelled).
+
+
+</td></tr>
+<tr><td>
+
+[PresenceTimeoutError](./vaultkeeper.presencetimeouterror.md)
+
+
+</td><td>
+
+Thrown when a required fresh, per-use human presence action did not happen within the allotted time — the device was present and ready, but no touch, tap, or biometric approval was performed before the timeout elapsed.
 
 
 </td></tr>
@@ -219,6 +328,50 @@ Thrown during initialization when a required system dependency (e.g. OpenSSL or 
 </td></tr>
 <tr><td>
 
+[SigningKeyAlreadyExistsError](./vaultkeeper.signingkeyalreadyexistserror.md)
+
+
+</td><td>
+
+Thrown when `key create` (or `createSigningKey`<!-- -->) is asked to enroll a signing key under a name that already exists. Enrollment never silently overwrites an existing key, because a regenerated keypair would invalidate every public key that was previously exported and pinned by a verifier.
+
+
+</td></tr>
+<tr><td>
+
+[SigningKeyNotFoundError](./vaultkeeper.signingkeynotfounderror.md)
+
+
+</td><td>
+
+Thrown when a named signing key does not exist in the active backend — for example `key export` or `sign` is asked for a name that was never enrolled with `key create`<!-- -->. This is distinct from [SecretNotFoundError](./vaultkeeper.secretnotfounderror.md)<!-- -->: signing keys occupy their own namespace and are never returned as ordinary secrets.
+
+
+</td></tr>
+<tr><td>
+
+[SigningNotSupportedError](./vaultkeeper.signingnotsupportederror.md)
+
+
+</td><td>
+
+Thrown when a signing operation (`key create`<!-- -->, `key export`<!-- -->, `sign`<!-- -->) is requested against a backend that does not implement the signing contract. Signing is never silently emulated on a backend that cannot perform it in a key-stays-backend-side manner; inspect [SigningNotSupportedError.builtInSigningBackends](./vaultkeeper.signingnotsupportederror.builtinsigningbackends.md) for the built-in backend types that do.
+
+
+</td></tr>
+<tr><td>
+
+[TestDoubleMisuseError](./vaultkeeper.testdoublemisuseerror.md)
+
+
+</td><td>
+
+Thrown when a test-only double — a class built purely to fabricate a vaultkeeper-internal signal (e.g. a granted presence check, an unlocked backend) for driving negative test cases — refuses to construct because it detected it is running outside a test environment.
+
+
+</td></tr>
+<tr><td>
+
 [TokenExpiredError](./vaultkeeper.tokenexpirederror.md)
 
 
@@ -236,6 +389,30 @@ Thrown when a JWE token has passed its expiration time (`exp` claim).
 </td><td>
 
 Thrown when a JWE token has been explicitly blocked (e.g. after a single-use token has already been consumed).
+
+
+</td></tr>
+<tr><td>
+
+[UnknownBackendTypeError](./vaultkeeper.unknownbackendtypeerror.md)
+
+
+</td><td>
+
+Thrown when a config's `backends[].type` names a backend that is not registered with the [BackendRegistry](./vaultkeeper.backendregistry.md)<!-- -->.
+
+A specialization of [ConfigValidationError](./vaultkeeper.configvalidationerror.md)<!-- -->: an unknown backend type is a semantic schema failure (the config parses and is structurally valid, but names a backend that cannot be created), so it fails config validation the same way `version !== 1` does. It carries the offending `backendType` and the set of `knownTypes` so a consumer — notably `doctor` — can give the same "Available types: …" guidance the runtime [BackendUnavailableError](./vaultkeeper.backendunavailableerror.md) gives, without parsing the human-readable message. This closes the gap where a config with an unknown backend type parsed as valid JSON and passed `doctor` with a false "System ready.", only for the next real command to throw [BackendUnavailableError](./vaultkeeper.backendunavailableerror.md) (issue \#215).
+
+
+</td></tr>
+<tr><td>
+
+[UnreachableError](./vaultkeeper.unreachableerror.md)
+
+
+</td><td>
+
+Thrown from the `default`<!-- -->/impossible arm of an exhaustive `switch` (or equivalent conditional) over a discriminated union. The constructor parameter is typed `never`<!-- -->, so passing anything other than a value the compiler has already narrowed to `never` — i.e. a union member that was missed — is a compile-time error at the call site, not just a runtime throw. This turns an unhandled union arm into a build failure the moment a new variant is added, rather than a silent fallthrough discovered later at runtime.
 
 
 </td></tr>
@@ -289,12 +466,127 @@ Description
 </th></tr></thead>
 <tbody><tr><td>
 
+[defaultBackendType()](./vaultkeeper.defaultbackendtype.md)
+
+
+</td><td>
+
+The backend type vaultkeeper uses by default when no backend is explicitly configured — the \*\*`file`<!-- -->\*\* backend, on every platform.
+
+
+</td></tr>
+<tr><td>
+
+[getBackendCapabilities(backend)](./vaultkeeper.getbackendcapabilities.md)
+
+
+</td><td>
+
+Resolve a backend's [BackendCapabilities](./vaultkeeper.backendcapabilities.md)<!-- -->, defaulting safely for backends that do not implement [PresenceCapableBackend](./vaultkeeper.presencecapablebackend.md)<!-- -->.
+
+
+</td></tr>
+<tr><td>
+
+[getDefaultConfigDir()](./vaultkeeper.getdefaultconfigdir.md)
+
+
+</td><td>
+
+Return the platform-appropriate default config directory.
+
+Resolution order: the `VAULTKEEPER_CONFIG_DIR` environment variable, then the platform default (see `getPlatformDefaultConfigDir`<!-- -->). Consumers that also support a higher-precedence override (e.g. a CLI flag) should check that first and only fall back to this function when no override was supplied.
+
+
+</td></tr>
+<tr><td>
+
+[getPlatformDefaultConfigDir()](./vaultkeeper.getplatformdefaultconfigdir.md)
+
+
+</td><td>
+
+Return the platform-appropriate default config directory, ignoring the `VAULTKEEPER_CONFIG_DIR` environment variable.
+
+This is the location vaultkeeper falls back to when neither a CLI `--config-dir` flag nor the `VAULTKEEPER_CONFIG_DIR` environment variable is set: `%APPDATA%/vaultkeeper` on Windows, `~/.config/vaultkeeper` elsewhere.
+
+Unlike `getDefaultConfigDir`<!-- -->, this deliberately does not consult `VAULTKEEPER_CONFIG_DIR`<!-- -->, so a caller can tell whether an active config directory differs from the machine default even when that difference came from the environment variable — for example, to decide whether a printed remediation command must carry an explicit `--config-dir` so it still targets the right file in a fresh shell that does not have the environment variable set.
+
+
+</td></tr>
+<tr><td>
+
 [isListableBackend(backend)](./vaultkeeper.islistablebackend.md)
 
 
 </td><td>
 
 Type guard for backends that support listing.
+
+
+</td></tr>
+<tr><td>
+
+[isPresenceCapableBackend(backend)](./vaultkeeper.ispresencecapablebackend.md)
+
+
+</td><td>
+
+Type guard for backends that implement the capability-reporting contract.
+
+
+</td></tr>
+<tr><td>
+
+[isSigningBackend(backend)](./vaultkeeper.issigningbackend.md)
+
+
+</td><td>
+
+Type guard for backends that implement the signing contract.
+
+
+</td></tr>
+<tr><td>
+
+[loadConfig(configDir)](./vaultkeeper.loadconfig.md)
+
+
+</td><td>
+
+Load the vaultkeeper config from disk, falling back to platform defaults only when the config file is missing (`ENOENT`<!-- -->).
+
+Any other read failure (e.g. `EACCES`<!-- -->, `EISDIR`<!-- -->) is a genuinely broken or unreadable config and is rethrown as a [FilesystemError](./vaultkeeper.filesystemerror.md) rather than silently defaulted — silently defaulting on a permissions error would hide the problem from `doctor` and `config show` (issue \#68). A present file that fails to parse as JSON throws [ConfigParseError](./vaultkeeper.configparseerror.md)<!-- -->; a present file that parses but fails schema validation throws [ConfigValidationError](./vaultkeeper.configvalidationerror.md)<!-- -->. All three error messages include the config file path and a remediation hint naming `vaultkeeper config init --force` (via the separate `@vaultkeeper/cli` package) as well as the JS-API alternative of repairing or replacing the config directly — the supported recovery paths for an existing-but-broken config (issues \#97, \#100).
+
+
+</td></tr>
+<tr><td>
+
+[platformNativeBackendType()](./vaultkeeper.platformnativebackendtype.md)
+
+
+</td><td>
+
+Resolve the OS-native credential store type for the current platform.
+
+
+</td></tr>
+<tr><td>
+
+[redactSecrets(text, secrets, replacement)](./vaultkeeper.redactsecrets.md)
+
+
+</td><td>
+
+Replace every occurrence of each secret value in `text` with `replacement`<!-- -->.
+
+This is used to scrub captured child-process `stdout`<!-- -->/`stderr` so a secret injected into a delegated command never surfaces in the returned output.
+
+Before redacting, the secret set is normalized so masking is complete and order-independent:
+
+- \*\*Empty/whitespace-only values are dropped.\*\* An empty string matches between every character, and a whitespace-only value matches ubiquitous whitespace, so redacting either would blank the text rather than a secret. - \*\*Duplicates are removed\*\* so each distinct value is processed once. - \*\*Longer values are redacted first.\*\* If one secret is a substring or prefix of another — common for keys that share a prefix — redacting the shorter one first would leave the longer secret's remaining suffix visible (redacting `"abc"` before `"abc123"` yields `"[REDACTED]123"`<!-- -->, leaking `"123"`<!-- -->). Sorting by length descending guarantees each longer value is fully masked before any shorter substring pass runs.
+
+Both arguments are treated fully literally: the secret is matched as a plain substring (never as a regular expression), and `replacement` is inserted verbatim — `String.prototype.replaceAll`<!-- -->'s `$`<!-- -->-substitution patterns are disabled, since a replacement containing `$&` would otherwise re-expand to the matched secret and silently defeat the redaction.
 
 
 </td></tr>
@@ -326,6 +618,17 @@ Description
 </th></tr></thead>
 <tbody><tr><td>
 
+[BackendCapabilities](./vaultkeeper.backendcapabilities.md)
+
+
+</td><td>
+
+The set of security capabilities a configured backend instance advertises.
+
+
+</td></tr>
+<tr><td>
+
 [BackendConfig](./vaultkeeper.backendconfig.md)
 
 
@@ -344,7 +647,7 @@ Configuration for a single backend.
 
 Request for delegated command execution.
 
-String values in `args` and `env` may include the placeholder `{{secret}}`<!-- -->, which is replaced with the actual secret value immediately before the command is spawned.
+String values in `env` may include the placeholder `{{secret}}` (single-token mode) or `{{secret:name}}` (multi-token mode), which are replaced with actual secret values immediately before the command is spawned. Placeholders are \*\*not\*\* supported in `command` or `args` — `VaultKeeper.exec()` throws `ExecError` if one appears there.
 
 
 </td></tr>
@@ -361,6 +664,19 @@ Result from delegated command execution.
 </td></tr>
 <tr><td>
 
+[ExecutableTrustStatus](./vaultkeeper.executabletruststatus.md)
+
+
+</td><td>
+
+Trust status of an executable, as recorded in the trust-on-first-use (TOFU) trust manifest.
+
+Returned by [VaultKeeper.approveExecutable()](./vaultkeeper.vaultkeeper.approveexecutable.md) and [VaultKeeper.checkExecutableTrust()](./vaultkeeper.vaultkeeper.checkexecutabletrust.md)<!-- -->.
+
+
+</td></tr>
+<tr><td>
+
 [FetchRequest](./vaultkeeper.fetchrequest.md)
 
 
@@ -368,7 +684,7 @@ Result from delegated command execution.
 
 Request for delegated HTTP fetch.
 
-String values in `url`<!-- -->, `headers`<!-- -->, and `body` may include the placeholder `{{secret}}`<!-- -->, which is replaced with the actual secret value immediately before the request is sent.
+String values in `url`<!-- -->, `headers`<!-- -->, and `body` may include the placeholder `{{secret}}` (single-token mode) or `{{secret:name}}` (multi-token mode), which are replaced with actual secret values immediately before the request is sent.
 
 
 </td></tr>
@@ -396,12 +712,49 @@ Result of a preflight check for a single dependency.
 </td></tr>
 <tr><td>
 
+[PreflightCheckError](./vaultkeeper.preflightcheckerror.md)
+
+
+</td><td>
+
+Structured, remediation-free error context for a failed preflight check.
+
+This carries the machine-readable facts a caller needs to build its own audience-appropriate remediation message, so a consumer never has to parse the human-readable `reason` prose. It is currently populated only for the `config` check when the config file is present but invalid.
+
+The `reason` field intentionally keeps the library's own remediation text (which points a library consumer at installing the CLI); a consumer that ships its own CLI should read this structured field instead and phrase the remediation itself.
+
+
+</td></tr>
+<tr><td>
+
 [PreflightResult](./vaultkeeper.preflightresult.md)
 
 
 </td><td>
 
 Aggregated result from all preflight checks.
+
+
+</td></tr>
+<tr><td>
+
+[PresenceCapableBackend](./vaultkeeper.presencecapablebackend.md)
+
+
+</td><td>
+
+Backend that can report its security [BackendCapabilities](./vaultkeeper.backendcapabilities.md) for its configured instance.
+
+
+</td></tr>
+<tr><td>
+
+[PresenceRequirementOptions](./vaultkeeper.presencerequirementoptions.md)
+
+
+</td><td>
+
+Options common to every backend-touching operation that can be gated on a fresh, per-use human presence action.
 
 
 </td></tr>
@@ -418,6 +771,17 @@ Options for running the doctor.
 </td></tr>
 <tr><td>
 
+[ScopedPreflightCheck](./vaultkeeper.scopedpreflightcheck.md)
+
+
+</td><td>
+
+A [PreflightCheck](./vaultkeeper.preflightcheck.md) scoped by whether its dependency is required for the active/configured backend(s). Plugin-backend checks (`op`<!-- -->, `ykman`<!-- -->) are `required: false` when their backend isn't enabled — a non-`'ok'` status there is informational, not a system-readiness blocker (issue \#116). They are promoted to `required: true` when their backend is explicitly enabled (e.g. `--backend yubikey` requires `ykman`<!-- -->).
+
+
+</td></tr>
+<tr><td>
+
 [SecretAccessor](./vaultkeeper.secretaccessor.md)
 
 
@@ -425,7 +789,7 @@ Options for running the doctor.
 
 Callback-based secret accessor with auto-zeroing.
 
-The accessor is backed by a revocable Proxy. Calling `read()` passes a `Buffer` containing the secret to the callback, then zeroes the buffer after the callback returns. The accessor can only be read once; a second call throws.
+The accessor is backed by a Proxy and is single-use via an internal consumed flag. Calling `read()` passes a `Buffer` containing the secret to the callback, then zeroes the buffer after the callback returns and passes the callback's return value through. The accessor can only be read once; a second call throws.
 
 
 </td></tr>
@@ -453,12 +817,12 @@ A choice within a setup question.
 </td></tr>
 <tr><td>
 
-[SetupOptions](./vaultkeeper.setupoptions.md)
+[SetupOptionsBase](./vaultkeeper.setupoptionsbase.md)
 
 
 </td><td>
 
-Options for the setup operation.
+Options for [VaultKeeper.setup()](./vaultkeeper.vaultkeeper.setup.md) that are independent of the mandatory executable-trust choice. Intersected with that choice to form [SetupOptions](./vaultkeeper.setupoptions.md)<!-- -->.
 
 
 </td></tr>
@@ -486,14 +850,38 @@ Result returned when a backend setup generator completes.
 </td></tr>
 <tr><td>
 
+[SigningBackend](./vaultkeeper.signingbackend.md)
+
+
+</td><td>
+
+Backend that can enroll and use signing keys entirely on its own side.
+
+
+</td></tr>
+<tr><td>
+
+[SigningPublicKey](./vaultkeeper.signingpublickey.md)
+
+
+</td><td>
+
+The public half of an enrolled signing key.
+
+Returned by `key create` / `key export` and used to verify detached signatures independently of vaultkeeper.
+
+
+</td></tr>
+<tr><td>
+
 [SignRequest](./vaultkeeper.signrequest.md)
 
 
 </td><td>
 
-Request for delegated signing.
+Request to sign a caller-supplied payload with a named signing key.
 
-The `data` field is the payload to sign. Strings are UTF-8-encoded before signing.
+The `payload` is arbitrary bytes to be signed with detachment (RFC 7797) — it is never stored and never treated as a secret. Strings are UTF-8-encoded before signing.
 
 
 </td></tr>
@@ -504,7 +892,9 @@ The `data` field is the payload to sign. Strings are UTF-8-encoded before signin
 
 </td><td>
 
-Result from a delegated signing operation.
+Result of a signing operation.
+
+The signature is a detached-payload Compact JWS (RFC 7515 §7.2.2 + RFC 7797 `b64:false`<!-- -->, `crit:["b64"]`<!-- -->): `<protected>..<signature>`<!-- -->, with the payload omitted. Any standards-compliant JOSE library can verify it given the detached payload and the public key.
 
 
 </td></tr>
@@ -548,9 +938,35 @@ Response from a vault access operation.
 
 </td><td>
 
-Request for signature verification.
+Request for detached-signature verification.
 
-This is a static operation that only requires public key material — no VaultKeeper instance or capability token is needed.
+This is a fully offline operation that only requires public key material — no VaultKeeper instance, backend, config, or capability token is needed.
+
+
+</td></tr>
+</tbody></table>
+
+## Variables
+
+<table><thead><tr><th>
+
+Variable
+
+
+</th><th>
+
+Description
+
+
+</th></tr></thead>
+<tbody><tr><td>
+
+[REDACTED](./vaultkeeper.redacted.md)
+
+
+</td><td>
+
+The token substituted for a redacted secret value.
 
 
 </td></tr>
@@ -615,12 +1031,73 @@ The OS platform identifier used for platform-specific behavior.
 </td></tr>
 <tr><td>
 
+[PreflightCheckErrorKind](./vaultkeeper.preflightcheckerrorkind.md)
+
+
+</td><td>
+
+The kind of error that made a preflight check fail, as a stable machine-readable discriminant. `'config-parse'` means the config file could not be parsed as JSON; `'config-validation'` means it parsed but failed schema validation; `'config-unknown-backend'` is a specific validation failure where `backends[].type` names a backend that is not registered, carrying the offending type and the valid options; `'config-read'` means the config file could not be read at all (for example a permission failure on the file or its parent directory) — a different remediation from parse/validation, since overwriting the file with `config init --force` cannot fix a read-permission problem.
+
+
+</td></tr>
+<tr><td>
+
 [PreflightCheckStatus](./vaultkeeper.preflightcheckstatus.md)
 
 
 </td><td>
 
 Status of a preflight check.
+
+`'invalid'` applies specifically to the `config` check: the config file exists but fails to parse or fails schema validation (see issue \#68).
+
+
+</td></tr>
+<tr><td>
+
+[PresenceOperation](./vaultkeeper.presenceoperation.md)
+
+
+</td><td>
+
+A keyed backend operation that a presence-per-use requirement can gate.
+
+
+</td></tr>
+<tr><td>
+
+[SecretTokenMap](./vaultkeeper.secrettokenmap.md)
+
+
+</td><td>
+
+Map of named secrets to their capability tokens.
+
+Use with `exec()` or `fetch()` to inject multiple secrets into a single request. Each key becomes the name referenced in `{{secret:name}}` placeholders.
+
+
+</td></tr>
+<tr><td>
+
+[SetupOptions](./vaultkeeper.setupoptions.md)
+
+
+</td><td>
+
+Options for the setup operation.
+
+
+</td></tr>
+<tr><td>
+
+[SigningAlgorithm](./vaultkeeper.signingalgorithm.md)
+
+
+</td><td>
+
+A signing algorithm identifier from the strict JOSE registry (RFC 7518).
+
+Only `'EdDSA'` (Ed25519) is supported today; the identifier is intentionally a strict JOSE `alg` value so future algorithms (`'ES256'`<!-- -->, `'RS256'`<!-- -->, …) each bind to their proper curve/key type rather than an ambiguous label.
 
 
 </td></tr>

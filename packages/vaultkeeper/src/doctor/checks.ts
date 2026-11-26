@@ -21,10 +21,7 @@ function parseVersion(raw: string): [number, number, number] | null {
 /**
  * Returns true if [aMajor, aMinor, aPatch] >= [bMajor, bMinor, bPatch].
  */
-function versionGte(
-  a: [number, number, number],
-  b: [number, number, number],
-): boolean {
+function versionGte(a: [number, number, number], b: [number, number, number]): boolean {
   if (a[0] !== b[0]) return a[0] > b[0]
   if (a[1] !== b[1]) return a[1] > b[1]
   return a[2] >= b[2]
@@ -83,10 +80,7 @@ export async function checkBash(): Promise<PreflightCheck> {
 export async function checkPowershell(): Promise<PreflightCheck> {
   const name = 'powershell'
   try {
-    const output = await execCommand('powershell', [
-      '-Command',
-      '$PSVersionTable.PSVersion',
-    ])
+    const output = await execCommand('powershell', ['-Command', '$PSVersionTable.PSVersion'])
     const version = output.trim()
     return { name, status: 'ok', version }
   } catch {

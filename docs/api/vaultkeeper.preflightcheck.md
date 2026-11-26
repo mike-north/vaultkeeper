@@ -37,6 +37,25 @@ Description
 </th></tr></thead>
 <tbody><tr><td>
 
+[error?](./vaultkeeper.preflightcheck.error.md)
+
+
+</td><td>
+
+
+</td><td>
+
+[PreflightCheckError](./vaultkeeper.preflightcheckerror.md) \| undefined
+
+
+</td><td>
+
+_(Optional)_ Structured, remediation-free error context when this check failed with a recognized error, so a caller can build its own remediation message instead of parsing the `reason` prose. Populated only for the `config` check when the config file is present but invalid.
+
+
+</td></tr>
+<tr><td>
+
 [name](./vaultkeeper.preflightcheck.name.md)
 
 

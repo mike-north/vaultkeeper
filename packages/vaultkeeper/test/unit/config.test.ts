@@ -1,5 +1,27 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { validateConfig, loadConfig, getDefaultConfigDir } from '../../src/config.js'
+import { describe, it, expect, vi, beforeEach, afterEach, beforeAll, afterAll } from 'vitest'
+import {
+  validateConfig,
+  loadConfig,
+  getDefaultConfigDir,
+  getPlatformDefaultConfigDir,
+  defaultBackendType,
+  platformNativeBackendType,
+} from '../../src/config.js'
+import {
+  ConfigValidationError,
+  ConfigParseError,
+  FilesystemError,
+  UnknownBackendTypeError,
+} from '../../src/errors.js'
+import { BackendRegistry } from '../../src/backend/registry.js'
+import { registerBuiltinBackends } from '../../src/backend/register-builtins.js'
+
+// Importing `register-builtins` runs its module side effect (it registers all
+// built-ins on load), which would populate the process-global registry for the
+// whole file. Most tests here validate configs with the registry empty — where
+// the backend-type check is intentionally a no-op — so start from a clean slate
+// and let only the backend-type describes register built-ins explicitly.
+BackendRegistry.clearBackends()
 
 vi.mock('node:fs/promises', () => ({
   readFile: vi.fn(),
@@ -7,6 +29,11 @@ vi.mock('node:fs/promises', () => ({
 
 // Must import after mock declaration
 const { readFile } = await import('node:fs/promises')
+
+/** Build a Node.js-shaped filesystem error with a `code` (e.g. 'ENOENT'). */
+function fsError(code: string, message: string): NodeJS.ErrnoException {
+  return Object.assign(new Error(message), { code })
+}
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -47,9 +74,35 @@ describe('validateConfig', () => {
     expect(result.backends[0]?.path).toBe('/opt/plugin.js')
   })
 
+  it('should reject a whitespace-only backend path (regression: PR #78 review)', () => {
+    // A path of " " previously passed validation and was treated as a real
+    // storage directory by file-based backends instead of being rejected.
+    const input = validConfigJson()
+    input.backends = [{ type: 'file', enabled: true, path: ' ' }]
+    expect(() => validateConfig(input)).toThrow(ConfigValidationError)
+    expect(() => validateConfig(input)).toThrow('must not be empty or whitespace-only')
+  })
+
+  it('should reject an empty-string backend path', () => {
+    const input = validConfigJson()
+    input.backends = [{ type: 'file', enabled: true, path: '' }]
+    expect(() => validateConfig(input)).toThrow(ConfigValidationError)
+  })
+
+  it('should reject a non-string backend path as ConfigValidationError (consistency: PR #78 review)', () => {
+    // The adjacent type check for `path` previously threw a plain Error while
+    // the whitespace check threw ConfigValidationError — both now agree.
+    const input = validConfigJson()
+    input.backends = [{ type: 'file', enabled: true, path: 42 }]
+    expect(() => validateConfig(input)).toThrow(ConfigValidationError)
+    expect(() => validateConfig(input)).toThrow('path must be a string')
+  })
+
   it('should accept backend with valid options object', () => {
     const input = validConfigJson()
-    input.backends = [{ type: 'file', enabled: true, options: { region: 'us-east-1', vault: 'my-vault' } }]
+    input.backends = [
+      { type: 'file', enabled: true, options: { region: 'us-east-1', vault: 'my-vault' } },
+    ]
     const result = validateConfig(input)
     expect(result.backends[0]?.options).toEqual({ region: 'us-east-1', vault: 'my-vault' })
   })
@@ -73,14 +126,35 @@ describe('validateConfig', () => {
     expect(() => validateConfig(input)).toThrow('must be a string')
   })
 
+  it('should report a bracketed, quoted field path for an invalid option value (PR #78 review)', () => {
+    // Option keys are user-defined and may contain characters that aren't
+    // valid identifier segments (dashes, spaces, dots); the field path must
+    // bracket-and-quote the key rather than dot-append it.
+    const input = validConfigJson()
+    input.backends = [{ type: 'file', enabled: true, options: { 'weird key.name': 42 } }]
+    try {
+      validateConfig(input)
+      expect.unreachable('validateConfig should have thrown')
+    } catch (err) {
+      if (!(err instanceof ConfigValidationError)) {
+        throw err
+      }
+      expect(err.field).toBe('backends[0].options["weird key.name"]')
+    }
+  })
+
   // Negative tests
   it('should reject non-object', () => {
+    expect(() => validateConfig('string')).toThrow(ConfigValidationError)
     expect(() => validateConfig('string')).toThrow('Config must be an object')
     expect(() => validateConfig(null)).toThrow('Config must be an object')
     expect(() => validateConfig(42)).toThrow('Config must be an object')
   })
 
   it('should reject wrong version', () => {
+    expect(() => validateConfig({ ...validConfigJson(), version: 2 })).toThrow(
+      ConfigValidationError,
+    )
     expect(() => validateConfig({ ...validConfigJson(), version: 2 })).toThrow('version must be 1')
   })
 
@@ -91,9 +165,12 @@ describe('validateConfig', () => {
   })
 
   it('should reject backend with missing type', () => {
-    expect(() =>
-      validateConfig({ ...validConfigJson(), backends: [{ enabled: true }] }),
-    ).toThrow('type must be a non-empty string')
+    expect(() => validateConfig({ ...validConfigJson(), backends: [{ enabled: true }] })).toThrow(
+      ConfigValidationError,
+    )
+    expect(() => validateConfig({ ...validConfigJson(), backends: [{ enabled: true }] })).toThrow(
+      'type must be a non-empty string',
+    )
   })
 
   it('should reject backend with non-boolean enabled', () => {
@@ -197,6 +274,97 @@ describe('validateConfig', () => {
 })
 
 // ---------------------------------------------------------------------------
+// Backend-type validation (issue #215)
+//
+// A config whose `backends[].type` names a backend nobody registered parses as
+// valid JSON and is structurally valid, but the next real command would throw
+// BackendUnavailableError at backend-creation time. Validation must reject it
+// in the shared path so `loadConfig` and `doctor` agree. These tests register
+// the built-in backends first, since the type check is a no-op when the
+// registry is empty (an isolated caller can't know the valid set).
+// ---------------------------------------------------------------------------
+
+describe('validateConfig backend-type validation', () => {
+  beforeAll(() => {
+    BackendRegistry.clearBackends()
+    registerBuiltinBackends()
+  })
+
+  afterAll(() => {
+    // Restore the empty-registry state the rest of this file assumes (e.g. the
+    // `type: 'custom'` acceptance test relies on the no-known-types skip).
+    BackendRegistry.clearBackends()
+  })
+
+  it('rejects an unknown backend type with UnknownBackendTypeError', () => {
+    const input = validConfigJson()
+    input.backends = [{ type: 'not-a-real-backend', enabled: true }]
+    expect(() => validateConfig(input)).toThrow(UnknownBackendTypeError)
+  })
+
+  it('names the invalid type and lists the valid options', () => {
+    const input = validConfigJson()
+    input.backends = [{ type: 'not-a-real-backend', enabled: true }]
+    try {
+      validateConfig(input)
+      expect.unreachable('validateConfig should have rejected the unknown type')
+    } catch (err) {
+      if (!(err instanceof UnknownBackendTypeError)) {
+        throw err
+      }
+      expect(err.backendType).toBe('not-a-real-backend')
+      expect(err.field).toBe('backends[0].type')
+      // The valid options mirror the runtime BackendUnavailableError guidance.
+      expect(err.knownTypes).toEqual([
+        'file',
+        'keychain',
+        'dpapi',
+        'secret-tool',
+        '1password',
+        'yubikey',
+      ])
+      expect(err.message).toContain('not-a-real-backend')
+      expect(err.message).toContain('file')
+      expect(err.message).toContain('yubikey')
+    }
+  })
+
+  it('is a ConfigValidationError subclass so existing catch sites still handle it', () => {
+    const input = validConfigJson()
+    input.backends = [{ type: 'nope', enabled: true }]
+    expect(() => validateConfig(input)).toThrow(ConfigValidationError)
+  })
+
+  it('rejects an unknown type even when that backend entry is disabled', () => {
+    // An unusable backend is a config defect regardless of `enabled` — leaving
+    // it in place lets a later `enabled` flip silently break the vault.
+    const input = validConfigJson()
+    input.backends = [
+      { type: 'file', enabled: true },
+      { type: 'bogus', enabled: false },
+    ]
+    expect(() => validateConfig(input)).toThrow(UnknownBackendTypeError)
+  })
+
+  it('accepts every registered built-in backend type', () => {
+    for (const type of ['file', 'keychain', 'dpapi', 'secret-tool', '1password', 'yubikey']) {
+      const input = validConfigJson()
+      input.backends = [{ type, enabled: true }]
+      expect(() => validateConfig(input)).not.toThrow()
+    }
+  })
+
+  it('accepts a custom backend type once it is registered', () => {
+    BackendRegistry.register('acme-vault', () => {
+      throw new Error('factory not needed for validation')
+    })
+    const input = validConfigJson()
+    input.backends = [{ type: 'acme-vault', enabled: true }]
+    expect(() => validateConfig(input)).not.toThrow()
+  })
+})
+
+// ---------------------------------------------------------------------------
 // getDefaultConfigDir
 // ---------------------------------------------------------------------------
 
@@ -235,6 +403,44 @@ describe('getDefaultConfigDir', () => {
     expect(result).toContain('vaultkeeper')
     expect(result).not.toBe('')
   })
+
+  it('should delegate to the platform default when no env override is set', () => {
+    delete process.env.VAULTKEEPER_CONFIG_DIR
+    expect(getDefaultConfigDir()).toBe(getPlatformDefaultConfigDir())
+  })
+})
+
+// ---------------------------------------------------------------------------
+// getPlatformDefaultConfigDir (issue #149)
+// ---------------------------------------------------------------------------
+
+describe('getPlatformDefaultConfigDir', () => {
+  let savedEnv: string | undefined
+
+  beforeEach(() => {
+    savedEnv = process.env.VAULTKEEPER_CONFIG_DIR
+  })
+
+  afterEach(() => {
+    if (savedEnv === undefined) {
+      delete process.env.VAULTKEEPER_CONFIG_DIR
+    } else {
+      process.env.VAULTKEEPER_CONFIG_DIR = savedEnv
+    }
+  })
+
+  it('should include vaultkeeper in the path', () => {
+    expect(getPlatformDefaultConfigDir()).toContain('vaultkeeper')
+  })
+
+  // The whole point of this helper (vs getDefaultConfigDir): it is the
+  // machine default, so a remediation hint can tell whether an active dir
+  // that came from the env var differs from what a fresh shell would use.
+  it('should IGNORE VAULTKEEPER_CONFIG_DIR (env-independent)', () => {
+    process.env.VAULTKEEPER_CONFIG_DIR = '/tmp/env-override-vaultkeeper'
+    expect(getPlatformDefaultConfigDir()).not.toBe('/tmp/env-override-vaultkeeper')
+    expect(getPlatformDefaultConfigDir()).toContain('vaultkeeper')
+  })
 })
 
 // ---------------------------------------------------------------------------
@@ -246,8 +452,8 @@ describe('loadConfig', () => {
     vi.mocked(readFile).mockReset()
   })
 
-  it('should return default config when file does not exist', async () => {
-    vi.mocked(readFile).mockRejectedValue(new Error('ENOENT'))
+  it('should return default config when file does not exist (ENOENT)', async () => {
+    vi.mocked(readFile).mockRejectedValue(fsError('ENOENT', 'no such file or directory'))
     const config = await loadConfig('/nonexistent')
     expect(config.version).toBe(1)
     expect(config.backends).toHaveLength(1)
@@ -265,8 +471,210 @@ describe('loadConfig', () => {
     await expect(loadConfig('/fake')).rejects.toThrow('Failed to parse config file')
   })
 
+  it('should throw a ConfigParseError with the file path, a parse location, and a remediation hint on invalid JSON (issue #68)', async () => {
+    vi.mocked(readFile).mockResolvedValue('{ bad json')
+    try {
+      await loadConfig('/fake')
+      expect.unreachable('loadConfig should have thrown')
+    } catch (err) {
+      if (!(err instanceof ConfigParseError)) {
+        throw err
+      }
+      expect(err.path).toBe('/fake/config.json')
+      expect(err.location).toMatch(/line \d+, column \d+/)
+      expect(err.message).toContain('/fake/config.json')
+      const location = err.location
+      if (location === undefined) {
+        expect.unreachable('location should be defined')
+      }
+      expect(err.message).toContain(location)
+      expect(err.message).toContain('vaultkeeper config init')
+    }
+  })
+
   it('should throw on invalid config structure', async () => {
     vi.mocked(readFile).mockResolvedValue(JSON.stringify({ version: 99 }))
     await expect(loadConfig('/fake')).rejects.toThrow('version must be 1')
+  })
+
+  it('should throw a ConfigValidationError with the file path and a remediation hint on invalid config structure (issue #68)', async () => {
+    vi.mocked(readFile).mockResolvedValue(JSON.stringify({ version: 99 }))
+    try {
+      await loadConfig('/fake')
+      expect.unreachable('loadConfig should have thrown')
+    } catch (err) {
+      if (!(err instanceof ConfigValidationError)) {
+        throw err
+      }
+      expect(err.message).toContain('/fake/config.json')
+      expect(err.message).toContain('vaultkeeper config init')
+      expect(err.field).toBe('version')
+    }
+  })
+
+  // Regression: issue #118 — loadConfig previously joined the inner
+  // validation diagnosis and the remediation hint with only a space
+  // ("...version must be 1 Fix the file..."), reading as a run-on with no
+  // sentence break. A period must now separate diagnosis from remediation.
+  it('should separate the validation diagnosis from the remediation hint with a period, not a run-on (issue #118)', async () => {
+    vi.mocked(readFile).mockResolvedValue(JSON.stringify({ version: 99 }))
+    try {
+      await loadConfig('/fake')
+      expect.unreachable('loadConfig should have thrown')
+    } catch (err) {
+      if (!(err instanceof ConfigValidationError)) {
+        throw err
+      }
+      expect(err.message).toContain('Config version must be 1. Fix the file')
+      expect(err.message).not.toContain('Config version must be 1 Fix the file')
+    }
+  })
+
+  // Issue #98: a missing config must resolve to the safe zero-config default
+  // (the `file` backend), never the OS-native store — copy-pasting the first
+  // documented example can never silently write to the real keychain.
+  it('should resolve the safe file backend when no config file exists', async () => {
+    vi.mocked(readFile).mockRejectedValue(fsError('ENOENT', 'no such file or directory'))
+    const config = await loadConfig('/nonexistent')
+    const firstBackend = config.backends[0]
+    expect(firstBackend?.type).toBe('file')
+    expect(firstBackend?.type).toBe(defaultBackendType())
+    // Regardless of platform, the default is never the native credential store
+    // on macOS/Windows (issue #98).
+    if (platformNativeBackendType() !== 'file') {
+      expect(firstBackend?.type).not.toBe(platformNativeBackendType())
+    }
+  })
+
+  // Regression test for issue #68's loadConfig hardening (folded in from #92's
+  // review): before this fix, loadConfig fell back to defaultConfig() on ANY
+  // read error, not just ENOENT — so a genuinely broken/unreadable config
+  // (e.g. a permissions error) silently returned defaults instead of
+  // surfacing the problem.
+  it('should rethrow a non-ENOENT read error as a typed FilesystemError instead of silently defaulting (regression: issue #68 / #92 review)', async () => {
+    const cause = fsError('EACCES', 'permission denied')
+    vi.mocked(readFile).mockRejectedValue(cause)
+    try {
+      await loadConfig('/fake')
+      expect.unreachable('loadConfig should have thrown, not silently defaulted')
+    } catch (err) {
+      if (!(err instanceof FilesystemError)) {
+        throw err
+      }
+      expect(err.path).toBe('/fake/config.json')
+      expect(err.permission).toBe('read')
+      expect(err.message).toContain('/fake/config.json')
+      expect(err.message).toContain('vaultkeeper config init')
+      // Regression: issue #133 — the errno code and original error must
+      // survive the wrap as machine-readable `code`/`cause`, not just as
+      // text embedded in the message.
+      expect(err.code).toBe('EACCES')
+      expect(err.cause).toBe(cause)
+    }
+  })
+
+  // Regression: issue #133 — a non-permission errno (EISDIR) must also
+  // survive wrapping, proving `code`/`cause` propagation isn't specific to
+  // permission failures like EACCES/EPERM.
+  it('should rethrow an EISDIR read error as a typed FilesystemError instead of silently defaulting', async () => {
+    const cause = fsError('EISDIR', 'illegal operation on a directory')
+    vi.mocked(readFile).mockRejectedValue(cause)
+    try {
+      await loadConfig('/fake')
+      expect.unreachable('loadConfig should have thrown, not silently defaulted')
+    } catch (err) {
+      if (!(err instanceof FilesystemError)) {
+        throw err
+      }
+      expect(err.code).toBe('EISDIR')
+      expect(err.cause).toBe(cause)
+    }
+  })
+})
+
+// ---------------------------------------------------------------------------
+// loadConfig backend-type validation (issue #215)
+// ---------------------------------------------------------------------------
+
+describe('loadConfig backend-type validation', () => {
+  beforeAll(() => {
+    BackendRegistry.clearBackends()
+    registerBuiltinBackends()
+  })
+
+  afterEach(() => {
+    vi.mocked(readFile).mockReset()
+  })
+
+  afterAll(() => {
+    BackendRegistry.clearBackends()
+  })
+
+  it('rejects a config file with an unknown backend type, preserving the subclass', async () => {
+    const onDisk = { ...validConfigJson(), backends: [{ type: 'not-a-real-backend', enabled: true }] }
+    vi.mocked(readFile).mockResolvedValue(JSON.stringify(onDisk))
+    try {
+      await loadConfig('/fake')
+      expect.unreachable('loadConfig should have rejected the unknown backend type')
+    } catch (err) {
+      // The file-path re-wrap must keep the concrete subclass and its context.
+      if (!(err instanceof UnknownBackendTypeError)) {
+        throw err
+      }
+      expect(err.backendType).toBe('not-a-real-backend')
+      expect(err.knownTypes).toContain('file')
+      expect(err.configFilePath).toBe('/fake/config.json')
+      expect(err.message).toContain('Invalid config at /fake/config.json')
+      expect(err.message).toContain('not-a-real-backend')
+    }
+  })
+
+  it('loads a valid file-backend config unchanged', async () => {
+    vi.mocked(readFile).mockResolvedValue(JSON.stringify(validConfigJson()))
+    const config = await loadConfig('/fake')
+    expect(config.backends[0]?.type).toBe('file')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Plain-Error audit (issue #115)
+// ---------------------------------------------------------------------------
+
+// Regression: issue #115 first added this guard scoped to config.ts alone.
+// Issue #127 broadened the "never throw plain Error" audit to every source
+// file in this package (and @vaultkeeper/cli) — see
+// `no-plain-error.test.ts`, which supersedes the narrower per-file check
+// that used to live here.
+
+// ---------------------------------------------------------------------------
+// defaultBackendType
+// ---------------------------------------------------------------------------
+
+describe('defaultBackendType', () => {
+  it('should always be the file backend, on every platform (issue #98)', () => {
+    // The zero-config default is platform-independent: `file` everywhere, so a
+    // missing config never silently targets the OS-native credential store.
+    expect(defaultBackendType()).toBe('file')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// platformNativeBackendType
+// ---------------------------------------------------------------------------
+
+describe('platformNativeBackendType', () => {
+  it('should map the current platform to its native credential store', () => {
+    // Resolution contract (see platformNativeBackendType docs): macOS ->
+    // keychain, Windows -> dpapi, Linux -> secret-tool (a real shipped
+    // Secret Service backend), any other platform -> file.
+    const expected =
+      process.platform === 'darwin'
+        ? 'keychain'
+        : process.platform === 'win32'
+          ? 'dpapi'
+          : process.platform === 'linux'
+            ? 'secret-tool'
+            : 'file'
+    expect(platformNativeBackendType()).toBe(expected)
   })
 })

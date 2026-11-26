@@ -1,11 +1,17 @@
 {
   "name": "vaultkeeper",
-  "version": "0.6.0",
+  "version": "0.8.0",
   "description": "Unified, policy-enforced secret storage across OS backends",
+  "homepage": "https://github.com/mike-north/vaultkeeper#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mike-north/vaultkeeper.git",
+    "directory": "packages/vaultkeeper"
+  },
+  "bugs": "https://github.com/mike-north/vaultkeeper/issues",
   "type": "module",
   "main": "./dist/index.cjs",
   "module": "./dist/index.js",
-  "types": "./dist/vaultkeeper-public.d.ts",
   "exports": {
     ".": {
       "import": {
@@ -16,16 +22,19 @@
         "types": "./dist/index.d.cts",
         "default": "./dist/index.cjs"
       }
-    }
+    },
+    "./package.json": "./package.json"
   },
   "files": [
-    "dist"
+    "dist",
+    "LICENSE",
+    "README.md"
   ],
   "engines": {
     "node": ">=20.0.0"
   },
   "scripts": {
-    "build": "tsup",
+    "build": "tsup && node scripts/inject-node-types-reference.mjs",
     "clean": "node -e \"import('node:fs').then(fs=>fs.rmSync('dist',{recursive:true,force:true}))\"",
     "test": "vitest run",
     "test:watch": "vitest",
@@ -42,10 +51,22 @@
     "access": "public"
   },
   "dependencies": {
-    "@1password/sdk": "^0.4.0",
     "jose": "^6.0.0"
   },
+  "peerDependencies": {
+    "@1password/sdk": "^0.4.0",
+    "@types/node": ">=20"
+  },
+  "peerDependenciesMeta": {
+    "@1password/sdk": {
+      "optional": true
+    },
+    "@types/node": {
+      "optional": true
+    }
+  },
   "devDependencies": {
+    "@1password/sdk": "^0.4.0",
     "@microsoft/api-documenter": "^7.0.0",
     "@microsoft/api-extractor": "^7.57.2",
     "@types/node": "^22.0.0",

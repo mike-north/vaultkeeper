@@ -1,11 +1,17 @@
 {
   "name": "@vaultkeeper/test-helpers",
-  "version": "0.2.7",
+  "version": "0.4.0",
   "description": "Test utilities for vaultkeeper consumers",
+  "homepage": "https://github.com/mike-north/vaultkeeper#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mike-north/vaultkeeper.git",
+    "directory": "packages/test-helpers"
+  },
+  "bugs": "https://github.com/mike-north/vaultkeeper/issues",
   "type": "module",
   "main": "./dist/index.cjs",
   "module": "./dist/index.js",
-  "types": "./dist/test-helpers-public.d.ts",
   "exports": {
     ".": {
       "import": {
@@ -19,7 +25,9 @@
     }
   },
   "files": [
-    "dist"
+    "dist",
+    "LICENSE",
+    "README.md"
   ],
   "engines": {
     "node": ">=20.0.0"
@@ -40,10 +48,11 @@
   "publishConfig": {
     "access": "public"
   },
-  "dependencies": {
-    "vaultkeeper": "workspace:*"
+  "peerDependencies": {
+    "vaultkeeper": ">=0.6.0 <1"
   },
   "devDependencies": {
+    "vaultkeeper": "workspace:*",
     "@microsoft/api-extractor": "^7.57.2",
     "@types/node": "^22.0.0",
     "tsup": "^8.0.0"

@@ -34,6 +34,10 @@
       "cache": true,
       "inputs": ["default"]
     },
+    "check:format": {
+      "cache": true,
+      "inputs": ["default", "{workspaceRoot}/prettier.config.js", "{workspaceRoot}/.prettierignore"]
+    },
     "check:api-report": {
       "dependsOn": ["build"],
       "cache": true,

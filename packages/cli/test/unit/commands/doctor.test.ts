@@ -1,15 +1,23 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
+const configDir = '/tmp/vaultkeeper-test-config-dir'
+
 // Capture mock fn references in the factory closure to avoid
 // accessing class methods through vi.mocked(), which triggers
 // @typescript-eslint/unbound-method on static class method types.
 const mockDoctor = vi.fn()
+const mockLoadConfig = vi.fn()
 
-vi.mock('vaultkeeper', () => ({
-  VaultKeeper: {
-    doctor: mockDoctor,
-  },
-}))
+vi.mock('vaultkeeper', async (importOriginal) => {
+  const { mockVaultkeeperModule } = await import('../../support/mock-vaultkeeper-module.js')
+  return mockVaultkeeperModule(importOriginal, {
+    VaultKeeper: {
+      doctor: mockDoctor,
+    },
+    loadConfig: mockLoadConfig,
+    defaultBackendType: vi.fn().mockReturnValue('file'),
+  })
+})
 
 describe('doctorCommand', () => {
   let stderrOutput: string
@@ -26,6 +34,7 @@ describe('doctorCommand', () => {
       stdoutOutput += String(chunk)
       return true
     })
+    mockLoadConfig.mockResolvedValue({ backends: [] })
   })
 
   afterEach(() => {
@@ -37,36 +46,36 @@ describe('doctorCommand', () => {
     it('should return 0', async () => {
       mockDoctor.mockResolvedValue({
         ready: true,
-        checks: [{ name: 'keychain', status: 'ok' }],
+        checks: [{ name: 'keychain', status: 'ok', required: true }],
         warnings: [],
         nextSteps: [],
       })
       const { doctorCommand } = await import('../../../src/commands/doctor.js')
-      const code = await doctorCommand([])
+      const code = await doctorCommand([], configDir)
       expect(code).toBe(0)
     })
 
     it('should write ready message to stdout', async () => {
       mockDoctor.mockResolvedValue({
         ready: true,
-        checks: [{ name: 'keychain', status: 'ok' }],
+        checks: [{ name: 'keychain', status: 'ok', required: true }],
         warnings: [],
         nextSteps: [],
       })
       const { doctorCommand } = await import('../../../src/commands/doctor.js')
-      await doctorCommand([])
+      await doctorCommand([], configDir)
       expect(stdoutOutput).toContain('System ready.')
     })
 
     it('should display each check result with ✓ icon', async () => {
       mockDoctor.mockResolvedValue({
         ready: true,
-        checks: [{ name: 'keychain', status: 'ok', version: '1.2.3' }],
+        checks: [{ name: 'keychain', status: 'ok', version: '1.2.3', required: true }],
         warnings: [],
         nextSteps: [],
       })
       const { doctorCommand } = await import('../../../src/commands/doctor.js')
-      await doctorCommand([])
+      await doctorCommand([], configDir)
       expect(stdoutOutput).toContain('✓')
       expect(stdoutOutput).toContain('keychain')
       expect(stdoutOutput).toContain('1.2.3')
@@ -80,7 +89,7 @@ describe('doctorCommand', () => {
         nextSteps: [],
       })
       const { doctorCommand } = await import('../../../src/commands/doctor.js')
-      await doctorCommand([])
+      await doctorCommand([], configDir)
       expect(stdoutOutput).toContain('Warnings:')
       expect(stdoutOutput).toContain('Keychain is locked')
     })
@@ -90,24 +99,24 @@ describe('doctorCommand', () => {
     it('should return 1', async () => {
       mockDoctor.mockResolvedValue({
         ready: false,
-        checks: [{ name: 'keychain', status: 'error', reason: 'not available' }],
+        checks: [{ name: 'keychain', status: 'error', reason: 'not available', required: true }],
         warnings: [],
         nextSteps: ['Install keychain'],
       })
       const { doctorCommand } = await import('../../../src/commands/doctor.js')
-      const code = await doctorCommand([])
+      const code = await doctorCommand([], configDir)
       expect(code).toBe(1)
     })
 
     it('should display next steps', async () => {
       mockDoctor.mockResolvedValue({
         ready: false,
-        checks: [{ name: 'keychain', status: 'error', reason: 'not available' }],
+        checks: [{ name: 'keychain', status: 'error', reason: 'not available', required: true }],
         warnings: [],
         nextSteps: ['Install keychain'],
       })
       const { doctorCommand } = await import('../../../src/commands/doctor.js')
-      await doctorCommand([])
+      await doctorCommand([], configDir)
       expect(stdoutOutput).toContain('Next steps:')
       expect(stdoutOutput).toContain('Install keychain')
     })
@@ -115,14 +124,37 @@ describe('doctorCommand', () => {
     it('should display failed checks with ✗ icon', async () => {
       mockDoctor.mockResolvedValue({
         ready: false,
-        checks: [{ name: 'keychain', status: 'error', reason: 'not available' }],
+        checks: [{ name: 'keychain', status: 'error', reason: 'not available', required: true }],
         warnings: [],
         nextSteps: [],
       })
       const { doctorCommand } = await import('../../../src/commands/doctor.js')
-      await doctorCommand([])
+      await doctorCommand([], configDir)
       expect(stdoutOutput).toContain('✗')
       expect(stdoutOutput).toContain('not available')
+    })
+
+    // Issue #116: a check that is not required for the active/configured
+    // backend (e.g. `ykman`/`op` when no plugin backend is enabled) must not
+    // render with the ✗ failure icon — only genuinely required, failing
+    // checks should. This is the CLI-level regression test for the bug: a
+    // fresh file-default `doctor` run previously red-X'd unused plugin tools.
+    it('should not display an unmet optional check with the ✗ icon', async () => {
+      mockDoctor.mockResolvedValue({
+        ready: true,
+        checks: [
+          { name: 'openssl', status: 'ok', required: true },
+          { name: 'ykman', status: 'missing', reason: 'ykman not found in PATH', required: false },
+        ],
+        warnings: ['Optional dependency not found: ykman — ykman not found in PATH'],
+        nextSteps: [],
+      })
+      const { doctorCommand } = await import('../../../src/commands/doctor.js')
+      await doctorCommand([], configDir)
+      expect(stdoutOutput).not.toContain('✗')
+      expect(stdoutOutput).toContain('System ready.')
+      // Still surfaced, informationally, via the Warnings section.
+      expect(stdoutOutput).toContain('ykman')
     })
   })
 
@@ -130,14 +162,14 @@ describe('doctorCommand', () => {
     it('should return 1', async () => {
       mockDoctor.mockRejectedValue(new Error('doctor failed'))
       const { doctorCommand } = await import('../../../src/commands/doctor.js')
-      const code = await doctorCommand([])
+      const code = await doctorCommand([], configDir)
       expect(code).toBe(1)
     })
 
     it('should write formatted error to stderr', async () => {
       mockDoctor.mockRejectedValue(new Error('doctor failed'))
       const { doctorCommand } = await import('../../../src/commands/doctor.js')
-      await doctorCommand([])
+      await doctorCommand([], configDir)
       expect(stderrOutput).toContain('doctor failed')
     })
   })

@@ -28,6 +28,19 @@ Description
 </td></tr>
 <tr><td>
 
+[@vaultkeeper/wasm](./wasm.md)
+
+
+</td><td>
+
+@<!-- -->vaultkeeper/wasm — WASM-backed vaultkeeper SDK for Node.js.
+
+Uses the Rust vaultkeeper-core compiled to WebAssembly, with Node.js providing the host platform (file I/O, subprocess execution).
+
+
+</td></tr>
+<tr><td>
+
 [vaultkeeper](./vaultkeeper.md)
 
 

@@ -1,5 +1,6 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, afterEach } from 'vitest'
 import { currentPlatform, isDarwin, isWindows, isLinux } from '../../../src/util/platform.js'
+import { SetupError } from '../../../src/errors.js'
 
 describe('currentPlatform', () => {
   it('returns the current platform without throwing', () => {
@@ -11,6 +12,34 @@ describe('currentPlatform', () => {
   it('returns a value consistent with process.platform', () => {
     const platform = currentPlatform()
     expect(platform).toBe(process.platform)
+  })
+
+  // Regression: issue #127 — an unsupported process.platform previously threw
+  // a plain `Error`, breaking instanceof-based handling. It must now throw a
+  // typed SetupError.
+  describe('on an unsupported platform', () => {
+    const original = Object.getOwnPropertyDescriptor(process, 'platform')
+
+    afterEach(() => {
+      if (original !== undefined) {
+        Object.defineProperty(process, 'platform', original)
+      }
+    })
+
+    it('throws a typed SetupError naming the platform dependency', () => {
+      Object.defineProperty(process, 'platform', { value: 'freebsd', configurable: true })
+
+      try {
+        currentPlatform()
+        expect.unreachable('currentPlatform should have thrown for an unsupported platform')
+      } catch (err) {
+        if (!(err instanceof SetupError)) {
+          throw err
+        }
+        expect(err.dependency).toBe('platform')
+        expect(err.message).toContain('freebsd')
+      }
+    })
   })
 })
 

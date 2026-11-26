@@ -34,3 +34,26 @@ export interface KeyRotationConfig {
   /** How long (in milliseconds) the previous key remains valid after rotation */
   gracePeriodMs: number
 }
+
+/**
+ * A point-in-time snapshot of {@link KeyManager} state, suitable for persisting
+ * across processes. Produced by {@link KeyManager.snapshot} and consumed by
+ * {@link KeyManager.hydrate}.
+ *
+ * The rotation grace period is represented purely as an absolute expiry
+ * timestamp; whether a rotation is "in progress" is derived by comparing it to
+ * the current time, so the guard survives process restarts without a live
+ * timer.
+ * @internal
+ */
+export interface KeyStateSnapshot {
+  /** The currently active encryption key. */
+  current: KeyMaterial
+  /** The previous key, present only while its grace period is still active. */
+  previous?: KeyMaterial
+  /**
+   * Absolute epoch-millisecond time at which the current grace period ends.
+   * Present only while a rotation grace period is active.
+   */
+  gracePeriodExpiresAt?: number
+}

@@ -1,0 +1,184 @@
+[
+  {
+    "name": "store then retrieve returns the same secret",
+    "steps": [
+      {
+        "op": "store",
+        "id": "conformance-key",
+        "secret": "conformance-secret"
+      },
+      {
+        "op": "expectRetrieve",
+        "id": "conformance-key",
+        "secret": "conformance-secret"
+      }
+    ]
+  },
+  {
+    "name": "retrieve of a missing id returns not found",
+    "steps": [
+      {
+        "op": "expectRetrieveNotFound",
+        "id": "never-stored"
+      }
+    ]
+  },
+  {
+    "name": "delete removes a stored secret",
+    "steps": [
+      {
+        "op": "store",
+        "id": "delete-me",
+        "secret": "x"
+      },
+      {
+        "op": "delete",
+        "id": "delete-me"
+      },
+      {
+        "op": "expectRetrieveNotFound",
+        "id": "delete-me"
+      }
+    ]
+  },
+  {
+    "name": "delete of a missing id returns not found",
+    "steps": [
+      {
+        "op": "expectDeleteNotFound",
+        "id": "never-existed"
+      }
+    ]
+  },
+  {
+    "name": "exists reflects store/delete state",
+    "steps": [
+      {
+        "op": "expectExists",
+        "id": "existence-probe",
+        "exists": false
+      },
+      {
+        "op": "store",
+        "id": "existence-probe",
+        "secret": "v"
+      },
+      {
+        "op": "expectExists",
+        "id": "existence-probe",
+        "exists": true
+      },
+      {
+        "op": "delete",
+        "id": "existence-probe"
+      },
+      {
+        "op": "expectExists",
+        "id": "existence-probe",
+        "exists": false
+      }
+    ]
+  },
+  {
+    "name": "list reflects every stored id",
+    "steps": [
+      {
+        "op": "store",
+        "id": "list-a",
+        "secret": "1"
+      },
+      {
+        "op": "store",
+        "id": "list-b",
+        "secret": "2"
+      },
+      {
+        "op": "expectListContains",
+        "ids": [
+          "list-a",
+          "list-b"
+        ]
+      }
+    ]
+  },
+  {
+    "name": "list omits an id after it is deleted",
+    "steps": [
+      {
+        "op": "store",
+        "id": "list-delete-me",
+        "secret": "v"
+      },
+      {
+        "op": "expectListContains",
+        "ids": [
+          "list-delete-me"
+        ]
+      },
+      {
+        "op": "delete",
+        "id": "list-delete-me"
+      },
+      {
+        "op": "expectListDoesNotContain",
+        "ids": [
+          "list-delete-me"
+        ]
+      }
+    ]
+  },
+  {
+    "name": "a generated signing key signs and verifies against its own public key",
+    "steps": [
+      {
+        "op": "generateSigningKey",
+        "id": "sign-key"
+      },
+      {
+        "op": "expectSignRoundTrips",
+        "id": "sign-key",
+        "message": "vaultkeeper issue #312 conformance"
+      }
+    ]
+  },
+  {
+    "name": "generate signing key rejects a duplicate id",
+    "steps": [
+      {
+        "op": "generateSigningKey",
+        "id": "dup"
+      },
+      {
+        "op": "expectGenerateSigningKeyAlreadyExists",
+        "id": "dup"
+      }
+    ]
+  },
+  {
+    "name": "get public key for a missing signing key id returns not found",
+    "steps": [
+      {
+        "op": "expectGetPublicKeyNotFound",
+        "id": "ghost"
+      }
+    ]
+  },
+  {
+    "name": "sign with a missing signing key id returns not found",
+    "steps": [
+      {
+        "op": "expectSignNotFound",
+        "id": "ghost-signer"
+      }
+    ]
+  },
+  {
+    "name": "reports no presence-per-use capability",
+    "steps": [
+      {
+        "op": "expectPresencePerUse",
+        "value": false
+      }
+    ]
+  }
+]

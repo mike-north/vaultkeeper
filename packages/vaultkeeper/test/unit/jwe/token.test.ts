@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { createToken, decryptToken, extractKid } from '../../../src/jwe/token.js'
 import type { VaultClaims } from '../../../src/types.js'
 import { VaultError, InvalidTokenError } from '../../../src/errors.js'
+import { validateClaims } from '../../../src/jwe/claims.js'
 
 /** Creates a minimal valid VaultClaims for testing. */
 function makeTestClaims(overrides: Partial<VaultClaims> = {}): VaultClaims {
@@ -17,6 +18,25 @@ function makeTestClaims(overrides: Partial<VaultClaims> = {}): VaultClaims {
     bkd: 'keychain',
     val: 'encrypted-secret-value',
     ref: '/keychain/my-api-key',
+    ...overrides,
+  }
+}
+
+/** Creates a well-formed signing-key lease VaultClaims for testing. */
+function makeTestLeaseClaims(overrides: Partial<VaultClaims> = {}): VaultClaims {
+  const now = Math.floor(Date.now() / 1000)
+  return {
+    jti: 'test-jti-lease-uuid-1234',
+    exp: now + 3600,
+    iat: now,
+    sub: 'release-key',
+    exe: 'abc123def456' + '0'.repeat(52),
+    use: null,
+    tid: 1,
+    ref: 'release-key',
+    kty: 'signing-key',
+    kid: 'kid-abc123',
+    kgen: 1,
     ...overrides,
   }
 }
@@ -114,6 +134,46 @@ describe('createToken / decryptToken', () => {
     // We can't easily forge a valid JWE with bad JSON, so test via wrong key to exercise error path
     const key = makeKey()
     await expect(decryptToken(key, 'a.b.c.d.e')).rejects.toBeInstanceOf(VaultError)
+  })
+
+  // Regression test for issue #287: `parseVaultClaims` used to hard-require
+  // `bkd`/`val` as non-optional strings and silently drop `kty`/`kid`/`kgen`/
+  // `pres`, so a real signing-key lease JWE failed inside `decryptToken`
+  // before `validateClaims` (the actual secret-vs-lease business-rule
+  // chokepoint) ever ran. This exercises the full real pipeline —
+  // `createToken` → `decryptToken` → `validateClaims` — for both claim
+  // shapes, end to end.
+  describe('createToken -> decryptToken -> validateClaims round trip (issue #287)', () => {
+    it('accepts a well-formed signing-key lease', async () => {
+      const key = makeKey()
+      const claims = makeTestLeaseClaims()
+
+      const jwe = await createToken(key, claims)
+      const decrypted = await decryptToken(key, jwe)
+
+      expect(decrypted.kty).toBe('signing-key')
+      expect(decrypted.kid).toBe('kid-abc123')
+      expect(decrypted.kgen).toBe(1)
+      expect(decrypted.val).toBeUndefined()
+      expect(() => {
+        validateClaims(decrypted)
+      }).not.toThrow()
+    })
+
+    it('still accepts an unchanged (non-lease) secret token', async () => {
+      const key = makeKey()
+      const claims = makeTestClaims()
+
+      const jwe = await createToken(key, claims)
+      const decrypted = await decryptToken(key, jwe)
+
+      expect(decrypted.kty).toBeUndefined()
+      expect(decrypted.bkd).toBe('keychain')
+      expect(decrypted.val).toBe('encrypted-secret-value')
+      expect(() => {
+        validateClaims(decrypted)
+      }).not.toThrow()
+    })
   })
 })
 

@@ -19,6 +19,7 @@ vaultkeeper is a polyglot monorepo (TypeScript + Rust) providing unified, policy
 - **`vaultkeeper-cli`** — Native CLI binary using clap. Provides `NativeHostPlatform` impl.
 - **`vaultkeeper-wasm`** — wasm-bindgen wrapper over core. Compiled with `wasm-pack --target nodejs`.
 - **`vaultkeeper-conformance`** — Data-driven conformance test definitions. Exports cases as JSON for both Rust and JS test runners.
+- **`vaultkeeper-stub-tools`** — Dev-only, table-driven paired-double/stub-tool framework. Ships five `vk-stub-*` binaries (`vk-stub-ykman`, `vk-stub-secret-tool`, `vk-stub-security`, `vk-stub-op`, `vk-stub-powershell`) that reproduce the argv/stdin/stdout/stderr/exit contract of the real subprocess-driven backends; never a runtime dependency.
 
 ## Package manager
 
@@ -44,7 +45,8 @@ vaultkeeper/
 │   ├── vaultkeeper-core/       (Rust core library)
 │   ├── vaultkeeper-cli/        (Rust native CLI)
 │   ├── vaultkeeper-wasm/       (Rust WASM bindings)
-│   └── vaultkeeper-conformance/ (conformance test data)
+│   ├── vaultkeeper-conformance/ (conformance test data)
+│   └── vaultkeeper-stub-tools/  (dev-only paired-double/stub-tool framework)
 ├── packages/
 │   ├── vaultkeeper/            (TS library)
 │   ├── cli/                    (TS CLI)
@@ -62,34 +64,39 @@ All workspace-level scripts use Nx for dependency-graph-aware execution with cac
 
 ### Workspace-level scripts
 
-| Script | Purpose |
-|--------|---------|
-| `pnpm build` | Build all TS packages (Nx resolves dependency order) |
-| `pnpm clean` | Clean all packages |
-| `pnpm test` | Run all tests across all packages |
-| `pnpm test:watch` | Run tests in watch mode (vitest workspace) |
-| `pnpm check` | Run typecheck + lint + API report validation |
-| `pnpm check:typecheck` | `tsc --noEmit` in all packages |
-| `pnpm check:lint-ts` | `eslint .` in all packages |
-| `pnpm check:api-report` | Validate API reports |
-| `pnpm generate:api-report` | Update API reports |
+| Script                     | Purpose                                                                      |
+| -------------------------- | ---------------------------------------------------------------------------- |
+| `pnpm build`               | Build all TS packages (Nx resolves dependency order)                         |
+| `pnpm clean`               | Clean all packages                                                           |
+| `pnpm test`                | Run all tests across all packages                                            |
+| `pnpm test:watch`          | Run tests in watch mode (vitest workspace)                                   |
+| `pnpm check`               | Run typecheck + lint + API report validation                                 |
+| `pnpm check:typecheck`     | `tsc --noEmit` in all packages                                               |
+| `pnpm check:lint-ts`       | `eslint .` in all packages                                                   |
+| `pnpm check:api-report`    | Validate API reports                                                         |
+| `pnpm generate:api-report` | Update API reports                                                           |
+| `pnpm check:api-docs`      | Validate `docs/api/` is not stale (CI-enforced)                              |
+| `pnpm generate:api-docs`   | Regenerate `docs/api/` markdown                                              |
+| `pnpm check:rust-api`      | Validate `crates/vaultkeeper-core/public-api.txt` is not stale (CI-enforced) |
+| `pnpm generate:rust-api`   | Regenerate `crates/vaultkeeper-core/public-api.txt`                          |
 
 ### Rust builds
 
 Rust builds are separate from Nx (Cargo manages its own dependency graph):
 
-| Command | Purpose |
-|---------|---------|
-| `cargo build` | Build all Rust crates |
-| `cargo test` | Run all Rust tests (130 tests) |
-| `cargo clippy` | Lint Rust code |
-| `wasm-pack build --target nodejs crates/vaultkeeper-wasm` | Build WASM module |
+| Command                                                   | Purpose                        |
+| --------------------------------------------------------- | ------------------------------ |
+| `cargo build`                                             | Build all Rust crates          |
+| `cargo test`                                              | Run all Rust tests (130 tests) |
+| `cargo clippy`                                            | Lint Rust code                 |
+| `wasm-pack build --target nodejs crates/vaultkeeper-wasm` | Build WASM module              |
 
 The WASM output (`packages/vaultkeeper-wasm/wasm/`) is committed to git so TypeScript builds work without wasm-pack installed.
 
 ### Package-level (run with `--filter`)
 
 Use `pnpm --filter <name>` to target a specific package:
+
 - `pnpm --filter vaultkeeper build`
 - `pnpm --filter @vaultkeeper/wasm test`
 
@@ -150,6 +157,45 @@ packages/cli-tests/test/
 
 Tests use vitest (except `@vaultkeeper/wasm` which uses `node:test`). Coverage collected with `v8`.
 
+### Type-level tests
+
+For "this must not typecheck" assertions (verifying a type constraint is enforced at compile time,
+not just at runtime), the canonical convention for any package that uses vitest is **vitest's
+built-in typecheck mode**:
+
+- A `test/types/<name>.test-d.ts` file, using `describe`/`it` from vitest with `expectTypeOf` for
+  structural assertions and `@ts-expect-error` immediately above the line that must fail to
+  compile. See `packages/vaultkeeper/test/types/setup-options.test-d.ts` for the reference example.
+- Gated by a package-local `tsconfig.test-d.json` (narrowly scoped to `src` plus `test/types`, not
+  the whole `test` tree), wired into the package's `vitest.config.ts` via:
+  ```ts
+  test: {
+    typecheck: {
+      enabled: true,
+      tsconfig: './tsconfig.test-d.json',
+      include: ['test/**/*.test-d.ts'],
+    },
+  }
+  ```
+  This runs automatically as part of the package's ordinary `vitest run` (`pnpm test`) and CI — no
+  separate script or nx target is needed.
+- Do not add `tsd` as a dependency anywhere in this repo. Vitest's `expectTypeOf`/`@ts-expect-error`
+  already cover the same ground `tsd`'s `expectType`/`expectError` would, and a package here already
+  uses vitest for runtime tests — introducing a second type-only test runner would recreate the
+  inconsistency this convention exists to resolve (see issue #199).
+- Prefer this over a bare `tsc --noEmit -p tsconfig.test.json` script: both catch a stale
+  `@ts-expect-error` (TS2578 fires either way), but vitest's typecheck mode runs as part of the
+  package's normal `vitest run`/CI invocation — no separate script or nx target to add, wire into
+  `check`, and keep in sync — and reports type-level results alongside the runtime tests in one
+  `describe`/`it`/`expectTypeOf` structure instead of a second, differently-shaped fixture file.
+
+**Exception — `@vaultkeeper/wasm`:** this package deliberately uses `node:test`, not vitest, for
+runtime tests, so it cannot host vitest's typecheck mode. Its type-only `*.test-d.ts` fixtures
+instead live under `src/test/` (e.g. `packages/vaultkeeper-wasm/src/test/setup-options.test-d.ts`)
+and are gated by the package's ordinary `check:typecheck` (`tsc --noEmit`), since `src/test` already
+falls under the package's main `tsconfig.json` include. This is the one place in the repo where the
+plain-`tsc`-only style is intentional rather than a convention to migrate away from.
+
 ### Rust tests
 
 - `crates/vaultkeeper-core/tests/` — unit tests (47 tests)
@@ -159,6 +205,7 @@ Tests use vitest (except `@vaultkeeper/wasm` which uses `node:test`). Coverage c
 ### Conformance testing
 
 Both CLIs (Rust native and TS) are tested against the same data-driven test cases:
+
 1. Cases defined in `crates/vaultkeeper-conformance/src/lib.rs`
 2. Exported as JSON via `cargo run -p export-conformance`
 3. JS runner in `packages/cli-tests/test/conformance/` loads `cases.json` and tests the Rust binary
@@ -206,6 +253,7 @@ Generated files in `**/wasm/**` (wasm-pack output) are excluded from linting.
 API Extractor v7 (`@microsoft/api-extractor`) is configured per-package in `api-extractor.json`. Each package generates its own `.d.ts` rollup and API report.
 
 Workflow:
+
 1. `pnpm build` — produces `dist/*.d.ts` source files
 2. `pnpm generate:api-report` — updates API reports in all packages
 3. Commit `api-report/` when the public API changes
@@ -213,11 +261,53 @@ Workflow:
 
 Every exported symbol in a package's `src/index.ts` must have a `@public` or `@packageDocumentation` JSDoc tag (or be marked `@internal` / `@alpha` / `@beta` if not yet stable).
 
+Publishable dual ESM/CJS packages (`vaultkeeper`, `@vaultkeeper/test-helpers`, `@vaultkeeper/cli-test-helpers`) do not set a top-level `package.json#types` field. The API Extractor `dtsRollup` output (`dist/<name>-public.d.ts`) is only produced by `generate:api-report`/`check:api-report`, which the release pipeline does not run before `changeset publish` — a top-level `types` pointing at it would reference a file missing from the published tarball. Types resolve entirely through the conditional `exports` map (`import.types` / `require.types`, pointing at the real per-format `tsup` output), which is sufficient for `moduleResolution: NodeNext`/`bundler` consumers and is what the packed-install and pack-contents tests in `packages/cli-tests/test/packaging/` verify.
+
+### Generated API docs (`docs/api/`)
+
+`docs/api/*.md` is `@microsoft/api-documenter` output rendered from the API Extractor `.api.json` doc model (`vaultkeeper`, `@vaultkeeper/test-helpers`, `@vaultkeeper/wasm`). It is generated, not hand-edited — treat any public API/JSDoc change as also touching `docs/api/`.
+
+Workflow:
+
+1. Change a public API signature or its JSDoc (an exported symbol in `src/index.ts`, its parameters, or its doc comments).
+2. Run `pnpm build && pnpm generate:api-docs` — this rebuilds, regenerates `api-report/`, and rewrites `docs/api/` from the fresh doc model.
+3. Commit the changed/added/removed files under `docs/api/`.
+4. `pnpm check:api-docs` regenerates into a temp directory and diffs it against the committed `docs/api/`; it fails (and CI fails) if they differ — this catches both a stale regen and a hand-edited or prettier-mangled `docs/api/` file. It is **not** self-contained: it consumes the API Extractor doc-model JSON (`tmp/api-extractor/*.api.json`) that `pnpm build && pnpm check:api-report` (or `generate:api-report`) already produced — run one of those first, exactly as CI does (`check:api-report` immediately before `check:api-docs`).
+
+`docs/api/` is marked `linguist-generated=true` in `.gitattributes` and listed in `.prettierignore` — **never run Prettier over it**. `@microsoft/api-documenter`'s Markdown output is sensitive to exact blank-line placement (its own renderer, not Prettier's), and Prettier collapses/reflows that structure, corrupting the file. If `docs/api/` needs reformatting, that only ever happens by re-running `pnpm generate:api-docs`, never by hand or via Prettier.
+
+### Rust public-API snapshot (`crates/vaultkeeper-core/public-api.txt`)
+
+`api-report/*.api.md` (API Extractor) covers only the TypeScript packages. `crates/vaultkeeper-core/public-api.txt` is the equivalent committed, diffable listing for `vaultkeeper-core`'s public surface — generated by [`cargo public-api`](https://github.com/cargo-public-api/cargo-public-api), CI-enforced the same way as `check:api-report` (docs/specs/001 §3.1).
+
+Scope: **`vaultkeeper-core` only**. `vaultkeeper-cli` is a binary with no library surface to snapshot. `@vaultkeeper/wasm`'s exported bindings are already covered by two other checks — do not add a fourth: `scripts/wasm-export-fingerprint.mjs` (wired into the `wasm-guards` CI job) asserts the _set_ of wasm exports/imports, and `@vaultkeeper/wasm`'s own `api-report/` covers the _TS_ shape of the wrapper. This Rust listing covers only the native `vaultkeeper-core` crate's public items.
+
+`cargo public-api` builds rustdoc JSON, which requires nightly rustdoc flags — the exact nightly toolchain and `cargo-public-api` version are pinned in `crates/vaultkeeper-core/rust-api-toolchain.env` (same pinning pattern as `crates/vaultkeeper-wasm/wasm-toolchain.env`; a floating nightly would make the gate flaky).
+
+Workflow:
+
+1. Change `vaultkeeper-core`'s public surface (an added/removed/renamed `pub` item, trait, or trait impl anywhere reachable from `lib.rs`'s `pub use`/`pub mod` tree).
+2. Install the pinned toolchain once: `rustup toolchain install <RUST_API_NIGHTLY_TOOLCHAIN>` and `cargo install cargo-public-api --version <CARGO_PUBLIC_API_VERSION> --locked` (read the exact versions from `crates/vaultkeeper-core/rust-api-toolchain.env`).
+3. Run `pnpm generate:rust-api` to regenerate `crates/vaultkeeper-core/public-api.txt`, and commit it.
+4. `pnpm check:rust-api` regenerates into a temp file and diffs it against the committed listing, failing on any drift; this runs as the `rust-public-api` CI job on every push/PR.
+
+**Governance (docs/specs/001 §3.5, normative):** a diff that touches `crates/vaultkeeper-core/public-api.txt` (or `api-report/*.api.md`, or a CLI help snapshot) is _by definition_ a surface change. It requires the corresponding spec section updated in the **same PR** — Part 2 of docs/specs/001 for a library change — and carries explicit owner-level review scrutiny. The mechanical diff proves the surface changed; the spec diff proves the change was designed, not incidental.
+
 ## Conventions
+
+### Releases are human-gated
+
+Merging the changesets bot PR — branch `changeset-release/main`, titled
+"Version Packages" — **is** the release trigger: it runs the release workflow, publishing
+to npm (OIDC trusted publishing) and crates.io. No agent may merge that PR,
+enable auto-merge on it, or otherwise cause it to merge — regardless of CI or
+review-thread state. Only a human merges it. If its state blocks other work,
+report that to the user and stop.
 
 ### Errors
 
 All errors extend `VaultError` (defined in `packages/vaultkeeper/src/errors.ts`). When adding a new error class:
+
 - Extend the closest existing base (e.g. `VaultError` directly if no better parent exists)
 - Set `this.name` in the constructor to match the class name
 - Add strongly-typed extra fields for machine-readable context
@@ -227,7 +317,7 @@ Never throw plain `Error` objects — always use a typed subclass from the error
 
 ### Backends
 
-All backends implement `SecretBackend` from `packages/vaultkeeper/src/backend/types.ts`. Register new backends with `BackendRegistry.register(type, factory)`. The factory must be a zero-argument function returning a `SecretBackend` instance.
+All backends implement `SecretBackend` from `packages/vaultkeeper/src/backend/types.ts`. Register new backends with `BackendRegistry.register(type, factory)`. The factory is a `BackendFactory` — it receives the backend's own `BackendConfig` (forwarded by `BackendRegistry.create(type, config)`) and returns a `SecretBackend` instance. A factory that needs no configuration may ignore the argument. File-based backends should honor `BackendConfig.path` as their storage directory (see `FileBackend`, `DpapiBackend`, `YubikeyBackend`).
 
 Plugin backends (1Password, YubiKey) are flagged with `plugin: true` in `BackendConfig`.
 
@@ -238,9 +328,9 @@ Tokens are compact JWE strings. The TS library uses the `jose` npm package; the 
 ### Rust/TS interop
 
 - Config JSON uses **camelCase** field names, enforced via `#[serde(rename_all = "camelCase")]`
-- `TrustTier` serializes as string numbers: `"1"`, `"2"`, `"3"`
+- `TrustTier` has two wire forms depending on where it appears. In a JWE token's `tid` claim it is a **string** number (`"1"`, `"2"`, `"3"`) for `jose` compatibility. In `config.json`'s `defaults.trustTier` it is a **bare number** (`3`) — matching the CLI `config init` output, the TS library, and the README. The config reader (both Rust core and TS) accepts either form for backward compatibility (issue #200).
 - VaultClaims fields use serde renames: `use_limit` → JSON `use`, `reference` → JSON `ref`
-- Both CLIs have identical command surfaces and output formats
+- Both CLIs have identical command surfaces and output formats for shared commands, with documented divergences governed by `docs/specs/001-surface-governance.md` (e.g. B9: `run`'s `exec`/`--profile`/`--set`/`--dry-run` fold-in is native-CLI-only for now)
 
 ### Access patterns
 

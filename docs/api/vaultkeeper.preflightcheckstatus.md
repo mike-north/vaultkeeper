@@ -6,8 +6,10 @@
 
 Status of a preflight check.
 
+`'invalid'` applies specifically to the `config` check: the config file exists but fails to parse or fails schema validation (see issue \#68).
+
 **Signature:**
 
 ```typescript
-type PreflightCheckStatus = 'ok' | 'missing' | 'version-unsupported';
+type PreflightCheckStatus = 'ok' | 'missing' | 'version-unsupported' | 'invalid';
 ```

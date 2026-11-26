@@ -1,11 +1,14 @@
 import { describe, it, expect } from 'vitest'
+import * as publicApi from '../../../src/index.js'
 import {
   CapabilityToken,
   createCapabilityToken,
+  createSigningCapabilityToken,
   validateCapabilityToken,
+  isSigningClaims,
 } from '../../../src/identity/session.js'
 import { AuthorizationDeniedError } from '../../../src/errors.js'
-import type { VaultClaims } from '../../../src/identity/types.js'
+import type { VaultClaims, SigningClaims } from '../../../src/identity/types.js'
 
 function makeClaims(overrides: Partial<VaultClaims> = {}): VaultClaims {
   return {
@@ -50,6 +53,29 @@ describe('CapabilityToken', () => {
   })
 })
 
+// Regression guard for issue #74: the CapabilityToken doc promises there is no
+// public API for reading claims, so both token helpers must stay internal — for
+// different reasons. Exporting validateCapabilityToken would directly leak the
+// secret, since it reads the claims (including the secret value) back out.
+// Exporting createCapabilityToken would not read claims, but it mints a token
+// around caller-supplied claims, letting callers forge tokens outside the
+// authorize() flow and bypass its validation and usage tracking. Neither is
+// exported.
+describe('CapabilityToken public surface (issue #74)', () => {
+  it('exports the CapabilityToken class', () => {
+    expect('CapabilityToken' in publicApi).toBe(true)
+  })
+
+  it('does not export the internal token helpers', () => {
+    // Asserts the source entrypoint's (src/index.ts) export surface. The issue
+    // repro checks the built package at runtime
+    // (`'validateCapabilityToken' in await import('vaultkeeper')`); both resolve
+    // to the same export set, so this is the fast unit-level equivalent.
+    expect('validateCapabilityToken' in publicApi).toBe(false)
+    expect('createCapabilityToken' in publicApi).toBe(false)
+  })
+})
+
 describe('createCapabilityToken', () => {
   it('creates a distinct token for each call', () => {
     const claims = makeClaims()
@@ -79,7 +105,9 @@ describe('validateCapabilityToken', () => {
   it('throws AuthorizationDeniedError for a token not created by createCapabilityToken', () => {
     const forgery = new CapabilityToken()
     expect(() => validateCapabilityToken(forgery)).toThrow(AuthorizationDeniedError)
-    expect(() => validateCapabilityToken(forgery)).toThrow('Invalid or unrecognized capability token')
+    expect(() => validateCapabilityToken(forgery)).toThrow(
+      'Invalid or unrecognized capability token',
+    )
   })
 
   it('throws AuthorizationDeniedError for a plain object cast-free forgery attempt', () => {
@@ -98,5 +126,41 @@ describe('validateCapabilityToken', () => {
 
     expect(validateCapabilityToken(tokenA).jti).toBe('token-a')
     expect(validateCapabilityToken(tokenB).jti).toBe('token-b')
+  })
+})
+
+function makeSigningClaims(overrides: Partial<SigningClaims> = {}): SigningClaims {
+  return { keyType: 'signing-key', kid: 'test-kid', backendRef: 'signing-key:test', ...overrides }
+}
+
+describe('isSigningClaims', () => {
+  it('accepts well-formed signing claims', () => {
+    expect(isSigningClaims(makeSigningClaims())).toBe(true)
+  })
+
+  it('accepts real claims from createSigningCapabilityToken', () => {
+    const token = createSigningCapabilityToken(makeSigningClaims())
+    expect(isSigningClaims(validateCapabilityToken(token))).toBe(true)
+  })
+
+  it('rejects ordinary secret claims (no keyType marker)', () => {
+    expect(isSigningClaims(makeClaims())).toBe(false)
+  })
+
+  it('rejects signing claims with an empty kid', () => {
+    expect(isSigningClaims(makeSigningClaims({ kid: '' }))).toBe(false)
+  })
+
+  it('rejects signing claims with an empty backendRef', () => {
+    expect(isSigningClaims(makeSigningClaims({ backendRef: '' }))).toBe(false)
+  })
+
+  it('rejects a claims object carrying BOTH signing markers and secret material', () => {
+    // Defense in depth: a hostile/malformed object that presents the signing
+    // markers but also carries a `val` secret must never be treated as a
+    // signing key. Object.assign attaches `val` at runtime while keeping a
+    // SigningClaims-assignable static type (no cast needed).
+    const both: SigningClaims = Object.assign(makeSigningClaims(), { val: 'super-secret' })
+    expect(isSigningClaims(both)).toBe(false)
   })
 })

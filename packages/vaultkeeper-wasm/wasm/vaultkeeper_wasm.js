@@ -1,6 +1,127 @@
 /* @ts-self-types="./vaultkeeper_wasm.d.ts" */
 
 /**
+ * Result of a successful [`WasmVaultKeeper::authorize`] call.
+ *
+ * Holds the validated claims (with the raw secret redacted) and the raw
+ * secret behind a one-time read. The secret is deliberately not part of the
+ * `claims` shape — callers must opt in explicitly via the exported
+ * `readSecret()` method, which yields the value exactly once.
+ *
+ * Also carries the underlying core capability handle id (`handleId`, issue
+ * #241 AC6) so a caller can additionally use `WasmVaultKeeper`'s
+ * handle-based entry points (`resolveSecretClaims`/`releaseHandle`)
+ * directly — the primitives a future engine swap builds on instead of this
+ * eager wrapper.
+ */
+class WasmAuthorization {
+    static __wrap(ptr) {
+        ptr = ptr >>> 0;
+        const obj = Object.create(WasmAuthorization.prototype);
+        obj.__wbg_ptr = ptr;
+        WasmAuthorizationFinalization.register(obj, obj.__wbg_ptr, obj);
+        return obj;
+    }
+    __destroy_into_raw() {
+        const ptr = this.__wbg_ptr;
+        this.__wbg_ptr = 0;
+        WasmAuthorizationFinalization.unregister(this);
+        return ptr;
+    }
+    free() {
+        const ptr = this.__destroy_into_raw();
+        wasm.__wbg_wasmauthorization_free(ptr, 0);
+    }
+    /**
+     * The validated token claims, with the raw secret (`val`) redacted.
+     * @returns {any}
+     */
+    get claims() {
+        const ret = wasm.wasmauthorization_claims(this.__wbg_ptr);
+        if (ret[2]) {
+            throw takeFromExternrefTable0(ret[1]);
+        }
+        return takeFromExternrefTable0(ret[0]);
+    }
+    /**
+     * The underlying core capability handle id (issue #241 AC6). Usable
+     * with `WasmVaultKeeper.resolveSecretClaims`/`releaseHandle`.
+     * @returns {string}
+     */
+    get handleId() {
+        let deferred1_0;
+        let deferred1_1;
+        try {
+            const ret = wasm.wasmauthorization_handleId(this.__wbg_ptr);
+            deferred1_0 = ret[0];
+            deferred1_1 = ret[1];
+            return getStringFromWasm0(ret[0], ret[1]);
+        } finally {
+            wasm.__wbindgen_free(deferred1_0, deferred1_1, 1);
+        }
+    }
+    /**
+     * Read the raw secret value exactly once. Subsequent calls throw an
+     * `accessor-consumed` error. This is the explicit, deliberately-named
+     * escape hatch for flows that must touch the plaintext secret.
+     *
+     * The Rust side never clones the secret to produce this value: the
+     * plaintext is moved out of the `Zeroizing<String>` wrapper (leaving it
+     * holding an empty string, which is a no-op to scrub on drop) rather
+     * than copied out. The one residual, unprotected copy this cannot close
+     * is on the far side of the `wasm-bindgen`-generated FFI glue itself —
+     * returning an owned `String` from a `#[wasm_bindgen]` method has that
+     * glue copy the bytes into a fresh JS string and then free this Rust
+     * `String` via ordinary (non-zeroizing) `Drop`. That hand-off is
+     * generated code we do not control, and JS strings are immutable and
+     * cannot be scrubbed by this crate regardless — the same trust boundary
+     * already noted for a dishonest/misbehaving JS host elsewhere in this
+     * file (see `JsHostPlatform`'s "No-reentrancy contract").
+     * @returns {string}
+     */
+    readSecret() {
+        let deferred2_0;
+        let deferred2_1;
+        try {
+            const ret = wasm.wasmauthorization_readSecret(this.__wbg_ptr);
+            var ptr1 = ret[0];
+            var len1 = ret[1];
+            if (ret[3]) {
+                ptr1 = 0; len1 = 0;
+                throw takeFromExternrefTable0(ret[2]);
+            }
+            deferred2_0 = ptr1;
+            deferred2_1 = len1;
+            return getStringFromWasm0(ptr1, len1);
+        } finally {
+            wasm.__wbindgen_free(deferred2_0, deferred2_1, 1);
+        }
+    }
+    /**
+     * The authorization response (key status, optional rotated token).
+     * @returns {any}
+     */
+    get response() {
+        const ret = wasm.wasmauthorization_response(this.__wbg_ptr);
+        if (ret[2]) {
+            throw takeFromExternrefTable0(ret[1]);
+        }
+        return takeFromExternrefTable0(ret[0]);
+    }
+    /**
+     * Whether the secret is still available to read (i.e. `readSecret()` has
+     * not yet been called).
+     * @returns {boolean}
+     */
+    get secretAvailable() {
+        const ret = wasm.wasmauthorization_secretAvailable(this.__wbg_ptr);
+        return ret !== 0;
+    }
+}
+if (Symbol.dispose) WasmAuthorization.prototype[Symbol.dispose] = WasmAuthorization.prototype.free;
+exports.WasmAuthorization = WasmAuthorization;
+
+/**
  * WASM-exposed VaultKeeper wrapper.
  */
 class WasmVaultKeeper {
@@ -22,9 +143,23 @@ class WasmVaultKeeper {
         wasm.__wbg_wasmvaultkeeper_free(ptr, 0);
     }
     /**
-     * Decrypt a JWE token, validate its claims, and return { claims, response }.
+     * Decrypt a JWE token, validate its claims, and return a
+     * [`WasmAuthorization`].
+     *
+     * The returned object's `claims` **never** contains the raw secret value
+     * (`val` is redacted) — `vaultkeeper_core::VaultKeeper::authorize` (issue
+     * #241) never returns it either; it stays behind a core-side capability
+     * handle. This call performs the one-time `read_secret` against that
+     * handle immediately, internally, and caches the result on the returned
+     * `WasmAuthorization` exactly as this method always has, so the
+     * `@vaultkeeper/wasm` public shape (`claims`, `response`,
+     * `secretAvailable`, `readSecret()`) is unchanged. The handle itself is
+     * also retained (exposed as `WasmAuthorization.handleId`) so a caller
+     * can additionally use the handle-based entry points below
+     * (`resolveSecretClaims`/`releaseHandle`) — the primitives a future
+     * engine swap would build directly on instead of this eager wrapper.
      * @param {string} jwe
-     * @returns {any}
+     * @returns {WasmAuthorization}
      */
     authorize(jwe) {
         const ptr0 = passStringToWasm0(jwe, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
@@ -33,7 +168,7 @@ class WasmVaultKeeper {
         if (ret[2]) {
             throw takeFromExternrefTable0(ret[1]);
         }
-        return takeFromExternrefTable0(ret[0]);
+        return WasmAuthorization.__wrap(ret[0]);
     }
     /**
      * Get the current configuration as JSON.
@@ -66,6 +201,44 @@ class WasmVaultKeeper {
         return ret;
     }
     /**
+     * Explicitly release a capability handle (issue #241 AC6). Returns
+     * `true` if a handle was actually present and removed, `false` if it
+     * was already gone (released, expired, or evicted). A caller that is
+     * done with a handle should call this rather than waiting on its
+     * expiry. Throws an `authorization-denied` error for a `handleId` that
+     * is not even shaped like a real handle (see
+     * `validate_handle_id_shape`), rather than allocating/looking it up.
+     * @param {string} handle_id
+     * @returns {boolean}
+     */
+    releaseHandle(handle_id) {
+        const ptr0 = passStringToWasm0(handle_id, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.wasmvaultkeeper_releaseHandle(this.__wbg_ptr, ptr0, len0);
+        if (ret[2]) {
+            throw takeFromExternrefTable0(ret[1]);
+        }
+        return ret[0] !== 0;
+    }
+    /**
+     * Resolve the non-secret claims behind a capability handle id (issue
+     * #241 AC6 — a new, handle-based entry point for the future engine
+     * swap, alongside the eager `authorize()`/`WasmAuthorization` wrapper
+     * above). Returns the claims as JSON, with `val` always absent. Refuses
+     * a signing-key handle.
+     * @param {string} handle_id
+     * @returns {any}
+     */
+    resolveSecretClaims(handle_id) {
+        const ptr0 = passStringToWasm0(handle_id, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.wasmvaultkeeper_resolveSecretClaims(this.__wbg_ptr, ptr0, len0);
+        if (ret[2]) {
+            throw takeFromExternrefTable0(ret[1]);
+        }
+        return takeFromExternrefTable0(ret[0]);
+    }
+    /**
      * Retrieve a secret via the file backend.
      * @param {string} id
      * @returns {Promise<string>}
@@ -78,50 +251,39 @@ class WasmVaultKeeper {
     }
     /**
      * Emergency key revocation — removes previous key and generates a new current key.
+     * @returns {Promise<void>}
      */
     revokeKey() {
         const ret = wasm.wasmvaultkeeper_revokeKey(this.__wbg_ptr);
-        if (ret[1]) {
-            throw takeFromExternrefTable0(ret[0]);
-        }
+        return ret;
     }
     /**
      * Rotate the encryption key.
+     * @returns {Promise<void>}
      */
     rotateKey() {
         const ret = wasm.wasmvaultkeeper_rotateKey(this.__wbg_ptr);
-        if (ret[1]) {
-            throw takeFromExternrefTable0(ret[0]);
-        }
+        return ret;
     }
     /**
      * Create a JWE token encapsulating a secret.
+     *
+     * When `options.executablePath` is supplied, the executable is hashed and
+     * run through trust verification (Sigstore → trust-manifest match → TOFU
+     * first-encounter) via the host bridge; a first-encounter TOFU record is
+     * persisted only after the token has been minted (issue #148).
      * @param {string} secret_name
      * @param {string} secret_value
      * @param {any} options
-     * @returns {string}
+     * @returns {Promise<string>}
      */
     setup(secret_name, secret_value, options) {
-        let deferred4_0;
-        let deferred4_1;
-        try {
-            const ptr0 = passStringToWasm0(secret_name, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
-            const len0 = WASM_VECTOR_LEN;
-            const ptr1 = passStringToWasm0(secret_value, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
-            const len1 = WASM_VECTOR_LEN;
-            const ret = wasm.wasmvaultkeeper_setup(this.__wbg_ptr, ptr0, len0, ptr1, len1, options);
-            var ptr3 = ret[0];
-            var len3 = ret[1];
-            if (ret[3]) {
-                ptr3 = 0; len3 = 0;
-                throw takeFromExternrefTable0(ret[2]);
-            }
-            deferred4_0 = ptr3;
-            deferred4_1 = len3;
-            return getStringFromWasm0(ptr3, len3);
-        } finally {
-            wasm.__wbindgen_free(deferred4_0, deferred4_1, 1);
-        }
+        const ptr0 = passStringToWasm0(secret_name, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ptr1 = passStringToWasm0(secret_value, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len1 = WASM_VECTOR_LEN;
+        const ret = wasm.wasmvaultkeeper_setup(this.__wbg_ptr, ptr0, len0, ptr1, len1, options);
+        return ret;
     }
     /**
      * Store a secret via the file backend.
@@ -143,6 +305,278 @@ class WasmVaultKeeper {
 }
 if (Symbol.dispose) WasmVaultKeeper.prototype[Symbol.dispose] = WasmVaultKeeper.prototype.free;
 exports.WasmVaultKeeper = WasmVaultKeeper;
+
+/**
+ * Diagnostic-only export: constructs one instance of every `VaultError`
+ * variant with fixed dummy field values and converts each through the real
+ * `vault_error_to_js` bridge, exactly as a genuine thrown error would be.
+ *
+ * This exists solely so `error-parity.test.ts` can round-trip real
+ * bridge-produced values through the TypeScript reconstruction map, instead
+ * of guessing at the JSON shape `vault_error_to_js` produces. It is not part
+ * of the SDK's public TypeScript API (`packages/vaultkeeper-wasm/src/index.ts`
+ * does not re-export it) and is never called from a real code path — see
+ * `all_variants_for_parity_test` in `crates/vaultkeeper-core/src/errors.rs`
+ * for the fixture values.
+ * @returns {Array<any>}
+ */
+function __testAllVaultErrors() {
+    const ret = wasm.__testAllVaultErrors();
+    return ret;
+}
+exports.__testAllVaultErrors = __testAllVaultErrors;
+
+/**
+ * Diagnostic-only export exercising `HostPlatform::exec` directly through
+ * the real `JsHostPlatform` bridge (issue #239 AC1, and the malformed-result
+ * hardening below it). Lets tests drive a mock host whose `exec()` returns a
+ * malformed `stdout`/`stderr`/`exitCode` without needing a core consumer
+ * that calls `exec` with such a host. Not part of the SDK's public
+ * TypeScript API (`packages/vaultkeeper-wasm/src/index.ts` does not
+ * re-export it).
+ *
+ * `host` must satisfy the full `JsHostPlatform::new` contract (`platform()`,
+ * `configDir()`) in addition to `exec()`, since it's constructed the same
+ * way a real `WasmVaultKeeper` host is.
+ * @param {any} host
+ * @param {string} cmd
+ * @param {string[]} args
+ * @returns {Promise<any>}
+ */
+function __testExec(host, cmd, args) {
+    const ptr0 = passStringToWasm0(cmd, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ptr1 = passArrayJsValueToWasm0(args, wasm.__wbindgen_malloc);
+    const len1 = WASM_VECTOR_LEN;
+    const ret = wasm.__testExec(host, ptr0, len0, ptr1, len1);
+    return ret;
+}
+exports.__testExec = __testExec;
+
+/**
+ * Diagnostic-only export exercising `HostPlatform::http_fetch` directly
+ * through the real `JsHostPlatform` bridge (issue #239 AC2 — "land the
+ * primitive with direct tests"). No core consumer calls `http_fetch` yet
+ * (see the trait default in `crates/vaultkeeper-core/src/backend/types.rs`),
+ * so this is the only way to exercise the bridge end-to-end today. Not part
+ * of the SDK's public TypeScript API (`packages/vaultkeeper-wasm/src/index.ts`
+ * does not re-export it).
+ *
+ * `host` must satisfy the full `JsHostPlatform::new` contract (`platform()`,
+ * `configDir()`) in addition to `httpFetch()`, since it's constructed the
+ * same way a real `WasmVaultKeeper` host is.
+ * @param {any} host
+ * @param {any} request
+ * @returns {Promise<any>}
+ */
+function __testHttpFetch(host, request) {
+    const ret = wasm.__testHttpFetch(host, request);
+    return ret;
+}
+exports.__testHttpFetch = __testHttpFetch;
+
+/**
+ * Diagnostic-only export exercising `JsSecretBackend::delete`.
+ * @param {any} host
+ * @param {string} id
+ * @returns {Promise<void>}
+ */
+function __testJsSecretBackendDelete(host, id) {
+    const ptr0 = passStringToWasm0(id, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.__testJsSecretBackendDelete(host, ptr0, len0);
+    return ret;
+}
+exports.__testJsSecretBackendDelete = __testJsSecretBackendDelete;
+
+/**
+ * Diagnostic-only export exercising `JsSecretBackend::exists`.
+ * @param {any} host
+ * @param {string} id
+ * @returns {Promise<boolean>}
+ */
+function __testJsSecretBackendExists(host, id) {
+    const ptr0 = passStringToWasm0(id, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.__testJsSecretBackendExists(host, ptr0, len0);
+    return ret;
+}
+exports.__testJsSecretBackendExists = __testJsSecretBackendExists;
+
+/**
+ * Diagnostic-only export exercising `JsSecretBackend::is_available`.
+ * @param {any} host
+ * @returns {Promise<boolean>}
+ */
+function __testJsSecretBackendIsAvailable(host) {
+    const ret = wasm.__testJsSecretBackendIsAvailable(host);
+    return ret;
+}
+exports.__testJsSecretBackendIsAvailable = __testJsSecretBackendIsAvailable;
+
+/**
+ * Diagnostic-only export exercising `JsSecretBackend::list`
+ * (`ListableBackend`), including the `NotCapable` path when the JS mock
+ * doesn't provide `list()`.
+ * @param {any} host
+ * @returns {Promise<string[]>}
+ */
+function __testJsSecretBackendList(host) {
+    const ret = wasm.__testJsSecretBackendList(host);
+    return ret;
+}
+exports.__testJsSecretBackendList = __testJsSecretBackendList;
+
+/**
+ * Diagnostic-only export: constructs a `JsSecretBackend` from `host` and
+ * returns its `{ type, displayName }` identity — issue #239 AC5 "unit
+ * coverage with a mock JS backend". Not part of the SDK's public TypeScript
+ * API.
+ * @param {any} host
+ * @returns {any}
+ */
+function __testJsSecretBackendMeta(host) {
+    const ret = wasm.__testJsSecretBackendMeta(host);
+    if (ret[2]) {
+        throw takeFromExternrefTable0(ret[1]);
+    }
+    return takeFromExternrefTable0(ret[0]);
+}
+exports.__testJsSecretBackendMeta = __testJsSecretBackendMeta;
+
+/**
+ * Diagnostic-only export exercising `JsSecretBackend::retrieve`.
+ * @param {any} host
+ * @param {string} id
+ * @returns {Promise<string>}
+ */
+function __testJsSecretBackendRetrieve(host, id) {
+    const ptr0 = passStringToWasm0(id, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.__testJsSecretBackendRetrieve(host, ptr0, len0);
+    return ret;
+}
+exports.__testJsSecretBackendRetrieve = __testJsSecretBackendRetrieve;
+
+/**
+ * Diagnostic-only export exercising `JsSecretBackend::store`. `secret` is a
+ * UTF-8 string on this side of the boundary — the core `SecretBackend`
+ * trait's `store`/`retrieve` are `&str`/`String`-based — but crosses to the
+ * JS mock as a `Uint8Array`, exactly as a real `JsSecretBackend::store` call
+ * would.
+ * @param {any} host
+ * @param {string} id
+ * @param {string} secret
+ * @returns {Promise<void>}
+ */
+function __testJsSecretBackendStore(host, id, secret) {
+    const ptr0 = passStringToWasm0(id, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ptr1 = passStringToWasm0(secret, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const len1 = WASM_VECTOR_LEN;
+    const ret = wasm.__testJsSecretBackendStore(host, ptr0, len0, ptr1, len1);
+    return ret;
+}
+exports.__testJsSecretBackendStore = __testJsSecretBackendStore;
+
+/**
+ * Diagnostic-only export proving the core-resident environment-profile
+ * loader (issue #277) is reachable from the TS path through the real WASM
+ * binary (AC7's wasm-bridge half; the Rust half is
+ * `crates/vaultkeeper-core/tests/profile_loader_integration.rs`). Not part
+ * of the SDK's public TypeScript API — `packages/vaultkeeper-wasm/src/index.ts`
+ * does not re-export it.
+ *
+ * `config_defaults` is `{ ttlMinutes: number, trustTier: 1 | 2 | 3 }`,
+ * mirroring `config.json`'s `defaults` shape; this function performs the
+ * same `ttlMinutes` → seconds conversion
+ * `vaultkeeper_core::profile::ProfileDefaults::from_vault_defaults` does.
+ * @param {string} json
+ * @param {any} config_defaults
+ * @returns {any}
+ */
+function __testLoadProfile(json, config_defaults) {
+    const ptr0 = passStringToWasm0(json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.__testLoadProfile(ptr0, len0, config_defaults);
+    if (ret[2]) {
+        throw takeFromExternrefTable0(ret[1]);
+    }
+    return takeFromExternrefTable0(ret[0]);
+}
+exports.__testLoadProfile = __testLoadProfile;
+
+/**
+ * Diagnostic-only export exercising `HostPlatform::prompt_approval`
+ * directly through the real `JsHostPlatform` bridge (issue #239 AC3). Not
+ * part of the SDK's public TypeScript API.
+ * @param {any} host
+ * @param {string} action
+ * @param {string} detail
+ * @returns {Promise<boolean>}
+ */
+function __testPromptApproval(host, action, detail) {
+    const ptr0 = passStringToWasm0(action, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ptr1 = passStringToWasm0(detail, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const len1 = WASM_VECTOR_LEN;
+    const ret = wasm.__testPromptApproval(host, ptr0, len0, ptr1, len1);
+    return ret;
+}
+exports.__testPromptApproval = __testPromptApproval;
+
+/**
+ * Diagnostic-only export: runs the Rust core's `validate_claims` — the
+ * single validation chokepoint every token passes through — directly against
+ * a caller-supplied claims payload, without needing a real JWE, key, or
+ * `VaultKeeper` instance.
+ *
+ * `claims_json` must deserialize as `VaultClaims`. Returns `Ok(())` when
+ * validation passes, or a `JsValue` produced by the real `vault_error_to_js`
+ * bridge (matching every other error surfaced from this binary) when it
+ * fails.
+ *
+ * This exists so `packages/cli-tests/test/conformance/claims-validation-parity.test.ts`
+ * can assert the Rust core and the TypeScript library's `validateClaims`
+ * (`packages/vaultkeeper/src/jwe/claims.ts`) produce byte-identical error
+ * messages for the same malformed claims payload (issue #280) — it is not
+ * part of the SDK's public TypeScript API (`../index.ts` does not re-export
+ * it) and is never called from a real code path.
+ *
+ * # Errors
+ * Returns the bridged `VaultError` when `claims_json` fails to parse as
+ * `VaultClaims`, or when `validate_claims` rejects the parsed claims.
+ * @param {string} claims_json
+ * @param {bigint} used_count
+ */
+function __testValidateClaims(claims_json, used_count) {
+    const ptr0 = passStringToWasm0(claims_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.__testValidateClaims(ptr0, len0, used_count);
+    if (ret[1]) {
+        throw takeFromExternrefTable0(ret[0]);
+    }
+}
+exports.__testValidateClaims = __testValidateClaims;
+
+/**
+ * The canonical list of every machine-readable `vaultErrorCode` this WASM
+ * binary can throw — the single source of truth for the error taxonomy (see
+ * `ALL_ERROR_CODES` in `crates/vaultkeeper-core/src/errors.rs`).
+ *
+ * `packages/vaultkeeper-wasm/src/test/error-parity.test.ts` fetches this
+ * exact list at test time and asserts it equals the TypeScript
+ * reconstruction map's known codes exactly, catching drift between the two
+ * languages in either direction.
+ * @returns {string[]}
+ */
+function allVaultErrorCodes() {
+    const ret = wasm.allVaultErrorCodes();
+    var v1 = getArrayJsValueFromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 4, 4);
+    return v1;
+}
+exports.allVaultErrorCodes = allVaultErrorCodes;
 
 /**
  * Factory function to create a WasmVaultKeeper.
@@ -187,6 +621,10 @@ function __wbg_get_imports() {
             const ret = typeof(arg0) === 'function';
             return ret;
         },
+        __wbg___wbindgen_is_null_0b605fc6b167c56f: function(arg0) {
+            const ret = arg0 === null;
+            return ret;
+        },
         __wbg___wbindgen_is_object_781bc9f159099513: function(arg0) {
             const val = arg0;
             const ret = typeof(val) === 'object' && val !== null;
@@ -218,6 +656,10 @@ function __wbg_get_imports() {
         },
         __wbg_call_2d781c1f4d5c0ef8: function() { return handleError(function (arg0, arg1, arg2) {
             const ret = arg0.call(arg1, arg2);
+            return ret;
+        }, arguments); },
+        __wbg_call_dcc2662fa17a72cf: function() { return handleError(function (arg0, arg1, arg2, arg3) {
+            const ret = arg0.call(arg1, arg2, arg3);
             return ret;
         }, arguments); },
         __wbg_call_e133b57c9155d22c: function() { return handleError(function (arg0, arg1) {
@@ -257,6 +699,24 @@ function __wbg_get_imports() {
             const ret = arg0[arg1 >>> 0];
             return ret;
         },
+        __wbg_instanceof_Uint8Array_740438561a5b956d: function(arg0) {
+            let result;
+            try {
+                result = arg0 instanceof Uint8Array;
+            } catch (_) {
+                result = false;
+            }
+            const ret = result;
+            return ret;
+        },
+        __wbg_isArray_33b91feb269ff46e: function(arg0) {
+            const ret = Array.isArray(arg0);
+            return ret;
+        },
+        __wbg_keys_ab0d051a1c55236d: function(arg0) {
+            const ret = Object.keys(arg0);
+            return ret;
+        },
         __wbg_length_b3416cf66a5452c8: function(arg0) {
             const ret = arg0.length;
             return ret;
@@ -277,6 +737,10 @@ function __wbg_get_imports() {
             const ret = new Array();
             return ret;
         },
+        __wbg_new_ab79df5bd7c26067: function() {
+            const ret = new Object();
+            return ret;
+        },
         __wbg_new_typed_aaaeaf29cf802876: function(arg0, arg1) {
             try {
                 var state0 = {a: arg0, b: arg1};
@@ -284,7 +748,7 @@ function __wbg_get_imports() {
                     const a = state0.a;
                     state0.a = 0;
                     try {
-                        return wasm_bindgen__convert__closures_____invoke__h20801636f3b67db9(a, state0.b, arg0, arg1);
+                        return wasm_bindgen__convert__closures_____invoke__h1d09f6aac4bd3d03(a, state0.b, arg0, arg1);
                     } finally {
                         state0.a = a;
                     }
@@ -325,6 +789,10 @@ function __wbg_get_imports() {
             const ret = Promise.resolve(arg0);
             return ret;
         },
+        __wbg_set_7eaa4f96924fd6b3: function() { return handleError(function (arg0, arg1, arg2) {
+            const ret = Reflect.set(arg0, arg1, arg2);
+            return ret;
+        }, arguments); },
         __wbg_set_8c0b3ffcf05d61c2: function(arg0, arg1, arg2) {
             arg0.set(getArrayU8FromWasm0(arg1, arg2));
         },
@@ -364,8 +832,8 @@ function __wbg_get_imports() {
             return ret;
         },
         __wbindgen_cast_0000000000000001: function(arg0, arg1) {
-            // Cast intrinsic for `Closure(Closure { dtor_idx: 157, function: Function { arguments: [Externref], shim_idx: 158, ret: Result(Unit), inner_ret: Some(Result(Unit)) }, mutable: true }) -> Externref`.
-            const ret = makeMutClosure(arg0, arg1, wasm.wasm_bindgen__closure__destroy__had4a06f88502d92d, wasm_bindgen__convert__closures_____invoke__h245423d8564c58d0);
+            // Cast intrinsic for `Closure(Closure { dtor_idx: 238, function: Function { arguments: [Externref], shim_idx: 239, ret: Result(Unit), inner_ret: Some(Result(Unit)) }, mutable: true }) -> Externref`.
+            const ret = makeMutClosure(arg0, arg1, wasm.wasm_bindgen__closure__destroy__h1722208547e491cb, wasm_bindgen__convert__closures_____invoke__h8760ba3086f56474);
             return ret;
         },
         __wbindgen_cast_0000000000000002: function(arg0) {
@@ -376,6 +844,13 @@ function __wbg_get_imports() {
         __wbindgen_cast_0000000000000003: function(arg0, arg1) {
             // Cast intrinsic for `Ref(String) -> Externref`.
             const ret = getStringFromWasm0(arg0, arg1);
+            return ret;
+        },
+        __wbindgen_cast_0000000000000004: function(arg0, arg1) {
+            var v0 = getArrayJsValueFromWasm0(arg0, arg1).slice();
+            wasm.__wbindgen_free(arg0, arg1 * 4, 4);
+            // Cast intrinsic for `Vector(NamedExternref("string")) -> Externref`.
+            const ret = v0;
             return ret;
         },
         __wbindgen_init_externref_table: function() {
@@ -394,17 +869,20 @@ function __wbg_get_imports() {
     };
 }
 
-function wasm_bindgen__convert__closures_____invoke__h245423d8564c58d0(arg0, arg1, arg2) {
-    const ret = wasm.wasm_bindgen__convert__closures_____invoke__h245423d8564c58d0(arg0, arg1, arg2);
+function wasm_bindgen__convert__closures_____invoke__h8760ba3086f56474(arg0, arg1, arg2) {
+    const ret = wasm.wasm_bindgen__convert__closures_____invoke__h8760ba3086f56474(arg0, arg1, arg2);
     if (ret[1]) {
         throw takeFromExternrefTable0(ret[0]);
     }
 }
 
-function wasm_bindgen__convert__closures_____invoke__h20801636f3b67db9(arg0, arg1, arg2, arg3) {
-    wasm.wasm_bindgen__convert__closures_____invoke__h20801636f3b67db9(arg0, arg1, arg2, arg3);
+function wasm_bindgen__convert__closures_____invoke__h1d09f6aac4bd3d03(arg0, arg1, arg2, arg3) {
+    wasm.wasm_bindgen__convert__closures_____invoke__h1d09f6aac4bd3d03(arg0, arg1, arg2, arg3);
 }
 
+const WasmAuthorizationFinalization = (typeof FinalizationRegistry === 'undefined')
+    ? { register: () => {}, unregister: () => {} }
+    : new FinalizationRegistry(ptr => wasm.__wbg_wasmauthorization_free(ptr >>> 0, 1));
 const WasmVaultKeeperFinalization = (typeof FinalizationRegistry === 'undefined')
     ? { register: () => {}, unregister: () => {} }
     : new FinalizationRegistry(ptr => wasm.__wbg_wasmvaultkeeper_free(ptr >>> 0, 1));
@@ -484,6 +962,17 @@ function debugString(val) {
     return className;
 }
 
+function getArrayJsValueFromWasm0(ptr, len) {
+    ptr = ptr >>> 0;
+    const mem = getDataViewMemory0();
+    const result = [];
+    for (let i = ptr; i < ptr + 4 * len; i += 4) {
+        result.push(wasm.__wbindgen_externrefs.get(mem.getUint32(i, true)));
+    }
+    wasm.__externref_drop_slice(ptr, len);
+    return result;
+}
+
 function getArrayU8FromWasm0(ptr, len) {
     ptr = ptr >>> 0;
     return getUint8ArrayMemory0().subarray(ptr / 1, ptr / 1 + len);
@@ -549,6 +1038,16 @@ function makeMutClosure(arg0, arg1, dtor, f) {
     };
     CLOSURE_DTORS.register(real, state, state);
     return real;
+}
+
+function passArrayJsValueToWasm0(array, malloc) {
+    const ptr = malloc(array.length * 4, 4) >>> 0;
+    for (let i = 0; i < array.length; i++) {
+        const add = addToExternrefTable0(array[i]);
+        getDataViewMemory0().setUint32(ptr + 4 * i, add, true);
+    }
+    WASM_VECTOR_LEN = array.length;
+    return ptr;
 }
 
 function passStringToWasm0(arg, malloc, realloc) {

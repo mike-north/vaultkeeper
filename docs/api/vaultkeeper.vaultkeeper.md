@@ -12,6 +12,52 @@ Main entry point for vaultkeeper. Orchestrates backends, keys, JWE tokens, ident
 declare class VaultKeeper 
 ```
 
+## Properties
+
+<table><thead><tr><th>
+
+Property
+
+
+</th><th>
+
+Modifiers
+
+
+</th><th>
+
+Type
+
+
+</th><th>
+
+Description
+
+
+</th></tr></thead>
+<tbody><tr><td>
+
+[activeBackendType](./vaultkeeper.vaultkeeper.activebackendtype.md)
+
+
+</td><td>
+
+`readonly`
+
+
+</td><td>
+
+string
+
+
+</td><td>
+
+The type identifier of the active backend — the first enabled backend in the resolved configuration (the one `store()`<!-- -->, `delete()`<!-- -->, and `setup()` operate on).
+
+
+</td></tr>
+</tbody></table>
+
 ## Methods
 
 <table><thead><tr><th>
@@ -32,6 +78,24 @@ Description
 </th></tr></thead>
 <tbody><tr><td>
 
+[approveExecutable(executablePath)](./vaultkeeper.vaultkeeper.approveexecutable.md)
+
+
+</td><td>
+
+
+</td><td>
+
+Approve an executable for trust-on-first-use by recording its current SHA-256 hash in the trust manifest.
+
+After approval, [VaultKeeper.setup()](./vaultkeeper.vaultkeeper.setup.md) and [VaultKeeper.checkExecutableTrust()](./vaultkeeper.vaultkeeper.checkexecutabletrust.md) recognize the executable (matched by its resolved absolute path and content hash) as trusted, so callers can skip an interactive approval prompt.
+
+The operation is idempotent: approving the same, unchanged executable more than once leaves a single manifest entry.
+
+
+</td></tr>
+<tr><td>
+
 [authorize(jwe)](./vaultkeeper.vaultkeeper.authorize.md)
 
 
@@ -46,7 +110,55 @@ Decrypt a JWE, validate claims, verify executable identity, and return an opaque
 </td></tr>
 <tr><td>
 
-[delete(name)](./vaultkeeper.vaultkeeper.delete.md)
+[authorizeSigningKey(name)](./vaultkeeper.vaultkeeper.authorizesigningkey.md)
+
+
+</td><td>
+
+
+</td><td>
+
+Mint a signing-key capability token for the key named `name`<!-- -->.
+
+The returned token carries only `{ kid, backendRef, keyType: 'signing-key' }` — never any key material — and is accepted only by [VaultKeeper.sign()](./vaultkeeper.vaultkeeper.sign.md)<!-- -->. Passing it to `getSecret`<!-- -->/`fetch`<!-- -->/`exec` is rejected.
+
+
+</td></tr>
+<tr><td>
+
+[checkExecutableTrust(executablePath)](./vaultkeeper.vaultkeeper.checkexecutabletrust.md)
+
+
+</td><td>
+
+
+</td><td>
+
+Check whether an executable is trusted according to the trust manifest, without modifying the manifest.
+
+This is a read-only probe. Unlike [VaultKeeper.setup()](./vaultkeeper.vaultkeeper.setup.md)<!-- -->, it never records a hash, so it can be used to decide whether an interactive approval prompt is required before proceeding.
+
+
+</td></tr>
+<tr><td>
+
+[createSigningKey(name, algorithm)](./vaultkeeper.vaultkeeper.createsigningkey.md)
+
+
+</td><td>
+
+
+</td><td>
+
+Enroll a new signing keypair under `name` in the active backend.
+
+The keypair is generated and stored entirely backend-side (see [SigningBackend](./vaultkeeper.signingbackend.md)<!-- -->); the private key never enters vault claims, a capability token, or the caller's process. Signing keys occupy a namespace distinct from secrets, so a signing key and a secret can share a name without colliding, and a signing key can never be read as a secret.
+
+
+</td></tr>
+<tr><td>
+
+[delete(name, options)](./vaultkeeper.vaultkeeper.delete.md)
 
 
 </td><td>
@@ -88,9 +200,29 @@ When called without arguments, uses conservative platform defaults — all platf
 
 </td><td>
 
-Execute a delegated command, injecting the secret from the token.
+Execute a delegated command, injecting secrets from the token(s).
 
-The secret value is substituted for every `{{secret}}` placeholder found in `request.args` and `request.env` values before the process is spawned. The raw secret is never exposed in the return value.
+\*\*Single token:\*\* every `{{secret}}` placeholder in `request.env` values is replaced with the secret value.
+
+\*\*Token map ([SecretTokenMap](./vaultkeeper.secrettokenmap.md)<!-- -->):\*\* every `{{secret:name}}` placeholder is replaced with the secret from the corresponding named token.
+
+Secret placeholders are not supported in `request.command` or `request.args` — process arguments are visible to other processes via `ps` and often collected in logs and telemetry.
+
+The raw secret is never exposed in the return value: by default the captured `stdout`<!-- -->/`stderr` is scrubbed of every injected secret value (replaced with `[REDACTED]`<!-- -->), so a command that echoes the secret does not leak it back. Pass `request.redact = false` to receive raw, unredacted output — only when a caller genuinely needs it, since that forfeits the guarantee.
+
+
+</td></tr>
+<tr><td>
+
+[exportPublicKey(name)](./vaultkeeper.vaultkeeper.exportpublickey.md)
+
+
+</td><td>
+
+
+</td><td>
+
+Export the SPKI PEM public key for the signing key named `name`<!-- -->.
 
 
 </td></tr>
@@ -104,9 +236,27 @@ The secret value is substituted for every `{{secret}}` placeholder found in `req
 
 </td><td>
 
-Execute a delegated HTTP fetch, injecting the secret from the token.
+Execute a delegated HTTP fetch, injecting secrets from the token(s).
 
-The secret value is substituted for every `{{secret}}` placeholder found in `request.url`<!-- -->, `request.headers`<!-- -->, and `request.body` before the fetch is executed. The raw secret is never exposed in the return value.
+\*\*Single token:\*\* every `{{secret}}` placeholder in `request.url`<!-- -->, `request.headers`<!-- -->, and `request.body` is replaced with the secret value.
+
+\*\*Token map ([SecretTokenMap](./vaultkeeper.secrettokenmap.md)<!-- -->):\*\* every `{{secret:name}}` placeholder is replaced with the secret from the corresponding named token.
+
+The delegation covers only the requested URL. Fetch redirect statuses (301, 302, 303, 307, and 308) reject with [FetchError](./vaultkeeper.fetcherror.md)<!-- -->, including same-origin redirects and requests without placeholders.
+
+
+</td></tr>
+<tr><td>
+
+[getActiveBackendCapabilities()](./vaultkeeper.vaultkeeper.getactivebackendcapabilities.md)
+
+
+</td><td>
+
+
+</td><td>
+
+Report the [BackendCapabilities](./vaultkeeper.backendcapabilities.md) of the active backend's configured instance — the same backend [VaultKeeper.store()](./vaultkeeper.vaultkeeper.store.md)<!-- -->, [VaultKeeper.setup()](./vaultkeeper.vaultkeeper.setup.md)<!-- -->, and [VaultKeeper.sign()](./vaultkeeper.vaultkeeper.sign.md) operate on.
 
 
 </td></tr>
@@ -139,6 +289,8 @@ The accessor wraps the secret in a single-use, auto-zeroing `Buffer`<!-- -->. Th
 </td><td>
 
 Initialize a new VaultKeeper instance. Runs doctor checks (unless skipped), loads config, and sets up the key manager.
+
+The configured secret backend is resolved lazily on first use, not during `init()`<!-- -->. Trust-only operations (e.g. [VaultKeeper.approveExecutable()](./vaultkeeper.vaultkeeper.approveexecutable.md)<!-- -->, [VaultKeeper.checkExecutableTrust()](./vaultkeeper.vaultkeeper.checkexecutabletrust.md)<!-- -->) therefore succeed even when the configured backend or plugin is unavailable or unregistered; a misconfigured backend surfaces only when a secret operation is invoked.
 
 
 </td></tr>
@@ -176,6 +328,20 @@ The previous key remains valid for decryption during the grace period configured
 </td></tr>
 <tr><td>
 
+[secretExists(name)](./vaultkeeper.vaultkeeper.secretexists.md)
+
+
+</td><td>
+
+
+</td><td>
+
+Check whether a secret exists in the active backend, without retrieving its value, minting a token, or touching the TOFU trust manifest.
+
+
+</td></tr>
+<tr><td>
+
 [setDevelopmentMode(executablePath, enabled)](./vaultkeeper.vaultkeeper.setdevelopmentmode.md)
 
 
@@ -206,7 +372,7 @@ Read a stored secret from the backend and mint a JWE token that encapsulates it.
 </td></tr>
 <tr><td>
 
-[sign(token, request)](./vaultkeeper.vaultkeeper.sign.md)
+[sign(token, request, options)](./vaultkeeper.vaultkeeper.sign.md)
 
 
 </td><td>
@@ -214,15 +380,15 @@ Read a stored secret from the backend and mint a JWE token that encapsulates it.
 
 </td><td>
 
-Sign data using the private key embedded in a capability token.
+Sign a caller-supplied payload with a signing-key capability token.
 
-The signing key is extracted from the token's encrypted claims, used for a single `crypto.sign()` call, and never exposed to the caller. The algorithm is auto-detected from the key type unless overridden in the request.
+The signature is produced backend-side via [SigningBackend.signWithKey()](./vaultkeeper.signingbackend.signwithkey.md) — the private key never leaves the backend and never appears in the token, the claims, or this process. The result is a detached-payload Compact JWS (RFC 7515 §7.2.2 + RFC 7797 `b64:false`<!-- -->, `crit:["b64"]`<!-- -->, `alg:EdDSA`<!-- -->) that any standards-compliant JOSE library can verify given the payload and the public key.
 
 
 </td></tr>
 <tr><td>
 
-[store(name, value)](./vaultkeeper.vaultkeeper.store.md)
+[store(name, value, options)](./vaultkeeper.vaultkeeper.store.md)
 
 
 </td><td>
@@ -248,11 +414,11 @@ This is a convenience method that delegates to the active backend's `store()` me
 
 </td><td>
 
-Verify a signature using a public key.
+Verify a detached-payload Compact JWS against a public key — fully offline.
 
-This is a static method — no VaultKeeper instance, secrets, or capability tokens are required. It is safe to call from CI or any context that has access to public key material.
+This is a static, asynchronous method: no VaultKeeper instance, backend, config, or capability token is required, so it is safe to call in CI or any context holding only public material.
 
-Returns `false` for invalid key material, malformed signatures, or any verification failure (except disallowed algorithms, which throw).
+Returns `false` for a signature that does not verify — a tampered payload, the wrong key, or a structurally malformed JWS. It throws [InvalidKeyMaterialError](./vaultkeeper.invalidkeymaterialerror.md) only when the public key itself is not parseable (or a private key was supplied) — an operational fault distinct from a bad signature.
 
 
 </td></tr>

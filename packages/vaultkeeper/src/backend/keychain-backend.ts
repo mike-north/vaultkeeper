@@ -42,13 +42,7 @@ export class KeychainBackend implements ListableBackend {
     const service = `${SERVICE_PREFIX}${id}`
     const encoded = Buffer.from(secret, 'utf8').toString('base64')
     // Delete existing entry first (ignore errors) then add fresh
-    await execCommandFull('security', [
-      'delete-generic-password',
-      '-a',
-      ACCOUNT,
-      '-s',
-      service,
-    ])
+    await execCommandFull('security', ['delete-generic-password', '-a', ACCOUNT, '-s', service])
     await execCommand('security', [
       'add-generic-password',
       '-a',
@@ -104,9 +98,7 @@ export class KeychainBackend implements ListableBackend {
   }
 
   async list(): Promise<string[]> {
-    const result = await execCommandFull('security', [
-      'dump-keychain',
-    ])
+    const result = await execCommandFull('security', ['dump-keychain'])
     if (result.exitCode !== 0) {
       return []
     }

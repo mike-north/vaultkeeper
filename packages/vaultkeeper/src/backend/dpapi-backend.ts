@@ -10,10 +10,22 @@ import * as fs from 'node:fs/promises'
 import * as path from 'node:path'
 import * as os from 'node:os'
 import { execCommand, execCommandFull } from '../util/exec.js'
-import { SecretNotFoundError } from '../errors.js'
+import { SecretNotFoundError, toFilesystemError } from '../errors.js'
 import type { ListableBackend } from './types.js'
 
-function getStoragePath(): string {
+/**
+ * Resolve the storage directory for a DpapiBackend instance.
+ *
+ * When `configuredPath` is provided (from `BackendConfig.path`), encrypted
+ * blobs are stored directly under that directory. Otherwise the default
+ * `$HOME/.vaultkeeper/dpapi` location is used.
+ */
+function resolveStorageDir(configuredPath?: string): string {
+  // Config validation (see validateConfig) rejects empty/whitespace-only
+  // paths, so any defined value here is guaranteed non-blank.
+  if (configuredPath !== undefined) {
+    return configuredPath
+  }
   return path.join(os.homedir(), '.vaultkeeper', 'dpapi')
 }
 
@@ -37,6 +49,16 @@ export class DpapiBackend implements ListableBackend {
   readonly type = 'dpapi'
   readonly displayName = 'Windows DPAPI'
 
+  readonly #storageDir: string
+
+  /**
+   * @param storageDir - Directory in which encrypted blobs are stored.
+   *   Sourced from `BackendConfig.path`. Defaults to `$HOME/.vaultkeeper/dpapi`.
+   */
+  constructor(storageDir?: string) {
+    this.#storageDir = resolveStorageDir(storageDir)
+  }
+
   async isAvailable(): Promise<boolean> {
     if (process.platform !== 'win32') {
       return false
@@ -54,24 +76,39 @@ export class DpapiBackend implements ListableBackend {
   }
 
   async store(id: string, secret: string): Promise<void> {
-    const storageDir = getStoragePath()
+    const storageDir = this.#storageDir
     await fs.mkdir(storageDir, { recursive: true })
     const entryPath = getEntryPath(storageDir, id)
 
+    // The secret is never embedded in the script text (which becomes a
+    // `-Command` argv element, and therefore visible to any other process
+    // that can list this process's command line, e.g. `ps`/Task Manager).
+    // Instead it is piped over stdin, base64-encoded so the transfer is
+    // immune to console/pipe text-encoding and newline-translation
+    // differences between Node and PowerShell (issue #269).
     const script = [
       'Add-Type -AssemblyName System.Security',
-      `$bytes = [System.Text.Encoding]::UTF8.GetBytes(${JSON.stringify(secret)})`,
+      '$b64 = [Console]::In.ReadToEnd()',
+      '$bytes = [System.Convert]::FromBase64String($b64.Trim())',
       '$entropy = $null',
       '$scope = [System.Security.Cryptography.DataProtectionScope]::CurrentUser',
       '$encrypted = [System.Security.Cryptography.ProtectedData]::Protect($bytes, $entropy, $scope)',
       `[System.IO.File]::WriteAllBytes(${JSON.stringify(entryPath)}, $encrypted)`,
     ].join('; ')
 
-    await execCommand('powershell', ['-NoProfile', '-Command', script])
+    // Zero the plaintext intermediate once the stdin payload is derived
+    // (security rule: zero Buffer instances containing secrets after use).
+    const secretBuf = Buffer.from(secret, 'utf8')
+    const stdinPayload = secretBuf.toString('base64')
+    secretBuf.fill(0)
+
+    await execCommand('powershell', ['-NoProfile', '-Command', script], {
+      stdin: stdinPayload,
+    })
   }
 
   async retrieve(id: string): Promise<string> {
-    const storageDir = getStoragePath()
+    const storageDir = this.#storageDir
     const entryPath = getEntryPath(storageDir, id)
 
     try {
@@ -93,7 +130,7 @@ export class DpapiBackend implements ListableBackend {
   }
 
   async delete(id: string): Promise<void> {
-    const storageDir = getStoragePath()
+    const storageDir = this.#storageDir
     const entryPath = getEntryPath(storageDir, id)
 
     try {
@@ -102,12 +139,14 @@ export class DpapiBackend implements ListableBackend {
       if (err instanceof Error && 'code' in err && err.code === 'ENOENT') {
         throw new SecretNotFoundError(`Secret not found in Windows DPAPI store: ${id}`)
       }
-      throw err
+      // Same contract as FileBackend.delete (#126): a non-ENOENT unlink
+      // failure surfaces as a typed FilesystemError, never a raw Node error.
+      throw toFilesystemError(err, 'secret file', entryPath, 'delete')
     }
   }
 
   async exists(id: string): Promise<boolean> {
-    const storageDir = getStoragePath()
+    const storageDir = this.#storageDir
     const entryPath = getEntryPath(storageDir, id)
 
     try {
@@ -119,7 +158,7 @@ export class DpapiBackend implements ListableBackend {
   }
 
   async list(): Promise<string[]> {
-    const storageDir = getStoragePath()
+    const storageDir = this.#storageDir
     let entries: string[]
     try {
       entries = await fs.readdir(storageDir)

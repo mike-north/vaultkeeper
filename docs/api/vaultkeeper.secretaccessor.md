@@ -6,7 +6,7 @@
 
 Callback-based secret accessor with auto-zeroing.
 
-The accessor is backed by a revocable Proxy. Calling `read()` passes a `Buffer` containing the secret to the callback, then zeroes the buffer after the callback returns. The accessor can only be read once; a second call throws.
+The accessor is backed by a Proxy and is single-use via an internal consumed flag. Calling `read()` passes a `Buffer` containing the secret to the callback, then zeroes the buffer after the callback returns and passes the callback's return value through. The accessor can only be read once; a second call throws.
 
 **Signature:**
 
@@ -37,6 +37,8 @@ Description
 Read the secret value via a callback.
 
 The `buf` argument is a temporary `Buffer` containing the secret encoded as UTF-8. The buffer is zeroed immediately after the callback returns, so callers must not store a reference to it beyond the callback scope.
+
+The callback's return value is passed through, so a caller-derived result (for example `buf.toString()` or a hash) flows out of `read()`<!-- -->: `const digest = accessor.read((buf) => sha256(buf))`<!-- -->. To preserve the zero-copy, auto-zeroing contract, derive a new value inside the callback — never return the raw `buf` itself, which is zeroed before `read()` returns.
 
 
 </td></tr>

@@ -12,6 +12,9 @@ export {
   BackendLockedError,
   DeviceNotPresentError,
   AuthorizationDeniedError,
+  NotCapableError,
+  PresenceDeclinedError,
+  PresenceTimeoutError,
   BackendUnavailableError,
   PluginNotFoundError,
   SecretNotFoundError,
@@ -21,20 +24,35 @@ export {
   TokenRevokedError,
   UsageLimitExceededError,
   IdentityMismatchError,
+  ExecutableTrustRequiredError,
   ExecError,
   InvalidTokenError,
   AccessorConsumedError,
   InvalidAlgorithmError,
+  InvalidKeyMaterialError,
+  SigningKeyNotFoundError,
+  SigningKeyAlreadyExistsError,
+  SigningNotSupportedError,
+  DecryptionError,
+  FetchError,
   SetupError,
   FilesystemError,
   RotationInProgressError,
+  ConfigValidationError,
+  UnknownBackendTypeError,
+  ConfigParseError,
+  TestDoubleMisuseError,
+  UnreachableError,
 } from './errors.js'
 
 export type {
   TrustTier,
   KeyStatus,
   PreflightCheckStatus,
+  PreflightCheckErrorKind,
+  PreflightCheckError,
   PreflightCheck,
+  ScopedPreflightCheck,
   PreflightResult,
   VaultResponse,
   FetchRequest,
@@ -44,23 +62,51 @@ export type {
   SignRequest,
   SignResult,
   VerifyRequest,
+  SigningAlgorithm,
+  SigningPublicKey,
   VaultConfig,
   BackendConfig,
 } from './types.js'
 
-export type { SecretBackend, BackendFactory, ListableBackend } from './backend/index.js'
+export type {
+  SecretBackend,
+  BackendFactory,
+  ListableBackend,
+  SigningBackend,
+  PresenceCapableBackend,
+  BackendCapabilities,
+  PresenceOperation,
+} from './backend/index.js'
 export type {
   SetupQuestion,
   SetupChoice,
   SetupResult,
   BackendSetupFactory,
 } from './backend/index.js'
-export { BackendRegistry, isListableBackend } from './backend/index.js'
+export {
+  BackendRegistry,
+  isListableBackend,
+  isSigningBackend,
+  isPresenceCapableBackend,
+  getBackendCapabilities,
+} from './backend/index.js'
 
 export { CapabilityToken } from './identity/index.js'
 
 export { VaultKeeper } from './vault.js'
-export type { VaultKeeperOptions, SetupOptions, SecretTokenMap } from './vault.js'
+export type {
+  VaultKeeperOptions,
+  SetupOptions,
+  SetupOptionsBase,
+  PresenceRequirementOptions,
+  SecretTokenMap,
+  ExecutableTrustStatus,
+} from './vault.js'
+
+export { redactSecrets, REDACTED } from './access/index.js'
+
+export { defaultBackendType, platformNativeBackendType } from './config.js'
+export { getDefaultConfigDir, getPlatformDefaultConfigDir, loadConfig } from './config.js'
 
 export { runDoctor } from './doctor/runner.js'
 export type { RunDoctorOptions } from './doctor/runner.js'

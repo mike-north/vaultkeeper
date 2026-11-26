@@ -16,6 +16,17 @@ vi.mock('../../../src/doctor/checks.js', () => ({
   checkYkman: vi.fn(),
 }))
 
+vi.mock('../../../src/config.js', () => ({
+  loadConfig: vi.fn(),
+}))
+
+import { loadConfig } from '../../../src/config.js'
+import {
+  ConfigParseError,
+  ConfigValidationError,
+  FilesystemError,
+  UnknownBackendTypeError,
+} from '../../../src/errors.js'
 import {
   checkOpenssl,
   checkBash,
@@ -35,6 +46,7 @@ const mockCheckSecretTool = vi.mocked(checkSecretTool)
 const mockCheckOp = vi.mocked(checkOp)
 const mockCheckYkman = vi.mocked(checkYkman)
 const mockCurrentPlatform = vi.mocked(currentPlatform)
+const mockLoadConfig = vi.mocked(loadConfig)
 
 beforeEach(() => {
   vi.resetAllMocks()
@@ -584,5 +596,329 @@ describe('backend-aware checks ignore disabled backends', () => {
 
     expect(result.ready).toBe(true)
     expect(result.warnings.some((w) => w.includes('security'))).toBe(true)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// configDir option — doctor loads and validates the config itself, adding a
+// "config" check. An invalid config is a failing, required check (issue #68).
+// ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// checks[].required — each check result is scoped by whether it is required
+// for the active/configured backend(s), so the CLI can visually separate
+// "checks for your active backend" from "optional plugin backends (not
+// configured)" instead of rendering every non-'ok' status as a failure
+// (issue #116: a fresh file-default doctor run must not red-X ykman/op).
+// ---------------------------------------------------------------------------
+
+describe('checks[].required scoping (issue #116)', () => {
+  it('marks op and ykman as not required when only the file backend is enabled', async () => {
+    mockCheckOpenssl.mockReturnValue(mockOk('openssl'))
+    mockCheckSecurity.mockReturnValue(mockOk('security'))
+    mockCheckBash.mockReturnValue(mockOk('bash'))
+    mockCheckOp.mockReturnValue(mockMissing('op', 'not found'))
+    mockCheckYkman.mockReturnValue(mockMissing('ykman', 'not found'))
+
+    const result = await runDoctor({
+      platform: 'darwin',
+      backends: [{ type: 'file', enabled: true }],
+    })
+
+    expect(result.ready).toBe(true)
+    expect(result.checks.find((c) => c.name === 'op')?.required).toBe(false)
+    expect(result.checks.find((c) => c.name === 'ykman')?.required).toBe(false)
+  })
+
+  it('marks security as required when the keychain backend is enabled, but op/ykman stay optional', async () => {
+    mockCheckOpenssl.mockReturnValue(mockOk('openssl'))
+    mockCheckSecurity.mockReturnValue(mockOk('security'))
+    mockCheckBash.mockReturnValue(mockOk('bash'))
+    mockCheckOp.mockReturnValue(mockMissing('op', 'not found'))
+    mockCheckYkman.mockReturnValue(mockMissing('ykman', 'not found'))
+
+    const result = await runDoctor({
+      platform: 'darwin',
+      backends: [{ type: 'keychain', enabled: true }],
+    })
+
+    expect(result.checks.find((c) => c.name === 'security')?.required).toBe(true)
+    expect(result.checks.find((c) => c.name === 'op')?.required).toBe(false)
+    expect(result.checks.find((c) => c.name === 'ykman')?.required).toBe(false)
+  })
+
+  it('marks ykman as required when the yubikey backend is enabled', async () => {
+    mockCheckOpenssl.mockReturnValue(mockOk('openssl'))
+    mockCheckSecurity.mockReturnValue(mockOk('security'))
+    mockCheckBash.mockReturnValue(mockOk('bash'))
+    mockCheckOp.mockReturnValue(mockMissing('op', 'not found'))
+    mockCheckYkman.mockReturnValue(mockMissing('ykman', 'not found'))
+
+    const result = await runDoctor({
+      platform: 'darwin',
+      backends: [
+        { type: 'file', enabled: true },
+        { type: 'yubikey', enabled: true, plugin: true },
+      ],
+    })
+
+    expect(result.checks.find((c) => c.name === 'ykman')?.required).toBe(true)
+    // op stays optional — only yubikey was enabled.
+    expect(result.checks.find((c) => c.name === 'op')?.required).toBe(false)
+  })
+})
+
+describe('runDoctor with configDir', () => {
+  it('adds an ok "config" check and scopes backend checks when the config loads successfully', async () => {
+    mockCheckOpenssl.mockReturnValue(mockOk('openssl'))
+    mockCheckBash.mockReturnValue(mockOk('bash'))
+    mockCheckSecretTool.mockReturnValue(mockMissing('secret-tool', 'not found'))
+    mockCheckOp.mockReturnValue(mockMissing('op'))
+    mockCheckYkman.mockReturnValue(mockMissing('ykman'))
+    mockLoadConfig.mockResolvedValue({
+      version: 1,
+      backends: [{ type: 'file', enabled: true }],
+      keyRotation: { gracePeriodDays: 7 },
+      defaults: { ttlMinutes: 60, trustTier: 3 },
+    })
+
+    const result = await runDoctor({ platform: 'linux', configDir: '/fake' })
+
+    const configCheck = result.checks.find((c) => c.name === 'config')
+    expect(configCheck?.status).toBe('ok')
+    expect(configCheck?.required).toBe(true)
+    // file backend does not require secret-tool -> demoted to optional, ready stays true
+    expect(result.ready).toBe(true)
+    expect(result.checks.find((c) => c.name === 'op')?.required).toBe(false)
+    expect(result.checks.find((c) => c.name === 'ykman')?.required).toBe(false)
+    expect(mockLoadConfig).toHaveBeenCalledWith('/fake')
+  })
+
+  it('reports a failing required "config" check with the underlying error message when the config is invalid', async () => {
+    mockCheckOpenssl.mockReturnValue(mockOk('openssl'))
+    mockCheckBash.mockReturnValue(mockOk('bash'))
+    mockCheckSecretTool.mockReturnValue(mockOk('secret-tool'))
+    mockCheckOp.mockReturnValue(mockMissing('op'))
+    mockCheckYkman.mockReturnValue(mockMissing('ykman'))
+    mockLoadConfig.mockRejectedValue(
+      new ConfigParseError(
+        "Failed to parse config file at /fake/config.json at line 1, column 3: Unexpected token. Run 'vaultkeeper config init' to create a valid config.",
+        '/fake/config.json',
+        'line 1, column 3',
+      ),
+    )
+
+    const result = await runDoctor({ platform: 'linux', configDir: '/fake' })
+
+    const configCheck = result.checks.find((c) => c.name === 'config')
+    expect(configCheck?.status).toBe('invalid')
+    expect(configCheck?.reason).toContain('/fake/config.json')
+    expect(configCheck?.reason).toContain('line 1, column 3')
+    expect(result.ready).toBe(false)
+    expect(result.nextSteps.some((s) => s.includes('/fake/config.json'))).toBe(true)
+  })
+
+  // Issue #130: the invalid "config" check carries structured,
+  // remediation-free error context (kind + configPath + optional parse
+  // location) so a CLI consumer can build its own remediation instead of
+  // parsing the library's `reason` prose.
+  it('attaches structured config-parse error context on a JSON parse failure', async () => {
+    mockCheckOpenssl.mockReturnValue(mockOk('openssl'))
+    mockCheckBash.mockReturnValue(mockOk('bash'))
+    mockCheckSecretTool.mockReturnValue(mockOk('secret-tool'))
+    mockCheckOp.mockReturnValue(mockMissing('op'))
+    mockCheckYkman.mockReturnValue(mockMissing('ykman'))
+    mockLoadConfig.mockRejectedValue(
+      new ConfigParseError(
+        "Failed to parse config file at /fake/config.json at line 1, column 3: Unexpected token. Run 'vaultkeeper config init' to create a valid config.",
+        '/fake/config.json',
+        'line 1, column 3',
+      ),
+    )
+
+    const result = await runDoctor({ platform: 'linux', configDir: '/fake' })
+
+    const configCheck = result.checks.find((c) => c.name === 'config')
+    expect(configCheck?.error).toEqual({
+      kind: 'config-parse',
+      configPath: '/fake/config.json',
+      location: 'line 1, column 3',
+    })
+  })
+
+  it('attaches structured config-validation error context (field, no location) on a schema failure', async () => {
+    mockCheckOpenssl.mockReturnValue(mockOk('openssl'))
+    mockCheckBash.mockReturnValue(mockOk('bash'))
+    mockCheckSecretTool.mockReturnValue(mockOk('secret-tool'))
+    mockCheckOp.mockReturnValue(mockMissing('op'))
+    mockCheckYkman.mockReturnValue(mockMissing('ykman'))
+    mockLoadConfig.mockRejectedValue(
+      new ConfigValidationError(
+        'Invalid config at /fake/config.json: Config version must be 1. Fix the file — either install @vaultkeeper/cli and run ...',
+        'version',
+        '/fake/config.json',
+      ),
+    )
+
+    const result = await runDoctor({ platform: 'linux', configDir: '/fake' })
+
+    const configCheck = result.checks.find((c) => c.name === 'config')
+    // Issue #202: the offending `field` is carried in the structured context so
+    // a consumer can render field-level detail (the validation analogue of a
+    // parse failure's `location`) without parsing the `reason` prose.
+    expect(configCheck?.error).toEqual({
+      kind: 'config-validation',
+      configPath: '/fake/config.json',
+      field: 'version',
+    })
+    // Validation failures have no parse location.
+    expect(configCheck?.error?.location).toBeUndefined()
+  })
+
+  // Issue #215: an unknown `backends[].type` is a distinct, richer validation
+  // failure than a generic schema error. The runner maps the
+  // UnknownBackendTypeError to a `config-unknown-backend` preflight error that
+  // carries the offending type and the valid options, so a CLI consumer can
+  // give the same "Available types: …" guidance the runtime
+  // BackendUnavailableError gives — and the config check fails (not ready).
+  it('attaches structured config-unknown-backend error context on an unknown backend type', async () => {
+    mockCheckOpenssl.mockReturnValue(mockOk('openssl'))
+    mockCheckBash.mockReturnValue(mockOk('bash'))
+    mockCheckSecretTool.mockReturnValue(mockOk('secret-tool'))
+    mockCheckOp.mockReturnValue(mockMissing('op'))
+    mockCheckYkman.mockReturnValue(mockMissing('ykman'))
+    mockLoadConfig.mockRejectedValue(
+      new UnknownBackendTypeError(
+        'Invalid config at /fake/config.json: backends[0].type is an unknown backend type: "not-a-real-backend". Available types: file, keychain, dpapi, secret-tool, 1password, yubikey. Fix the file ...',
+        'backends[0].type',
+        'not-a-real-backend',
+        ['file', 'keychain', 'dpapi', 'secret-tool', '1password', 'yubikey'],
+        '/fake/config.json',
+      ),
+    )
+
+    const result = await runDoctor({ platform: 'linux', configDir: '/fake' })
+
+    const configCheck = result.checks.find((c) => c.name === 'config')
+    expect(configCheck?.status).toBe('invalid')
+    expect(configCheck?.required).toBe(true)
+    expect(result.ready).toBe(false)
+    expect(configCheck?.error).toEqual({
+      kind: 'config-unknown-backend',
+      configPath: '/fake/config.json',
+      field: 'backends[0].type',
+      backendType: 'not-a-real-backend',
+      knownBackendTypes: ['file', 'keychain', 'dpapi', 'secret-tool', '1password', 'yubikey'],
+    })
+  })
+
+  it('falls back to the configDir-derived path when a validation error has no file path', async () => {
+    mockCheckOpenssl.mockReturnValue(mockOk('openssl'))
+    mockCheckBash.mockReturnValue(mockOk('bash'))
+    mockCheckSecretTool.mockReturnValue(mockOk('secret-tool'))
+    mockCheckOp.mockReturnValue(mockMissing('op'))
+    mockCheckYkman.mockReturnValue(mockMissing('ykman'))
+    mockLoadConfig.mockRejectedValue(
+      new ConfigValidationError('Invalid config: Config version must be 1.', 'version'),
+    )
+
+    const result = await runDoctor({ platform: 'linux', configDir: '/fake' })
+
+    const configCheck = result.checks.find((c) => c.name === 'config')
+    expect(configCheck?.error?.configPath).toBe('/fake/config.json')
+  })
+
+  // Issue #169: a config file that cannot be READ (e.g. EACCES on the file or
+  // its parent dir, chmod-000) is wrapped by `loadConfig` as a FilesystemError.
+  // The runner must record it as a failing `config` check with structured
+  // `config-read` context (carrying the errno `code`) so a CLI consumer can
+  // render a permissions-specific remediation — not `config init --force`,
+  // which cannot fix a read-permission problem.
+  it('attaches structured config-read error context (with errno code) on a filesystem read failure', async () => {
+    mockCheckOpenssl.mockReturnValue(mockOk('openssl'))
+    mockCheckBash.mockReturnValue(mockOk('bash'))
+    mockCheckSecretTool.mockReturnValue(mockOk('secret-tool'))
+    mockCheckOp.mockReturnValue(mockMissing('op'))
+    mockCheckYkman.mockReturnValue(mockMissing('ykman'))
+    const cause = Object.assign(new Error('EACCES: permission denied'), { code: 'EACCES' })
+    mockLoadConfig.mockRejectedValue(
+      new FilesystemError(
+        'Cannot read config file at /fake/config.json: EACCES: permission denied. ...',
+        '/fake/config.json',
+        'read',
+        cause,
+      ),
+    )
+
+    const result = await runDoctor({ platform: 'linux', configDir: '/fake' })
+
+    const configCheck = result.checks.find((c) => c.name === 'config')
+    expect(configCheck?.status).toBe('invalid')
+    expect(configCheck?.required).toBe(true)
+    expect(result.ready).toBe(false)
+    expect(configCheck?.error).toEqual({
+      kind: 'config-read',
+      configPath: '/fake/config.json',
+      code: 'EACCES',
+    })
+  })
+
+  it('records config-read error context with an undefined code when the cause carries no errno', async () => {
+    mockCheckOpenssl.mockReturnValue(mockOk('openssl'))
+    mockCheckBash.mockReturnValue(mockOk('bash'))
+    mockCheckSecretTool.mockReturnValue(mockOk('secret-tool'))
+    mockCheckOp.mockReturnValue(mockMissing('op'))
+    mockCheckYkman.mockReturnValue(mockMissing('ykman'))
+    // A FilesystemError with no underlying errno cause (the pre-#141 shape).
+    mockLoadConfig.mockRejectedValue(
+      new FilesystemError(
+        'Cannot read config file at /fake/config.json.',
+        '/fake/config.json',
+        'read',
+      ),
+    )
+
+    const result = await runDoctor({ platform: 'linux', configDir: '/fake' })
+
+    const configCheck = result.checks.find((c) => c.name === 'config')
+    expect(configCheck?.error).toEqual({
+      kind: 'config-read',
+      configPath: '/fake/config.json',
+      code: undefined,
+    })
+  })
+
+  it('leaves `error` undefined for an unrecognized config load failure', async () => {
+    mockCheckOpenssl.mockReturnValue(mockOk('openssl'))
+    mockCheckBash.mockReturnValue(mockOk('bash'))
+    mockCheckSecretTool.mockReturnValue(mockOk('secret-tool'))
+    mockCheckOp.mockReturnValue(mockMissing('op'))
+    mockCheckYkman.mockReturnValue(mockMissing('ykman'))
+    mockLoadConfig.mockRejectedValue(new Error('some unexpected failure'))
+
+    const result = await runDoctor({ platform: 'linux', configDir: '/fake' })
+
+    const configCheck = result.checks.find((c) => c.name === 'config')
+    expect(configCheck?.status).toBe('invalid')
+    expect(configCheck?.error).toBeUndefined()
+    // The human-readable reason is still available as a fallback.
+    expect(configCheck?.reason).toContain('some unexpected failure')
+  })
+
+  it('does not load config when an explicit backends option is also provided', async () => {
+    mockCheckOpenssl.mockReturnValue(mockOk('openssl'))
+    mockCheckBash.mockReturnValue(mockOk('bash'))
+    mockCheckSecretTool.mockReturnValue(mockOk('secret-tool'))
+    mockCheckOp.mockReturnValue(mockOk('op'))
+    mockCheckYkman.mockReturnValue(mockOk('ykman'))
+
+    const result = await runDoctor({
+      platform: 'linux',
+      configDir: '/fake',
+      backends: [{ type: 'file', enabled: true }],
+    })
+
+    expect(mockLoadConfig).not.toHaveBeenCalled()
+    expect(result.checks.find((c) => c.name === 'config')).toBeUndefined()
   })
 })

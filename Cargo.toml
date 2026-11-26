@@ -3,7 +3,7 @@ members = ["crates/*"]
 resolver = "2"
 
 [workspace.package]
-version = "0.2.1"
+version = "0.4.0"
 edition = "2024"
 license = "MIT"
 repository = "https://github.com/mike-north/vaultkeeper"
@@ -27,6 +27,20 @@ base64ct = { version = "1", features = ["alloc"] }
 getrandom = "0.3"
 rand = "0.9"
 uuid = { version = "1", features = ["v4"] }
+# Ed25519 (EdDSA) for detached-JWS signing (issue #237). `pkcs8` enables SPKI/
+# PKCS#8 DER import/export; `pem` (which itself pulls in `pkcs8`) is also
+# required to parse/emit the PEM string form so key material round-trips
+# byte-for-byte with `jose`'s `importSPKI`/`importPKCS8` (both take PEM, not
+# raw DER). Deliberately not `ring` — RustCrypto keeps the whole crypto stack
+# in one ecosystem and wasm32-compatible.
+ed25519-dalek = { version = "2", features = ["pkcs8", "pem", "zeroize"] }
+# HKDF-SHA256 (issue #289): derives the file backend's signing-key seal key
+# from the shared `.keys.wrap` material in a namespace distinct from any
+# secret-encryption path. Same RustCrypto ecosystem as `sha2`/`aes-gcm`
+# already in this workspace (built on the same `digest` trait already in the
+# dependency graph), pure-Rust, wasm32-compatible, and small (no transitive
+# deps beyond `hmac`, itself part of the same family).
+hkdf = "0.12"
 
 # WASM
 wasm-bindgen = "0.2"
@@ -36,9 +50,13 @@ console_error_panic_hook = "0.1"
 
 # CLI
 clap = { version = "4", features = ["derive"] }
+# `run` verb signal forwarding (issue #279, native CLI only): sends a
+# specific signal (SIGINT/SIGTERM) to the child process, which neither
+# `std::process::Child::kill()` (SIGKILL only) nor tokio expose directly.
+libc = "0.2"
 
 # Internal
-vaultkeeper-core = { path = "crates/vaultkeeper-core", version = "0.2.1" }
+vaultkeeper-core = { path = "crates/vaultkeeper-core", version = "0.4.0" }
 
 # Security
 zeroize = "1"
@@ -46,3 +64,27 @@ zeroize = "1"
 # Testing
 assert_matches = "1"
 serial_test = "3"
+
+# A single codegen unit for the wasm build's dependency graph (issue #240):
+# measurably shrinks the release wasm artifact (~16 KB smaller in testing)
+# thanks to more cross-function inlining than the default (16 parallel
+# codegen units). This is a size optimization only, NOT a reproducibility
+# fix — it does not make the rebuilt .wasm byte-identical across host
+# platforms (confirmed: a Linux CI rebuild still differed from a macOS
+# rebuild of the same commit after enabling this). Host-to-host drift is
+# instead handled by CI's functional export/import fingerprint check
+# (scripts/wasm-export-fingerprint.mjs), not by chasing byte-level
+# determinism here.
+#
+# vaultkeeper-core's override applies to it wherever it's compiled in
+# --release, including as a dependency of the native vaultkeeper-cli binary
+# (vaultkeeper-cli depends on vaultkeeper-core) — this is unavoidable, since
+# vaultkeeper-core's compiled code is what actually makes up most of the wasm
+# artifact's size, so it needs the same setting for the wasm-side benefit
+# above to apply. The CLI binary itself is not affected by
+# vaultkeeper-wasm's override (vaultkeeper-wasm is never linked into it).
+[profile.release.package.vaultkeeper-wasm]
+codegen-units = 1
+
+[profile.release.package.vaultkeeper-core]
+codegen-units = 1

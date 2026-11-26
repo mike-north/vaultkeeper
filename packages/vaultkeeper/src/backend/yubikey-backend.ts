@@ -18,8 +18,15 @@ import * as path from 'node:path'
 import * as os from 'node:os'
 import * as crypto from 'node:crypto'
 import { execCommandFull } from '../util/exec.js'
-import { SecretNotFoundError, PluginNotFoundError, DeviceNotPresentError } from '../errors.js'
-import type { ListableBackend } from './types.js'
+import {
+  SecretNotFoundError,
+  PluginNotFoundError,
+  DeviceNotPresentError,
+  DecryptionError,
+  SetupError,
+  ExecError,
+} from '../errors.js'
+import type { ListableBackend, PresenceCapableBackend, BackendCapabilities } from './types.js'
 
 const YKMAN_INSTALL_URL = 'https://developers.yubico.com/yubikey-manager/'
 const STORAGE_DIR_NAME = path.join('.vaultkeeper', 'yubikey')
@@ -38,7 +45,19 @@ interface YubikeyMetadata {
   entries: Record<string, string>
 }
 
-function getStorageDir(): string {
+/**
+ * Resolve the storage directory for a YubikeyBackend instance.
+ *
+ * When `configuredPath` is provided (from `BackendConfig.path`), encrypted
+ * secrets are stored directly under that directory. Otherwise the default
+ * `$HOME/.vaultkeeper/yubikey` location is used.
+ */
+function resolveStorageDir(configuredPath?: string): string {
+  // Config validation (see validateConfig) rejects empty/whitespace-only
+  // paths, so any defined value here is guaranteed non-blank.
+  if (configuredPath !== undefined) {
+    return configuredPath
+  }
   return path.join(os.homedir(), STORAGE_DIR_NAME)
 }
 
@@ -97,8 +116,9 @@ const HMAC_RESPONSE_RE = /^[0-9a-fA-F]{40}$/
 function deriveKey(hmacResponse: string, id: string): Buffer {
   const trimmed = hmacResponse.trim()
   if (!HMAC_RESPONSE_RE.test(trimmed)) {
-    throw new Error(
+    throw new SetupError(
       `Invalid YubiKey HMAC response: expected exactly ${String(HMAC_RESPONSE_HEX_LENGTH)} hex characters (20 bytes), got ${String(trimmed.length)} characters`,
+      'ykman',
     )
   }
   // The ykman response is a hex string; convert to raw bytes as the IKM.
@@ -155,46 +175,51 @@ function encryptGcm(key: Buffer, plaintext: string): string {
  *
  * The key buffer is always zeroed in a finally block, guaranteeing cleanup even
  * if `createDecipheriv` or `setAuthTag` throws before the decrypt attempt.
+ *
+ * @param path - The path of the encrypted entry, for attribution on a thrown
+ * {@link DecryptionError}.
  */
-function decryptGcm(key: Buffer, encoded: string): string {
+function decryptGcm(key: Buffer, encoded: string, path: string): string {
   const parts = encoded.split(':')
   const versionSegment = parts[0] ?? ''
 
   // Determine whether the first segment is a numeric version prefix at all.
   const parsedVersion = parseInt(versionSegment, 10)
-  const isNumericVersion =
-    String(parsedVersion) === versionSegment && !Number.isNaN(parsedVersion)
+  const isNumericVersion = String(parsedVersion) === versionSegment && !Number.isNaN(parsedVersion)
 
   if (!isNumericVersion) {
     // No recognisable version prefix — treat as legacy CBC or corrupt file.
     key.fill(0)
-    throw new Error(
+    throw new DecryptionError(
       'Encrypted file uses a legacy format (AES-256-CBC). ' +
         'Delete the secret and re-store it to migrate to AES-256-GCM.',
+      path,
     )
   }
 
   if (versionSegment !== FORMAT_VERSION) {
     // A future format version this binary does not know how to decode.
     key.fill(0)
-    throw new Error(
+    throw new DecryptionError(
       `Unsupported encrypted file version: ${versionSegment}. ` +
         `This vaultkeeper build only supports version ${FORMAT_VERSION}. ` +
         'Upgrade vaultkeeper to read this secret.',
+      path,
     )
   }
 
   if (parts.length !== 4) {
     key.fill(0)
-    throw new Error(
+    throw new DecryptionError(
       `Invalid encrypted file format: expected ${FORMAT_VERSION}:iv:authTag:ciphertext`,
+      path,
     )
   }
 
   const [_version, ivB64, authTagB64, ciphertextB64] = parts
   if (ivB64 === undefined || authTagB64 === undefined || ciphertextB64 === undefined) {
     key.fill(0)
-    throw new Error('Invalid encrypted file format: missing part')
+    throw new DecryptionError('Invalid encrypted file format: missing part', path)
   }
 
   let decrypted: Buffer | undefined
@@ -203,16 +228,20 @@ function decryptGcm(key: Buffer, encoded: string): string {
     const authTag = Buffer.from(authTagB64, 'base64')
     const ciphertext = Buffer.from(ciphertextB64, 'base64')
 
-    const decipher = crypto.createDecipheriv('aes-256-gcm', key, iv, {
-      authTagLength: GCM_TAG_LENGTH_BITS / 8,
-    })
-    decipher.setAuthTag(authTag)
-
+    // createDecipheriv/setAuthTag sit inside this try too: the iv and
+    // authTag lengths come from the on-disk file, so a truncated/corrupt
+    // entry can throw a native RangeError/TypeError before decryption even
+    // starts — every native crypto failure must wrap as DecryptionError.
     try {
+      const decipher = crypto.createDecipheriv('aes-256-gcm', key, iv, {
+        authTagLength: GCM_TAG_LENGTH_BITS / 8,
+      })
+      decipher.setAuthTag(authTag)
       decrypted = Buffer.concat([decipher.update(ciphertext), decipher.final()])
     } catch (err) {
-      throw new Error(
-        `GCM authentication failed — ciphertext may be tampered: ${err instanceof Error ? err.message : String(err)}`,
+      throw new DecryptionError(
+        `GCM authentication failed — ciphertext may be tampered or corrupt: ${err instanceof Error ? err.message : String(err)}`,
+        path,
       )
     }
 
@@ -236,9 +265,72 @@ function decryptGcm(key: Buffer, encoded: string): string {
  *
  * @internal
  */
-export class YubikeyBackend implements ListableBackend {
+export class YubikeyBackend implements ListableBackend, PresenceCapableBackend {
   readonly type = 'yubikey'
   readonly displayName = 'YubiKey'
+
+  readonly #storageDir: string
+
+  /**
+   * Whether the configured challenge-response slot enforces a touch for every
+   * operation. When `true`, each `store`/`retrieve`/`delete` requires a fresh
+   * physical tap (see {@link YubikeyBackend.getCapabilities}). Sourced from
+   * configuration, not hardcoded by type — a slot without a touch policy
+   * reports `false`.
+   */
+  readonly #requireTouch: boolean
+
+  /**
+   * @param storageDir - Directory in which encrypted secrets and metadata are
+   *   stored. Sourced from `BackendConfig.path`. Defaults to
+   *   `$HOME/.vaultkeeper/yubikey`.
+   * @param requireTouch - Whether the configured challenge-response slot
+   *   enforces a touch-per-operation policy. Defaults to `false`. Sourced from
+   *   the operator's configuration and must match the physical slot's policy
+   *   (verify with `ykman otp info`); it governs the value reported by
+   *   {@link YubikeyBackend.getCapabilities}.
+   */
+  constructor(storageDir?: string, requireTouch = false) {
+    this.#storageDir = resolveStorageDir(storageDir)
+    this.#requireTouch = requireTouch
+  }
+
+  /**
+   * Report this instance's capabilities.
+   *
+   * @remarks
+   * `presencePerUse` is `true` only when the configured slot enforces a
+   * touch-per-operation policy (`requireTouch`). A slot without a touch
+   * policy reports `false`; the answer is never derived from the backend
+   * `type` alone. Truth-basis: the reported value comes from the
+   * operator-declared `touchPolicy` configuration; confirm it matches the
+   * physical slot with `ykman otp info` (a manual verification).
+   *
+   * **Operation coverage (issue #326):** the touch-per-operation policy only
+   * actually fires for {@link YubikeyBackend.store} and
+   * {@link YubikeyBackend.retrieve} — both perform the HMAC-SHA1
+   * challenge-response (`ykman otp calculate 2 ...`) that demands the
+   * physical tap. {@link YubikeyBackend.delete} only calls
+   * `requireDevice()` (a presence *probe*: is a YubiKey plugged in at all)
+   * plus a filesystem unlink — it never invokes challenge-response, so it
+   * never actually demands a fresh touch. Reporting
+   * `presenceEnforcedOperations` omitted (meaning "all keyed operations")
+   * would therefore be dishonest: a caller relying on `presencePerUse` to
+   * mean "deleting this secret requires a physical touch" would be misled.
+   * This reports `presenceEnforcedOperations: ['read', 'store']`, excluding
+   * `'delete'`, so a `--require-presence-per-use` delete fails closed
+   * instead of silently succeeding with no touch. `'sign'` does not apply —
+   * this backend does not implement signing.
+   */
+  getCapabilities(): Promise<BackendCapabilities> {
+    if (this.#requireTouch) {
+      return Promise.resolve({
+        presencePerUse: true,
+        presenceEnforcedOperations: ['read', 'store'],
+      })
+    }
+    return Promise.resolve({ presencePerUse: false })
+  }
 
   async isAvailable(): Promise<boolean> {
     try {
@@ -276,7 +368,7 @@ export class YubikeyBackend implements ListableBackend {
     const challenge = Buffer.from(`vaultkeeper:${id}`, 'utf8').toString('hex')
     const responseResult = await execCommandFull('ykman', ['otp', 'calculate', '2', challenge])
     if (responseResult.exitCode !== 0) {
-      throw new Error(`YubiKey challenge-response failed: ${responseResult.stderr}`)
+      throw new ExecError(`YubiKey challenge-response failed: ${responseResult.stderr}`, 'ykman')
     }
     return responseResult.stdout.trim()
   }
@@ -284,7 +376,7 @@ export class YubikeyBackend implements ListableBackend {
   async store(id: string, secret: string): Promise<void> {
     await this.requireDevice()
 
-    const storageDir = getStorageDir()
+    const storageDir = this.#storageDir
     await fs.mkdir(storageDir, { recursive: true, mode: 0o700 })
 
     const hmacResponse = await this.challengeResponse(id)
@@ -302,7 +394,7 @@ export class YubikeyBackend implements ListableBackend {
   async retrieve(id: string): Promise<string> {
     await this.requireDevice()
 
-    const storageDir = getStorageDir()
+    const storageDir = this.#storageDir
     const entryPath = getEntryPath(storageDir, id)
 
     try {
@@ -315,13 +407,13 @@ export class YubikeyBackend implements ListableBackend {
     const hmacResponse = await this.challengeResponse(id)
     const key = deriveKey(hmacResponse, id)
 
-    return decryptGcm(key, encoded)
+    return decryptGcm(key, encoded, entryPath)
   }
 
   async delete(id: string): Promise<void> {
     await this.requireDevice()
 
-    const storageDir = getStorageDir()
+    const storageDir = this.#storageDir
     const entryPath = getEntryPath(storageDir, id)
 
     try {
@@ -340,7 +432,7 @@ export class YubikeyBackend implements ListableBackend {
   }
 
   async exists(id: string): Promise<boolean> {
-    const storageDir = getStorageDir()
+    const storageDir = this.#storageDir
     const entryPath = getEntryPath(storageDir, id)
 
     try {
@@ -352,7 +444,7 @@ export class YubikeyBackend implements ListableBackend {
   }
 
   async list(): Promise<string[]> {
-    const storageDir = getStorageDir()
+    const storageDir = this.#storageDir
     const metadata = await loadMetadata(storageDir)
     return Object.keys(metadata.entries)
   }

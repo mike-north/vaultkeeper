@@ -53,12 +53,29 @@ pub struct PreflightCheck {
     pub reason: Option<String>,
 }
 
+/// A [`PreflightCheck`] scoped by whether its dependency is required for the
+/// active/configured backend(s). Plugin-backend checks (`op`, `ykman`) are
+/// `required: false` when their backend isn't enabled — a non-`Ok` status
+/// there is informational, not a system-readiness blocker (issue #116). They
+/// are promoted to `required: true` when their backend is explicitly enabled
+/// (e.g. the `yubikey` backend requires `ykman`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ScopedPreflightCheck {
+    /// The underlying check result. Flattened so the JSON/JS shape is
+    /// identical to a plain `PreflightCheck` with an added `required` field.
+    #[serde(flatten)]
+    pub check: PreflightCheck,
+    /// Whether this dependency is required by the active/configured backend(s).
+    pub required: bool,
+}
+
 /// Aggregated result from all preflight checks.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PreflightResult {
     /// Individual check results, one per dependency inspected.
-    pub checks: Vec<PreflightCheck>,
+    pub checks: Vec<ScopedPreflightCheck>,
     /// `true` if all required checks passed and the system is ready.
     pub ready: bool,
     /// Non-fatal advisory messages about optional missing dependencies.
@@ -67,7 +84,42 @@ pub struct PreflightResult {
     pub next_steps: Vec<String>,
 }
 
+/// Discriminates a [`VaultClaims`] payload's kind: an ordinary secret claim
+/// (the default — used when `kty` is omitted, for backward compatibility with
+/// tokens minted before this discriminator existed) or a session signing-key
+/// lease, which carries no secret value.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ClaimsKind {
+    /// An ordinary secret-value claim.
+    Secret,
+    /// A session signing-key lease — no secret value.
+    SigningKey,
+}
+
+/// A signing lease's most recent presence-per-use action, if the backend
+/// enforces one. Informational only — not validated by `validate_claims`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LeasePresence {
+    /// The operation the presence action covered (e.g. `"sign"`).
+    pub op: String,
+    /// Unix timestamp (seconds) the presence action was recorded.
+    pub at: u64,
+    /// The presence mechanism used (e.g. `"touch"`).
+    pub method: String,
+    /// The backend type that enforced the presence action.
+    pub backend: String,
+}
+
 /// JWE claim payload.
+///
+/// A claim payload is one of two kinds, discriminated by [`VaultClaims::kty`]:
+/// an ordinary **secret** claim (`kty` omitted or `Secret`), which requires a
+/// non-empty [`VaultClaims::bkd`] and [`VaultClaims::val`]; or a session
+/// **signing-key lease** (`kty: SigningKey`), which carries no secret value at
+/// all and instead requires [`VaultClaims::kid`] and [`VaultClaims::kgen`].
+/// See [`crate::jwe::token::validate_claims`] for the exact rules.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VaultClaims {
     /// Unique token ID.
@@ -85,13 +137,50 @@ pub struct VaultClaims {
     pub use_limit: Option<u64>,
     /// Trust tier.
     pub tid: TrustTier,
-    /// Backend identifier hint.
-    pub bkd: String,
-    /// Encrypted secret value.
-    pub val: String,
+    /// Backend identifier hint. Required (non-empty) for a secret claim;
+    /// absent for a signing-key lease.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bkd: Option<String>,
+    /// Encrypted secret value. Required (non-empty) for a secret claim; MUST
+    /// be absent (or empty) for a signing-key lease — a lease carrying a
+    /// `val` is rejected outright.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub val: Option<String>,
     /// Backend-specific reference path.
     #[serde(rename = "ref")]
     pub reference: String,
+    /// Discriminates a secret claim (default, when omitted) from a session
+    /// signing-key lease.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kty: Option<ClaimsKind>,
+    /// The leased signing key's stable identifier. Required (non-empty) for a
+    /// signing-key lease.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kid: Option<String>,
+    /// The signing key's generation at lease-mint time. Required for a
+    /// signing-key lease — a lease missing `kgen` is rejected rather than
+    /// defaulted to generation 0, since the revocation design depends on this
+    /// being an explicit, honest claim.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kgen: Option<u64>,
+    /// The lease's most recent presence-per-use action, if any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pres: Option<LeasePresence>,
+}
+
+/// Claims for a signing-key capability handle: `{ kid, backendRef }`, never
+/// any key material. Mirrors the TypeScript `SigningClaims`
+/// (`packages/vaultkeeper/src/types.ts`), minus the `keyType: 'signing-key'`
+/// discriminator field — the Rust side discriminates via
+/// [`crate::identity::handles::StoredClaims`]'s enum variant instead of an
+/// inline tag.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SigningClaims {
+    /// The signing key's stable identifier (see [`SigningPublicKey::kid`]).
+    pub kid: String,
+    /// The backend key identifier used to invoke `signWithKey` (never the key).
+    pub backend_ref: String,
 }
 
 /// Response from a vault access operation.
@@ -189,36 +278,52 @@ impl Drop for SecretAccessor {
     }
 }
 
-/// Request for delegated signing.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SignRequest {
-    /// The data to sign (UTF-8 string).
-    pub data: String,
-    /// Override the hash algorithm (`"sha256"`, `"sha384"`, or `"sha512"`).
-    pub algorithm: Option<String>,
+/// A signing algorithm identifier from the strict JOSE registry (RFC 7518).
+///
+/// Only `EdDSA` (Ed25519) is supported today; the identifier is intentionally
+/// a strict JOSE `alg` value so future algorithms (`ES256`, `RS256`, …) each
+/// bind to their proper curve/key type rather than an ambiguous label. Mirrors
+/// the TypeScript `SigningAlgorithm` (`packages/vaultkeeper/src/types.ts`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SigningAlgorithm {
+    /// Ed25519 (the sole supported algorithm).
+    #[serde(rename = "EdDSA")]
+    EdDsa,
 }
 
-/// Result from a delegated signing operation.
+/// The public half of an enrolled signing key.
+///
+/// Mirrors the TypeScript `SigningPublicKey` (`packages/vaultkeeper/src/types.ts`).
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SignResult {
-    /// Base64-encoded signature.
-    pub signature: String,
-    /// Algorithm label describing how the signature was produced.
-    pub algorithm: String,
+#[serde(rename_all = "camelCase")]
+pub struct SigningPublicKey {
+    /// SPKI (SubjectPublicKeyInfo) PEM encoding of the public key.
+    pub public_key_pem: String,
+    /// The JOSE algorithm this key signs with.
+    pub algorithm: SigningAlgorithm,
+    /// Stable key identifier: the base64url-encoded SHA-256 of the SPKI DER.
+    /// Used as the JWS `kid` protected-header value so a verifier can select
+    /// the key.
+    pub kid: String,
 }
 
-/// Request for signature verification.
+/// Request for detached-signature verification (RFC 7515 §7.2.2 + RFC 7797).
+///
+/// This is a fully offline operation that only requires public key
+/// material — no `VaultKeeper` instance, backend, config, or capability token
+/// is needed. Mirrors the TypeScript `VerifyRequest`
+/// (`packages/vaultkeeper/src/types.ts`); replaces the stale, never-shipped
+/// generic hash+sign `VerifyRequest` this crate carried before issue #237.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct VerifyRequest {
-    /// The original data that was signed (UTF-8 string).
-    pub data: String,
-    /// Base64-encoded signature to verify.
-    pub signature: String,
+    /// The detached payload bytes that were signed.
+    pub payload: Vec<u8>,
+    /// The detached-payload compact JWS (`<protected>..<signature>`) produced
+    /// by [`crate::signing::create_detached_jws`].
+    pub jws: String,
     /// PEM-encoded public key (SPKI format).
     pub public_key: String,
-    /// Override the hash algorithm.
-    pub algorithm: Option<String>,
 }
 
 /// Vaultkeeper configuration file structure.
@@ -253,7 +358,70 @@ pub struct VaultDefaults {
     /// Default JWE time-to-live in minutes.
     pub ttl_minutes: u32,
     /// Default trust tier for executable identity verification.
+    ///
+    /// In `config.json` this field is written as a bare JSON number
+    /// (`"trustTier": 3`), matching the CLI `config init` output, the TS
+    /// library, and the README example. For backward compatibility the reader
+    /// also accepts a string-encoded number (`"trustTier": "3"`), which older
+    /// native-CLI configs emitted. Note this differs from the `tid` claim in a
+    /// JWE token, where [`TrustTier`] keeps its string wire form (`"3"`) for
+    /// `jose` compatibility.
+    #[serde(with = "trust_tier_config")]
     pub trust_tier: TrustTier,
+}
+
+/// Serde adapter for the `defaults.trustTier` config field (issue #200).
+///
+/// Serializes [`TrustTier`] as a bare JSON number and deserializes leniently
+/// from either a JSON number or a string-encoded number, so a config written
+/// by any of the CLIs (TS or native) loads uniformly. Kept local to the config
+/// field so the string wire form of [`TrustTier`] in JWE claims is untouched.
+mod trust_tier_config {
+    use super::TrustTier;
+    use serde::de::{Error as DeError, Unexpected};
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    fn tier_from_u64<E: DeError>(n: u64, unexpected: Unexpected<'_>) -> Result<TrustTier, E> {
+        match n {
+            1 => Ok(TrustTier::Sigstore),
+            2 => Ok(TrustTier::Tofu),
+            3 => Ok(TrustTier::Dev),
+            _ => Err(E::invalid_value(unexpected, &"a trust tier of 1, 2, or 3")),
+        }
+    }
+
+    pub(super) fn serialize<S>(value: &TrustTier, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_u8(*value as u8)
+    }
+
+    pub(super) fn deserialize<'de, D>(deserializer: D) -> Result<TrustTier, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum NumberOrString {
+            Number(u64),
+            String(String),
+        }
+
+        match NumberOrString::deserialize(deserializer)? {
+            NumberOrString::Number(n) => tier_from_u64(n, Unexpected::Unsigned(n)),
+            NumberOrString::String(s) => {
+                let trimmed = s.trim();
+                let n: u64 = trimmed.parse().map_err(|_| {
+                    D::Error::invalid_value(
+                        Unexpected::Str(&s),
+                        &"a trust tier of \"1\", \"2\", or \"3\"",
+                    )
+                })?;
+                tier_from_u64(n, Unexpected::Str(&s))
+            }
+        }
+    }
 }
 
 /// Development mode configuration.

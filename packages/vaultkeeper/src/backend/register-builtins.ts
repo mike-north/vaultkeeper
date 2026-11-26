@@ -28,9 +28,12 @@ import { YubikeyBackend } from './yubikey-backend.js'
  * @internal
  */
 export function registerBuiltinBackends(): void {
-  BackendRegistry.register('file', () => new FileBackend())
+  BackendRegistry.register(
+    'file',
+    (config?: BackendConfig, configDir?: string) => new FileBackend(config?.path, configDir),
+  )
   BackendRegistry.register('keychain', () => new KeychainBackend())
-  BackendRegistry.register('dpapi', () => new DpapiBackend())
+  BackendRegistry.register('dpapi', (config?: BackendConfig) => new DpapiBackend(config?.path))
   BackendRegistry.register('secret-tool', () => new SecretToolBackend())
   BackendRegistry.register('1password', (config?: BackendConfig) => {
     const opts = config?.options
@@ -50,7 +53,16 @@ export function registerBuiltinBackends(): void {
     }
     return new OnePasswordBackend(opOptions)
   })
-  BackendRegistry.register('yubikey', () => new YubikeyBackend())
+  BackendRegistry.register(
+    'yubikey',
+    (config?: BackendConfig) =>
+      // `touchPolicy: 'required'` in the backend options declares that the
+      // configured challenge-response slot enforces a touch per operation, which
+      // is what makes the instance presence-per-use capable (see
+      // YubikeyBackend.getCapabilities). Any other value (or absent) reports
+      // false — presence is never assumed from the backend type alone.
+      new YubikeyBackend(config?.path, config?.options?.touchPolicy === 'required'),
+  )
 }
 
 registerBuiltinBackends()

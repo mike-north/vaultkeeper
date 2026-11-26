@@ -22,6 +22,16 @@ export interface CliTestEnvOptions {
   env?: Record<string, string>
   /** Subprocess timeout in ms (default: 15000). */
   timeout?: number
+  /**
+   * How the isolated config directory is communicated to the CLI subprocess.
+   *
+   * - `'env'` (default): sets `VAULTKEEPER_CONFIG_DIR` in the subprocess env.
+   * - `'flag'`: does not set `VAULTKEEPER_CONFIG_DIR` — tests must pass
+   *   `--config-dir <env.configDir>` explicitly via `run()`/`runWithStdin()`
+   *   args. Use this to exercise `--config-dir` flag behavior in isolation,
+   *   including precedence over a separately-set env var.
+   */
+  configDirMode?: 'env' | 'flag'
 }
 
 /**

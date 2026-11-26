@@ -1,0 +1,12 @@
+{
+  "name": "vaultkeeper-ts-version-matrix-fixtures",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Isolated, non-workspace install of pinned TypeScript compiler versions used only by test/e2e/consumer-typecheck.test.ts's version matrix. Kept out of pnpm-workspace.yaml deliberately: adding these as workspace devDependencies pollutes pnpm's peer-dependency resolution for tsup's bundled rollup-plugin-dts (it auto-installs a stray incompatible typescript peer and crashes `pnpm build`). Install standalone via `pnpm --dir <this dir> install --ignore-workspace` (the `--ignore-workspace` is required — otherwise pnpm walks up to the repo root's pnpm-workspace.yaml and silently skips this directory since it isn't a declared member).",
+  "devDependencies": {
+    "typescript-5-0": "npm:typescript@5.0.4",
+    "typescript-5-9": "npm:typescript@5.9.3",
+    "typescript-6-0": "npm:typescript@6.0.3",
+    "typescript-7-0": "npm:typescript@7.0.2"
+  }
+}
