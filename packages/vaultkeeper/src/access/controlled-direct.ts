@@ -40,7 +40,8 @@ class SecretAccessorTarget implements SecretAccessorInternal {
 }
 
 /**
- * Create a `SecretAccessor` for the given secret value.
+ * Create a `SecretAccessor` that resolves the secret when read.
+ * The release check runs after encoding and before the callback receives bytes.
  * @internal
  *
  * The accessor is backed by a Proxy with all 13 traps implemented. The
@@ -51,7 +52,10 @@ class SecretAccessorTarget implements SecretAccessorInternal {
  * `TypeError: Cannot perform 'get' on a proxy that has been revoked` before
  * the descriptive error message can be thrown.
  */
-export function createSecretAccessor(secretValue: string): SecretAccessor {
+export function createSecretAccessor(
+  resolveSecret: () => string,
+  beforeRelease?: () => void,
+): SecretAccessor {
   let consumed = false
 
   // Close over the actual read logic. The callback's return value is passed
@@ -64,10 +68,10 @@ export function createSecretAccessor(secretValue: string): SecretAccessor {
         'SecretAccessor has already been consumed — call getSecret() again to obtain a new accessor',
       )
     }
-    consumed = true
-
-    const buf = Buffer.from(secretValue, 'utf8')
+    const buf = Buffer.from(resolveSecret(), 'utf8')
     try {
+      beforeRelease?.()
+      consumed = true
       return callback(buf)
     } finally {
       buf.fill(0)

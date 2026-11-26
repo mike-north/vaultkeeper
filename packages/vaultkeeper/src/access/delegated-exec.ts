@@ -27,26 +27,29 @@ import { redactSecrets } from './redact.js'
  * @param request - The exec request template with placeholders. Placeholders
  *   are only resolved in `env`; `command` and `args` reject them with
  *   `ExecError`.
+ * @param beforeDispatch - Lease check before starting the process
  * @returns The command result (stdout, stderr, exitCode)
  * @internal
  */
 export async function delegatedExec(
   secrets: string | Record<string, string>,
   request: ExecRequest,
+  beforeDispatch?: () => void,
 ): Promise<ExecResult> {
-  if (ANY_PLACEHOLDER_RE.test(request.command)) {
+  const command = request.command
+  if (ANY_PLACEHOLDER_RE.test(command)) {
     throw new ExecError(
       `Secret placeholders are not supported in the command field. Use env instead.`,
-      request.command,
+      command,
     )
   }
 
-  const args = request.args ?? []
+  const args = [...(request.args ?? [])]
   for (const arg of args) {
     if (ANY_PLACEHOLDER_RE.test(arg)) {
       throw new ExecError(
         `Secret placeholders are not supported in the args field — process arguments are visible to other processes via ps. Use env instead.`,
-        request.command,
+        command,
       )
     }
   }
@@ -61,10 +64,11 @@ export async function delegatedExec(
 
   let env: Record<string, string> | undefined
   try {
-    env = request.env !== undefined ? resolvePlaceholdersInRecord(request.env, secrets) : undefined
+    const template = request.env
+    env = template !== undefined ? resolvePlaceholdersInRecord(template, secrets) : undefined
   } catch (error) {
     if (error instanceof VaultError) {
-      throw new ExecError(error.message, request.command)
+      throw new ExecError(error.message, command)
     }
     throw error
   }
@@ -76,11 +80,13 @@ export async function delegatedExec(
     if (env !== undefined) {
       spawnOptions.env = { ...process.env, ...env }
     }
-    if (request.cwd !== undefined) {
-      spawnOptions.cwd = request.cwd
+    const cwd = request.cwd
+    if (cwd !== undefined) {
+      spawnOptions.cwd = cwd
     }
 
-    const proc = spawn(request.command, args, spawnOptions)
+    beforeDispatch?.()
+    const proc = spawn(command, args, spawnOptions)
     let stdout = ''
     let stderr = ''
 
@@ -105,15 +111,15 @@ export async function delegatedExec(
       if (isEnoent) {
         reject(
           new ExecError(
-            `Command not found: ${request.command}. Verify the command exists and is in PATH.`,
-            request.command,
+            `Command not found: ${command}. Verify the command exists and is in PATH.`,
+            command,
           ),
         )
       } else {
         reject(
           new ExecError(
-            `Failed to execute command: ${request.command}. ${error instanceof Error ? error.message : String(error)}`,
-            request.command,
+            `Failed to execute command: ${command}. ${error instanceof Error ? error.message : String(error)}`,
+            command,
           ),
         )
       }
