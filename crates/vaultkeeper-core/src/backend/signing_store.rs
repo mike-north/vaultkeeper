@@ -41,7 +41,7 @@ use zeroize::{Zeroize, Zeroizing};
 use super::file::hex_encode;
 use crate::backend::HostPlatform;
 use crate::errors::VaultError;
-use crate::keys::storage::{KEY_WRAP_FILE, get_or_create_wrap_key};
+use crate::keys::storage::{KEY_WRAP_FILE, WrapKeyPublication, get_or_create_wrap_key};
 use crate::signing::ed25519::{kid_for_verifying_key, sign as ed25519_sign};
 use crate::types::{SigningAlgorithm, SigningPublicKey};
 
@@ -161,7 +161,8 @@ fn decrypt_gcm(key: &[u8], encoded: &str) -> Result<Zeroizing<String>, VaultErro
 /// uses.
 async fn get_signing_seal_key(host: &dyn HostPlatform) -> Result<Vec<u8>, VaultError> {
     let wrap_path = host.config_dir().join(KEY_WRAP_FILE);
-    let mut wrap_key = get_or_create_wrap_key(host, &wrap_path).await?;
+    let mut wrap_key =
+        get_or_create_wrap_key(host, &wrap_path, WrapKeyPublication::RequireAtomic).await?;
 
     let hk = Hkdf::<Sha256>::new(None, &wrap_key);
     wrap_key.zeroize();
@@ -332,6 +333,9 @@ mod tests {
         /// Deny every write whose parent directory equals this path,
         /// regardless of filename.
         deny_write_under: Mutex<Option<PathBuf>>,
+        /// Model a host that supports atomic publication in the signing directory
+        /// but cannot do it for the wrapping key in the config directory.
+        no_atomic_wrap: bool,
         missing_key_barrier: Option<tokio::sync::Barrier>,
     }
 
@@ -342,6 +346,7 @@ mod tests {
                 config_dir: PathBuf::from("/test/config"),
                 deny_write: Mutex::new(HashSet::new()),
                 deny_write_under: Mutex::new(None),
+                no_atomic_wrap: false,
                 missing_key_barrier: None,
             }
         }
@@ -410,6 +415,11 @@ mod tests {
         ) -> Result<bool, VaultError> {
             use std::collections::hash_map::Entry;
 
+            if self.no_atomic_wrap && path.parent() == Some(self.config_dir()) {
+                return Err(VaultError::LockingNotSupported {
+                    message: "Atomic wrapping-key publication unavailable".to_owned(),
+                });
+            }
             if self.deny_write_under.lock().unwrap().as_deref() == path.parent() {
                 return Err(VaultError::Filesystem {
                     message: format!("Permission denied writing {}", path.display()),
@@ -446,6 +456,19 @@ mod tests {
         fn config_dir(&self) -> &Path {
             &self.config_dir
         }
+    }
+
+    #[tokio::test]
+    async fn enrollment_requires_atomic_wrap_key_publication() {
+        let host = TestHost {
+            no_atomic_wrap: true,
+            ..TestHost::new()
+        };
+        let err = generate_signing_key(&host, "release", SigningAlgorithm::EdDsa)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, VaultError::LockingNotSupported { .. }));
+        assert!(host.files.lock().unwrap().is_empty());
     }
 
     // -----------------------------------------------------------------
@@ -594,7 +617,9 @@ mod tests {
     async fn signing_seal_key_is_hkdf_derived_and_distinct_from_the_raw_wrap_key() {
         let host = TestHost::new();
         let wrap_path = host.config_dir().join(KEY_WRAP_FILE);
-        let wrap_key = get_or_create_wrap_key(&host, &wrap_path).await.unwrap();
+        let wrap_key = get_or_create_wrap_key(&host, &wrap_path, WrapKeyPublication::RequireAtomic)
+            .await
+            .unwrap();
         let seal_key = get_signing_seal_key(&host).await.unwrap();
 
         assert_eq!(seal_key.len(), GCM_KEY_BYTES);

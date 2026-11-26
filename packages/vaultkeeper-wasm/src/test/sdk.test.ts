@@ -12,7 +12,9 @@
 
 import { describe, it } from 'node:test'
 import * as assert from 'node:assert/strict'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { promises } from 'node:fs'
+import { mkdir, mkdtemp, readdir, rm } from 'node:fs/promises'
+import { syncBuiltinESMExports } from 'node:module'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { chmod, readFile, writeFile } from 'node:fs/promises'
@@ -191,6 +193,167 @@ describe('@vaultkeeper/wasm SDK', () => {
       }
     })
   })
+
+  for (const code of ['ENOTSUP', 'EPERM', 'EISDIR']) {
+    it(`stores and repairs wrapping keys when the filesystem rejects hard links with ${code}`, async (t) => {
+      await withTempDir(async (dir) => {
+        const unsupported = Object.assign(new Error('hard links unavailable'), { code })
+        const link = t.mock.method(promises, 'link', async () => {
+          await Promise.reject(unsupported)
+        })
+        const platform = process.platform
+        // Simulate libuv's Windows exFAT error without an external volume.
+        if (code === 'EISDIR') Object.defineProperty(process, 'platform', { value: 'win32' })
+        syncBuiltinESMExports()
+        try {
+          const vault = await createTestVault(dir)
+          try {
+            await vault.store('example', 'value')
+          } finally {
+            vault.dispose()
+          }
+          const reopened = await createTestVault(dir)
+          try {
+            assert.equal(await reopened.retrieve('example'), 'value')
+            assert.ok(link.mock.callCount() > 0)
+          } finally {
+            reopened.dispose()
+          }
+
+          // Simulate a completed selection followed by an interruption before installation.
+          const repairDir = join(dir, 'repair')
+          await mkdir(repairDir)
+          const keyPath = join(repairDir, '.keys.wrap')
+          const candidate = Buffer.alloc(32, 0x42)
+          await writeFile(keyPath, Buffer.alloc(1), { mode: 0o600 })
+          await writeFile(`${keyPath}.repair`, candidate, { mode: 0o600 })
+          const repaired = await createTestVault(repairDir)
+          try {
+            assert.ok((await readFile(keyPath)).equals(candidate))
+            await assert.rejects(readFile(`${keyPath}.repair`), { code: 'ENOENT' })
+          } finally {
+            repaired.dispose()
+          }
+        } finally {
+          Object.defineProperty(process, 'platform', { value: platform })
+          link.mock.restore()
+          syncBuiltinESMExports()
+        }
+      })
+    })
+  }
+
+  it('keeps the active wrapping-key path clear after a partial fallback write', async () => {
+    await withTempDir(async (dir) => {
+      const { createVaultKeeper } = await import('../../wasm/vaultkeeper_wasm.js')
+      // A host without the optional atomic publisher uses sequential storage.
+      const host = createNodeHost(dir)
+      delete host.writeFileIfAbsent
+      await assert.rejects(
+        createVaultKeeper(
+          {
+            ...host,
+            async writeFile(path: string, content: Uint8Array, mode: number): Promise<void> {
+              await host.writeFile(path, content.subarray(0, 1), mode)
+              throw Object.assign(new Error('disk full'), { code: 'ENOSPC' })
+            },
+          },
+          { skipDoctor: true },
+        ),
+        { vaultErrorCode: 'filesystem', code: 'ENOSPC', message: /disk full/ },
+      )
+      assert.deepEqual(await readdir(dir), [])
+    })
+  })
+
+  it('reopens a vault whose host retains the bytes supplied to writeFile', async () => {
+    await withTempDir(async (dir) => {
+      const { createVaultKeeper } = await import('../../wasm/vaultkeeper_wasm.js')
+      const host = createNodeHost(dir)
+      delete host.writeFileIfAbsent
+      const files = new Map<string, Uint8Array>()
+      const open = () =>
+        createVaultKeeper(
+          {
+            ...host,
+            fileExists: (path: string) => Promise.resolve(files.has(path)),
+            readFile(path: string): Promise<Uint8Array> {
+              const content = files.get(path)
+              if (content !== undefined) return Promise.resolve(content)
+              return Promise.reject(Object.assign(new Error('missing file'), { code: 'ENOENT' }))
+            },
+            writeFile(path: string, content: Uint8Array): Promise<void> {
+              // A host can persist the array it receives without copying it again.
+              files.set(path, content)
+              return Promise.resolve()
+            },
+            renameFile(from: string, to: string): Promise<void> {
+              const content = files.get(from)
+              assert.ok(content)
+              files.set(to, content)
+              files.delete(from)
+              return Promise.resolve()
+            },
+          },
+          { skipDoctor: true },
+        )
+
+      try {
+        const first = await open()
+        let token: string
+        try {
+          token = await first.setup('example', 'value', { skipTrust: true })
+        } finally {
+          first.free()
+        }
+        const reopened = await open()
+        try {
+          const auth = reopened.authorize(token)
+          try {
+            assert.equal(auth.readSecret(), 'value')
+          } finally {
+            auth.free()
+          }
+        } finally {
+          reopened.free()
+        }
+      } finally {
+        for (const content of files.values()) content.fill(0)
+      }
+    })
+  })
+
+  for (const state of ['fresh', 'repair']) {
+    it(
+      `initializes a ${state} vault at the macOS path boundary`,
+      { skip: process.platform !== 'darwin' },
+      async () => {
+        await withTempDir(async (dir) => {
+          let target = dir
+          while (Buffer.byteLength(target) < 990) {
+            const remaining = 989 - Buffer.byteLength(target)
+            target = join(target, 'a'.repeat(remaining === 201 ? 199 : Math.min(remaining, 200)))
+          }
+          assert.equal(Buffer.byteLength(target), 990)
+          await mkdir(target, { recursive: true })
+          const keyPath = join(target, '.keys.wrap')
+          const candidate = Buffer.alloc(32, 0x42)
+          if (state === 'repair') {
+            await writeFile(keyPath, Buffer.alloc(1))
+            await writeFile(`${keyPath}.repair`, candidate)
+          }
+          const vault = await createTestVault(target)
+          try {
+            const key = await readFile(keyPath)
+            assert.equal(key.byteLength, 32)
+            if (state === 'repair') assert.deepEqual(key, candidate)
+          } finally {
+            vault.dispose()
+          }
+        })
+      },
+    )
+  }
 
   it('resumes an interrupted wrapping-key repair during WASM initialization', async () => {
     await withTempDir(async (dir) => {

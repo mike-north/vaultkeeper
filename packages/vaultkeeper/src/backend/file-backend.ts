@@ -324,7 +324,7 @@ export class FileBackend implements ListableBackend, SigningBackend {
       }
       throw toFilesystemError(err, 'signing key', keyPath, 'read')
     }
-    const wrapKey = await getOrCreateKey(this.#storageDir)
+    const wrapKey = await getOrCreateWrapKey(path.join(this.#storageDir, KEY_FILE), 'atomic')
     try {
       return decryptGcm(wrapKey, encoded)
     } catch (err) {
@@ -381,7 +381,7 @@ export class FileBackend implements ListableBackend, SigningBackend {
 
     const { privateKey } = crypto.generateKeyPairSync('ed25519')
     const pkcs8Pem = privateKey.export({ type: 'pkcs8', format: 'pem' }).toString()
-    const wrapKey = await getOrCreateKey(this.#storageDir)
+    const wrapKey = await getOrCreateWrapKey(path.join(this.#storageDir, KEY_FILE), 'atomic')
     let encrypted: string
     try {
       encrypted = encryptGcm(wrapKey, pkcs8Pem)

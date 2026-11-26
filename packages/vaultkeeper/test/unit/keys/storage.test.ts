@@ -103,20 +103,35 @@ afterEach(async () => {
 })
 
 describe('saveKeyState / loadKeyState round-trip', () => {
-  it('saves and reloads at the macOS path boundary supported by the old staging name', async () => {
-    let target = dir
-    const targetLength = Buffer.byteLength(dir) === 989 ? 991 : Math.max(990, Buffer.byteLength(dir))
-    while (Buffer.byteLength(target) < targetLength) {
-      const remaining = targetLength - Buffer.byteLength(target) - 1
-      const length = remaining === 201 ? 199 : Math.min(remaining, 200)
-      target = path.join(target, 'a'.repeat(length))
-    }
-    expect(Buffer.byteLength(target)).toBe(targetLength)
-    const snapshot = { current: makeKey('k-boundary', 0x42) }
-    pathLimit.enabled = true
-    await saveKeyState(target, snapshot)
-    expect(await loadKeyState(target)).toEqual(snapshot)
-  })
+  it.each(['fresh', 'repair'])(
+    'saves and reloads a %s store at the supported macOS path boundary',
+    async (state) => {
+      let target = dir
+      const targetLength =
+        Buffer.byteLength(dir) === 989 ? 991 : Math.max(990, Buffer.byteLength(dir))
+      while (Buffer.byteLength(target) < targetLength) {
+        const remaining = targetLength - Buffer.byteLength(target) - 1
+        const length = remaining === 201 ? 199 : Math.min(remaining, 200)
+        target = path.join(target, 'a'.repeat(length))
+      }
+      expect(Buffer.byteLength(target)).toBe(targetLength)
+      const wrapPath = path.join(target, '.keys.wrap')
+      const candidate = Buffer.alloc(32, 0x42)
+      if (state === 'repair') {
+        await fs.mkdir(target, { recursive: true })
+        await fs.writeFile(wrapPath, Buffer.alloc(1))
+        await fs.writeFile(`${wrapPath}.repair`, candidate)
+      }
+      const snapshot = { current: makeKey('k-boundary', 0x42) }
+      pathLimit.enabled = true
+      await saveKeyState(target, snapshot)
+      expect(await loadKeyState(target)).toEqual(snapshot)
+      if (state === 'repair') {
+        expect(await fs.readFile(wrapPath)).toEqual(candidate)
+        await expect(fs.stat(`${wrapPath}.repair`)).rejects.toMatchObject({ code: 'ENOENT' })
+      }
+    },
+  )
   it.each([
     { write: true, code: 'ENOSPC', cause: stageFault.writeError },
     { write: false, code: 'EIO', cause: stageFault.closeError },

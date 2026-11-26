@@ -23,7 +23,7 @@ use std::path::Path;
 
 use aes_gcm::aead::Aead;
 use aes_gcm::{Aes256Gcm, KeyInit, Nonce};
-use base64ct::{Base64, Encoding};
+use base64ct::{Base64, Base64UrlUnpadded, Encoding};
 use serde::{Deserialize, Serialize};
 use zeroize::Zeroize;
 
@@ -206,6 +206,14 @@ fn decrypt_gcm(key: &[u8], encoded: &str) -> Option<String> {
     String::from_utf8(plaintext).ok()
 }
 
+/// Signing must select a single wrapping key across concurrent writers.
+/// Ordinary key state also supports sequential storage on legacy hosts.
+#[derive(Clone, Copy)]
+pub(crate) enum WrapKeyPublication {
+    RequireAtomic,
+    AllowSequential,
+}
+
 /// Read the 32-byte wrapping key at `wrap_path`, generating and persisting a
 /// fresh random one (mode `0o600`) when the file does not yet exist **or**
 /// holds a value that is not exactly 32 bytes.
@@ -221,15 +229,16 @@ fn decrypt_gcm(key: &[u8], encoded: &str) -> Option<String> {
 pub(crate) async fn get_or_create_wrap_key(
     host: &dyn HostPlatform,
     wrap_path: &Path,
+    publication: WrapKeyPublication,
 ) -> Result<Vec<u8>, VaultError> {
     match host.read_file(wrap_path).await {
         Ok(data) if data.len() == GCM_KEY_BYTES => Ok(data),
         Ok(mut invalid) => {
             invalid.zeroize();
-            repair_wrap_key(host, wrap_path).await
+            repair_wrap_key(host, wrap_path, publication).await
         }
         Err(read_err) => match host.file_exists(wrap_path).await {
-            Ok(false) => create_missing_wrap_key(host, wrap_path).await,
+            Ok(false) => create_missing_wrap_key(host, wrap_path, publication).await,
             // A concurrent startup may have published since the failed read.
             Ok(true) => match host.read_file(wrap_path).await {
                 Ok(key) if key.len() == GCM_KEY_BYTES => Ok(key),
@@ -269,35 +278,53 @@ async fn read_valid_wrap_key(
 async fn create_missing_wrap_key(
     host: &dyn HostPlatform,
     wrap_path: &Path,
+    publication: WrapKeyPublication,
 ) -> Result<Vec<u8>, VaultError> {
     let mut key = generate_wrap_key()?;
-    match host.write_file_if_absent(wrap_path, &key, 0o600).await {
-        Ok(true) => Ok(std::mem::take(&mut *key)),
-        Ok(false) => read_valid_wrap_key(host, wrap_path).await,
-        // Legacy hosts retain their existing key-state behavior. Signing
-        // enrollment requires atomic publication and cannot succeed on them.
-        Err(VaultError::LockingNotSupported { .. }) => {
-            host.write_file(wrap_path, &key, 0o600).await?;
-            Ok(std::mem::take(&mut *key))
+    if publish_wrap_key(host, wrap_path, &key, publication).await? {
+        Ok(std::mem::take(&mut *key))
+    } else {
+        read_valid_wrap_key(host, wrap_path).await
+    }
+}
+
+/// Select a complete key at an unused name. A host without no-replace
+/// publication can preserve ordinary sequential storage by probing then
+/// installing a complete file. Callers must serialize that fallback.
+async fn publish_wrap_key(
+    host: &dyn HostPlatform,
+    path: &Path,
+    key: &[u8],
+    publication: WrapKeyPublication,
+) -> Result<bool, VaultError> {
+    match host.write_file_if_absent(path, key, 0o600).await {
+        Err(VaultError::LockingNotSupported { .. })
+            if matches!(publication, WrapKeyPublication::AllowSequential) =>
+        {
+            if host.file_exists(path).await? {
+                return Ok(false);
+            }
+            replace_wrap_key(host, path, key, publication).await?;
+            Ok(true)
         }
-        Err(err) => Err(err),
+        result => result,
     }
 }
 
 /// A published candidate selects the key for all repairers, including those
 /// resuming after the first repairer stopped before installing it.
-async fn repair_wrap_key(host: &dyn HostPlatform, wrap_path: &Path) -> Result<Vec<u8>, VaultError> {
+async fn repair_wrap_key(
+    host: &dyn HostPlatform,
+    wrap_path: &Path,
+    publication: WrapKeyPublication,
+) -> Result<Vec<u8>, VaultError> {
     let mut candidate_path = wrap_path.as_os_str().to_os_string();
     candidate_path.push(".repair");
     let candidate_path = Path::new(&candidate_path);
     let mut candidate = generate_wrap_key()?;
 
-    match host
-        .write_file_if_absent(candidate_path, &candidate, 0o600)
-        .await
-    {
-        Ok(true) => {}
-        Ok(false) => match read_valid_wrap_key(host, candidate_path).await {
+    if !publish_wrap_key(host, candidate_path, &candidate, publication).await? {
+        match read_valid_wrap_key(host, candidate_path).await {
             Ok(selected) => {
                 candidate.zeroize();
                 *candidate = selected;
@@ -306,18 +333,13 @@ async fn repair_wrap_key(host: &dyn HostPlatform, wrap_path: &Path) -> Result<Ve
                 // A peer may have installed the key and removed its candidate.
                 return read_valid_wrap_key(host, wrap_path).await.or(Err(err));
             }
-        },
-        Err(VaultError::LockingNotSupported { .. }) => {
-            host.write_file(wrap_path, &candidate, 0o600).await?;
-            return Ok(std::mem::take(&mut *candidate));
         }
-        Err(err) => return Err(err),
     }
 
     let mut active = match read_valid_wrap_key(host, wrap_path).await {
         Ok(existing) => zeroize::Zeroizing::new(existing),
         Err(VaultError::Decryption { .. }) => {
-            install_wrap_key_repair(host, wrap_path, &candidate).await?;
+            replace_wrap_key(host, wrap_path, &candidate, publication).await?;
             candidate
         }
         Err(err) => return Err(err),
@@ -327,30 +349,49 @@ async fn repair_wrap_key(host: &dyn HostPlatform, wrap_path: &Path) -> Result<Ve
     Ok(std::mem::take(&mut *active))
 }
 
-/// Install a private copy so delayed repairers cannot rename a reused shared
-/// candidate path. Every copy eligible for installation holds the same key.
-async fn install_wrap_key_repair(
+/// Replace a destination only after a private sibling contains the complete
+/// key. A repairer owns its own stage even if the shared candidate is reused.
+async fn replace_wrap_key(
     host: &dyn HostPlatform,
-    wrap_path: &Path,
-    candidate: &[u8],
+    destination: &Path,
+    key: &[u8],
+    publication: WrapKeyPublication,
 ) -> Result<(), VaultError> {
-    let mut staged_path = wrap_path.as_os_str().to_os_string();
-    staged_path.push(format!(".repair-{}.tmp", uuid::Uuid::new_v4()));
-    let staged_path = Path::new(&staged_path);
-    if !host
-        .write_file_if_absent(staged_path, candidate, 0o600)
-        .await?
-    {
+    // A short sibling basename fits even when the config directory is close
+    // to the filesystem path limit.
+    let mut suffix = [0u8; 9];
+    getrandom::fill(&mut suffix).map_err(|e| {
+        VaultError::Other(format!("Failed to generate wrapping-key stage name: {e}"))
+    })?;
+    let staged_path =
+        destination.with_file_name(format!(".vk-{}", Base64UrlUnpadded::encode_string(&suffix)));
+    let staged = match host.write_file_if_absent(&staged_path, key, 0o600).await {
+        Err(VaultError::LockingNotSupported { .. })
+            if matches!(publication, WrapKeyPublication::AllowSequential) =>
+        {
+            if host.file_exists(&staged_path).await? {
+                false
+            } else {
+                if let Err(err) = host.write_file(&staged_path, key, 0o600).await {
+                    let _ = host.delete_file(&staged_path).await;
+                    return Err(err);
+                }
+                true
+            }
+        }
+        result => result?,
+    };
+    if !staged {
         return Err(VaultError::Filesystem {
-            message: "Wrapping key repair staging path already exists".to_string(),
+            message: "Wrapping key staging path already exists".to_string(),
             path: staged_path.display().to_string(),
             permission: "write".to_string(),
             code: Some("EEXIST".to_string()),
         });
     }
-    let result = host.rename_file(staged_path, wrap_path).await;
+    let result = host.rename_file(&staged_path, destination).await;
     if result.is_err() {
-        let _ = host.delete_file(staged_path).await;
+        let _ = host.delete_file(&staged_path).await;
     }
     result
 }
@@ -398,7 +439,8 @@ async fn try_load_raw(host: &dyn HostPlatform) -> Result<RawLoad, VaultError> {
     };
 
     let wrap_path = host.config_dir().join(KEY_WRAP_FILE);
-    let mut wrap_key = get_or_create_wrap_key(host, &wrap_path).await?;
+    let mut wrap_key =
+        get_or_create_wrap_key(host, &wrap_path, WrapKeyPublication::AllowSequential).await?;
 
     let json = decrypt_gcm(&wrap_key, &envelope);
     wrap_key.zeroize();
@@ -1070,7 +1112,8 @@ async fn write_raw_state(
     revocation: &RevocationState,
 ) -> Result<(), VaultError> {
     let wrap_path = host.config_dir().join(KEY_WRAP_FILE);
-    let mut wrap_key = get_or_create_wrap_key(host, &wrap_path).await?;
+    let mut wrap_key =
+        get_or_create_wrap_key(host, &wrap_path, WrapKeyPublication::AllowSequential).await?;
 
     let raw = RawKeyState {
         version: 1,

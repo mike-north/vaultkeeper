@@ -88,13 +88,24 @@ export function decryptGcm(key: Buffer, encoded: string, path = ''): string {
   }
 }
 
-/** Stage private data before publishing it atomically without replacement. @internal */
-export async function writeFileIfAbsent(
+/** Signing requires no-replace publication. Ordinary storage can also use sequential filesystems. */
+type Publication = 'atomic' | 'sequential-fallback'
+
+/** A rename consumes the stage. Other outcomes leave it to clean up. */
+type StagedPublication = 'linked' | 'exists' | 'renamed'
+
+/** Give the publisher exclusive ownership of a complete, owner-only sibling file. */
+async function withPrivateStage(
   dest: string,
   content: string | Buffer,
   resource: string,
-): Promise<boolean> {
-  const temp = path.join(path.dirname(dest), `.vk-${crypto.randomUUID()}.tmp`)
+  publish: (temp: string) => Promise<StagedPublication>,
+): Promise<StagedPublication> {
+  // A short basename leaves room for the stage near macOS's path limit.
+  const temp = path.join(
+    path.dirname(dest),
+    `.vk-${crypto.randomBytes(9).toString('base64url')}.tmp`,
+  )
   let file: Awaited<ReturnType<typeof fs.open>>
   try {
     file = await fs.open(temp, 'wx', 0o600)
@@ -102,26 +113,66 @@ export async function writeFileIfAbsent(
     throw toFilesystemError(err, resource, dest, 'write')
   }
 
+  let result: StagedPublication | undefined
   try {
     try {
       await file.writeFile(content)
       if (process.platform !== 'win32') await file.chmod(0o600)
-    } finally {
-      await file.close()
-    }
-    try {
-      await fs.link(temp, dest)
     } catch (err) {
-      if (err instanceof Error && 'code' in err && err.code === 'EEXIST') return false
+      await file.close().catch(() => undefined)
       throw err
     }
-    return true
+    await file.close()
+    result = await publish(temp)
+    return result
   } catch (err) {
     throw toFilesystemError(err, resource, dest, 'write')
   } finally {
-    // The link is the commit point. A cleanup failure does not undo it.
-    await fs.unlink(temp).catch(() => undefined)
+    // A rename released the stage path, so it could now belong to another writer.
+    if (result !== 'renamed') await fs.unlink(temp).catch(() => undefined)
   }
+}
+
+/**
+ * Publish a complete private file without replacement. Ordinary wrapping keys
+ * may opt into a sequential rename when the filesystem lacks hard links.
+ * @internal
+ */
+export async function writeFileIfAbsent(
+  dest: string,
+  content: string | Buffer,
+  resource: string,
+  publication: Publication = 'atomic',
+): Promise<boolean> {
+  const result = await withPrivateStage(dest, content, resource, async (temp) => {
+    try {
+      await fs.link(temp, dest)
+      return 'linked'
+    } catch (err) {
+      if (!(err instanceof Error && 'code' in err)) throw err
+      if (err.code === 'EEXIST') return 'exists'
+      // libuv can report the Windows exFAT link failure as EISDIR.
+      const unavailable =
+        err.code === 'ENOTSUP' ||
+        err.code === 'EOPNOTSUPP' ||
+        err.code === 'ENOSYS' ||
+        err.code === 'EPERM' ||
+        (process.platform === 'win32' && err.code === 'EISDIR')
+      if (publication === 'atomic' || !unavailable) throw err
+    }
+
+    // An owned sibling can still be renamed when the filesystem refuses to
+    // link it with EPERM. Signing requires the hard link's no-replace guarantee.
+    try {
+      await fs.lstat(dest)
+      return 'exists'
+    } catch (err) {
+      if (!(err instanceof Error && 'code' in err && err.code === 'ENOENT')) throw err
+    }
+    await fs.rename(temp, dest)
+    return 'renamed'
+  })
+  return result !== 'exists'
 }
 
 /**
@@ -141,9 +192,14 @@ export async function writeFileIfAbsent(
  * returned {@link Buffer} holds key material; zero it after use where practical.
  *
  * @param keyPath - Absolute path to the wrapping-key file.
+ * @param publication - Whether initial creation or repair requires atomic
+ * no-replace publication. Signing must use the atomic mode.
  * @internal
  */
-export async function getOrCreateWrapKey(keyPath: string): Promise<Buffer> {
+export async function getOrCreateWrapKey(
+  keyPath: string,
+  publication: Publication = 'sequential-fallback',
+): Promise<Buffer> {
   let existing: Buffer | undefined
   try {
     existing = await fs.readFile(keyPath)
@@ -156,13 +212,13 @@ export async function getOrCreateWrapKey(keyPath: string): Promise<Buffer> {
   if (existing?.byteLength === GCM_KEY_BYTES) return existing
   if (existing !== undefined) {
     existing.fill(0)
-    return repairWrapKey(keyPath)
+    return repairWrapKey(keyPath, publication)
   }
 
   const key = crypto.randomBytes(GCM_KEY_BYTES)
   let published = false
   try {
-    published = await writeFileIfAbsent(keyPath, key, 'wrapping key file')
+    published = await writeFileIfAbsent(keyPath, key, 'wrapping key file', publication)
     if (published) return key
   } finally {
     if (!published) key.fill(0)
@@ -184,12 +240,12 @@ async function readValidWrapKey(keyPath: string): Promise<Buffer> {
 }
 
 /** Resume any published repair so every writer uses the same selected key. */
-async function repairWrapKey(keyPath: string): Promise<Buffer> {
+async function repairWrapKey(keyPath: string, publication: Publication): Promise<Buffer> {
   const candidatePath = `${keyPath}.repair`
   let candidate: Buffer = crypto.randomBytes(GCM_KEY_BYTES)
   let returnCandidate = false
   try {
-    if (!(await writeFileIfAbsent(candidatePath, candidate, 'wrapping key repair'))) {
+    if (!(await writeFileIfAbsent(candidatePath, candidate, 'wrapping key repair', publication))) {
       candidate.fill(0)
       try {
         candidate = await readValidWrapKey(candidatePath)
@@ -221,18 +277,8 @@ async function repairWrapKey(keyPath: string): Promise<Buffer> {
 
 /** Install a private copy of the selected key so a delayed writer cannot rename a reused candidate path. */
 async function installWrapKeyRepair(keyPath: string, candidate: Buffer): Promise<void> {
-  const stagedPath = `${keyPath}.repair-${crypto.randomUUID()}.tmp`
-  if (!(await writeFileIfAbsent(stagedPath, candidate, 'wrapping key repair'))) {
-    throw new FilesystemError(
-      'Wrapping key repair staging path already exists',
-      stagedPath,
-      'write',
-    )
-  }
-  try {
-    await fs.rename(stagedPath, keyPath)
-  } catch (err) {
-    await fs.unlink(stagedPath).catch(() => undefined)
-    throw toFilesystemError(err, 'wrapping key file', keyPath, 'write')
-  }
+  await withPrivateStage(keyPath, candidate, 'wrapping key repair', async (temp) => {
+    await fs.rename(temp, keyPath)
+    return 'renamed'
+  })
 }

@@ -11,7 +11,7 @@ import * as fs from 'node:fs/promises'
 import * as os from 'node:os'
 import * as path from 'node:path'
 import * as crypto from 'node:crypto'
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { FileBackend } from '../../../src/backend/file-backend.js'
 import { isSigningBackend } from '../../../src/backend/types.js'
 import {
@@ -21,6 +21,37 @@ import {
   InvalidKeyMaterialError,
 } from '../../../src/errors.js'
 import { encryptGcm, getOrCreateWrapKey } from '../../../src/util/at-rest.js'
+
+// Simulate a partial write on the signing identity's file, including an implementation
+// that writes the final path directly. Writes outside the signing directory remain real.
+const diskFull = vi.hoisted(() => ({
+  dir: '',
+  error: Object.assign(new Error('disk full'), { code: 'ENOSPC' }),
+}))
+
+vi.mock('node:fs/promises', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs/promises')>()
+  return {
+    ...actual,
+    open: async (...args: Parameters<typeof actual.open>): Promise<fs.FileHandle> => {
+      const handle = await actual.open(...args)
+      if (typeof args[0] === 'string' && path.dirname(args[0]) === diskFull.dir) {
+        vi.spyOn(handle, 'writeFile').mockImplementation(async () => {
+          await handle.write('partial')
+          throw diskFull.error
+        })
+      }
+      return handle
+    },
+    writeFile: async (...args: Parameters<typeof actual.writeFile>): Promise<void> => {
+      if (typeof args[0] === 'string' && path.dirname(args[0]) === diskFull.dir) {
+        await actual.writeFile(args[0], 'partial', args[2])
+        throw diskFull.error
+      }
+      await actual.writeFile(...args)
+    },
+  }
+})
 
 /** Compute the on-disk encrypted-key path the FileBackend uses for a signing id. */
 function signingKeyFile(dir: string, id: string): string {
@@ -37,6 +68,7 @@ beforeEach(async () => {
 })
 
 afterEach(async () => {
+  diskFull.dir = ''
   await fs.rm(storageDir, { recursive: true, force: true })
 })
 
@@ -114,6 +146,21 @@ describe('FileBackend signing contract', () => {
       expect(loser.reason).toBeInstanceOf(SigningKeyAlreadyExistsError)
       expect(await new FileBackend(storageDir).getPublicKey(ID)).toEqual(winner.value)
     }
+  })
+
+  it('leaves the label available for retry after a partial write', async () => {
+    diskFull.dir = path.dirname(signingKeyFile(storageDir, ID))
+    await expect(backend.generateSigningKey(ID, 'EdDSA')).rejects.toMatchObject({
+      name: 'FilesystemError',
+      code: 'ENOSPC',
+      cause: diskFull.error,
+    })
+    expect(await fs.readdir(diskFull.dir)).toEqual([])
+    diskFull.dir = ''
+
+    await backend.generateSigningKey(ID, 'EdDSA')
+    const publicKey = await new FileBackend(storageDir).getPublicKey(ID)
+    expect(publicKey.algorithm).toBe('EdDSA')
   })
 
   it('uses a single wrapping key when different labels are created in a fresh store', async () => {

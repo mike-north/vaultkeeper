@@ -141,7 +141,7 @@ _(Optional)_ Optional interactive human-approval capability (issue \#239). Absen
 
 </td><td>
 
-_(Optional)_ Atomically publish a complete file. Resolves to false if the destination already exists. The caller retains ownership of the input bytes.
+_(Optional)_ Atomically publish a complete file. Resolves to false if the destination already exists. The caller retains ownership of the input bytes. Reject with `LockingNotSupportedError` when atomic publication is unavailable, so ordinary key-state storage can use its sequential fallback.
 
 
 </td></tr>

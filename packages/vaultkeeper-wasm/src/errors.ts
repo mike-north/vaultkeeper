@@ -789,11 +789,9 @@ export class MaterializeModeUnsupportedError extends VaultError {
  * pre-existing sequential-ordering-only guarantee rather than actually
  * blocking a concurrent writer.
  *
- * Reserved for forward compatibility with hosts that surface locking errors
- * directly: today the only production caller of `try_create_lock_file`
- * (`acquire_lock` in `keys::storage`) absorbs this variant internally and
- * degrades to unlocked operation, so no current SDK path actually throws
- * this error.
+ * Hosts also use this error when they cannot atomically publish a file
+ * without replacement. Ordinary wrapping-key storage can continue under
+ * its sequential contract when it receives this capability signal.
  */
 export class LockingNotSupportedError extends VaultError {
   constructor(message: string) {

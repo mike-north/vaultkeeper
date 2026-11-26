@@ -72,6 +72,8 @@ export interface WasmHostPlatform {
   /**
    * Atomically publish a complete file. Resolves to false if the destination
    * already exists. The caller retains ownership of the input bytes.
+   * Reject with `LockingNotSupportedError` when atomic publication is
+   * unavailable, so ordinary key-state storage can use its sequential fallback.
    */
   writeFileIfAbsent?(path: string, content: Uint8Array, mode: number): Promise<boolean>
   fileExists(path: string): Promise<boolean>

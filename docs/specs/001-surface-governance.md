@@ -304,10 +304,13 @@ the existing duplicate-key error. Rust hosts provide this operation through
 error, so enrollment requires a host that implements atomic publication. The
 Node WASM host also provides this primitive through
 `WasmHostPlatform.writeFileIfAbsent` for shared wrapping-key initialization.
-The built-in hosts require filesystem support for same-directory hard links.
-Custom hosts using the sequential wrapping-key fallback must serialize access
-to shared storage externally. Repair of a malformed wrapping key atomically
-selects one complete candidate. A later writer can finish an interrupted repair
+Built-in hosts use same-directory hard links for no-replace publication.
+Ordinary file storage and key-state persistence retain sequential wrapping-key
+initialization when the host cannot publish atomically. Callers using that
+fallback must serialize access to shared storage externally. Signing enrollment
+requires atomic publication when a wrapping key must be created or repaired.
+On hosts with atomic publication, repair of a malformed wrapping key selects
+one complete candidate atomically. A later writer can finish an interrupted repair
 using that candidate after rechecking the active key. Each repairer installs a
 private staging file with the selected bytes, so reusing the shared candidate
 path cannot cause a delayed writer to install a different key.
