@@ -145,6 +145,16 @@ describe('FileBackend signing contract', () => {
     expect((await reopened.getPublicKey(ID)).algorithm).toBe('EdDSA')
   })
 
+  it('recovers an interrupted wrapping-key repair and keeps the selected key', async () => {
+    const candidate = crypto.randomBytes(32)
+    await fs.writeFile(path.join(storageDir, '.key'), Buffer.alloc(1))
+    await fs.writeFile(path.join(storageDir, '.key.repair'), candidate)
+    await backend.generateSigningKey(ID, 'EdDSA')
+    const publicKey = await backend.getPublicKey(ID)
+    expect(await fs.readFile(path.join(storageDir, '.key'))).toEqual(candidate)
+    expect(await new FileBackend(storageDir).getPublicKey(ID)).toEqual(publicKey)
+  })
+
   it('a non-ENOENT probe failure surfaces a typed FilesystemError, never a silent overwrite', async () => {
     // Make the signing-key directory path a regular FILE so that probing for a
     // key underneath it fails with ENOTDIR (a non-ENOENT error) rather than
