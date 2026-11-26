@@ -14,8 +14,73 @@ import * as fs from 'node:fs/promises'
 import * as os from 'node:os'
 import * as path from 'node:path'
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
+import { FilesystemError } from '../../../src/errors.js'
 import { loadKeyState, saveKeyState } from '../../../src/keys/storage.js'
 import type { KeyMaterial, KeyStateSnapshot } from '../../../src/keys/types.js'
+
+const renameBarrier = vi.hoisted(() => ({
+  enabled: false,
+  pending: new Array<{ source: string; release: (fail?: boolean) => void }>(),
+}))
+
+// Faults apply only to the next exclusively created key-state staging file.
+const stageFault = vi.hoisted(() => ({
+  write: false,
+  close: false,
+  path: '',
+  writeError: Object.assign(new Error('disk full'), { code: 'ENOSPC' }),
+  closeError: Object.assign(new Error('close failed'), { code: 'EIO' }),
+}))
+
+// Model macOS's path limit on all platforms so the boundary stays tested in CI.
+const pathLimit = vi.hoisted(() => ({ enabled: false }))
+
+vi.mock('node:fs/promises', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs/promises')>()
+  return {
+    ...actual,
+    open: async (...args: Parameters<typeof actual.open>): Promise<fs.FileHandle> => {
+      if (pathLimit.enabled && args[1] === 'wx' && Buffer.byteLength(String(args[0])) >= 1024) {
+        throw Object.assign(new Error('path too long'), { code: 'ENAMETOOLONG' })
+      }
+      const handle = await actual.open(...args)
+      if (args[1] === 'wx' && (stageFault.write || stageFault.close)) {
+        stageFault.path = String(args[0])
+        if (stageFault.write) {
+          vi.spyOn(handle, 'writeFile').mockImplementation(async () => {
+            await handle.write('partial')
+            throw stageFault.writeError
+          })
+        }
+        if (stageFault.close) {
+          const close = handle.close.bind(handle)
+          vi.spyOn(handle, 'close').mockImplementation(async () => {
+            await close()
+            throw stageFault.closeError
+          })
+        }
+      }
+      return handle
+    },
+    rename: async (...args: Parameters<typeof actual.rename>): Promise<void> => {
+      if (renameBarrier.enabled) {
+        const fail = await new Promise<boolean>((resolve) => {
+          renameBarrier.pending.push({
+            source: String(args[0]),
+            release: (fail = false) => {
+              resolve(fail)
+            },
+          })
+        })
+        if (fail) {
+          await actual.rename(args[0], path.join(String(args[1]), 'missing', 'keys.enc'))
+          return
+        }
+      }
+      await actual.rename(...args)
+    },
+  }
+})
 
 const CREATED_AT = new Date('2024-01-15T10:30:00.000Z')
 
@@ -30,10 +95,52 @@ beforeEach(async () => {
 })
 
 afterEach(async () => {
+  stageFault.write = false
+  stageFault.close = false
+  stageFault.path = ''
+  pathLimit.enabled = false
   await fs.rm(dir, { recursive: true, force: true })
 })
 
 describe('saveKeyState / loadKeyState round-trip', () => {
+  it('saves and reloads at the macOS path boundary supported by the old staging name', async () => {
+    let target = dir
+    const targetLength = Buffer.byteLength(dir) === 989 ? 991 : Math.max(990, Buffer.byteLength(dir))
+    while (Buffer.byteLength(target) < targetLength) {
+      const remaining = targetLength - Buffer.byteLength(target) - 1
+      const length = remaining === 201 ? 199 : Math.min(remaining, 200)
+      target = path.join(target, 'a'.repeat(length))
+    }
+    expect(Buffer.byteLength(target)).toBe(targetLength)
+    const snapshot = { current: makeKey('k-boundary', 0x42) }
+    pathLimit.enabled = true
+    await saveKeyState(target, snapshot)
+    expect(await loadKeyState(target)).toEqual(snapshot)
+  })
+  it.each([
+    { write: true, code: 'ENOSPC', cause: stageFault.writeError },
+    { write: false, code: 'EIO', cause: stageFault.closeError },
+  ])('preserves the primary staging error when write failure is $write', async ({ write, code, cause }) => {
+    const initial = { current: makeKey('k-initial', 0x10) }
+    await saveKeyState(dir, initial)
+    stageFault.write = write
+    stageFault.close = true
+
+    const result = await saveKeyState(dir, { current: makeKey('k-next', 0x11) }).catch(
+      (error: unknown) => error,
+    )
+    expect(result).toBeInstanceOf(FilesystemError)
+    expect(result).toMatchObject({
+      name: 'FilesystemError',
+      code,
+      cause,
+      path: stageFault.path,
+    })
+    expect(path.dirname(stageFault.path)).toBe(dir)
+    expect(path.basename(stageFault.path)).toMatch(/^\.[A-Za-z0-9_-]{12}$/)
+    await expect(fs.stat(stageFault.path)).rejects.toMatchObject({ code: 'ENOENT' })
+    expect(await loadKeyState(dir)).toEqual(initial)
+  })
   it('persists the current key so a later load resolves the same id and bytes', async () => {
     const current = makeKey('k-1-aaaa', 0x11)
     await saveKeyState(dir, { current })
@@ -61,6 +168,79 @@ describe('saveKeyState / loadKeyState round-trip', () => {
     const loaded = await loadKeyState(dir)
     expect(loaded?.previous?.id).toBe('k-1-aaaa')
     expect(loaded?.gracePeriodExpiresAt).toBe(snapshot.gracePeriodExpiresAt)
+  })
+
+  it('publishes each complete snapshot from its own staging file', async () => {
+    const initial = { current: makeKey('k-initial', 0x10) }
+    const first = { current: makeKey('k-first', 0x11) }
+    const second = { current: makeKey('k-second', 0x22) }
+    await saveKeyState(dir, initial)
+
+    renameBarrier.enabled = true
+    const saves: Promise<void>[] = []
+    try {
+      saves.push(saveKeyState(dir, first))
+      await vi.waitFor(() => {
+        expect(renameBarrier.pending).toHaveLength(1)
+      })
+      saves.push(saveKeyState(dir, second))
+      await vi.waitFor(() => {
+        expect(renameBarrier.pending).toHaveLength(2)
+      })
+
+      expect(await loadKeyState(dir)).toEqual(initial)
+      const [firstStage, secondStage] = renameBarrier.pending
+      expect(firstStage).toBeDefined()
+      expect(secondStage).toBeDefined()
+
+      firstStage?.release()
+      await saves[0]
+      expect(await loadKeyState(dir)).toEqual(first)
+      await expect(fs.stat(firstStage?.source ?? '')).rejects.toMatchObject({ code: 'ENOENT' })
+      await expect(fs.stat(secondStage?.source ?? '')).resolves.toBeDefined()
+
+      secondStage?.release()
+      await saves[1]
+      expect(await loadKeyState(dir)).toEqual(second)
+      await expect(fs.stat(secondStage?.source ?? '')).rejects.toMatchObject({ code: 'ENOENT' })
+    } finally {
+      renameBarrier.enabled = false
+      for (const stage of renameBarrier.pending.splice(0)) stage.release()
+      await Promise.allSettled(saves)
+    }
+  })
+
+  it('cleans up a failed rename while leaving the other save staged', async () => {
+    const initial = { current: makeKey('k-initial', 0x10) }
+    const next = { current: makeKey('k-next', 0x11) }
+    await saveKeyState(dir, initial)
+
+    renameBarrier.enabled = true
+    const saves = [saveKeyState(dir, next), saveKeyState(dir, next)]
+    const completed = Promise.allSettled(saves)
+    try {
+      await vi.waitFor(() => {
+        expect(renameBarrier.pending).toHaveLength(2)
+      })
+      const [failedStage, survivingStage] = renameBarrier.pending
+      failedStage?.release(true)
+      await vi.waitFor(async () => {
+        await expect(fs.stat(failedStage?.source ?? '')).rejects.toMatchObject({ code: 'ENOENT' })
+      })
+      await expect(fs.stat(survivingStage?.source ?? '')).resolves.toBeDefined()
+      expect(await loadKeyState(dir)).toEqual(initial)
+
+      survivingStage?.release()
+      const results = await completed
+      expect(results).toContainEqual({ status: 'fulfilled', value: undefined })
+      const failure = results.find((result) => result.status === 'rejected')
+      expect(failure?.reason).toBeInstanceOf(FilesystemError)
+      expect(await loadKeyState(dir)).toEqual(next)
+    } finally {
+      renameBarrier.enabled = false
+      for (const stage of renameBarrier.pending.splice(0)) stage.release()
+      await completed
+    }
   })
 })
 
