@@ -31,7 +31,8 @@ import type {
   BackendCapabilities,
   PresenceOperation,
 } from './backend/types.js'
-import { createToken, decryptToken, extractKid, validateClaims, blockToken } from './jwe/index.js'
+import { createToken, decryptToken, extractKid, validateClaims } from './jwe/index.js'
+import { tokenExpiryTime } from './jwe/expiry-clock.js'
 import { verifyTrustPending, commitTrust } from './identity/trust.js'
 import { hashExecutable } from './identity/hash.js'
 import { loadManifest, saveManifest, addTrustedHash, isTrusted } from './identity/manifest.js'
@@ -321,15 +322,24 @@ const PRESENCE_PER_USE_QUALIFYING_BACKENDS =
   '(which enforces presence for reads only today, not writes). Switch to (or ' +
   'reconfigure) such a backend, or drop the presence requirement.'
 
-/** Usage tracking for tokens with use limits. */
-const usageCounts = new Map<string, number>()
+/** Successful authorizations against a single finite-use JTI. */
+interface UsageRecord {
+  count: number
+  expiresAt: number
+}
 
-/**
- * Maximum number of JTIs the in-memory usage-count map will retain.
- * When the cap is reached, the oldest inserted entry is evicted (FIFO).
- * This prevents unbounded growth for long-running processes.
- */
+/** Volatile finite-use accounting shared by vaults using this loaded module. */
+const usageCounts = new Map<string, UsageRecord>()
 const USAGE_MAP_MAX_SIZE = 10_000
+
+/** Lower bound on tracked deadlines, so denied admissions skip scans until reclamation is possible. */
+let nextUsageExpiry = Number.POSITIVE_INFINITY
+
+/** Clears process-local finite-use accounting for test isolation. @internal */
+export function clearUsageCounts(): void {
+  usageCounts.clear()
+  nextUsageExpiry = Number.POSITIVE_INFINITY
+}
 
 /**
  * Main entry point for vaultkeeper. Orchestrates backends, keys, JWE tokens,
@@ -660,7 +670,8 @@ export class VaultKeeper {
 
     const secretValue = await backend.retrieve(secretName)
 
-    const now = Math.floor(Date.now() / 1000)
+    // Keep minted issue times at whole-second precision, as in native tokens.
+    const now = Math.floor(tokenExpiryTime())
     const claims: VaultClaims = {
       jti: crypto.randomUUID(),
       exp: now + ttlMinutes * 60,
@@ -690,52 +701,70 @@ export class VaultKeeper {
    * Decrypt a JWE, validate claims, verify executable identity, and return
    * an opaque CapabilityToken.
    *
+   * @remarks
+   * Vault instances using the same loaded TypeScript module share in-memory
+   * accounting for up to 10,000 finite-use tokens. A tracked budget is retained
+   * through expiry. At capacity, a first finite-use authorization requires
+   * an expired entry to reclaim. Unlimited-use tokens need no entry.
+   * JWE redemption and capability use share an expiry clock that advances with
+   * elapsed time during a backward wall-clock adjustment. Expired tokens stay
+   * expired, and newly issued tokens continue to age.
+   * Each process maintains its own accounting.
+   *
    * @param jwe - Compact JWE string from setup()
    * @returns Object containing an opaque {@link CapabilityToken} for use with
    *   this vault instance's fetch/exec/getSecret, and a {@link VaultResponse}
    *   describing key status.
    *   When the JWE was decrypted with a non-current key,
    *   `vaultResponse.rotatedJwt` contains a re-encrypted JWE for the current key.
+   * @throws {@link AuthorizationDeniedError} If a new finite-use budget cannot
+   *   be tracked because all accounting entries are still live.
    */
   async authorize(jwe: string): Promise<{ token: CapabilityToken; vaultResponse: VaultResponse }> {
     const kid = extractKid(jwe)
     const { claims, keyStatus } = await this.#decryptWithKeyResolution(jwe, kid)
 
-    // Validate claims (expiry, blocklist, usage)
     const jti = claims.jti
-    const currentCount = usageCounts.get(jti) ?? 0
-    validateClaims(claims, currentCount)
-
-    // Only track usage for tokens with a finite use limit. Unlimited tokens
-    // (claims.use === null) never need count checks, so tracking them would
-    // waste memory and cause unnecessary evictions of limited-token entries.
-    if (claims.use !== null) {
-      const newCount = currentCount + 1
-      usageCounts.set(jti, newCount)
-
-      // Evict the oldest entry when the map exceeds its size cap to prevent
-      // unbounded memory growth in long-running processes. Block the evicted
-      // JTI so that it cannot be silently re-authorized with a reset count.
-      if (usageCounts.size > USAGE_MAP_MAX_SIZE) {
-        const oldest = usageCounts.keys().next().value
-        if (oldest !== undefined) {
-          usageCounts.delete(oldest)
-          blockToken(oldest)
-        }
-      }
-    }
-
-    const token = createCapabilityToken(claims, this.#capabilityOwner)
-
     const vaultResponse: VaultResponse = { keyStatus }
     if (keyStatus === 'previous') {
-      // Re-encrypt with current key
+      // Refresh can fail without returning a capability, so charge only after it succeeds.
+      validateClaims(claims, usageCounts.get(jti)?.count)
       const currentKey = this.#keyManager.getCurrentKey()
-      const rotatedJwt = await createToken(currentKey.key, claims, { kid: currentKey.id })
-      vaultResponse.rotatedJwt = rotatedJwt
+      vaultResponse.rotatedJwt = await createToken(currentKey.key, claims, { kid: currentKey.id })
     }
 
-    return { token, vaultResponse }
+    // Recheck after any refresh. Validation and accounting share a time snapshot
+    // and run without yielding, so concurrent callers share one budget.
+    const now = tokenExpiryTime()
+    const usage = usageCounts.get(jti)
+    const currentCount = usage?.count ?? 0
+    validateClaims(claims, currentCount, now)
+
+    if (claims.use !== null) {
+      if (usage === undefined && usageCounts.size >= USAGE_MAP_MAX_SIZE) {
+        if (nextUsageExpiry <= now) {
+          nextUsageExpiry = Number.POSITIVE_INFINITY
+          for (const [trackedJti, record] of usageCounts) {
+            if (record.expiresAt <= now) {
+              usageCounts.delete(trackedJti)
+            } else {
+              nextUsageExpiry = Math.min(nextUsageExpiry, record.expiresAt)
+            }
+          }
+        }
+        if (usageCounts.size >= USAGE_MAP_MAX_SIZE) {
+          throw new AuthorizationDeniedError(
+            'Cannot safely admit a finite-use token while live usage accounting is at capacity',
+          )
+        }
+      }
+
+      const expiresAt = Math.max(usage?.expiresAt ?? claims.exp, claims.exp)
+      usageCounts.set(jti, { count: currentCount + 1, expiresAt })
+      nextUsageExpiry = Math.min(nextUsageExpiry, expiresAt)
+    }
+
+    return { token: createCapabilityToken(claims, this.#capabilityOwner), vaultResponse }
   }
 
   /**
@@ -1270,7 +1299,7 @@ export class VaultKeeper {
   } {
     const capabilities: CapabilityToken[] = []
     const beforeDispatch = () => {
-      const nowSec = Date.now() / 1000
+      const nowSec = tokenExpiryTime()
       let earliest: { token: CapabilityToken; deadline: number } | undefined
       for (const capability of capabilities) {
         const claims = validateCapabilityToken(capability, this.#capabilityOwner, nowSec)

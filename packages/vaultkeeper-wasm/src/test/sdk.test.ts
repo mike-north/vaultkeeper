@@ -28,6 +28,9 @@ import {
   AccessorConsumedError,
   ExecutableTrustRequiredError,
   IdentityMismatchError,
+  AuthorizationDeniedError,
+  TokenExpiredError,
+  UsageLimitExceededError,
 } from '../index.js'
 
 /**
@@ -278,6 +281,76 @@ describe('@vaultkeeper/wasm SDK', () => {
       const result = vault.authorize(token)
       assert.equal(result.claims.use, 3)
       vault.dispose()
+    })
+  })
+
+  it('retains exhausted finite-use budgets when the committed core reaches capacity', async () => {
+    await withTempDir(async (dir) => {
+      const vault = await createTestVault(dir)
+      try {
+        const mint = () =>
+          vault.setup('finite', 'synthetic-value', { skipTrust: true, useLimit: 1 })
+        const exhausted = await mint()
+        vault.authorize(exhausted)
+
+        // One consumed token plus 9,999 distinct admissions fills the live accounting table.
+        for (let index = 1; index < 10_000; index++) {
+          vault.authorize(await mint())
+        }
+
+        const overflow = await mint()
+        assert.throws(() => vault.authorize(overflow), AuthorizationDeniedError)
+        // A distinct table can admit the overflow token and displace the original
+        // JTI in the shared blocklist. The original table must still deny it.
+        await withTempDir(async (otherDir) => {
+          const other = await createTestVault(otherDir)
+          try {
+            const extra = await other.setup('finite', 'synthetic-value', {
+              skipTrust: true,
+              useLimit: 1,
+            })
+            other.authorize(extra)
+          } finally {
+            other.dispose()
+          }
+        })
+        assert.throws(() => vault.authorize(exhausted), UsageLimitExceededError)
+      } finally {
+        vault.dispose()
+      }
+    })
+  })
+
+  it('ages new tokens while the corrected wall clock is behind', async (t) => {
+    await withTempDir(async (dir) => {
+      const vault = await createTestVault(dir)
+      try {
+        const start = Date.now()
+        let wallMs = start
+        let steadyMs = 0
+        t.mock.method(Date, 'now', () => wallMs)
+        t.mock.method(performance, 'now', () => steadyMs)
+        const mint = () =>
+          vault.setup('rollback', 'synthetic-value', { skipTrust: true, ttlMinutes: 1 })
+        const old = await mint()
+        vault.authorize(old)
+
+        wallMs += 120_000
+        assert.throws(() => vault.authorize(old), TokenExpiredError)
+        wallMs = start
+        assert.throws(() => vault.authorize(old), TokenExpiredError)
+        const fresh = await mint()
+        vault.authorize(fresh)
+
+        steadyMs += 59_000
+        wallMs += 59_000
+        vault.authorize(fresh)
+        steadyMs += 1_000
+        wallMs += 1_000
+        assert.throws(() => vault.authorize(fresh), TokenExpiredError)
+      } finally {
+        vault.dispose()
+      }
     })
   })
 

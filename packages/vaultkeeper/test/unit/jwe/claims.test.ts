@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { validateClaims, blockToken, isBlocked, clearBlocklist } from '../../../src/jwe/claims.js'
+import { resetTokenExpiryClockForTests } from '../../../src/jwe/expiry-clock.js'
 import type { VaultClaims } from '../../../src/types.js'
 import {
   TokenExpiredError,
@@ -27,11 +28,16 @@ function makeValidClaims(overrides: Partial<VaultClaims> = {}): VaultClaims {
   }
 }
 
-describe('blockToken / isBlocked', () => {
-  beforeEach(() => {
-    clearBlocklist()
-  })
+beforeEach(() => {
+  clearBlocklist()
+  resetTokenExpiryClockForTests()
+})
 
+afterEach(() => {
+  vi.useRealTimers()
+})
+
+describe('blockToken / isBlocked', () => {
   it('newly created JTI is not blocked', () => {
     expect(isBlocked('some-jti')).toBe(false)
   })
@@ -52,6 +58,56 @@ describe('blockToken / isBlocked', () => {
     expect(isBlocked('jti-a')).toBe(true)
   })
 
+  it('keeps a live denial under pressure and reclaims expired denials', () => {
+    vi.useFakeTimers()
+    const start = Date.now()
+    const now = Math.floor(start / 1000)
+    const live = makeValidClaims({ jti: 'live-denial', exp: now + 60 })
+    const expired = makeValidClaims({ jti: 'short-denial', exp: now + 1 })
+    blockToken(live.jti, live.exp)
+    blockToken(live.jti, expired.exp)
+    blockToken(expired.jti, expired.exp)
+    for (let index = 0; index < 10_000; index++) {
+      blockToken(`pressure-${String(index)}`, live.exp)
+    }
+
+    vi.setSystemTime(new Date(expired.exp * 1000))
+    blockToken('sweep-trigger', live.exp)
+    expect(isBlocked(expired.jti)).toBe(false)
+    expect(() => {
+      validateClaims(live)
+    }).toThrow(TokenRevokedError)
+
+    vi.setSystemTime(new Date(start))
+    expect(() => {
+      validateClaims(expired)
+    }).toThrow(TokenExpiredError)
+  })
+
+  it('reclaims a denial at a fractional deadline without reviving the claims after rollback', () => {
+    vi.useFakeTimers()
+    const start = 1_700_000_000_000
+    const claims = makeValidClaims({ iat: start / 1000, exp: start / 1000 + 0.5 })
+    vi.setSystemTime(start)
+    blockToken(claims.jti, claims.exp)
+
+    vi.setSystemTime(start + 499)
+    expect(() => {
+      validateClaims(claims)
+    }).toThrow(TokenRevokedError)
+
+    vi.setSystemTime(start + 500)
+    expect(isBlocked(claims.jti)).toBe(false)
+    expect(() => {
+      validateClaims(claims)
+    }).toThrow(TokenExpiredError)
+
+    vi.setSystemTime(start + 499)
+    expect(() => {
+      validateClaims(claims)
+    }).toThrow(TokenExpiredError)
+  })
+
   it('clearBlocklist removes all blocked JTIs', () => {
     blockToken('jti-a')
     blockToken('jti-b')
@@ -62,10 +118,6 @@ describe('blockToken / isBlocked', () => {
 })
 
 describe('validateClaims', () => {
-  beforeEach(() => {
-    clearBlocklist()
-  })
-
   describe('positive cases', () => {
     it('accepts a fully valid claims object', () => {
       expect(() => {
@@ -112,9 +164,6 @@ describe('validateClaims', () => {
       beforeEach(() => {
         vi.useFakeTimers()
         vi.setSystemTime(new Date('2024-01-15T10:00:00.000Z'))
-      })
-      afterEach(() => {
-        vi.useRealTimers()
       })
 
       it('accepts future expiry one second from now', () => {
