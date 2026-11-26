@@ -20,13 +20,15 @@
  * that npm's default behavior around optional peer dependencies — it does NOT
  * auto-install them — is what the test exercises.
  */
-import { describe, it, expect, afterAll } from 'vitest'
+import { describe, it, expect, afterAll, vi } from 'vitest'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import * as os from 'node:os'
 import * as path from 'node:path'
 import { fileURLToPath } from 'node:url'
+
+import { installTarballs } from './npm-install-fixture.js'
 
 const execFileAsync = promisify(execFile)
 
@@ -150,9 +152,14 @@ describe('vaultkeeper dependency closure', () => {
       ),
     )
 
-    await execFileAsync('npm', ['install', '--no-save', '--no-audit', '--no-fund', tarball], {
-      cwd: projectDir,
-    })
+    // A parent package manager can export its one-off script allowlist.
+    // npm rejects that setting for a project install even for this tarball.
+    vi.stubEnv('NPM_CONFIG_ALLOW_SCRIPTS', 'fixture-package')
+    try {
+      await installTarballs(projectDir, tarball)
+    } finally {
+      vi.unstubAllEnvs()
+    }
 
     const nodeModules = path.join(projectDir, 'node_modules')
     const topLevel = await readdir(nodeModules)
