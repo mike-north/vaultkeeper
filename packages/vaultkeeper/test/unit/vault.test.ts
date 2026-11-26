@@ -607,6 +607,37 @@ describe('VaultKeeper', () => {
       expect(fetchSpy).not.toHaveBeenCalled()
     })
 
+    it.each([false, true])(
+      'preserves single-destination fetch policy at dispatch (expired during lookup: %s)',
+      async (expiresDuringLookup) => {
+        const { vault, token } = await authorizeLease()
+        const dispatch = vi.fn<typeof fetch>().mockResolvedValue(new Response('ok'))
+        vi.stubGlobal('fetch', dispatch)
+        Object.defineProperty(globalThis, 'fetch', {
+          configurable: true,
+          get() {
+            // Resolving the transport is part of preparation and can consume the last millisecond.
+            if (expiresDuringLookup) {
+              vi.setSystemTime(expiresAt)
+            }
+            return dispatch
+          },
+        })
+
+        vi.setSystemTime(expiresAt - 1)
+        const url = 'https://example.invalid'
+        const pending = vault.fetch(token, { url })
+
+        if (expiresDuringLookup) {
+          await expect(pending).rejects.toThrow(TokenExpiredError)
+          expect(dispatch).not.toHaveBeenCalled()
+        } else {
+          await expect(pending).resolves.toMatchObject({ response: { status: 200 } })
+          expect(dispatch).toHaveBeenCalledExactlyOnceWith(url, { redirect: 'error' })
+        }
+      },
+    )
+
     it('checks expiry after preparing a delegated command', async () => {
       const { vault, token } = await authorizeLease()
       const spawnSpy = vi.mocked(spawn).mockImplementationOnce(() => {

@@ -10,7 +10,7 @@ Execute a delegated HTTP fetch, injecting secrets from the token(s).
 
 \*\*Token map ([SecretTokenMap](./vaultkeeper.secrettokenmap.md)<!-- -->):\*\* every `{{secret:name}}` placeholder is replaced with the secret from the corresponding named token.
 
-The raw secret is never exposed in the return value.
+The delegation covers only the requested URL. Fetch redirect statuses (301, 302, 303, 307, and 308) reject with [FetchError](./vaultkeeper.fetcherror.md)<!-- -->, including same-origin redirects and requests without placeholders.
 
 **Signature:**
 
@@ -77,7 +77,7 @@ The fetch request template with placeholders.
 
 Promise&lt;{ response: Response; vaultResponse: [VaultResponse](./vaultkeeper.vaultresponse.md)<!-- -->; }&gt;
 
-The `Response` from the underlying `fetch()` call, together with the vault metadata (`vaultResponse`<!-- -->).
+The `Response` from the underlying `fetch()` call, together with the vault metadata (`vaultResponse`<!-- -->). `Response.url` can include substitutions made in the request URL.
 
 ## Exceptions
 
@@ -87,5 +87,5 @@ The `Response` from the underlying `fetch()` call, together with the vault metad
 
 {<!-- -->VaultError<!-- -->} If a named placeholder references an unknown secret name.
 
-{<!-- -->FetchError<!-- -->} If the URL is malformed or the underlying network request fails.
+{<!-- -->FetchError<!-- -->} If the URL is malformed, the server sends a Fetch redirect, or the underlying network request fails.
 

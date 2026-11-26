@@ -2,7 +2,8 @@
  * Delegated HTTP fetch access pattern.
  *
  * Replaces `{{secret}}` or `{{secret:name}}` placeholders in the request
- * URL, headers, and body with actual secret values, then executes the fetch.
+ * URL, headers, and body with actual secret values for the initial request.
+ * Dispatch requires a live capability and covers only that destination.
  */
 
 import type { FetchRequest } from '../types.js'
@@ -42,9 +43,9 @@ function redactSecretMaterial(
  *   name-to-value map (replaces `{{secret:name}}`)
  * @param request - The fetch request template with placeholders
  * @param beforeDispatch - Lease check before handing the prepared request to fetch
- * @returns The fetch Response
- * @throws {FetchError} If the URL is malformed or the underlying network
- *   request fails (e.g. DNS failure, connection refused, TLS error).
+ * @returns The Response for a non-redirecting request.
+ * @throws {FetchError} If the URL is malformed, the server sends a Fetch
+ *   redirect, or the underlying network request fails.
  * @internal
  */
 export async function delegatedFetch(
@@ -52,9 +53,13 @@ export async function delegatedFetch(
   request: FetchRequest,
   beforeDispatch?: () => void,
 ): Promise<Response> {
+  // Keep this call's template for diagnostics if the caller reuses the request.
   const { url: urlTemplate, headers, body, method } = request
   const url = resolvePlaceholders(urlTemplate, secrets)
-  const init: RequestInit = {}
+
+  // Delegation covers the initial destination. Reject redirects in the
+  // transport and keep redirect response metadata out of the return value.
+  const init: RequestInit = { redirect: 'error' }
   if (method !== undefined) {
     init.method = method
   }
@@ -71,7 +76,7 @@ export async function delegatedFetch(
     // The underlying error's message can embed the placeholder-resolved URL
     // (with the injected secret) — e.g. `getaddrinfo ENOTFOUND <secret-host>`.
     // Redact the resolved URL and every secret value before including it, and
-    // report the unresolved template (`urlTemplate`), never the resolved `url`,
+    // report the dispatched request's unresolved template, never the resolved `url`,
     // so no secret is echoed into the thrown message or the `url` field. The
     // original error is deliberately not attached as `cause`: its message
     // cannot be redacted in place and would reintroduce the leak.
