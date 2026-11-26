@@ -70,7 +70,12 @@ export function execCommandFull(
     })
 
     proc.stderr?.on('data', (data: Buffer) => {
-      stderr += data.toString()
+      // A child may echo stdin, so do not retain its mutable output bytes.
+      try {
+        stderr += data.toString()
+      } finally {
+        data.fill(0)
+      }
     })
 
     if (options?.stdin !== undefined && proc.stdin) {

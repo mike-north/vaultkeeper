@@ -1,4 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
+import { Buffer } from 'node:buffer'
 import * as fs from 'node:fs/promises'
 import * as os from 'node:os'
 import * as path from 'node:path'
@@ -53,6 +54,28 @@ describe('execCommandFull', () => {
     const result = await execCommandFull('sh', ['-c', 'echo errout >&2'])
     expect(result.stderr.trim()).toBe('errout')
     expect(result.exitCode).toBe(0)
+  })
+
+  it('wipes stderr chunks after decoding potentially sensitive output', async () => {
+    const prototype: unknown = Object.getPrototypeOf(Buffer.alloc(0))
+    if (typeof prototype !== 'object' || prototype === null) throw new TypeError('Missing prototype')
+    const original: unknown = Reflect.get(prototype, 'toString')
+    if (typeof original !== 'function') throw new TypeError('Missing decoder')
+    const chunks: Buffer[] = []
+    const spy = vi.spyOn(prototype, 'toString').mockImplementation(function (this: Buffer) {
+      const decoded: unknown = Reflect.apply(original, this, [])
+      if (typeof decoded !== 'string') throw new TypeError('Invalid decoded output')
+      if (decoded.includes('unique-sensitive-stderr-marker')) chunks.push(this)
+      return decoded
+    })
+    try {
+      const result = await execCommandFull('sh', ['-c', 'printf unique-sensitive-stderr-marker >&2'])
+      expect(result.stderr).toBe('unique-sensitive-stderr-marker')
+      expect(chunks.length).toBeGreaterThan(0)
+      expect(chunks.every((chunk) => chunk.every((byte) => byte === 0))).toBe(true)
+    } finally {
+      spy.mockRestore()
+    }
   })
 
   it('kills the process and rejects after timeout', async () => {
