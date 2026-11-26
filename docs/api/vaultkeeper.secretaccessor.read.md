@@ -60,5 +60,7 @@ Whatever the callback returns.
 
 ## Exceptions
 
-{<!-- -->Error<!-- -->} If the accessor has already been consumed.
+{<!-- -->AccessorConsumedError<!-- -->} If the accessor has already been consumed.
+
+{<!-- -->TokenExpiredError<!-- -->} If the authorizing JWE has reached its deadline before the callback receives the secret.
 

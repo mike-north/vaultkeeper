@@ -70,6 +70,24 @@ export function clearBlocklist(): void {
 }
 
 /**
+ * Check the inclusive JWE cutoff, including fractional NumericDates.
+ * @internal
+ */
+export function getTokenExpiryError(
+  exp: number,
+  nowSec = Date.now() / 1000,
+): TokenExpiredError | undefined {
+  if (nowSec >= exp) {
+    const reportedNow = Number.isInteger(exp) ? Math.floor(nowSec) : nowSec
+    return new TokenExpiredError(
+      `Token expired at ${String(exp)} (now: ${String(reportedNow)})`,
+      false,
+    )
+  }
+  return undefined
+}
+
+/**
  * Validates all claims in a VaultClaims payload.
  * @internal
  *
@@ -180,13 +198,9 @@ export function validateClaims(claims: VaultClaims, usedCount = 0): void {
     throw new VaultError('Invalid token: iat must not be after exp')
   }
 
-  // Check expiration
-  const nowSec = Math.floor(Date.now() / 1000)
-  if (nowSec >= claims.exp) {
-    throw new TokenExpiredError(
-      `Token expired at ${String(claims.exp)} (now: ${String(nowSec)})`,
-      false,
-    )
+  const expiryError = getTokenExpiryError(claims.exp)
+  if (expiryError !== undefined) {
+    throw expiryError
   }
 
   // Check blocklist
