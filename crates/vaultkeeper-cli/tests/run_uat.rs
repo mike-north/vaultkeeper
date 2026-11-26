@@ -87,6 +87,32 @@ fn empty_profile() -> serde_json::Value {
     serde_json::json!({ "version": 1, "name": "uat", "entries": {} })
 }
 
+/// An approved executable satisfies a registry requirement on plaintext reads.
+#[test]
+fn approved_command_satisfies_registry_profile() {
+    let profile = serde_json::json!({"version": 1, "name": "uat", "entries": {
+        "GREETING": {"secret": "greeting", "materialize": "secret", "minTrust": "registry"}
+    }});
+    let dir = run_test_env(&profile);
+    store_secret(&dir, "greeting", "hello");
+    let approved = Command::new(vk_bin())
+        .env("VAULTKEEPER_CONFIG_DIR", dir.path())
+        .args(["approve", "--path", "/usr/bin/true"])
+        .output()
+        .unwrap();
+    assert!(approved.status.success());
+    let output = Command::new(vk_bin())
+        .env("VAULTKEEPER_CONFIG_DIR", dir.path())
+        .args(["run", "--profile", "uat", "--", "/usr/bin/true"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
 // ─── AC1: stdio round trip — byte-exact, both directions ─────────
 
 #[test]
