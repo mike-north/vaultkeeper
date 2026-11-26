@@ -756,7 +756,7 @@ async fn cmd_run_token(
 
     // Reserve the durable budget before the process-local handle can expose
     // its secret.
-    if let Err(e) = usage::reserve(host.config_dir(), &claims).await {
+    if let Err(e) = usage::reserve(host.as_ref(), token, &claims, vault.key_manager_mut()).await {
         vault.release_handle(&handle);
         stderr_diag(&format!("Error: Failed to authorize token: {e}"));
         return 1;

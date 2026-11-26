@@ -8,7 +8,10 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 use tokio::time::Instant;
+use vaultkeeper_core::backend::HostPlatform;
 use vaultkeeper_core::errors::VaultError;
+use vaultkeeper_core::jwe::extract_kid;
+use vaultkeeper_core::keys::{KeyManager, KeyMaterial, load_key_state};
 use vaultkeeper_core::types::VaultClaims;
 
 use crate::host::create_dir_all_secure;
@@ -21,20 +24,31 @@ struct UsageState {
     uses: u64,
 }
 
-/// Reserve one use after core authorization and before reading the secret.
+/// Reserve one use of an authenticated token before its handle can expose the
+/// secret. The key lookup uses the same key manager that authorized the token.
 /// A committed admission spends the use even if launching the child fails.
-pub(crate) async fn reserve(config_dir: &Path, claims: &VaultClaims) -> Result<(), VaultError> {
+pub(crate) async fn reserve(
+    host: &dyn HostPlatform,
+    token: &str,
+    claims: &VaultClaims,
+    authorized_keys: &mut KeyManager,
+) -> Result<(), VaultError> {
     let Some(limit) = claims.use_limit else {
         return Ok(());
     };
 
+    let config_dir = host.config_dir();
     let directory = prepare_directory(config_dir)?;
     let fingerprint = vaultkeeper_core::identity::hash::hash_bytes(claims.jti.as_bytes());
     let state_path = directory.join(format!("{fingerprint}.json"));
     let lock_path = directory.join(format!("{fingerprint}.lock"));
     let _lock = acquire_lock(&lock_path).await?;
 
-    // Core validated the token, but it can expire while waiting for the lock.
+    // Admission reads the persisted key state inside the usage lock, so a
+    // revocation completed while this launcher waited takes effect here.
+    check_key_eligibility(host, token, authorized_keys).await?;
+
+    // The token can expire while admission waits or reads key state.
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
@@ -64,6 +78,39 @@ pub(crate) async fn reserve(config_dir: &Path, claims: &VaultClaims) -> Result<(
             .map_err(|error| fs_error(path, "sync token usage directory", error))?;
     }
     Ok(())
+}
+
+/// Check the key that authenticated the protected JWE header against the
+/// persisted key state without decrypting the secret again. A token with no
+/// header key ID is eligible only under the current key, as in core authorization.
+async fn check_key_eligibility(
+    host: &dyn HostPlatform,
+    token: &str,
+    authorized_keys: &mut KeyManager,
+) -> Result<(), VaultError> {
+    let kid = extract_kid(token)?;
+    let revoked = || VaultError::KeyRevoked {
+        message: "Token encryption key is no longer eligible".to_string(),
+    };
+    let authorized_key = match kid.as_deref() {
+        Some(id) => authorized_keys
+            .find_key_by_id(id)
+            .map(|(key, _)| key)
+            .ok_or_else(revoked)?,
+        None => authorized_keys.get_current_key()?,
+    };
+
+    // IDs select keys, but only the same key material can authenticate this
+    // token. The loader includes a previous key only during rotation grace.
+    let matches = |key: &KeyMaterial| key.id == authorized_key.id && key.key == authorized_key.key;
+    let current = load_key_state(host).await?.ok_or_else(revoked)?;
+    if matches(&current.current)
+        || (kid.is_some() && current.previous.as_ref().is_some_and(matches))
+    {
+        Ok(())
+    } else {
+        Err(revoked())
+    }
 }
 
 /// Keep the ledger under the same trusted config path as the keys. On

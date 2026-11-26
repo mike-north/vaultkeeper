@@ -263,6 +263,68 @@ async fn finite_use_budget_survives_restart_and_serializes_concurrent_admission(
     assert_exhausted(&admit(&dir, &token, "exec").output().unwrap(), 3);
 }
 
+/// A revocation completed while admission waits must deny both launcher verbs
+/// before either spends a durable use or reaches the child process.
+#[tokio::test]
+async fn queued_finite_token_is_refused_after_key_revocation() {
+    let dir = TempDir::new().unwrap();
+    write_config(&dir);
+    let (token, fingerprint) = mint_token_with_limit(&dir, "finite-secret", Some(2)).await;
+    let ledger = dir.path().join("token-usage");
+    fs::DirBuilder::new().mode(0o700).create(&ledger).unwrap();
+    let gate = OpenOptions::new()
+        .create_new(true)
+        .mode(0o600)
+        .read(true)
+        .write(true)
+        .open(ledger.join(format!("{fingerprint}.lock")))
+        .unwrap();
+    gate.lock().unwrap();
+
+    let mut children = ["run", "exec"].map(|verb| {
+        run_finite_token(&dir, &token, verb)
+            .args(["--", "sh", "-c", "printf launched"])
+            .spawn()
+            .unwrap()
+    });
+    // Give both launchers a chance to load the old key state and queue while
+    // the ledger is locked, as in the concurrent admission test above.
+    tokio::time::sleep(Duration::from_millis(750)).await;
+    let waited = children
+        .iter_mut()
+        .all(|child| child.try_wait().unwrap().is_none());
+    let revoked = Command::new(vk_bin())
+        .env("VAULTKEEPER_CONFIG_DIR", dir.path())
+        .arg("revoke-key")
+        .output()
+        .unwrap();
+    drop(gate);
+    let results = children.map(|child| child.wait_with_output().unwrap());
+
+    assert!(waited, "the launchers must wait for the ledger lock");
+    assert!(
+        revoked.status.success(),
+        "{}",
+        String::from_utf8_lossy(&revoked.stderr)
+    );
+    for output in results {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert_eq!(
+            (output.status.code(), output.stdout.as_slice()),
+            (Some(1), b"".as_slice()),
+            "revocation must prevent launch: {stderr}"
+        );
+        assert!(
+            stderr.contains("Token encryption key is no longer eligible"),
+            "{stderr}"
+        );
+    }
+    assert!(
+        !ledger.join(format!("{fingerprint}.json")).exists(),
+        "revocation must leave the durable budget unspent"
+    );
+}
+
 #[test]
 fn usage_lock_owner_fixture() {
     let Some(lock_path) = std::env::var_os("VAULTKEEPER_UAT_USAGE_LOCK") else {
