@@ -888,7 +888,7 @@ async fn launch_and_wait(
     use std::process::Stdio;
 
     if let Some(verified) = verified
-        && let Err(e) = verified.check_digest(host).await
+        && let Err(e) = verified.check_launch_target(host).await
     {
         stderr_diag(&format!("Error: {e}"));
         return 1;
@@ -905,8 +905,8 @@ async fn launch_and_wait(
 
     let mut cmd = match verified {
         Some(verified) => {
-            let mut cmd = tokio::process::Command::new(&verified.path);
-            // Preserve how the caller invoked aliases and multicall binaries.
+            let mut cmd = tokio::process::Command::new(&verified.launch_path);
+            // Preserve the requested argv[0] for native multicall binaries.
             #[cfg(unix)]
             cmd.arg0(&command[0]);
             cmd

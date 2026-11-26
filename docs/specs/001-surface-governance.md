@@ -74,12 +74,15 @@ After the separator, both flags pass unchanged to the child.
 
 For native `run`, protected profile entries and `--set` overlays use verification of the selected child
 executable. The launcher resolves a bare name on the parent's `PATH`, verifies the canonical absolute target
-without recording first encounters, then checks the digest again after materialization. It launches that path
-directly, so the child environment's `PATH` cannot change which executable is selected. If the selected
-executable lacks sufficient trust for a protected entry, including a `--set` entry that inherits an elevated
-default, `run` exits 1 before launching the child. Dry runs describe the plan without verifying the
-executable or resolving secrets. The executable and its parent path components must stay stable from the
-final digest check until the OS opens it. On Windows, protected runs require a native `.exe` target.
+without recording first encounters, then checks the digest again after materialization. On Unix it also
+checks that the selected invocation path still resolves to the verified target, and launches using that path
+so shebang scripts receive their invocation spelling in `$0`. An empty `PATH` component selects `./NAME`.
+On Windows it launches the canonical path and requires a native `.exe` target. The child environment's
+`PATH` cannot change which executable is selected. If the selected executable lacks sufficient trust for a
+protected entry, including a `--set` entry that inherits an elevated default, `run` exits 1 before launching
+the child. Dry runs describe the plan without verifying the executable or resolving secrets. The executable
+and both paths, including symlinks and parent directories, must stay stable from the final checks until the
+OS opens the executable and, for a script, its interpreter opens it.
 
 **In review / designed, not landed** (env-epic-spec.md §4, lease lane #298–#300) — rows tracked here so the
 grammar review covers them before they land:

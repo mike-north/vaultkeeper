@@ -181,6 +181,85 @@ fn path_lookup_accepts_an_approved_executable_through_a_symlink() {
     assert_eq!(output.stdout, b"hello");
 }
 
+/// A shebang interpreter receives the invocation path as `$0`, even when
+/// approval is for the canonical target of a symlink.
+#[test]
+fn approved_script_preserves_its_invocation_path() {
+    use std::os::unix::fs::{PermissionsExt, symlink};
+    use std::path::Path;
+
+    let profile = serde_json::json!({"version": 1, "name": "uat", "entries": {
+        "GREETING": {"secret": "greeting", "materialize": "secret", "minTrust": "registry"},
+        "PATH": {"secret": "child-path", "materialize": "secret", "minTrust": "registry"}
+    }});
+    let dir = run_test_env(&profile);
+    store_secret(&dir, "greeting", "hello");
+    let bin = dir.path().join("bin");
+    let shadow = dir.path().join("shadow");
+    fs::create_dir(&bin).unwrap();
+    fs::create_dir(&shadow).unwrap();
+    store_secret(&dir, "child-path", shadow.to_str().unwrap());
+
+    let target = dir.path().join("fixture-command");
+    fs::write(&target, b"#!/bin/sh\nprintf '%s\\n' \"$0\" \"$GREETING\"\n").unwrap();
+    fs::set_permissions(&target, fs::Permissions::from_mode(0o700)).unwrap();
+    let alias = bin.join("fixture-alias");
+    symlink(&target, &alias).unwrap();
+
+    // The injected PATH contains a different executable with the same name.
+    let shadow_command = shadow.join("fixture-alias");
+    fs::write(&shadow_command, b"#!/bin/sh\nexit 99\n").unwrap();
+    fs::set_permissions(&shadow_command, fs::Permissions::from_mode(0o700)).unwrap();
+
+    let approved = Command::new(vk_bin())
+        .env("VAULTKEEPER_CONFIG_DIR", dir.path())
+        .args(["approve", "--path"])
+        .arg(target.canonicalize().unwrap())
+        .output()
+        .unwrap();
+    assert!(approved.status.success());
+
+    for (cwd, parent_path, command, invocation) in [
+        (dir.path(), bin.as_path(), "fixture-alias", alias.as_path()),
+        (
+            dir.path(),
+            Path::new("bin"),
+            "fixture-alias",
+            Path::new("bin/fixture-alias"),
+        ),
+        (
+            dir.path(),
+            bin.as_path(),
+            "./bin/fixture-alias",
+            Path::new("./bin/fixture-alias"),
+        ),
+        (
+            bin.as_path(),
+            Path::new(""),
+            "fixture-alias",
+            Path::new("./fixture-alias"),
+        ),
+    ] {
+        let output = Command::new(vk_bin())
+            .current_dir(cwd)
+            .env("VAULTKEEPER_CONFIG_DIR", dir.path())
+            .env("PATH", parent_path)
+            .args(["run", "--profile", "uat", "--", command])
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{command}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(
+            String::from_utf8(output.stdout).unwrap(),
+            format!("{}\nhello\n", invocation.display()),
+            "script invocation for {command} with PATH={parent_path:?}"
+        );
+    }
+}
+
 #[test]
 fn elevated_default_set_refuses_before_launching_child() {
     let dir = run_test_env(&empty_profile());
