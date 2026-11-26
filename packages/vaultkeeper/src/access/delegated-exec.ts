@@ -14,8 +14,10 @@
  */
 
 import { spawn } from 'node:child_process'
-import type { ExecRequest, ExecResult } from '../types.js'
+
 import { ExecError, VaultError } from '../errors.js'
+import type { ExecRequest, ExecResult } from '../types.js'
+import { collectUtf8 } from '../util/collect-utf8.js'
 import { ANY_PLACEHOLDER_RE, resolvePlaceholdersInRecord } from './placeholder.js'
 import { redactSecrets } from './redact.js'
 
@@ -85,28 +87,25 @@ export async function delegatedExec(
       spawnOptions.cwd = cwd
     }
 
+    // Request getters can consume the remaining lease time during preparation.
     beforeDispatch?.()
     const proc = spawn(command, args, spawnOptions)
-    let stdout = ''
-    let stderr = ''
-
-    proc.stdout?.on('data', (data: Buffer) => {
-      stdout += data.toString()
-    })
-
-    proc.stderr?.on('data', (data: Buffer) => {
-      stderr += data.toString()
-    })
+    const stdout = collectUtf8(proc.stdout)
+    const stderr = collectUtf8(proc.stderr)
 
     proc.on('close', (code) => {
+      const stdoutText = stdout.finish()
+      const stderrText = stderr.finish()
       resolve({
-        stdout: shouldRedact ? redactSecrets(stdout, secretValues) : stdout,
-        stderr: shouldRedact ? redactSecrets(stderr, secretValues) : stderr,
+        stdout: shouldRedact ? redactSecrets(stdoutText, secretValues) : stdoutText,
+        stderr: shouldRedact ? redactSecrets(stderrText, secretValues) : stderrText,
         exitCode: code ?? 1,
       })
     })
 
     proc.on('error', (error) => {
+      stdout.discard()
+      stderr.discard()
       const isEnoent = error instanceof Error && 'code' in error && error.code === 'ENOENT'
       if (isEnoent) {
         reject(
