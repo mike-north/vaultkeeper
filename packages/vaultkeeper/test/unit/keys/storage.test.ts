@@ -39,6 +39,16 @@ afterEach(async () => {
 })
 
 describe('saveKeyState / loadKeyState round-trip', () => {
+  it('accepts an existing fractional grace expiry', async () => {
+    const expiry = Date.now() + 60_000.5
+    await saveKeyState(dir, {
+      current: makeKey('current', 1),
+      previous: makeKey('previous', 2),
+      gracePeriodExpiresAt: expiry,
+    })
+    expect((await loadKeyState(dir))?.gracePeriodExpiresAt).toBe(expiry)
+  })
+
   it('persists the current key so a later load resolves the same id and bytes', async () => {
     const current = makeKey('k-1-aaaa', 0x11)
     await saveKeyState(dir, { current })

@@ -85,6 +85,19 @@ describe('cross-process token reuse (criterion 2)', () => {
 })
 
 describe('cross-process rotation guard (criterion 5)', () => {
+  it('reopens state written with a fractional grace expiry', async () => {
+    await writeConfig(0.010000001)
+    const first = await newProcess()
+    await first.rotateKey()
+    const wrap = await fs.readFile(path.join(configDir, '.keys.wrap'))
+    const envelope = await fs.readFile(path.join(configDir, 'keys.enc'), 'utf8')
+    const state: unknown = JSON.parse(decryptGcm(wrap, envelope))
+    expect(state).toHaveProperty('gracePeriodExpiresAt', expect.any(Number))
+    if (typeof state !== 'object' || state === null || !('gracePeriodExpiresAt' in state)) return
+    expect(Number.isSafeInteger(state.gracePeriodExpiresAt)).toBe(true)
+    await expect(newProcess()).resolves.toBeDefined()
+  })
+
   it('rejects a second rotation while the previous rotation is still in grace', async () => {
     const first = await newProcess()
     await first.rotateKey()

@@ -114,8 +114,9 @@ function isRawKeyState(value: unknown): value is RawKeyState {
     value.previous.id !== value.current.id &&
     'gracePeriodExpiresAt' in value &&
     typeof value.gracePeriodExpiresAt === 'number' &&
-    Number.isSafeInteger(value.gracePeriodExpiresAt) &&
-    value.gracePeriodExpiresAt >= 0
+    Number.isFinite(value.gracePeriodExpiresAt) &&
+    value.gracePeriodExpiresAt >= 0 &&
+    value.gracePeriodExpiresAt <= Number.MAX_SAFE_INTEGER
   )
 }
 

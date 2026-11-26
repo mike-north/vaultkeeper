@@ -149,7 +149,9 @@ export class KeyManager {
 
     const newKey = this.generateKey()
     this.#state = { current: newKey, previous: state.current }
-    this.#gracePeriodExpiresAt = Date.now() + gracePeriodMs
+    // Persist integral milliseconds for compatibility with the native reader,
+    // rounding up so a fractional duration never shortens the grace period.
+    this.#gracePeriodExpiresAt = Math.ceil(Date.now() + gracePeriodMs)
     this.#armGracePeriodTimer(gracePeriodMs)
   }
 
