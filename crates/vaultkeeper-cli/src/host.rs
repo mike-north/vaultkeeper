@@ -927,7 +927,7 @@ mod tests {
 
         let dir = tempfile::tempdir().unwrap();
         let key_path = dir.path().join(".keys.wrap");
-        let repair_path = dir.path().join(".keys.wrap.repair");
+        let repair_path = dir.path().join(".keys.wrap.r");
         let candidate = [0x42; 32];
         let host = NativeHostPlatform::new(dir.path().to_path_buf());
         host.write_file(&key_path, &[0], 0o600).await.unwrap();
@@ -982,7 +982,7 @@ mod tests {
         }
         assert_eq!(root.as_os_str().len(), 990);
         let key_path = root.join(".keys.wrap");
-        let repair_path = root.join(".keys.wrap.repair");
+        let repair_path = root.join(".keys.wrap.r");
         let candidate = [0x42; 32];
         let host = Arc::new(NativeHostPlatform::new(root));
         host.write_file(&key_path, &[0], 0o600).await.unwrap();

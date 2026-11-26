@@ -98,10 +98,15 @@ describe('FileBackend', () => {
         defaultStorageDir,
         expect.objectContaining({ recursive: true }),
       )
-      expect(mockFs.link).toHaveBeenCalledWith(
-        expect.stringContaining('.tmp'),
-        path.join(defaultStorageDir, '.key'),
-      )
+      // The link must publish the private sibling opened exclusively for this key.
+      const [stage] = mockFs.open.mock.calls[0] ?? []
+      const keyPath = path.join(defaultStorageDir, '.key')
+      expect(typeof stage).toBe('string')
+      expect(path.dirname(String(stage))).toBe(defaultStorageDir)
+      expect(stage).not.toBe(keyPath)
+      expect(mockFs.open).toHaveBeenCalledWith(stage, 'wx', 0o600)
+      expect(mockFs.link).toHaveBeenCalledWith(stage, keyPath)
+      expect(mockFs.unlink).toHaveBeenCalledWith(stage)
       expect(mockFs.writeFile).toHaveBeenCalledTimes(1)
       const encryptedWriteCall = mockFs.writeFile.mock.calls[0]
       expect(encryptedWriteCall?.[0]).toEqual(expect.stringContaining('.enc'))

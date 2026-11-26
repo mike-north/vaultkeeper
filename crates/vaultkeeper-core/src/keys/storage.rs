@@ -319,7 +319,9 @@ async fn repair_wrap_key(
     publication: WrapKeyPublication,
 ) -> Result<Vec<u8>, VaultError> {
     let mut candidate_path = wrap_path.as_os_str().to_os_string();
-    candidate_path.push(".repair");
+    // Match the TypeScript repair name so either runtime can finish a repair
+    // of a shared .keys.wrap. The suffix also fits long config paths.
+    candidate_path.push(".r");
     let candidate_path = Path::new(&candidate_path);
     let mut candidate = generate_wrap_key()?;
 

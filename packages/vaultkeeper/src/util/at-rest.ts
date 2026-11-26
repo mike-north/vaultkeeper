@@ -101,11 +101,9 @@ async function withPrivateStage(
   resource: string,
   publish: (temp: string) => Promise<StagedPublication>,
 ): Promise<StagedPublication> {
-  // A short basename leaves room for the stage near macOS's path limit.
-  const temp = path.join(
-    path.dirname(dest),
-    `.vk-${crypto.randomBytes(9).toString('base64url')}.tmp`,
-  )
+  // Match the 13-byte staging basename for keys.enc so wrapping-key
+  // publication fits wherever the key state can be saved.
+  const temp = path.join(path.dirname(dest), `.${crypto.randomBytes(9).toString('base64url')}`)
   let file: Awaited<ReturnType<typeof fs.open>>
   try {
     file = await fs.open(temp, 'wx', 0o600)
@@ -241,7 +239,9 @@ async function readValidWrapKey(keyPath: string): Promise<Buffer> {
 
 /** Resume any published repair so every writer uses the same selected key. */
 async function repairWrapKey(keyPath: string, publication: Publication): Promise<Buffer> {
-  const candidatePath = `${keyPath}.repair`
+  // Rust uses the same short suffix so both runtimes can finish each other's
+  // repairs of a shared .keys.wrap, including in long config paths.
+  const candidatePath = `${keyPath}.r`
   let candidate: Buffer = crypto.randomBytes(GCM_KEY_BYTES)
   let returnCandidate = false
   try {

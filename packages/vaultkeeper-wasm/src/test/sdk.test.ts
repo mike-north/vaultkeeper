@@ -224,13 +224,14 @@ describe('@vaultkeeper/wasm SDK', () => {
           const repairDir = join(dir, 'repair')
           await mkdir(repairDir)
           const keyPath = join(repairDir, '.keys.wrap')
+          const candidatePath = `${keyPath}.r`
           const candidate = Buffer.alloc(32, 0x42)
           await writeFile(keyPath, Buffer.alloc(1), { mode: 0o600 })
-          await writeFile(`${keyPath}.repair`, candidate, { mode: 0o600 })
+          await writeFile(candidatePath, candidate, { mode: 0o600 })
           const repaired = await createTestVault(repairDir)
           try {
             assert.ok((await readFile(keyPath)).equals(candidate))
-            await assert.rejects(readFile(`${keyPath}.repair`), { code: 'ENOENT' })
+            await assert.rejects(readFile(candidatePath), { code: 'ENOENT' })
           } finally {
             repaired.dispose()
           }
@@ -340,7 +341,7 @@ describe('@vaultkeeper/wasm SDK', () => {
           const candidate = Buffer.alloc(32, 0x42)
           if (state === 'repair') {
             await writeFile(keyPath, Buffer.alloc(1))
-            await writeFile(`${keyPath}.repair`, candidate)
+            await writeFile(`${keyPath}.r`, candidate, { mode: 0o600 })
           }
           const vault = await createTestVault(target)
           try {
@@ -358,7 +359,7 @@ describe('@vaultkeeper/wasm SDK', () => {
   it('resumes an interrupted wrapping-key repair during WASM initialization', async () => {
     await withTempDir(async (dir) => {
       const keyPath = join(dir, '.keys.wrap')
-      const candidatePath = `${keyPath}.repair`
+      const candidatePath = `${keyPath}.r`
       const candidate = Buffer.alloc(32, 0x42)
       // A prior writer published its complete candidate before installing it.
       await writeFile(keyPath, Buffer.alloc(1), { mode: 0o600 })

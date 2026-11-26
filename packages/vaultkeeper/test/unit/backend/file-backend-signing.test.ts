@@ -194,7 +194,7 @@ describe('FileBackend signing contract', () => {
 
   it('recovers an interrupted wrapping-key repair and keeps the selected key', async () => {
     const keyPath = path.join(storageDir, '.key')
-    const candidatePath = `${keyPath}.repair`
+    const candidatePath = `${keyPath}.r`
     const candidate = Buffer.alloc(32, 0x42)
     await fs.writeFile(keyPath, Buffer.alloc(1))
     await fs.writeFile(candidatePath, candidate, { mode: 0o600 })
@@ -208,7 +208,7 @@ describe('FileBackend signing contract', () => {
     ])
 
     expect(await fs.readFile(keyPath)).toEqual(candidate)
-    expect(await fs.readdir(storageDir)).not.toContain('.key.repair')
+    await expect(fs.stat(candidatePath)).rejects.toMatchObject({ code: 'ENOENT' })
     const reopened = new FileBackend(storageDir)
     expect(await reopened.getPublicKey(ID)).toEqual(await backend.getPublicKey(ID))
     expect(await reopened.getPublicKey(otherId)).toEqual(await other.getPublicKey(otherId))
