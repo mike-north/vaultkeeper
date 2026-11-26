@@ -47,7 +47,7 @@ export function extractConfigDirFlag(argv: string[]): ExtractedConfigDir {
 
     if (arg === '--config-dir') {
       const value = argv[i + 1]
-      if (value === undefined || value.trim() === '') {
+      if (value === undefined || value === '--' || value.trim() === '') {
         throw new ConfigDirFlagError('--config-dir requires a value')
       }
       configDir = value

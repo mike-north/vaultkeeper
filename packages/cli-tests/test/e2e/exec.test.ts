@@ -44,6 +44,7 @@ import * as path from 'node:path'
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { createCliTestEnv } from '@vaultkeeper/cli-test-helpers'
 import type { CliTestEnv } from '@vaultkeeper/cli-test-helpers'
+import { VaultError } from 'vaultkeeper'
 
 const SECRET_NAME = 'API_KEY'
 const SECRET_VALUE = 's3cr3t-value'
@@ -282,14 +283,43 @@ describe('exec trust gate', () => {
 
   // Issue #58, criterion 4: exec --help documents the TTY requirement and both
   // escape hatches, proven against the real CLI subprocess.
-  it('documents the TTY requirement and escape hatches in exec --help', async () => {
-    if (env === undefined) throw new Error('env not initialized')
-    const result = await env.run(['exec', '--help'])
+  it.each(['--help', '-h'])(
+    'documents the TTY requirement and escape hatches with %s before --',
+    async (helpFlag) => {
+      if (env === undefined) throw new VaultError('env not initialized')
+      const result = await env.run(['exec', helpFlag, '--', '/no/such/command'])
+      expect(result.exitCode).toBe(0)
+      expect(result.stdout).toContain('--yes')
+      expect(result.stdout).toContain('VAULTKEEPER_YES')
+      expect(result.stdout).toContain('non-TTY')
+      expect(result.stdout).toContain('vaultkeeper approve --script')
+    },
+  )
+
+  it.each(['--help', '-h'])('forwards child help flag %s unchanged after --', async (helpFlag) => {
+    if (env === undefined) throw new VaultError('env not initialized')
+    const caller = await writeCaller('#!/bin/sh\necho hi\n')
+    const approval = await env.run(['approve', '--script', caller])
+    expect(approval.exitCode).toBe(0)
+
+    const result = await env.run([
+      'exec',
+      '--secret',
+      SECRET_NAME,
+      '--env',
+      'INJECTED',
+      '--caller',
+      caller,
+      '--',
+      'sh',
+      '-c',
+      'printf "%s" "$1"',
+      'child',
+      helpFlag,
+    ])
+
     expect(result.exitCode).toBe(0)
-    expect(result.stdout).toContain('--yes')
-    expect(result.stdout).toContain('VAULTKEEPER_YES')
-    expect(result.stdout).toContain('non-TTY')
-    expect(result.stdout).toContain('vaultkeeper approve --script')
+    expect(result.stdout).toBe(helpFlag)
   })
 
   // Issue #69, criterion 3: exec validates secret existence BEFORE the

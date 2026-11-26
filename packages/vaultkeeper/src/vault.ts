@@ -31,7 +31,8 @@ import type {
   BackendCapabilities,
   PresenceOperation,
 } from './backend/types.js'
-import { createToken, decryptToken, extractKid, validateClaims, blockToken } from './jwe/index.js'
+import { createToken, decryptToken, extractKid, validateClaims } from './jwe/index.js'
+import { tokenExpiryTime } from './jwe/expiry-clock.js'
 import { verifyTrustPending, commitTrust } from './identity/trust.js'
 import { hashExecutable } from './identity/hash.js'
 import { loadManifest, saveManifest, addTrustedHash, isTrusted } from './identity/manifest.js'
@@ -39,6 +40,7 @@ import {
   CapabilityToken,
   createCapabilityToken,
   createSigningCapabilityToken,
+  requireSigningCapabilityClaims,
   validateCapabilityToken,
   isSigningClaims,
 } from './identity/session.js'
@@ -320,21 +322,32 @@ const PRESENCE_PER_USE_QUALIFYING_BACKENDS =
   '(which enforces presence for reads only today, not writes). Switch to (or ' +
   'reconfigure) such a backend, or drop the presence requirement.'
 
-/** Usage tracking for tokens with use limits. */
-const usageCounts = new Map<string, number>()
+/** Successful authorizations against a single finite-use JTI. */
+interface UsageRecord {
+  count: number
+  expiresAt: number
+}
 
-/**
- * Maximum number of JTIs the in-memory usage-count map will retain.
- * When the cap is reached, the oldest inserted entry is evicted (FIFO).
- * This prevents unbounded growth for long-running processes.
- */
+/** Volatile finite-use accounting shared by vaults using this loaded module. */
+const usageCounts = new Map<string, UsageRecord>()
 const USAGE_MAP_MAX_SIZE = 10_000
+
+/** Lower bound on tracked deadlines, so denied admissions skip scans until reclamation is possible. */
+let nextUsageExpiry = Number.POSITIVE_INFINITY
+
+/** Clears process-local finite-use accounting for test isolation. @internal */
+export function clearUsageCounts(): void {
+  usageCounts.clear()
+  nextUsageExpiry = Number.POSITIVE_INFINITY
+}
 
 /**
  * Main entry point for vaultkeeper. Orchestrates backends, keys, JWE tokens,
  * identity verification, and access patterns.
  */
 export class VaultKeeper {
+  /** Binds in-process capabilities to this instance, even when vaults share storage or configuration. */
+  readonly #capabilityOwner = Symbol('VaultKeeper capability owner')
   readonly #config: VaultConfig
   readonly #keyManager: KeyManager
   readonly #configDir: string
@@ -657,7 +670,8 @@ export class VaultKeeper {
 
     const secretValue = await backend.retrieve(secretName)
 
-    const now = Math.floor(Date.now() / 1000)
+    // Keep minted issue times at whole-second precision, as in native tokens.
+    const now = Math.floor(tokenExpiryTime())
     const claims: VaultClaims = {
       jti: crypto.randomUUID(),
       exp: now + ttlMinutes * 60,
@@ -687,51 +701,70 @@ export class VaultKeeper {
    * Decrypt a JWE, validate claims, verify executable identity, and return
    * an opaque CapabilityToken.
    *
+   * @remarks
+   * Vault instances using the same loaded TypeScript module share in-memory
+   * accounting for up to 10,000 finite-use tokens. A tracked budget is retained
+   * through expiry. At capacity, a first finite-use authorization requires
+   * an expired entry to reclaim. Unlimited-use tokens need no entry.
+   * JWE redemption and capability use share an expiry clock that advances with
+   * elapsed time during a backward wall-clock adjustment. Expired tokens stay
+   * expired, and newly issued tokens continue to age.
+   * Each process maintains its own accounting.
+   *
    * @param jwe - Compact JWE string from setup()
    * @returns Object containing an opaque {@link CapabilityToken} for use with
-   *   fetch/exec/getSecret, and a {@link VaultResponse} describing key status.
+   *   this vault instance's fetch/exec/getSecret, and a {@link VaultResponse}
+   *   describing key status.
    *   When the JWE was decrypted with a non-current key,
    *   `vaultResponse.rotatedJwt` contains a re-encrypted JWE for the current key.
+   * @throws {@link AuthorizationDeniedError} If a new finite-use budget cannot
+   *   be tracked because all accounting entries are still live.
    */
   async authorize(jwe: string): Promise<{ token: CapabilityToken; vaultResponse: VaultResponse }> {
     const kid = extractKid(jwe)
     const { claims, keyStatus } = await this.#decryptWithKeyResolution(jwe, kid)
 
-    // Validate claims (expiry, blocklist, usage)
     const jti = claims.jti
-    const currentCount = usageCounts.get(jti) ?? 0
-    validateClaims(claims, currentCount)
-
-    // Only track usage for tokens with a finite use limit. Unlimited tokens
-    // (claims.use === null) never need count checks, so tracking them would
-    // waste memory and cause unnecessary evictions of limited-token entries.
-    if (claims.use !== null) {
-      const newCount = currentCount + 1
-      usageCounts.set(jti, newCount)
-
-      // Evict the oldest entry when the map exceeds its size cap to prevent
-      // unbounded memory growth in long-running processes. Block the evicted
-      // JTI so that it cannot be silently re-authorized with a reset count.
-      if (usageCounts.size > USAGE_MAP_MAX_SIZE) {
-        const oldest = usageCounts.keys().next().value
-        if (oldest !== undefined) {
-          usageCounts.delete(oldest)
-          blockToken(oldest)
-        }
-      }
-    }
-
-    const token = createCapabilityToken(claims)
-
     const vaultResponse: VaultResponse = { keyStatus }
     if (keyStatus === 'previous') {
-      // Re-encrypt with current key
+      // Refresh can fail without returning a capability, so charge only after it succeeds.
+      validateClaims(claims, usageCounts.get(jti)?.count)
       const currentKey = this.#keyManager.getCurrentKey()
-      const rotatedJwt = await createToken(currentKey.key, claims, { kid: currentKey.id })
-      vaultResponse.rotatedJwt = rotatedJwt
+      vaultResponse.rotatedJwt = await createToken(currentKey.key, claims, { kid: currentKey.id })
     }
 
-    return { token, vaultResponse }
+    // Recheck after any refresh. Validation and accounting share a time snapshot
+    // and run without yielding, so concurrent callers share one budget.
+    const now = tokenExpiryTime()
+    const usage = usageCounts.get(jti)
+    const currentCount = usage?.count ?? 0
+    validateClaims(claims, currentCount, now)
+
+    if (claims.use !== null) {
+      if (usage === undefined && usageCounts.size >= USAGE_MAP_MAX_SIZE) {
+        if (nextUsageExpiry <= now) {
+          nextUsageExpiry = Number.POSITIVE_INFINITY
+          for (const [trackedJti, record] of usageCounts) {
+            if (record.expiresAt <= now) {
+              usageCounts.delete(trackedJti)
+            } else {
+              nextUsageExpiry = Math.min(nextUsageExpiry, record.expiresAt)
+            }
+          }
+        }
+        if (usageCounts.size >= USAGE_MAP_MAX_SIZE) {
+          throw new AuthorizationDeniedError(
+            'Cannot safely admit a finite-use token while live usage accounting is at capacity',
+          )
+        }
+      }
+
+      const expiresAt = Math.max(usage?.expiresAt ?? claims.exp, claims.exp)
+      usageCounts.set(jti, { count: currentCount + 1, expiresAt })
+      nextUsageExpiry = Math.min(nextUsageExpiry, expiresAt)
+    }
+
+    return { token: createCapabilityToken(claims, this.#capabilityOwner), vaultResponse }
   }
 
   /**
@@ -755,6 +788,8 @@ export class VaultKeeper {
    * substitutions made in the request URL.
    * @throws {AuthorizationDeniedError} If any token is invalid or was not
    *   created by this vault instance.
+   * @throws {TokenExpiredError} If any token reaches its JWE deadline before
+   *   dispatch.
    * @throws {VaultError} If a named placeholder references an unknown
    *   secret name.
    * @throws {FetchError} If the URL is malformed, the server sends a Fetch
@@ -764,8 +799,8 @@ export class VaultKeeper {
     token: CapabilityToken | SecretTokenMap,
     request: FetchRequest,
   ): Promise<{ response: Response; vaultResponse: VaultResponse }> {
-    const secrets = VaultKeeper.#resolveSecrets(token)
-    const response = await delegatedFetch(secrets, request)
+    const { secrets, beforeDispatch } = this.#resolveSecrets(token)
+    const response = await delegatedFetch(secrets, request, beforeDispatch)
     return {
       response,
       vaultResponse: { keyStatus: 'current' },
@@ -800,6 +835,8 @@ export class VaultKeeper {
    *   the vault metadata (`vaultResponse`).
    * @throws {AuthorizationDeniedError} If any token is invalid or was not
    *   created by this vault instance.
+   * @throws {TokenExpiredError} If any token reaches its JWE deadline before
+   *   dispatch.
    * @throws {ExecError} If the command cannot be started (e.g. ENOENT),
    *   a placeholder references an unknown secret name, or a secret
    *   placeholder appears in the `command` or `args` field.
@@ -808,8 +845,8 @@ export class VaultKeeper {
     token: CapabilityToken | SecretTokenMap,
     request: ExecRequest,
   ): Promise<{ result: ExecResult; vaultResponse: VaultResponse }> {
-    const secrets = VaultKeeper.#resolveSecrets(token)
-    const result = await delegatedExec(secrets, request)
+    const { secrets, beforeDispatch } = this.#resolveSecrets(token)
+    const result = await delegatedExec(secrets, request, beforeDispatch)
     return {
       result,
       vaultResponse: { keyStatus: 'current' },
@@ -820,17 +857,29 @@ export class VaultKeeper {
    * Create a controlled-direct `SecretAccessor` from a capability token.
    *
    * The accessor wraps the secret in a single-use, auto-zeroing `Buffer`. The
-   * secret is accessible only through the `read()` callback and is zeroed
-   * immediately after the callback returns.
+   * secret is accessible only through the `read()` callback while the JWE
+   * is live and is zeroed immediately after the callback returns.
    *
    * @param token - A `CapabilityToken` obtained from `authorize()`.
    * @returns A `SecretAccessor` that can be read exactly once.
    * @throws {AuthorizationDeniedError} If `token` is invalid or was not created
    *   by this vault instance, or if it is a signing-key token — a signing key
    *   carries no secret and cannot be read through `getSecret()` (use `sign()`).
+   * @throws {TokenExpiredError} If the token has reached its JWE deadline.
    */
   getSecret(token: CapabilityToken): SecretAccessor {
-    const claims = validateCapabilityToken(token)
+    this.#requireReadableSecret(token)
+    return createSecretAccessor(
+      () => this.#requireReadableSecret(token),
+      () => {
+        validateCapabilityToken(token, this.#capabilityOwner)
+      },
+    )
+  }
+
+  /** Resolve live, same-vault secret claims for direct access. */
+  #requireReadableSecret(token: CapabilityToken): string {
+    const claims = validateCapabilityToken(token, this.#capabilityOwner)
     // Defense in depth: a signing-key token carries no secret and must never be
     // read through the secret-access path.
     if (isSigningClaims(claims)) {
@@ -859,7 +908,7 @@ export class VaultKeeper {
           'it is malformed or was not minted as a secret token.',
       )
     }
-    return createSecretAccessor(claims.val)
+    return claims.val
   }
 
   /**
@@ -911,11 +960,12 @@ export class VaultKeeper {
    * Mint a signing-key capability token for the key named `name`.
    *
    * The returned token carries only `{ kid, backendRef, keyType: 'signing-key' }`
-   * — never any key material — and is accepted only by {@link VaultKeeper.sign}.
+   * — never any key material — and is accepted only by this vault instance's
+   * {@link VaultKeeper.sign} method.
    * Passing it to `getSecret`/`fetch`/`exec` is rejected.
    *
    * @param name - Caller-facing signing key name. Must not contain `':'`.
-   * @returns An opaque {@link CapabilityToken} usable with `sign()`.
+   * @returns An opaque {@link CapabilityToken} usable with `sign()` on this instance.
    * @throws {SigningNotSupportedError} If the active backend cannot sign.
    * @throws {SigningKeyNotFoundError} If no signing key exists under `name`.
    * @throws {VaultError} If `name` is empty or contains `':'`.
@@ -927,7 +977,10 @@ export class VaultKeeper {
     const id = VaultKeeper.#signingKeyId(name)
     // getPublicKey validates the key exists (throws SigningKeyNotFoundError).
     const pub = await backend.getPublicKey(id)
-    return createSigningCapabilityToken({ keyType: 'signing-key', kid: pub.kid, backendRef: id })
+    return createSigningCapabilityToken(
+      { keyType: 'signing-key', kid: pub.kid, backendRef: id },
+      this.#capabilityOwner,
+    )
   }
 
   /**
@@ -940,7 +993,8 @@ export class VaultKeeper {
    * any standards-compliant JOSE library can verify given the payload and the
    * public key.
    *
-   * @param token - A signing-key `CapabilityToken` from {@link VaultKeeper.authorizeSigningKey}.
+   * @param token - A signing-key `CapabilityToken` issued by this vault instance's
+   *   {@link VaultKeeper.authorizeSigningKey} method.
    * @param request - The payload to sign.
    * @param options - Optional {@link PresenceRequirementOptions}. When
    *   `requirePresencePerUse` is set, the signature is refused with a
@@ -949,8 +1003,9 @@ export class VaultKeeper {
    *   backend `signWithKey` round-trip is performed for this call — no cached
    *   key material can satisfy it (the private key never leaves the backend).
    * @returns The detached compact JWS and vault metadata.
-   * @throws {AuthorizationDeniedError} If `token` is invalid or is not a
-   *   signing-key token (e.g. an ordinary secret token).
+   * @throws {AuthorizationDeniedError} If `token` is invalid, was issued by
+   *   another vault instance, or is the wrong kind of capability. This check
+   *   runs before selecting or invoking a signing backend.
    * @throws {SigningNotSupportedError} If the active backend cannot sign.
    * @throws {SigningKeyNotFoundError} If the referenced key no longer exists.
    * @throws {@link NotCapableError} If `options.requirePresencePerUse` is set
@@ -962,13 +1017,7 @@ export class VaultKeeper {
     request: SignRequest,
     options?: PresenceRequirementOptions,
   ): Promise<{ result: SignResult; vaultResponse: VaultResponse }> {
-    const claims = validateCapabilityToken(token)
-    if (!isSigningClaims(claims)) {
-      throw new AuthorizationDeniedError(
-        'sign() requires a signing-key capability token from authorizeSigningKey() — ' +
-          'an ordinary secret token cannot be used to sign.',
-      )
-    }
+    const claims = requireSigningCapabilityClaims(token, this.#capabilityOwner)
     const backend = this.#requireSigningBackend()
     await this.#enforcePresenceRequirement(backend, 'sign', options?.requirePresencePerUse)
     const jws = await createDetachedJws(claims.kid, request.payload, (data) =>
@@ -1243,9 +1292,31 @@ export class VaultKeeper {
   // Private helpers
   // ---------------------------------------------------------------------------
 
-  static #resolveSecrets(token: CapabilityToken | SecretTokenMap): string | Record<string, string> {
+  /** Snapshot this vault's authorized secrets and recheck their leases at dispatch. */
+  #resolveSecrets(token: CapabilityToken | SecretTokenMap): {
+    secrets: string | Record<string, string>
+    beforeDispatch: () => void
+  } {
+    const capabilities: CapabilityToken[] = []
+    const beforeDispatch = () => {
+      const nowSec = tokenExpiryTime()
+      let earliest: { token: CapabilityToken; deadline: number } | undefined
+      for (const capability of capabilities) {
+        const claims = validateCapabilityToken(capability, this.#capabilityOwner, nowSec)
+        if ('exp' in claims && (earliest === undefined || claims.exp < earliest.deadline)) {
+          earliest = { token: capability, deadline: claims.exp }
+        }
+      }
+      // The full walk catches leases already observed expired during request preparation.
+      // Resample through the earliest lease afterward so the walk cannot outlive its clock sample.
+      if (earliest !== undefined) {
+        validateCapabilityToken(earliest.token, this.#capabilityOwner)
+      }
+    }
+
     if (token instanceof CapabilityToken) {
-      return VaultKeeper.#requireSecretValue(token)
+      capabilities.push(token)
+      return { secrets: this.#requireSecretValue(token), beforeDispatch }
     }
     const result: Record<string, string> = {}
     for (const [name, t] of Object.entries(token)) {
@@ -1254,9 +1325,10 @@ export class VaultKeeper {
           `Invalid capability token for secret "${name}" — expected a CapabilityToken from authorize()`,
         )
       }
-      result[name] = VaultKeeper.#requireSecretValue(t)
+      result[name] = this.#requireSecretValue(t)
+      capabilities.push(t)
     }
-    return result
+    return { secrets: result, beforeDispatch }
   }
 
   /**
@@ -1268,8 +1340,8 @@ export class VaultKeeper {
    * (`kty: 'signing-key'`) — the two capability shapes are discriminated
    * differently but neither ever carries a secret value.
    */
-  static #requireSecretClaims(token: CapabilityToken): VaultClaims {
-    const claims = validateCapabilityToken(token)
+  #requireSecretClaims(token: CapabilityToken): VaultClaims {
+    const claims = validateCapabilityToken(token, this.#capabilityOwner)
     if (isSigningClaims(claims)) {
       throw new AuthorizationDeniedError(
         'This capability token authorizes a signing key, not a secret — ' +
@@ -1286,8 +1358,8 @@ export class VaultKeeper {
   }
 
   /** Resolve a token to its secret value, rejecting a claims shape with no `val`. */
-  static #requireSecretValue(token: CapabilityToken): string {
-    const claims = VaultKeeper.#requireSecretClaims(token)
+  #requireSecretValue(token: CapabilityToken): string {
+    const claims = this.#requireSecretClaims(token)
     if (claims.val === undefined || claims.val.trim() === '') {
       throw new AuthorizationDeniedError('This capability token does not authorize a secret value.')
     }
