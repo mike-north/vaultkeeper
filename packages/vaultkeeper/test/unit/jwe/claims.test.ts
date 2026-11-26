@@ -143,6 +143,18 @@ describe('validateClaims', () => {
       }).toThrow(TokenExpiredError)
     })
 
+    it('preserves whole-second diagnostics for whole-second deadlines', () => {
+      const clock = vi.spyOn(Date, 'now').mockReturnValue(1_700_000_000_500)
+      try {
+        const claims = makeValidClaims({ iat: 1_699_999_940, exp: 1_700_000_000 })
+        expect(() => {
+          validateClaims(claims)
+        }).toThrow('Token expired at 1700000000 (now: 1700000000)')
+      } finally {
+        clock.mockRestore()
+      }
+    })
+
     it('TokenExpiredError has canRefresh=false', () => {
       const past = Math.floor(Date.now() / 1000) - 3600
       const claims = makeValidClaims({ iat: past - 60, exp: past })

@@ -2,10 +2,10 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { delegatedExec } from '../../../src/access/delegated-exec.js'
 import { ExecError } from '../../../src/errors.js'
 import type { ExecRequest } from '../../../src/access/types.js'
+import { splitUtf8Script, splitUtf8Text } from '../../helpers/split-utf8-fixture.js'
 
-// spawn is wrapped (not replaced) so every other test in this file still
-// spawns real child processes — only the guardrail test below asserts
-// against call count.
+// Wrap spawn so the guardrail tests can inspect dispatch while output tests
+// still exercise real child processes.
 vi.mock('node:child_process', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:child_process')>()
   return { ...actual, spawn: vi.fn(actual.spawn) }
@@ -20,6 +20,24 @@ beforeEach(() => {
 })
 
 describe('delegatedExec', () => {
+  it.each<'stdout' | 'stderr'>(['stdout', 'stderr'])(
+    'decodes UTF-8 split across %s chunks before redaction',
+    async (stream) => {
+      const secret = splitUtf8Text.trimEnd()
+      const request = {
+        command: process.execPath,
+        args: ['-e', splitUtf8Script("process.env.FIXTURE_TEXT + '\\n'"), '--', stream],
+        env: { FIXTURE_TEXT: '{{secret}}' },
+      }
+
+      const rawResult = await delegatedExec(secret, { ...request, redact: false })
+      expect(rawResult[stream]).toBe(splitUtf8Text)
+
+      const redactedResult = await delegatedExec(secret, request)
+      expect(redactedResult[stream]).toBe('[REDACTED]\n')
+    },
+  )
+
   describe('args placeholder guardrail', () => {
     // Regression test for issue #70: {{secret}} in args was silently
     // substituted, exposing the plaintext secret on the process command
@@ -87,6 +105,26 @@ describe('delegatedExec', () => {
 
       expect(result.exitCode).toBe(0)
     })
+  })
+
+  it('spawns the same command it validated even when the request has a getter', async () => {
+    // The dispatch target must be the checked snapshot of the request field.
+    const readCommand = vi.fn(() => 'unexpected-command-after-validation')
+    readCommand.mockReturnValueOnce(process.execPath)
+
+    const result = await delegatedExec('unused', {
+      get command() {
+        return readCommand()
+      },
+      args: ['--version'],
+    })
+
+    expect(result.exitCode).toBe(0)
+    expect(mockSpawn).toHaveBeenCalledExactlyOnceWith(
+      process.execPath,
+      ['--version'],
+      expect.anything(),
+    )
   })
 
   describe('env placeholder replacement', () => {
