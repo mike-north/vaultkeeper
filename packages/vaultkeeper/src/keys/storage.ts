@@ -21,7 +21,7 @@
 
 import * as fs from 'node:fs/promises'
 import * as path from 'node:path'
-import { randomUUID } from 'node:crypto'
+import { randomBytes } from 'node:crypto'
 import { encryptGcm, decryptGcm, getOrCreateWrapKey } from '../util/at-rest.js'
 import { toFilesystemError } from '../errors.js'
 import type { KeyMaterial, KeyStateSnapshot } from './types.js'
@@ -185,8 +185,9 @@ export async function saveKeyState(configDir: string, snapshot: KeyStateSnapshot
   }
 
   const statePath = path.join(configDir, KEY_STATE_FILE)
-  // Each save exclusively owns its staging file until it publishes the snapshot.
-  const tmpPath = `${statePath}.${String(process.pid)}.${randomUUID()}.tmp`
+  // A short random basename preserves long config paths; exclusive creation
+  // ensures this save owns the stage even if a name collides.
+  const tmpPath = path.join(configDir, `.${randomBytes(9).toString('base64url')}`)
   let stage: fs.FileHandle
   try {
     stage = await fs.open(tmpPath, 'wx', 0o600)

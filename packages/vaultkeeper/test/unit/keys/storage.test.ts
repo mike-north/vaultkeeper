@@ -32,11 +32,17 @@ const stageFault = vi.hoisted(() => ({
   closeError: Object.assign(new Error('close failed'), { code: 'EIO' }),
 }))
 
+// Model macOS's path limit on all platforms so the boundary stays tested in CI.
+const pathLimit = vi.hoisted(() => ({ enabled: false }))
+
 vi.mock('node:fs/promises', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:fs/promises')>()
   return {
     ...actual,
     open: async (...args: Parameters<typeof actual.open>): Promise<fs.FileHandle> => {
+      if (pathLimit.enabled && args[1] === 'wx' && Buffer.byteLength(String(args[0])) >= 1024) {
+        throw Object.assign(new Error('path too long'), { code: 'ENAMETOOLONG' })
+      }
       const handle = await actual.open(...args)
       if (args[1] === 'wx' && (stageFault.write || stageFault.close)) {
         stageFault.path = String(args[0])
@@ -92,10 +98,25 @@ afterEach(async () => {
   stageFault.write = false
   stageFault.close = false
   stageFault.path = ''
+  pathLimit.enabled = false
   await fs.rm(dir, { recursive: true, force: true })
 })
 
 describe('saveKeyState / loadKeyState round-trip', () => {
+  it('saves and reloads at the macOS path boundary supported by the old staging name', async () => {
+    let target = dir
+    const targetLength = Buffer.byteLength(dir) === 989 ? 991 : Math.max(990, Buffer.byteLength(dir))
+    while (Buffer.byteLength(target) < targetLength) {
+      const remaining = targetLength - Buffer.byteLength(target) - 1
+      const length = remaining === 201 ? 199 : Math.min(remaining, 200)
+      target = path.join(target, 'a'.repeat(length))
+    }
+    expect(Buffer.byteLength(target)).toBe(targetLength)
+    const snapshot = { current: makeKey('k-boundary', 0x42) }
+    pathLimit.enabled = true
+    await saveKeyState(target, snapshot)
+    expect(await loadKeyState(target)).toEqual(snapshot)
+  })
   it.each([
     { write: true, code: 'ENOSPC', cause: stageFault.writeError },
     { write: false, code: 'EIO', cause: stageFault.closeError },
@@ -115,7 +136,8 @@ describe('saveKeyState / loadKeyState round-trip', () => {
       cause,
       path: stageFault.path,
     })
-    expect(stageFault.path).toMatch(/keys\.enc\..*\.tmp$/)
+    expect(path.dirname(stageFault.path)).toBe(dir)
+    expect(path.basename(stageFault.path)).toMatch(/^\.[A-Za-z0-9_-]{12}$/)
     await expect(fs.stat(stageFault.path)).rejects.toMatchObject({ code: 'ENOENT' })
     expect(await loadKeyState(dir)).toEqual(initial)
   })
