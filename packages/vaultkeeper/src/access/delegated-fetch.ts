@@ -3,6 +3,7 @@
  *
  * Replaces `{{secret}}` or `{{secret:name}}` placeholders in the request
  * URL, headers, and body with actual secret values for the initial request.
+ * Dispatch requires a live capability and covers only that destination.
  * The returned response exposes the body stream and safe status information
  * without transport text.
  */
@@ -125,6 +126,7 @@ function sanitizeResponse(transportResponse: Response): Response {
  * @param secrets - A single secret string (replaces `{{secret}}`) or a
  *   name-to-value map (replaces `{{secret:name}}`)
  * @param request - The fetch request template with placeholders
+ * @param beforeDispatch - Lease check before handing the prepared request to fetch
  * @returns A detached response carrying the body stream, numeric status, and redirect flag.
  * @throws {FetchError} If the URL is malformed, the server sends a Fetch
  *   redirect, or the underlying network request fails.
@@ -133,32 +135,27 @@ function sanitizeResponse(transportResponse: Response): Response {
 export async function delegatedFetch(
   secrets: string | Record<string, string>,
   request: FetchRequest,
+  beforeDispatch?: () => void,
 ): Promise<Response> {
-  // Diagnostics must identify the request sent by this call, even if the caller reuses the template.
-  const urlTemplate = request.url
+  // Keep this call's template for diagnostics if the caller reuses the request.
+  const { url: urlTemplate, headers, body, method } = request
   const url = resolvePlaceholders(urlTemplate, secrets)
-  const headers =
-    request.headers !== undefined
-      ? resolvePlaceholdersInRecord(request.headers, secrets)
-      : undefined
-  const body = request.body !== undefined ? resolvePlaceholders(request.body, secrets) : undefined
 
   // Delegation covers the initial destination. Reject redirects in the
   // transport and keep redirect response metadata out of the return value.
   const init: RequestInit = { redirect: 'error' }
-  if (request.method !== undefined) {
-    init.method = request.method
+  if (method !== undefined) {
+    init.method = method
   }
   if (headers !== undefined) {
-    init.headers = headers
+    init.headers = resolvePlaceholdersInRecord(headers, secrets)
   }
   if (body !== undefined) {
-    init.body = body
+    init.body = resolvePlaceholders(body, secrets)
   }
 
-  try {
-    return sanitizeResponse(await fetch(url, init))
-  } catch (error) {
+  /** Keep fetch lookup and transport failures on the same redacted error path. */
+  const fetchFailure = (error: unknown): FetchError => {
     const rawDetail = error instanceof Error ? error.message : String(error)
     // The underlying error's message can embed the placeholder-resolved URL
     // (with the injected secret) — e.g. `getaddrinfo ENOTFOUND <secret-host>`.
@@ -169,6 +166,22 @@ export async function delegatedFetch(
     // cannot be redacted in place and would reintroduce the leak.
     const secretValues = typeof secrets === 'string' ? [secrets] : Object.values(secrets)
     const detail = redactSecretMaterial(rawDetail, url, urlTemplate, secretValues)
-    throw new FetchError(`Fetch failed for ${urlTemplate}: ${detail}`, urlTemplate)
+    return new FetchError(`Fetch failed for ${urlTemplate}: ${detail}`, urlTemplate)
+  }
+
+  let dispatch: typeof fetch
+  try {
+    dispatch = fetch
+  } catch (error) {
+    throw fetchFailure(error)
+  }
+
+  // A lease refusal keeps its authorization error type. Resolve dispatch first
+  // because a global getter can run user code before returning the function.
+  beforeDispatch?.()
+  try {
+    return sanitizeResponse(await dispatch(url, init))
+  } catch (error) {
+    throw fetchFailure(error)
   }
 }

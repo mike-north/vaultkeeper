@@ -85,6 +85,8 @@ A detached `Response` and the vault metadata (`vaultResponse`<!-- -->).
 
 {<!-- -->AuthorizationDeniedError<!-- -->} If any token is invalid or was not created by this vault instance.
 
+{<!-- -->TokenExpiredError<!-- -->} If any token reaches its JWE deadline before dispatch.
+
 {<!-- -->VaultError<!-- -->} If a named placeholder references an unknown secret name.
 
 {<!-- -->FetchError<!-- -->} If the URL is malformed, the server sends a Fetch redirect, or the underlying network request fails.
