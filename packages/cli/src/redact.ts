@@ -6,14 +6,14 @@ import { REDACTED } from 'vaultkeeper'
  * A Transform stream that replaces all occurrences of a secret value
  * with a replacement string in the piped output.
  *
- * Handles secrets that may be split across chunk boundaries by buffering
- * up to one byte fewer than the UTF-8 secret's byte length.
+ * Retains only a trailing prefix of the UTF-8 secret across chunk boundaries.
  *
  * @internal
  */
 export class RedactingStream extends Transform {
   readonly #secret: Buffer
   readonly #replacement: Buffer
+  readonly #prefixLengths: number[]
   #tail: Buffer
 
   constructor(secret: string, replacement = REDACTED) {
@@ -21,12 +21,22 @@ export class RedactingStream extends Transform {
     this.#secret = Buffer.alloc(Buffer.byteLength(secret))
     this.#secret.write(secret)
     this.#replacement = Buffer.from(replacement)
+    // The prefix table bounds suffix recognition to linear time, even for
+    // secrets with many overlapping prefixes.
+    this.#prefixLengths = Array.from({ length: this.#secret.length }, () => 0)
+    let prefix = 0
+    for (let i = 1; i < this.#secret.length; i++) {
+      while (prefix > 0 && this.#secret[i] !== this.#secret[prefix]) {
+        prefix = this.#prefixLengths[prefix - 1] ?? 0
+      }
+      if (this.#secret[i] === this.#secret[prefix]) prefix++
+      this.#prefixLengths[i] = prefix
+    }
     this.#tail = Buffer.alloc(0)
   }
 
   override _transform(chunk: Buffer, _encoding: BufferEncoding, callback: TransformCallback): void {
-    const bufferSize = this.#secret.length - 1
-    if (bufferSize < 0) {
+    if (this.#secret.length === 0) {
       this.push(chunk)
       callback()
       return
@@ -38,14 +48,31 @@ export class RedactingStream extends Transform {
     chunk.copy(bytes, this.#tail.length)
     this.#tail.fill(0)
 
+    // Bound each downstream write without accumulating the entire redacted
+    // output, including when replacements are much larger than the secret.
+    const output = Buffer.alloc(16 * 1024)
+    let used = 0
+    const append = (source: Buffer): boolean => {
+      let offset = 0
+      while (offset < source.length) {
+        const count = Math.min(output.length - used, source.length - offset)
+        source.copy(output, used, offset, offset + count)
+        used += count
+        offset += count
+        if (used === output.length) {
+          this.push(Buffer.from(output))
+          used = 0
+          if (this.destroyed) return false
+        }
+      }
+      return true
+    }
+
     try {
       let position = 0
       let match = bytes.indexOf(this.#secret, position)
       while (match !== -1) {
-        this.push(Buffer.from(bytes.subarray(position, match)))
-        this.push(Buffer.from(this.#replacement))
-        // A downstream data listener may destroy the stream during push().
-        if (this.destroyed) {
+        if (!append(bytes.subarray(position, match)) || !append(this.#replacement)) {
           callback()
           return
         }
@@ -53,12 +80,22 @@ export class RedactingStream extends Transform {
         match = bytes.indexOf(this.#secret, position)
       }
 
-      const end = bytes.length - Math.min(bufferSize, bytes.length - position)
+      let prefix = 0
+      for (let i = position; i < bytes.length; i++) {
+        while (prefix > 0 && bytes[i] !== this.#secret[prefix]) {
+          prefix = this.#prefixLengths[prefix - 1] ?? 0
+        }
+        if (bytes[i] === this.#secret[prefix]) prefix++
+      }
+      const end = bytes.length - prefix
       this.#tail = Buffer.alloc(bytes.length - end)
       bytes.copy(this.#tail, 0, end)
-      this.push(Buffer.from(bytes.subarray(position, end)))
+      if (append(bytes.subarray(position, end)) && used > 0) {
+        this.push(Buffer.from(output.subarray(0, used)))
+      }
     } finally {
       bytes.fill(0)
+      output.fill(0)
     }
 
     callback()

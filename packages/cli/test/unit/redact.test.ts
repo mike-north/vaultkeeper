@@ -120,4 +120,23 @@ describe('RedactingStream', () => {
     expect(Buffer.concat(output).toString()).toBe('progress [REDACTED]')
     stream.end()
   })
+
+  it('emits an unrelated prompt before EOF with a multibyte secret', () => {
+    const stream = new RedactingStream('🔐')
+    const output: Buffer[] = []
+    stream.on('data', (chunk: Buffer) => output.push(chunk))
+    stream.write(Buffer.from('> '))
+    expect(Buffer.concat(output).toString()).toBe('> ')
+    stream.end()
+  })
+
+  it('batches dense matches while delivering output before EOF', () => {
+    const stream = new RedactingStream('xy')
+    const output: Buffer[] = []
+    stream.on('data', (chunk: Buffer) => output.push(chunk))
+    stream.write(Buffer.from('xy'.repeat(32768)))
+    expect(Buffer.concat(output).toString()).toBe('[REDACTED]'.repeat(32768))
+    expect(output.length).toBeLessThanOrEqual(32)
+    stream.end()
+  })
 })
