@@ -13,6 +13,7 @@ function printStoreHelp(): void {
       // Derived from SECRET_NAME_RULE (the single source of truth for the
       // pattern's human description) so help and validation can't drift.
       `  --name <name>      Name to store the secret under; ${SECRET_NAME_RULE}\n` +
+      '  --raw              Preserve UTF-8 stdin including its final line ending\n' +
       '  --require-presence-per-use\n' +
       '                     Refuse unless the active backend forces a fresh, per-use\n' +
       '                     human action for this write. A non-qualifying backend\n' +
@@ -33,12 +34,18 @@ export async function storeCommand(args: string[], configDir: string): Promise<n
     return 0
   }
 
-  let values: { name?: string; 'skip-doctor': boolean; 'require-presence-per-use': boolean }
+  let values: {
+    name?: string
+    raw: boolean
+    'skip-doctor': boolean
+    'require-presence-per-use': boolean
+  }
   try {
     ;({ values } = parseArgs({
       args,
       options: {
         name: { type: 'string' },
+        raw: { type: 'boolean', default: false },
         'skip-doctor': { type: 'boolean', default: false },
         'require-presence-per-use': { type: 'boolean', default: false },
       },
@@ -88,7 +95,18 @@ export async function storeCommand(args: string[], configDir: string): Promise<n
         chunks.push(Buffer.from(String(chunk)))
       }
     }
-    const secret = Buffer.concat(chunks).toString('utf8').trimEnd()
+    const input = Buffer.concat(chunks)
+    for (const chunk of chunks) chunk.fill(0)
+    let text: string
+    try {
+      // Reject invalid bytes instead of silently changing a credential. Keep a
+      // leading BOM because it may itself be part of the secret.
+      text = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(input)
+    } finally {
+      input.fill(0)
+    }
+    // Consume only one line terminator in the echo-friendly default mode.
+    const secret = values.raw ? text : text.replace(/\r?\n$/, '')
 
     if (secret.length === 0) {
       // Exit code 2, not 1: empty stdin is equivalent misuse to an empty or

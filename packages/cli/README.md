@@ -64,6 +64,9 @@ vaultkeeper delete --name MY_API_KEY
 Run `vaultkeeper <command> --help` for full flag reference on any subcommand — the CLI's own
 `--help` output is the source of truth for its flags.
 
+`store` accepts UTF-8 text and rejects malformed input. By default it removes one final LF or
+CRLF, preserving other trailing characters. Use `store --raw` to preserve the final line ending too.
+
 ## Example config
 
 `vaultkeeper config init` (no `--backend`) writes this config — the safe-by-default `file` backend,

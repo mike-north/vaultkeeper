@@ -10,7 +10,10 @@ import { describe, it, expect, afterEach } from 'vitest'
 import * as fs from 'node:fs/promises'
 import * as os from 'node:os'
 import * as path from 'node:path'
+import { spawnSync } from 'node:child_process'
+import { fileURLToPath } from 'node:url'
 import { createCliTestEnv } from '@vaultkeeper/cli-test-helpers'
+import { FileBackend } from '../../../vaultkeeper/src/backend/file-backend.js'
 import type { CliTestEnv } from '@vaultkeeper/cli-test-helpers'
 
 describe('store and delete lifecycle', () => {
@@ -21,6 +24,46 @@ describe('store and delete lifecycle', () => {
       await env.cleanup()
       env = undefined
     }
+  })
+
+  it('preserves trailing characters and supports raw line endings', async () => {
+    env = await createCliTestEnv()
+    const backend = new FileBackend(undefined, env.configDir)
+    const cases: [string, boolean, string][] = [
+      ['value \t', false, 'value \t'],
+      ['value \t\r\n', false, 'value \t'],
+      ['value\n\n', false, 'value\n'],
+      ['value \t\r\n', true, 'value \t\r\n'],
+      ['\uFEFFvalue\r', true, '\uFEFFvalue\r'],
+    ]
+    for (const [input, raw, expected] of cases) {
+      const args = ['store', '--name', 'trailing', '--skip-doctor']
+      if (raw) args.push('--raw')
+      expect((await env.runWithStdin(args, input)).exitCode).toBe(0)
+      expect(await backend.retrieve('trailing')).toBe(expected)
+    }
+  })
+
+  it('rejects malformed UTF-8 without storing a modified value', async () => {
+    env = await createCliTestEnv()
+    const result = spawnSync(
+      process.execPath,
+      [
+        fileURLToPath(new URL('../../../cli/dist/bin.js', import.meta.url)),
+        'store',
+        '--name',
+        'invalid',
+        '--raw',
+        '--skip-doctor',
+      ],
+      {
+        env: { ...process.env, VAULTKEEPER_CONFIG_DIR: env.configDir },
+        input: Buffer.from([0xff]),
+      },
+    )
+    expect(result.status).toBe(1)
+    expect(result.stderr.toString()).toMatch(/encoded data|utf-8/i)
+    await expect(new FileBackend(undefined, env.configDir).retrieve('invalid')).rejects.toThrow()
   })
 
   // Regression: issue #118 — empty stdin previously exited 1 (runtime error)
