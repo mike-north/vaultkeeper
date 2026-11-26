@@ -7,8 +7,8 @@ interface IUpstreamBranch {
 }
 
 /**
- * Owns the Fetch response while the detached stream can read from it. A
- * pending transport read holds only a weak reference to the public controller.
+ * Owns the Fetch response while the detached stream can read from it. An
+ * outstanding byte request owns its public controller until data or EOF arrives.
  */
 class DetachedBodySource {
   private reading = false
@@ -34,8 +34,8 @@ class DetachedBodySource {
     return new DetachedBodySource(this.transport, copy)
   }
 
-  /** Forward one chunk on demand without rooting the public stream from the transport. */
-  pull(controllerRef: WeakRef<ReadableByteStreamController>): void {
+  /** Forward one chunk on demand, keeping the pending read's stream alive. */
+  pull(controller: ReadableByteStreamController): void {
     const upstream = this.upstream
     if (upstream === undefined || this.reading) {
       return
@@ -45,8 +45,7 @@ class DetachedBodySource {
       .read()
       .then((result) => {
         this.reading = false
-        const controller = controllerRef.deref()
-        if (this.upstream === undefined || controller === undefined) {
+        if (this.upstream === undefined) {
           return
         }
         if (result.done) {
@@ -58,14 +57,14 @@ class DetachedBodySource {
           // share its chunk's backing buffer with other views.
           controller.enqueue(Uint8Array.from(result.value))
         } else {
-          this.pull(controllerRef)
+          this.pull(controller)
         }
       })
       .catch(async (error: unknown) => {
         if (this.upstream !== undefined) {
           // Forward transport errors and byte-controller errors through the
           // reader, including EOF in the middle of a typed-array element.
-          controllerRef.deref()?.error(error)
+          controller.error(error)
           await this.cancel(error).catch(() => undefined)
         }
       })
@@ -99,16 +98,15 @@ const abandonedBodies = new FinalizationRegistry<DetachedBodySource>((source) =>
 const detachedSources = new WeakMap<ReadableStream<Uint8Array>, DetachedBodySource>()
 
 /**
- * Expose a demand-driven byte stream whose source never roots the public stream.
- * A live native tee or reader still keeps the public stream reachable.
+ * Expose a byte stream with zero default buffering. Idle streams can be
+ * collected. Once a read starts, its promise can outlive the stream and reader
+ * references held by the caller, so the upstream read keeps the controller alive.
  */
 function createBody(source: DetachedBodySource): ReadableStream<Uint8Array> {
   const stream = new ReadableStream({
     type: 'bytes',
-    // A pending pull promise would hold the public controller alive from the
-    // transport. Track the in-flight read separately so the controller stays weak.
     pull(controller: ReadableByteStreamController): void {
-      source.pull(new WeakRef(controller))
+      source.pull(controller)
     },
     cancel(reason: unknown): Promise<void> {
       return source.cancel(reason)

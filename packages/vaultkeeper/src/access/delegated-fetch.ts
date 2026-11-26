@@ -39,11 +39,31 @@ function redactSecretMaterial(
   return out
 }
 
-/**
- * Preserve safe metadata that the Response constructor cannot represent.
- * Instance clones carry that metadata and keep each body branch independent of
- * the Response object's lifetime.
- */
+/** Safe metadata associated with each detached response for instance cloning. */
+const detachedMetadata = new WeakMap<
+  Response,
+  { readonly status: number; readonly redirected: boolean }
+>()
+
+/** Clone the receiver's own body and metadata, even when the method is borrowed. */
+function clone(this: Response): Response {
+  const metadata = detachedMetadata.get(this)
+  if (metadata === undefined) {
+    return Response.prototype.clone.call(this)
+  }
+
+  const { status, redirected } = metadata
+  const { body } = this
+  const copy = body === null ? undefined : cloneDetachedBody(body)
+  if (copy === undefined) {
+    // Native clone handles null or unusable bodies and streams already
+    // branched by a direct call to the native prototype method.
+    return preserveResponseMetadata(Response.prototype.clone.call(this), status, redirected)
+  }
+  return createResponse(copy, status, redirected, this.headers)
+}
+
+/** Preserve safe metadata that the constructor cannot represent on instance clones. */
 function preserveResponseMetadata(
   response: Response,
   status: number,
@@ -56,18 +76,8 @@ function preserveResponseMetadata(
     Object.defineProperty(response, 'redirected', { value: true })
   }
 
-  Object.defineProperty(response, 'clone', {
-    value: function clone(this: Response): Response {
-      const { body } = this
-      const copy = body === null ? undefined : cloneDetachedBody(body)
-      if (copy === undefined) {
-        // Preserve native behavior for null or unusable bodies and streams
-        // already branched by a direct call to the native prototype method.
-        return preserveResponseMetadata(Response.prototype.clone.call(this), status, redirected)
-      }
-      return createResponse(copy, status, redirected, this.headers)
-    },
-  })
+  detachedMetadata.set(response, { status, redirected })
+  Object.defineProperty(response, 'clone', { value: clone })
   return response
 }
 

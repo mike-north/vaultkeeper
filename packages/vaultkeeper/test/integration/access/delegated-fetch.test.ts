@@ -117,6 +117,28 @@ describe('VaultKeeper.fetch response metadata', () => {
     }
   })
 
+  it('clones the receiver when a delegated response clone method is borrowed', async () => {
+    const server = createServer((_request, response) => {
+      response.writeHead(201).end('delegated body')
+    })
+    const endpoint = await listen(server)
+
+    try {
+      const { vault, token } = await authorizeFixture('synthetic credential')
+      const { response } = await vault.fetch(token, { url: `${endpoint}/?credential={{secret}}` })
+      const receiver = new Response('receiver body', { status: 418, statusText: 'Receiver status' })
+
+      const copy = response.clone.call(receiver)
+      expect(copy.status).toBe(418)
+      expect(copy.ok).toBe(false)
+      expect(copy.statusText).toBe('Receiver status')
+      await expect(copy.text()).resolves.toBe('receiver body')
+      await expect(response.text()).resolves.toBe('delegated body')
+    } finally {
+      await close(server)
+    }
+  })
+
   it('keeps the native body readable across GC before the first read', async () => {
     const expected = 'body sent after the caller receives the response'
     let pending: ServerResponse | undefined
@@ -141,6 +163,74 @@ describe('VaultKeeper.fetch response metadata', () => {
       await close(server)
     }
   })
+
+  it.each(['text', 'default reader', 'BYOB reader', 'pipeTo'])(
+    'completes a pending %s operation when only its promise survives GC',
+    async (mode) => {
+      // A single-byte payload works for operations that promise just one chunk.
+      const expected = 'x'
+      let pending: ServerResponse | undefined
+      const server = createServer((_request, response) => {
+        pending = response
+        response.writeHead(200, { 'Content-Length': Buffer.byteLength(expected) }).flushHeaders()
+      })
+      const endpoint = await listen(server)
+
+      try {
+        const { vault, token } = await authorizeFixture('synthetic credential')
+        const startRead = (response: Response): Promise<string> => {
+          if (mode === 'text') {
+            return response.text()
+          }
+          const { body } = response
+          if (body === null) {
+            throw new VaultError('Expected a stalled response with a body')
+          }
+          if (mode === 'pipeTo') {
+            const chunks: Uint8Array[] = []
+            return body
+              .pipeTo(
+                new WritableStream({
+                  write(chunk: Uint8Array): void {
+                    chunks.push(chunk)
+                  },
+                }),
+              )
+              .then(() => Buffer.concat(chunks).toString())
+          }
+          const next =
+            mode === 'BYOB reader'
+              ? body.getReader({ mode: 'byob' }).read(new Uint8Array(Buffer.byteLength(expected)))
+              : body.getReader().read()
+          return next.then(({ done, value }) => {
+            if (done || !(value instanceof Uint8Array)) {
+              throw new VaultError('Expected a byte chunk from the pending read')
+            }
+            return new TextDecoder().decode(value)
+          })
+        }
+
+        // Return only the operation. A response, stream, or reader held by the
+        // test would conceal premature collection of the pending body graph.
+        async function openRead(): Promise<{ operation: Promise<string> }> {
+          const { response } = await vault.fetch(token, {
+            url: `${endpoint}/?credential={{secret}}`,
+          })
+          return { operation: startRead(response) }
+        }
+        const { operation } = await openRead()
+        if (pending === undefined) {
+          throw new VaultError('Expected a response waiting to send its body')
+        }
+        await collectGarbage()
+        expect(pending.destroyed).toBe(false)
+        pending.end(expected)
+        await expect(operation).resolves.toBe(expected)
+      } finally {
+        await close(server)
+      }
+    },
+  )
 
   it.each(['instance', 'prototype'])(
     'closes a stalled connection after %s clones are collected',
