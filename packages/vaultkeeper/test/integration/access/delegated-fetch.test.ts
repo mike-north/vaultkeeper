@@ -142,29 +142,38 @@ describe('VaultKeeper.fetch response metadata', () => {
     }
   })
 
-  it('closes a stalled connection after the response and its clone are collected', async () => {
-    let pending: ServerResponse | undefined
-    const server = createServer((_request, response) => {
-      pending = response
-      response.writeHead(200, { 'Content-Length': '4' }).flushHeaders()
-    })
-    const endpoint = await listen(server)
+  it.each(['instance', 'prototype'])(
+    'closes a stalled connection after %s clones are collected',
+    async (method) => {
+      let pending: ServerResponse | undefined
+      const server = createServer((_request, response) => {
+        pending = response
+        response.writeHead(200, { 'Content-Length': '4' }).flushHeaders()
+      })
+      const endpoint = await listen(server)
 
-    try {
-      const { vault, token } = await authorizeFixture('synthetic credential')
-      // Leave both tee branches unread and outside the stack collecting them.
-      async function abandonClones(): Promise<void> {
-        const { response } = await vault.fetch(token, { url: `${endpoint}/?credential={{secret}}` })
-        response.clone()
+      try {
+        const { vault, token } = await authorizeFixture('synthetic credential')
+        // Leave both tee branches unread and outside the stack collecting them.
+        async function abandonClones(): Promise<void> {
+          const { response } = await vault.fetch(token, {
+            url: `${endpoint}/?credential={{secret}}`,
+          })
+          if (method === 'prototype') {
+            Response.prototype.clone.call(response)
+          } else {
+            response.clone()
+          }
+        }
+
+        await abandonClones()
+        await collectGarbage()
+        expect(pending?.destroyed).toBe(true)
+      } finally {
+        await close(server)
       }
-
-      await abandonClones()
-      await collectGarbage()
-      expect(pending?.destroyed).toBe(true)
-    } finally {
-      await close(server)
-    }
-  })
+    },
+  )
 
   it.concurrent.each([599, 600, 700, 999])(
     'preserves transport status %i and its body',
@@ -182,7 +191,8 @@ describe('VaultKeeper.fetch response metadata', () => {
           url: `${endpoint}/result?credential={{secret}}`,
         })
         const clone = response.clone()
-        for (const result of [response, clone, clone.clone()]) {
+        const nativeClone = Response.prototype.clone.call(response)
+        for (const result of [response, clone, clone.clone(), nativeClone]) {
           expect(result.status).toBe(status)
           expect(result.ok).toBe(false)
           expect(result.redirected).toBe(false)
