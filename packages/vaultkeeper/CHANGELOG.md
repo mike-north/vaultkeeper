@@ -1,5 +1,15 @@
 # vaultkeeper
 
+## 0.8.0
+
+### Minor Changes
+
+- [#317](https://github.com/mike-north/vaultkeeper/pull/317) [`5231999`](https://github.com/mike-north/vaultkeeper/commit/52319994a609c13f55d3a698e9797957e2d69324) Thanks [@mike-north](https://github.com/mike-north)! - Add `PresenceSimulatorBackend` to `@vaultkeeper/test-helpers`: a test-only backend that scripts vaultkeeper's presence signal (including its absence) so a consumer can prove in CI that an automation signer attempting a presence-gated operation is refused. Per-operation outcomes are scriptable across `'grant'` / `'refuse'` / `'timeout'` / `'not-capable'` via `forTesting({ operations })`, or armed one call at a time via `armPresence` to prove presence is demanded fresh on every call. Three stacked guards keep it unreachable from production: it is never registered with the backend registry, has no default constructor, and its `forTesting()` factory throws a new `TestDoubleMisuseError` (exported from `vaultkeeper`) when `NODE_ENV` is `'production'`.
+
+### Patch Changes
+
+- [#323](https://github.com/mike-north/vaultkeeper/pull/323) [`8be4d18`](https://github.com/mike-north/vaultkeeper/commit/8be4d18bde0eecf0f9f8ac17f1771460f4d98903) Thanks [@mike-north](https://github.com/mike-north)! - Harden the Linux `secret-tool` backend: a `--` separator now precedes every positional attribute/id argument so ids beginning with dashes cannot be parsed as flags; not-found detection depends solely on the exit code, and `retrieve()` strips exactly one trailing newline instead of trimming, so empty and whitespace-only secret values round-trip byte-for-byte.
+
 ## 0.7.1
 
 ### Patch Changes

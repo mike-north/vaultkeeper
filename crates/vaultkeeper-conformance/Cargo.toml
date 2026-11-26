@@ -20,5 +20,9 @@ path = "src/export.rs"
 name = "export-backend-conformance"
 path = "src/export_backend.rs"
 
+[[bin]]
+name = "export-stub-scenarios"
+path = "src/export_stub_scenarios.rs"
+
 [dev-dependencies]
 tempfile = "3"

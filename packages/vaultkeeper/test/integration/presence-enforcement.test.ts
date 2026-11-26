@@ -21,6 +21,7 @@ import {
   DeviceNotPresentError,
 } from '../../src/errors.js'
 import { MockPresenceBackend } from '../helpers/presence-backend.js'
+import { YubikeyBackend } from '../../src/backend/yubikey-backend.js'
 
 async function vaultWith(backend: MockPresenceBackend): Promise<VaultKeeper> {
   return VaultKeeper.init({ skipDoctor: true, backend })
@@ -283,6 +284,26 @@ describe('operation-aware, fail-closed enforcement (1Password per-access shape)'
     expect(typeof jwe).toBe('string')
     // One action for the seed store, one for the presence-gated read.
     expect(backend.freshActionDemands).toBe(2)
+  })
+})
+
+describe('YubikeyBackend delete is not presence-enforced (regression, issue #326)', () => {
+  it('a --require-presence-per-use delete against a touch-configured YubiKey backend fails closed with NotCapableError', async () => {
+    // Regression for issue #326: delete() never performs challenge-response
+    // (it only probes device presence and unlinks the entry), so
+    // getCapabilities() correctly excludes 'delete' from
+    // presenceEnforcedOperations. Before the fix, that field was omitted
+    // entirely, which the shared enforcement contract reads as "every keyed
+    // operation is covered" — so a requirePresencePerUse delete would have
+    // silently passed enforcement instead of failing closed. Enforcement
+    // runs before any backend touch, so no real YubiKey/ykman is needed
+    // here: the refusal must happen before device I/O is attempted.
+    const backend = new YubikeyBackend('/tmp/vk-issue-326-yubikey', true)
+    const vault = await VaultKeeper.init({ skipDoctor: true, backend })
+
+    await expect(vault.delete('k', { requirePresencePerUse: true })).rejects.toBeInstanceOf(
+      NotCapableError,
+    )
   })
 })
 

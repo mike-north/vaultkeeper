@@ -166,7 +166,7 @@ Thrown by [VaultKeeper.setup()](./vaultkeeper.vaultkeeper.setup.md) when the cal
 
 </td><td>
 
-Thrown when a delegated `fetch()` call fails before a `Response` can be produced — for example the URL is malformed or the underlying network request fails (DNS failure, connection refused, TLS error).
+Thrown when delegated `fetch()` rejects without returning a `Response`<!-- -->. This includes malformed URLs, Fetch redirects, and transport failures.
 
 
 </td></tr>
@@ -402,6 +402,17 @@ Thrown when a JWE token has been explicitly blocked (e.g. after a single-use tok
 Thrown when a config's `backends[].type` names a backend that is not registered with the [BackendRegistry](./vaultkeeper.backendregistry.md)<!-- -->.
 
 A specialization of [ConfigValidationError](./vaultkeeper.configvalidationerror.md)<!-- -->: an unknown backend type is a semantic schema failure (the config parses and is structurally valid, but names a backend that cannot be created), so it fails config validation the same way `version !== 1` does. It carries the offending `backendType` and the set of `knownTypes` so a consumer — notably `doctor` — can give the same "Available types: …" guidance the runtime [BackendUnavailableError](./vaultkeeper.backendunavailableerror.md) gives, without parsing the human-readable message. This closes the gap where a config with an unknown backend type parsed as valid JSON and passed `doctor` with a false "System ready.", only for the next real command to throw [BackendUnavailableError](./vaultkeeper.backendunavailableerror.md) (issue \#215).
+
+
+</td></tr>
+<tr><td>
+
+[UnreachableError](./vaultkeeper.unreachableerror.md)
+
+
+</td><td>
+
+Thrown from the `default`<!-- -->/impossible arm of an exhaustive `switch` (or equivalent conditional) over a discriminated union. The constructor parameter is typed `never`<!-- -->, so passing anything other than a value the compiler has already narrowed to `never` — i.e. a union member that was missed — is a compile-time error at the call site, not just a runtime throw. This turns an unhandled union arm into a build failure the moment a new variant is added, rather than a silent fallthrough discovered later at runtime.
 
 
 </td></tr>

@@ -12,7 +12,9 @@
     "expectedStderr": {
       "type": "Any"
     },
-    "expectedConfigFile": null
+    "expectedConfigFile": null,
+    "extraFiles": [],
+    "stubScenario": null
   },
   {
     "name": "help flag prints help and exits 0",
@@ -29,7 +31,9 @@
     "expectedStderr": {
       "type": "Any"
     },
-    "expectedConfigFile": null
+    "expectedConfigFile": null,
+    "extraFiles": [],
+    "stubScenario": null
   },
   {
     "name": "short help flag prints help and exits 0",
@@ -46,7 +50,9 @@
     "expectedStderr": {
       "type": "Any"
     },
-    "expectedConfigFile": null
+    "expectedConfigFile": null,
+    "extraFiles": [],
+    "stubScenario": null
   },
   {
     "name": "version flag prints version",
@@ -63,7 +69,9 @@
     "expectedStderr": {
       "type": "Any"
     },
-    "expectedConfigFile": null
+    "expectedConfigFile": null,
+    "extraFiles": [],
+    "stubScenario": null
   },
   {
     "name": "help lists all expected commands",
@@ -75,12 +83,14 @@
     "expectedExitCode": 0,
     "expectedStdout": {
       "type": "Regex",
-      "value": "(?s)exec.*doctor.*approve.*dev-mode.*store.*delete.*config.*rotate-key.*revoke-key"
+      "value": "(?s)run.*doctor.*approve.*dev-mode.*store.*delete.*config.*rotate-key.*revoke-key"
     },
     "expectedStderr": {
       "type": "Any"
     },
-    "expectedConfigFile": null
+    "expectedConfigFile": null,
+    "extraFiles": [],
+    "stubScenario": null
   },
   {
     "name": "unknown command exits with error",
@@ -97,7 +107,9 @@
       "type": "Contains",
       "value": "error"
     },
-    "expectedConfigFile": null
+    "expectedConfigFile": null,
+    "extraFiles": [],
+    "stubScenario": null
   },
   {
     "name": "store requires --name",
@@ -114,7 +126,9 @@
       "type": "Contains",
       "value": "--name"
     },
-    "expectedConfigFile": null
+    "expectedConfigFile": null,
+    "extraFiles": [],
+    "stubScenario": null
   },
   {
     "name": "delete requires --name",
@@ -131,7 +145,9 @@
       "type": "Contains",
       "value": "--name"
     },
-    "expectedConfigFile": null
+    "expectedConfigFile": null,
+    "extraFiles": [],
+    "stubScenario": null
   },
   {
     "name": "exec requires --token",
@@ -148,7 +164,9 @@
       "type": "Contains",
       "value": "--token"
     },
-    "expectedConfigFile": null
+    "expectedConfigFile": null,
+    "extraFiles": [],
+    "stubScenario": null
   },
   {
     "name": "approve requires --path",
@@ -165,7 +183,9 @@
       "type": "Contains",
       "value": "--path"
     },
-    "expectedConfigFile": null
+    "expectedConfigFile": null,
+    "extraFiles": [],
+    "stubScenario": null
   },
   {
     "name": "dev-mode requires --path",
@@ -182,7 +202,9 @@
       "type": "Contains",
       "value": "--path"
     },
-    "expectedConfigFile": null
+    "expectedConfigFile": null,
+    "extraFiles": [],
+    "stubScenario": null
   },
   {
     "name": "config with no subcommand exits 2",
@@ -198,7 +220,9 @@
     "expectedStderr": {
       "type": "Any"
     },
-    "expectedConfigFile": null
+    "expectedConfigFile": null,
+    "extraFiles": [],
+    "stubScenario": null
   },
   {
     "name": "store succeeds with valid secret",
@@ -217,7 +241,9 @@
     "expectedStderr": {
       "type": "Any"
     },
-    "expectedConfigFile": null
+    "expectedConfigFile": null,
+    "extraFiles": [],
+    "stubScenario": null
   },
   {
     "name": "store exits 1 when stdin is empty",
@@ -236,7 +262,9 @@
       "type": "Contains",
       "value": "No secret provided"
     },
-    "expectedConfigFile": null
+    "expectedConfigFile": null,
+    "extraFiles": [],
+    "stubScenario": null
   },
   {
     "name": "delete succeeds",
@@ -255,7 +283,9 @@
     "expectedStderr": {
       "type": "Any"
     },
-    "expectedConfigFile": null
+    "expectedConfigFile": null,
+    "extraFiles": [],
+    "stubScenario": null
   },
   {
     "name": "config init writes the 'file' backend as the zero-config default (#98)",
@@ -282,7 +312,9 @@
           }
         ]
       }
-    }
+    },
+    "extraFiles": [],
+    "stubScenario": null
   },
   {
     "name": "config show outputs valid JSON with version",
@@ -300,7 +332,9 @@
     "expectedStderr": {
       "type": "Any"
     },
-    "expectedConfigFile": null
+    "expectedConfigFile": null,
+    "extraFiles": [],
+    "stubScenario": null
   },
   {
     "name": "config show exits 1 when no config exists",
@@ -318,7 +352,9 @@
       "type": "Contains",
       "value": "Error: No config file found. Run 'vaultkeeper config init' to create one."
     },
-    "expectedConfigFile": null
+    "expectedConfigFile": null,
+    "extraFiles": [],
+    "stubScenario": null
   },
   {
     "name": "config init exits 1 when config already exists",
@@ -336,7 +372,9 @@
       "type": "Contains",
       "value": "Error: Config already exists at"
     },
-    "expectedConfigFile": null
+    "expectedConfigFile": null,
+    "extraFiles": [],
+    "stubScenario": null
   },
   {
     "name": "doctor produces output",
@@ -352,7 +390,9 @@
     "expectedStderr": {
       "type": "Any"
     },
-    "expectedConfigFile": null
+    "expectedConfigFile": null,
+    "extraFiles": [],
+    "stubScenario": null
   },
   {
     "name": "rotate-key succeeds with valid config",
@@ -369,7 +409,9 @@
     "expectedStderr": {
       "type": "Any"
     },
-    "expectedConfigFile": null
+    "expectedConfigFile": null,
+    "extraFiles": [],
+    "stubScenario": null
   },
   {
     "name": "revoke-key succeeds with valid config",
@@ -386,7 +428,9 @@
     "expectedStderr": {
       "type": "Any"
     },
-    "expectedConfigFile": null
+    "expectedConfigFile": null,
+    "extraFiles": [],
+    "stubScenario": null
   },
   {
     "name": "approve succeeds for existing file",
@@ -405,7 +449,9 @@
     "expectedStderr": {
       "type": "Any"
     },
-    "expectedConfigFile": null
+    "expectedConfigFile": null,
+    "extraFiles": [],
+    "stubScenario": null
   },
   {
     "name": "dev-mode enable succeeds",
@@ -425,7 +471,9 @@
     "expectedStderr": {
       "type": "Any"
     },
-    "expectedConfigFile": null
+    "expectedConfigFile": null,
+    "extraFiles": [],
+    "stubScenario": null
   },
   {
     "name": "dev-mode disable succeeds",
@@ -444,7 +492,9 @@
     "expectedStderr": {
       "type": "Any"
     },
-    "expectedConfigFile": null
+    "expectedConfigFile": null,
+    "extraFiles": [],
+    "stubScenario": null
   },
   {
     "name": "backend capabilities exits 0 and reports the file backend as not presence-capable",
@@ -462,7 +512,9 @@
     "expectedStderr": {
       "type": "Any"
     },
-    "expectedConfigFile": null
+    "expectedConfigFile": null,
+    "extraFiles": [],
+    "stubScenario": null
   },
   {
     "name": "backend capabilities --json emits a row with type, displayName, presencePerUse",
@@ -487,7 +539,9 @@
     "expectedStderr": {
       "type": "Any"
     },
-    "expectedConfigFile": null
+    "expectedConfigFile": null,
+    "extraFiles": [],
+    "stubScenario": null
   },
   {
     "name": "backend with no subcommand exits 2",
@@ -503,6 +557,371 @@
     "expectedStderr": {
       "type": "Any"
     },
-    "expectedConfigFile": null
+    "expectedConfigFile": null,
+    "extraFiles": [],
+    "stubScenario": null
+  },
+  {
+    "name": "run requires --profile or --profile-file",
+    "command": [
+      "run",
+      "--",
+      "true"
+    ],
+    "stdin": null,
+    "needsConfig": false,
+    "expectedExitCode": 2,
+    "expectedStdout": {
+      "type": "Any"
+    },
+    "expectedStderr": {
+      "type": "Contains",
+      "value": "--profile"
+    },
+    "expectedConfigFile": null,
+    "extraFiles": [],
+    "stubScenario": null
+  },
+  {
+    "name": "run rejects --profile and --profile-file together",
+    "command": [
+      "run",
+      "--profile",
+      "x",
+      "--profile-file",
+      "/tmp/x.json",
+      "--",
+      "true"
+    ],
+    "stdin": null,
+    "needsConfig": false,
+    "expectedExitCode": 2,
+    "expectedStdout": {
+      "type": "Any"
+    },
+    "expectedStderr": {
+      "type": "Any"
+    },
+    "expectedConfigFile": null,
+    "extraFiles": [],
+    "stubScenario": null
+  },
+  {
+    "name": "run rejects a --set value with no '='",
+    "command": [
+      "run",
+      "--profile",
+      "nonexistent",
+      "--set",
+      "NOEQUALS",
+      "--",
+      "true"
+    ],
+    "stdin": null,
+    "needsConfig": true,
+    "expectedExitCode": 1,
+    "expectedStdout": {
+      "type": "Any"
+    },
+    "expectedStderr": {
+      "type": "Contains",
+      "value": "--set"
+    },
+    "expectedConfigFile": null,
+    "extraFiles": [],
+    "stubScenario": null
+  },
+  {
+    "name": "run exits 1 with 'No profile found' for a nonexistent profile",
+    "command": [
+      "run",
+      "--profile",
+      "nonexistent-profile"
+    ],
+    "stdin": null,
+    "needsConfig": true,
+    "expectedExitCode": 1,
+    "expectedStdout": {
+      "type": "Any"
+    },
+    "expectedStderr": {
+      "type": "Contains",
+      "value": "No profile found"
+    },
+    "expectedConfigFile": null,
+    "extraFiles": [],
+    "stubScenario": null
+  },
+  {
+    "name": "run exits 1 with 'No command specified' for a valid profile and no command",
+    "command": [
+      "run",
+      "--profile",
+      "empty-profile"
+    ],
+    "stdin": null,
+    "needsConfig": true,
+    "expectedExitCode": 1,
+    "expectedStdout": {
+      "type": "Any"
+    },
+    "expectedStderr": {
+      "type": "Contains",
+      "value": "No command specified"
+    },
+    "expectedConfigFile": null,
+    "extraFiles": [
+      [
+        "profiles/empty-profile.json",
+        "{ \"version\": 1, \"name\": \"empty-profile\", \"entries\": {} }"
+      ]
+    ],
+    "stubScenario": null
+  },
+  {
+    "name": "run --dry-run against a valid profile prints the plan and exits 0",
+    "command": [
+      "run",
+      "--profile",
+      "empty-profile",
+      "--dry-run"
+    ],
+    "stdin": null,
+    "needsConfig": true,
+    "expectedExitCode": 0,
+    "expectedStdout": {
+      "type": "Contains",
+      "value": "plan only"
+    },
+    "expectedStderr": {
+      "type": "Any"
+    },
+    "expectedConfigFile": null,
+    "extraFiles": [
+      [
+        "profiles/empty-profile.json",
+        "{ \"version\": 1, \"name\": \"empty-profile\", \"entries\": {} }"
+      ]
+    ],
+    "stubScenario": null
+  },
+  {
+    "name": "run refuses a real launch when --require-presence-at-issuance is set",
+    "command": [
+      "run",
+      "--profile",
+      "empty-profile",
+      "--require-presence-at-issuance",
+      "--",
+      "true"
+    ],
+    "stdin": null,
+    "needsConfig": true,
+    "expectedExitCode": 1,
+    "expectedStdout": {
+      "type": "Any"
+    },
+    "expectedStderr": {
+      "type": "Contains",
+      "value": "not yet enforced"
+    },
+    "expectedConfigFile": null,
+    "extraFiles": [
+      [
+        "profiles/empty-profile.json",
+        "{ \"version\": 1, \"name\": \"empty-profile\", \"entries\": {} }"
+      ]
+    ],
+    "stubScenario": null
+  },
+  {
+    "name": "run --help documents the exact --require-presence-at-issuance flag name",
+    "command": [
+      "run",
+      "--help"
+    ],
+    "stdin": null,
+    "needsConfig": false,
+    "expectedExitCode": 0,
+    "expectedStdout": {
+      "type": "Contains",
+      "value": "--require-presence-at-issuance"
+    },
+    "expectedStderr": {
+      "type": "Any"
+    },
+    "expectedConfigFile": null,
+    "extraFiles": [],
+    "stubScenario": null
+  },
+  {
+    "name": "run --token conflicts with --profile, naming both flags",
+    "command": [
+      "run",
+      "--profile",
+      "x",
+      "--token",
+      "y",
+      "--",
+      "true"
+    ],
+    "stdin": null,
+    "needsConfig": false,
+    "expectedExitCode": 2,
+    "expectedStdout": {
+      "type": "Any"
+    },
+    "expectedStderr": {
+      "type": "Contains",
+      "value": "--profile"
+    },
+    "expectedConfigFile": null,
+    "extraFiles": [],
+    "stubScenario": null
+  },
+  {
+    "name": "run --token conflicts with --profile-file, naming both flags",
+    "command": [
+      "run",
+      "--profile-file",
+      "/tmp/x.json",
+      "--token",
+      "y",
+      "--",
+      "true"
+    ],
+    "stdin": null,
+    "needsConfig": false,
+    "expectedExitCode": 2,
+    "expectedStdout": {
+      "type": "Any"
+    },
+    "expectedStderr": {
+      "type": "Contains",
+      "value": "--profile-file"
+    },
+    "expectedConfigFile": null,
+    "extraFiles": [],
+    "stubScenario": null
+  },
+  {
+    "name": "run --token rejects an invalid --as var name with a typed error",
+    "command": [
+      "run",
+      "--token",
+      "irrelevant",
+      "--as",
+      "lower_case",
+      "--",
+      "true"
+    ],
+    "stdin": null,
+    "needsConfig": true,
+    "expectedExitCode": 1,
+    "expectedStdout": {
+      "type": "Any"
+    },
+    "expectedStderr": {
+      "type": "Contains",
+      "value": "--as"
+    },
+    "expectedConfigFile": null,
+    "extraFiles": [],
+    "stubScenario": null
+  },
+  {
+    "name": "run --token --dry-run never redeems or decrypts the token",
+    "command": [
+      "run",
+      "--token",
+      "not-a-real-jwe",
+      "--dry-run"
+    ],
+    "stdin": null,
+    "needsConfig": true,
+    "expectedExitCode": 0,
+    "expectedStdout": {
+      "type": "Contains",
+      "value": "VAULTKEEPER_SECRET"
+    },
+    "expectedStderr": {
+      "type": "Any"
+    },
+    "expectedConfigFile": null,
+    "extraFiles": [],
+    "stubScenario": null
+  },
+  {
+    "name": "run --token conflicts with --require-presence-at-issuance, naming both flags",
+    "command": [
+      "run",
+      "--token",
+      "irrelevant",
+      "--require-presence-at-issuance",
+      "--",
+      "true"
+    ],
+    "stdin": null,
+    "needsConfig": false,
+    "expectedExitCode": 2,
+    "expectedStdout": {
+      "type": "Any"
+    },
+    "expectedStderr": {
+      "type": "Contains",
+      "value": "--require-presence-at-issuance"
+    },
+    "expectedConfigFile": null,
+    "extraFiles": [],
+    "stubScenario": null
+  },
+  {
+    "name": "run --token --dry-run refuses a --set/--as collision instead of rendering cleanly",
+    "command": [
+      "run",
+      "--token",
+      "not-a-real-jwe",
+      "--dry-run",
+      "--set",
+      "VAULTKEEPER_SECRET=some-secret"
+    ],
+    "stdin": null,
+    "needsConfig": true,
+    "expectedExitCode": 1,
+    "expectedStdout": {
+      "type": "Exact",
+      "value": ""
+    },
+    "expectedStderr": {
+      "type": "Contains",
+      "value": "--as"
+    },
+    "expectedConfigFile": null,
+    "extraFiles": [],
+    "stubScenario": null
+  },
+  {
+    "name": "exec emits a deprecation notice on stderr even when the token is invalid",
+    "command": [
+      "exec",
+      "--token",
+      "not-a-real-jwe",
+      "--",
+      "true"
+    ],
+    "stdin": null,
+    "needsConfig": true,
+    "expectedExitCode": 1,
+    "expectedStdout": {
+      "type": "Exact",
+      "value": ""
+    },
+    "expectedStderr": {
+      "type": "Contains",
+      "value": "deprecated"
+    },
+    "expectedConfigFile": null,
+    "extraFiles": [],
+    "stubScenario": null
   }
 ]

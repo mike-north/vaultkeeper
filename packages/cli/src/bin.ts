@@ -94,7 +94,10 @@ function printHelp(stream: NodeJS.WritableStream = process.stdout): void {
   stream.write(
     'Usage: vaultkeeper [--config-dir <path>] <command> [options]\n\n' +
       'Commands:\n' +
-      '  exec         Run a command with a secret injected as an env var\n' +
+      '  run          Redeem an already-minted --token and launch a command with\n' +
+      '               it injected as an env var — stdio/signal transparent\n' +
+      '  exec         Mint a token from --secret/--caller (TOFU trust gate) and\n' +
+      '               run a command with it injected as an env var\n' +
       '  doctor       Run preflight checks\n' +
       '  approve      Pre-record a script hash in the TOFU manifest\n' +
       '  dev-mode     Toggle development mode for a script\n' +
@@ -180,6 +183,10 @@ async function main(): Promise<number> {
   const configDir = resolveConfigDir(configDirFlag)
 
   switch (subcommand) {
+    case 'run': {
+      const { runCommand } = await import('./commands/run.js')
+      return runCommand(commandArgs, configDir)
+    }
     case 'exec': {
       const { execCommand } = await import('./commands/exec.js')
       return execCommand(commandArgs, configDir)

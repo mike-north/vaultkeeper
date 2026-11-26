@@ -1,0 +1,1361 @@
+pub mod vaultkeeper_core
+pub mod vaultkeeper_core::access
+pub struct vaultkeeper_core::access::SecretAccessor
+impl vaultkeeper_core::types::SecretAccessor
+pub fn vaultkeeper_core::types::SecretAccessor::new(alloc::vec::Vec<u8>) -> Self
+pub fn vaultkeeper_core::types::SecretAccessor::read<F, R>(&mut self, F) -> core::result::Result<R, vaultkeeper_core::errors::VaultError> where F: core::ops::function::FnOnce(&[u8]) -> R
+impl core::ops::drop::Drop for vaultkeeper_core::types::SecretAccessor
+pub fn vaultkeeper_core::types::SecretAccessor::drop(&mut self)
+pub mod vaultkeeper_core::backend
+pub mod vaultkeeper_core::backend::dpapi
+pub struct vaultkeeper_core::backend::dpapi::DpapiBackend
+impl vaultkeeper_core::backend::dpapi::DpapiBackend
+pub fn vaultkeeper_core::backend::dpapi::DpapiBackend::new(alloc::sync::Arc<dyn vaultkeeper_core::backend::HostPlatform>, core::option::Option<std::path::PathBuf>) -> Self
+impl vaultkeeper_core::backend::ListableBackend for vaultkeeper_core::backend::dpapi::DpapiBackend
+pub fn vaultkeeper_core::backend::dpapi::DpapiBackend::list<'life0, 'async_trait>(&'life0 self) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<alloc::vec::Vec<alloc::string::String>, vaultkeeper_core::errors::VaultError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+impl vaultkeeper_core::backend::SecretBackend for vaultkeeper_core::backend::dpapi::DpapiBackend
+pub fn vaultkeeper_core::backend::dpapi::DpapiBackend::as_presence_capable(&self) -> core::option::Option<&dyn vaultkeeper_core::PresenceCapableBackend>
+pub fn vaultkeeper_core::backend::dpapi::DpapiBackend::backend_type(&self) -> &str
+pub fn vaultkeeper_core::backend::dpapi::DpapiBackend::delete<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<(), vaultkeeper_core::errors::VaultError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn vaultkeeper_core::backend::dpapi::DpapiBackend::display_name(&self) -> &str
+pub fn vaultkeeper_core::backend::dpapi::DpapiBackend::exists<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<bool, vaultkeeper_core::errors::VaultError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn vaultkeeper_core::backend::dpapi::DpapiBackend::is_available<'life0, 'async_trait>(&'life0 self) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = bool> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub fn vaultkeeper_core::backend::dpapi::DpapiBackend::retrieve<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<alloc::string::String, vaultkeeper_core::errors::VaultError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn vaultkeeper_core::backend::dpapi::DpapiBackend::store<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 str, &'life2 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<(), vaultkeeper_core::errors::VaultError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
+pub mod vaultkeeper_core::backend::file
+pub struct vaultkeeper_core::backend::file::FileBackend
+impl vaultkeeper_core::backend::file::FileBackend
+pub fn vaultkeeper_core::backend::file::FileBackend::new(alloc::sync::Arc<dyn vaultkeeper_core::backend::HostPlatform>) -> Self
+impl vaultkeeper_core::backend::ListableBackend for vaultkeeper_core::backend::file::FileBackend
+pub fn vaultkeeper_core::backend::file::FileBackend::list<'life0, 'async_trait>(&'life0 self) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<alloc::vec::Vec<alloc::string::String>, vaultkeeper_core::errors::VaultError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+impl vaultkeeper_core::backend::SecretBackend for vaultkeeper_core::backend::file::FileBackend
+pub fn vaultkeeper_core::backend::file::FileBackend::as_presence_capable(&self) -> core::option::Option<&dyn vaultkeeper_core::PresenceCapableBackend>
+pub fn vaultkeeper_core::backend::file::FileBackend::backend_type(&self) -> &str
+pub fn vaultkeeper_core::backend::file::FileBackend::delete<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<(), vaultkeeper_core::errors::VaultError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn vaultkeeper_core::backend::file::FileBackend::display_name(&self) -> &str
+pub fn vaultkeeper_core::backend::file::FileBackend::exists<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<bool, vaultkeeper_core::errors::VaultError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn vaultkeeper_core::backend::file::FileBackend::is_available<'life0, 'async_trait>(&'life0 self) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = bool> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub fn vaultkeeper_core::backend::file::FileBackend::retrieve<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<alloc::string::String, vaultkeeper_core::errors::VaultError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn vaultkeeper_core::backend::file::FileBackend::store<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 str, &'life2 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<(), vaultkeeper_core::errors::VaultError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
+impl vaultkeeper_core::backend::SigningBackend for vaultkeeper_core::backend::file::FileBackend
+pub fn vaultkeeper_core::backend::file::FileBackend::generate_signing_key<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 str, vaultkeeper_core::types::SigningAlgorithm) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<(), vaultkeeper_core::errors::VaultError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn vaultkeeper_core::backend::file::FileBackend::get_public_key<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<vaultkeeper_core::types::SigningPublicKey, vaultkeeper_core::errors::VaultError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn vaultkeeper_core::backend::file::FileBackend::sign_with_key<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 str, &'life2 [u8]) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<alloc::vec::Vec<u8>, vaultkeeper_core::errors::VaultError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
+pub mod vaultkeeper_core::backend::in_memory
+pub struct vaultkeeper_core::backend::in_memory::InMemoryBackend
+impl vaultkeeper_core::backend::in_memory::InMemoryBackend
+pub fn vaultkeeper_core::backend::in_memory::InMemoryBackend::clear(&self)
+pub fn vaultkeeper_core::backend::in_memory::InMemoryBackend::new() -> Self
+pub fn vaultkeeper_core::backend::in_memory::InMemoryBackend::size(&self) -> usize
+impl core::default::Default for vaultkeeper_core::backend::in_memory::InMemoryBackend
+pub fn vaultkeeper_core::backend::in_memory::InMemoryBackend::default() -> Self
+impl vaultkeeper_core::PresenceCapableBackend for vaultkeeper_core::backend::in_memory::InMemoryBackend
+pub fn vaultkeeper_core::backend::in_memory::InMemoryBackend::get_capabilities<'life0, 'async_trait>(&'life0 self) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<vaultkeeper_core::BackendCapabilities, vaultkeeper_core::errors::VaultError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+impl vaultkeeper_core::backend::ListableBackend for vaultkeeper_core::backend::in_memory::InMemoryBackend
+pub fn vaultkeeper_core::backend::in_memory::InMemoryBackend::list<'life0, 'async_trait>(&'life0 self) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<alloc::vec::Vec<alloc::string::String>, vaultkeeper_core::errors::VaultError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+impl vaultkeeper_core::backend::SecretBackend for vaultkeeper_core::backend::in_memory::InMemoryBackend
+pub fn vaultkeeper_core::backend::in_memory::InMemoryBackend::as_presence_capable(&self) -> core::option::Option<&dyn vaultkeeper_core::PresenceCapableBackend>
+pub fn vaultkeeper_core::backend::in_memory::InMemoryBackend::backend_type(&self) -> &str
+pub fn vaultkeeper_core::backend::in_memory::InMemoryBackend::delete<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<(), vaultkeeper_core::errors::VaultError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn vaultkeeper_core::backend::in_memory::InMemoryBackend::display_name(&self) -> &str
+pub fn vaultkeeper_core::backend::in_memory::InMemoryBackend::exists<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<bool, vaultkeeper_core::errors::VaultError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn vaultkeeper_core::backend::in_memory::InMemoryBackend::is_available<'life0, 'async_trait>(&'life0 self) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = bool> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub fn vaultkeeper_core::backend::in_memory::InMemoryBackend::retrieve<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<alloc::string::String, vaultkeeper_core::errors::VaultError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn vaultkeeper_core::backend::in_memory::InMemoryBackend::store<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 str, &'life2 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<(), vaultkeeper_core::errors::VaultError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
+impl vaultkeeper_core::backend::SigningBackend for vaultkeeper_core::backend::in_memory::InMemoryBackend
+pub fn vaultkeeper_core::backend::in_memory::InMemoryBackend::generate_signing_key<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 str, vaultkeeper_core::types::SigningAlgorithm) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<(), vaultkeeper_core::errors::VaultError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn vaultkeeper_core::backend::in_memory::InMemoryBackend::get_public_key<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<vaultkeeper_core::types::SigningPublicKey, vaultkeeper_core::errors::VaultError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn vaultkeeper_core::backend::in_memory::InMemoryBackend::sign_with_key<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 str, &'life2 [u8]) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<alloc::vec::Vec<u8>, vaultkeeper_core::errors::VaultError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
+pub mod vaultkeeper_core::backend::keychain
+pub struct vaultkeeper_core::backend::keychain::KeychainBackend
+impl vaultkeeper_core::backend::keychain::KeychainBackend
+pub fn vaultkeeper_core::backend::keychain::KeychainBackend::new(alloc::sync::Arc<dyn vaultkeeper_core::backend::HostPlatform>) -> Self
+impl vaultkeeper_core::backend::ListableBackend for vaultkeeper_core::backend::keychain::KeychainBackend
+pub fn vaultkeeper_core::backend::keychain::KeychainBackend::list<'life0, 'async_trait>(&'life0 self) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<alloc::vec::Vec<alloc::string::String>, vaultkeeper_core::errors::VaultError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+impl vaultkeeper_core::backend::SecretBackend for vaultkeeper_core::backend::keychain::KeychainBackend
+pub fn vaultkeeper_core::backend::keychain::KeychainBackend::as_presence_capable(&self) -> core::option::Option<&dyn vaultkeeper_core::PresenceCapableBackend>
+pub fn vaultkeeper_core::backend::keychain::KeychainBackend::backend_type(&self) -> &str
+pub fn vaultkeeper_core::backend::keychain::KeychainBackend::delete<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<(), vaultkeeper_core::errors::VaultError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn vaultkeeper_core::backend::keychain::KeychainBackend::display_name(&self) -> &str
+pub fn vaultkeeper_core::backend::keychain::KeychainBackend::exists<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<bool, vaultkeeper_core::errors::VaultError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn vaultkeeper_core::backend::keychain::KeychainBackend::is_available<'life0, 'async_trait>(&'life0 self) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = bool> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub fn vaultkeeper_core::backend::keychain::KeychainBackend::retrieve<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<alloc::string::String, vaultkeeper_core::errors::VaultError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn vaultkeeper_core::backend::keychain::KeychainBackend::store<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 str, &'life2 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<(), vaultkeeper_core::errors::VaultError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
+pub mod vaultkeeper_core::backend::secret_tool
+pub struct vaultkeeper_core::backend::secret_tool::SecretToolBackend
+impl vaultkeeper_core::backend::secret_tool::SecretToolBackend
+pub fn vaultkeeper_core::backend::secret_tool::SecretToolBackend::new(alloc::sync::Arc<dyn vaultkeeper_core::backend::HostPlatform>) -> Self
+impl vaultkeeper_core::backend::ListableBackend for vaultkeeper_core::backend::secret_tool::SecretToolBackend
+pub fn vaultkeeper_core::backend::secret_tool::SecretToolBackend::list<'life0, 'async_trait>(&'life0 self) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<alloc::vec::Vec<alloc::string::String>, vaultkeeper_core::errors::VaultError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+impl vaultkeeper_core::backend::SecretBackend for vaultkeeper_core::backend::secret_tool::SecretToolBackend
+pub fn vaultkeeper_core::backend::secret_tool::SecretToolBackend::as_presence_capable(&self) -> core::option::Option<&dyn vaultkeeper_core::PresenceCapableBackend>
+pub fn vaultkeeper_core::backend::secret_tool::SecretToolBackend::backend_type(&self) -> &str
+pub fn vaultkeeper_core::backend::secret_tool::SecretToolBackend::delete<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<(), vaultkeeper_core::errors::VaultError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn vaultkeeper_core::backend::secret_tool::SecretToolBackend::display_name(&self) -> &str
+pub fn vaultkeeper_core::backend::secret_tool::SecretToolBackend::exists<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<bool, vaultkeeper_core::errors::VaultError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn vaultkeeper_core::backend::secret_tool::SecretToolBackend::is_available<'life0, 'async_trait>(&'life0 self) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = bool> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub fn vaultkeeper_core::backend::secret_tool::SecretToolBackend::retrieve<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<alloc::string::String, vaultkeeper_core::errors::VaultError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn vaultkeeper_core::backend::secret_tool::SecretToolBackend::store<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 str, &'life2 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<(), vaultkeeper_core::errors::VaultError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
+pub mod vaultkeeper_core::backend::yubikey
+pub struct vaultkeeper_core::backend::yubikey::YubikeyBackend
+impl vaultkeeper_core::backend::yubikey::YubikeyBackend
+pub fn vaultkeeper_core::backend::yubikey::YubikeyBackend::new(alloc::sync::Arc<dyn vaultkeeper_core::backend::HostPlatform>, bool) -> Self
+impl vaultkeeper_core::PresenceCapableBackend for vaultkeeper_core::backend::yubikey::YubikeyBackend
+pub fn vaultkeeper_core::backend::yubikey::YubikeyBackend::get_capabilities<'life0, 'async_trait>(&'life0 self) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<vaultkeeper_core::BackendCapabilities, vaultkeeper_core::errors::VaultError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+impl vaultkeeper_core::backend::ListableBackend for vaultkeeper_core::backend::yubikey::YubikeyBackend
+pub fn vaultkeeper_core::backend::yubikey::YubikeyBackend::list<'life0, 'async_trait>(&'life0 self) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<alloc::vec::Vec<alloc::string::String>, vaultkeeper_core::errors::VaultError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+impl vaultkeeper_core::backend::SecretBackend for vaultkeeper_core::backend::yubikey::YubikeyBackend
+pub fn vaultkeeper_core::backend::yubikey::YubikeyBackend::as_presence_capable(&self) -> core::option::Option<&dyn vaultkeeper_core::PresenceCapableBackend>
+pub fn vaultkeeper_core::backend::yubikey::YubikeyBackend::backend_type(&self) -> &str
+pub fn vaultkeeper_core::backend::yubikey::YubikeyBackend::delete<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<(), vaultkeeper_core::errors::VaultError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn vaultkeeper_core::backend::yubikey::YubikeyBackend::display_name(&self) -> &str
+pub fn vaultkeeper_core::backend::yubikey::YubikeyBackend::exists<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<bool, vaultkeeper_core::errors::VaultError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn vaultkeeper_core::backend::yubikey::YubikeyBackend::is_available<'life0, 'async_trait>(&'life0 self) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = bool> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub fn vaultkeeper_core::backend::yubikey::YubikeyBackend::retrieve<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<alloc::string::String, vaultkeeper_core::errors::VaultError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn vaultkeeper_core::backend::yubikey::YubikeyBackend::store<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 str, &'life2 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<(), vaultkeeper_core::errors::VaultError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
+pub enum vaultkeeper_core::backend::Platform
+pub vaultkeeper_core::backend::Platform::Darwin
+pub vaultkeeper_core::backend::Platform::Linux
+pub vaultkeeper_core::backend::Platform::Windows
+pub enum vaultkeeper_core::backend::PresenceOperation
+pub vaultkeeper_core::backend::PresenceOperation::Delete
+pub vaultkeeper_core::backend::PresenceOperation::Read
+pub vaultkeeper_core::backend::PresenceOperation::Sign
+pub vaultkeeper_core::backend::PresenceOperation::Store
+impl vaultkeeper_core::PresenceOperation
+pub fn vaultkeeper_core::PresenceOperation::as_str(self) -> &'static str
+impl core::fmt::Display for vaultkeeper_core::PresenceOperation
+pub fn vaultkeeper_core::PresenceOperation::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct vaultkeeper_core::backend::ApprovalContext<'a>
+pub vaultkeeper_core::backend::ApprovalContext::action: &'a str
+pub vaultkeeper_core::backend::ApprovalContext::detail: &'a str
+pub struct vaultkeeper_core::backend::BackendCapabilities
+pub vaultkeeper_core::backend::BackendCapabilities::presence_enforced_operations: core::option::Option<alloc::vec::Vec<vaultkeeper_core::PresenceOperation>>
+pub vaultkeeper_core::backend::BackendCapabilities::presence_per_use: bool
+impl vaultkeeper_core::BackendCapabilities
+pub fn vaultkeeper_core::BackendCapabilities::enforces(&self, vaultkeeper_core::PresenceOperation) -> bool
+pub fn vaultkeeper_core::BackendCapabilities::none() -> Self
+pub struct vaultkeeper_core::backend::BackendRegistry
+impl vaultkeeper_core::backend::BackendRegistry
+pub fn vaultkeeper_core::backend::BackendRegistry::create(&self, &str, core::option::Option<&vaultkeeper_core::types::BackendConfig>) -> core::result::Result<alloc::boxed::Box<dyn vaultkeeper_core::backend::SecretBackend>, vaultkeeper_core::errors::VaultError>
+pub fn vaultkeeper_core::backend::BackendRegistry::has(&self, &str) -> bool
+pub fn vaultkeeper_core::backend::BackendRegistry::new() -> Self
+pub fn vaultkeeper_core::backend::BackendRegistry::register<F>(&self, &str, F) where F: core::ops::function::Fn(core::option::Option<&vaultkeeper_core::types::BackendConfig>) -> alloc::boxed::Box<dyn vaultkeeper_core::backend::SecretBackend> + core::marker::Send + core::marker::Sync + 'static
+impl core::default::Default for vaultkeeper_core::backend::BackendRegistry
+pub fn vaultkeeper_core::backend::BackendRegistry::default() -> Self
+pub struct vaultkeeper_core::backend::DpapiBackend
+impl vaultkeeper_core::backend::dpapi::DpapiBackend
+pub fn vaultkeeper_core::backend::dpapi::DpapiBackend::new(alloc::sync::Arc<dyn vaultkeeper_core::backend::HostPlatform>, core::option::Option<std::path::PathBuf>) -> Self
+impl vaultkeeper_core::backend::ListableBackend for vaultkeeper_core::backend::dpapi::DpapiBackend
+pub fn vaultkeeper_core::backend::dpapi::DpapiBackend::list<'life0, 'async_trait>(&'life0 self) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<alloc::vec::Vec<alloc::string::String>, vaultkeeper_core::errors::VaultError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+impl vaultkeeper_core::backend::SecretBackend for vaultkeeper_core::backend::dpapi::DpapiBackend
+pub fn vaultkeeper_core::backend::dpapi::DpapiBackend::as_presence_capable(&self) -> core::option::Option<&dyn vaultkeeper_core::PresenceCapableBackend>
+pub fn vaultkeeper_core::backend::dpapi::DpapiBackend::backend_type(&self) -> &str
+pub fn vaultkeeper_core::backend::dpapi::DpapiBackend::delete<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<(), vaultkeeper_core::errors::VaultError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn vaultkeeper_core::backend::dpapi::DpapiBackend::display_name(&self) -> &str
+pub fn vaultkeeper_core::backend::dpapi::DpapiBackend::exists<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<bool, vaultkeeper_core::errors::VaultError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn vaultkeeper_core::backend::dpapi::DpapiBackend::is_available<'life0, 'async_trait>(&'life0 self) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = bool> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub fn vaultkeeper_core::backend::dpapi::DpapiBackend::retrieve<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<alloc::string::String, vaultkeeper_core::errors::VaultError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn vaultkeeper_core::backend::dpapi::DpapiBackend::store<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 str, &'life2 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<(), vaultkeeper_core::errors::VaultError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
+pub struct vaultkeeper_core::backend::ExecOptions<'a>
+pub vaultkeeper_core::backend::ExecOptions::cwd: core::option::Option<&'a std::path::Path>
+pub vaultkeeper_core::backend::ExecOptions::env: core::option::Option<&'a [(&'a str, &'a str)]>
+pub vaultkeeper_core::backend::ExecOptions::stdin: core::option::Option<&'a [u8]>
+pub struct vaultkeeper_core::backend::ExecOutput
+pub vaultkeeper_core::backend::ExecOutput::exit_code: i32
+pub vaultkeeper_core::backend::ExecOutput::stderr: alloc::vec::Vec<u8>
+pub vaultkeeper_core::backend::ExecOutput::stdout: alloc::vec::Vec<u8>
+pub struct vaultkeeper_core::backend::FileBackend
+impl vaultkeeper_core::backend::file::FileBackend
+pub fn vaultkeeper_core::backend::file::FileBackend::new(alloc::sync::Arc<dyn vaultkeeper_core::backend::HostPlatform>) -> Self
+impl vaultkeeper_core::backend::ListableBackend for vaultkeeper_core::backend::file::FileBackend
+pub fn vaultkeeper_core::backend::file::FileBackend::list<'life0, 'async_trait>(&'life0 self) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<alloc::vec::Vec<alloc::string::String>, vaultkeeper_core::errors::VaultError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+impl vaultkeeper_core::backend::SecretBackend for vaultkeeper_core::backend::file::FileBackend
+pub fn vaultkeeper_core::backend::file::FileBackend::as_presence_capable(&self) -> core::option::Option<&dyn vaultkeeper_core::PresenceCapableBackend>
+pub fn vaultkeeper_core::backend::file::FileBackend::backend_type(&self) -> &str
+pub fn vaultkeeper_core::backend::file::FileBackend::delete<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<(), vaultkeeper_core::errors::VaultError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn vaultkeeper_core::backend::file::FileBackend::display_name(&self) -> &str
+pub fn vaultkeeper_core::backend::file::FileBackend::exists<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<bool, vaultkeeper_core::errors::VaultError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn vaultkeeper_core::backend::file::FileBackend::is_available<'life0, 'async_trait>(&'life0 self) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = bool> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub fn vaultkeeper_core::backend::file::FileBackend::retrieve<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<alloc::string::String, vaultkeeper_core::errors::VaultError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn vaultkeeper_core::backend::file::FileBackend::store<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 str, &'life2 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<(), vaultkeeper_core::errors::VaultError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
+impl vaultkeeper_core::backend::SigningBackend for vaultkeeper_core::backend::file::FileBackend
+pub fn vaultkeeper_core::backend::file::FileBackend::generate_signing_key<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 str, vaultkeeper_core::types::SigningAlgorithm) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<(), vaultkeeper_core::errors::VaultError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn vaultkeeper_core::backend::file::FileBackend::get_public_key<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<vaultkeeper_core::types::SigningPublicKey, vaultkeeper_core::errors::VaultError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn vaultkeeper_core::backend::file::FileBackend::sign_with_key<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 str, &'life2 [u8]) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<alloc::vec::Vec<u8>, vaultkeeper_core::errors::VaultError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
+pub struct vaultkeeper_core::backend::HttpRequest
+pub vaultkeeper_core::backend::HttpRequest::body: core::option::Option<alloc::vec::Vec<u8>>
+pub vaultkeeper_core::backend::HttpRequest::headers: alloc::vec::Vec<(alloc::string::String, alloc::string::String)>
+pub vaultkeeper_core::backend::HttpRequest::method: alloc::string::String
+pub vaultkeeper_core::backend::HttpRequest::url: alloc::string::String
+pub struct vaultkeeper_core::backend::HttpResponse
+pub vaultkeeper_core::backend::HttpResponse::body: alloc::vec::Vec<u8>
+pub vaultkeeper_core::backend::HttpResponse::headers: alloc::vec::Vec<(alloc::string::String, alloc::string::String)>
+pub vaultkeeper_core::backend::HttpResponse::status: u16
+pub struct vaultkeeper_core::backend::InMemoryBackend
+impl vaultkeeper_core::backend::in_memory::InMemoryBackend
+pub fn vaultkeeper_core::backend::in_memory::InMemoryBackend::clear(&self)
+pub fn vaultkeeper_core::backend::in_memory::InMemoryBackend::new() -> Self
+pub fn vaultkeeper_core::backend::in_memory::InMemoryBackend::size(&self) -> usize
+impl core::default::Default for vaultkeeper_core::backend::in_memory::InMemoryBackend
+pub fn vaultkeeper_core::backend::in_memory::InMemoryBackend::default() -> Self
+impl vaultkeeper_core::PresenceCapableBackend for vaultkeeper_core::backend::in_memory::InMemoryBackend
+pub fn vaultkeeper_core::backend::in_memory::InMemoryBackend::get_capabilities<'life0, 'async_trait>(&'life0 self) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<vaultkeeper_core::BackendCapabilities, vaultkeeper_core::errors::VaultError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+impl vaultkeeper_core::backend::ListableBackend for vaultkeeper_core::backend::in_memory::InMemoryBackend
+pub fn vaultkeeper_core::backend::in_memory::InMemoryBackend::list<'life0, 'async_trait>(&'life0 self) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<alloc::vec::Vec<alloc::string::String>, vaultkeeper_core::errors::VaultError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+impl vaultkeeper_core::backend::SecretBackend for vaultkeeper_core::backend::in_memory::InMemoryBackend
+pub fn vaultkeeper_core::backend::in_memory::InMemoryBackend::as_presence_capable(&self) -> core::option::Option<&dyn vaultkeeper_core::PresenceCapableBackend>
+pub fn vaultkeeper_core::backend::in_memory::InMemoryBackend::backend_type(&self) -> &str
+pub fn vaultkeeper_core::backend::in_memory::InMemoryBackend::delete<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<(), vaultkeeper_core::errors::VaultError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn vaultkeeper_core::backend::in_memory::InMemoryBackend::display_name(&self) -> &str
+pub fn vaultkeeper_core::backend::in_memory::InMemoryBackend::exists<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<bool, vaultkeeper_core::errors::VaultError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn vaultkeeper_core::backend::in_memory::InMemoryBackend::is_available<'life0, 'async_trait>(&'life0 self) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = bool> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub fn vaultkeeper_core::backend::in_memory::InMemoryBackend::retrieve<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<alloc::string::String, vaultkeeper_core::errors::VaultError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn vaultkeeper_core::backend::in_memory::InMemoryBackend::store<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 str, &'life2 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<(), vaultkeeper_core::errors::VaultError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
+impl vaultkeeper_core::backend::SigningBackend for vaultkeeper_core::backend::in_memory::InMemoryBackend
+pub fn vaultkeeper_core::backend::in_memory::InMemoryBackend::generate_signing_key<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 str, vaultkeeper_core::types::SigningAlgorithm) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<(), vaultkeeper_core::errors::VaultError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn vaultkeeper_core::backend::in_memory::InMemoryBackend::get_public_key<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<vaultkeeper_core::types::SigningPublicKey, vaultkeeper_core::errors::VaultError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn vaultkeeper_core::backend::in_memory::InMemoryBackend::sign_with_key<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 str, &'life2 [u8]) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<alloc::vec::Vec<u8>, vaultkeeper_core::errors::VaultError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
+pub struct vaultkeeper_core::backend::KeychainBackend
+impl vaultkeeper_core::backend::keychain::KeychainBackend
+pub fn vaultkeeper_core::backend::keychain::KeychainBackend::new(alloc::sync::Arc<dyn vaultkeeper_core::backend::HostPlatform>) -> Self
+impl vaultkeeper_core::backend::ListableBackend for vaultkeeper_core::backend::keychain::KeychainBackend
+pub fn vaultkeeper_core::backend::keychain::KeychainBackend::list<'life0, 'async_trait>(&'life0 self) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<alloc::vec::Vec<alloc::string::String>, vaultkeeper_core::errors::VaultError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+impl vaultkeeper_core::backend::SecretBackend for vaultkeeper_core::backend::keychain::KeychainBackend
+pub fn vaultkeeper_core::backend::keychain::KeychainBackend::as_presence_capable(&self) -> core::option::Option<&dyn vaultkeeper_core::PresenceCapableBackend>
+pub fn vaultkeeper_core::backend::keychain::KeychainBackend::backend_type(&self) -> &str
+pub fn vaultkeeper_core::backend::keychain::KeychainBackend::delete<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<(), vaultkeeper_core::errors::VaultError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn vaultkeeper_core::backend::keychain::KeychainBackend::display_name(&self) -> &str
+pub fn vaultkeeper_core::backend::keychain::KeychainBackend::exists<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<bool, vaultkeeper_core::errors::VaultError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn vaultkeeper_core::backend::keychain::KeychainBackend::is_available<'life0, 'async_trait>(&'life0 self) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = bool> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub fn vaultkeeper_core::backend::keychain::KeychainBackend::retrieve<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<alloc::string::String, vaultkeeper_core::errors::VaultError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn vaultkeeper_core::backend::keychain::KeychainBackend::store<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 str, &'life2 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<(), vaultkeeper_core::errors::VaultError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
+pub struct vaultkeeper_core::backend::SecretToolBackend
+impl vaultkeeper_core::backend::secret_tool::SecretToolBackend
+pub fn vaultkeeper_core::backend::secret_tool::SecretToolBackend::new(alloc::sync::Arc<dyn vaultkeeper_core::backend::HostPlatform>) -> Self
+impl vaultkeeper_core::backend::ListableBackend for vaultkeeper_core::backend::secret_tool::SecretToolBackend
+pub fn vaultkeeper_core::backend::secret_tool::SecretToolBackend::list<'life0, 'async_trait>(&'life0 self) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<alloc::vec::Vec<alloc::string::String>, vaultkeeper_core::errors::VaultError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+impl vaultkeeper_core::backend::SecretBackend for vaultkeeper_core::backend::secret_tool::SecretToolBackend
+pub fn vaultkeeper_core::backend::secret_tool::SecretToolBackend::as_presence_capable(&self) -> core::option::Option<&dyn vaultkeeper_core::PresenceCapableBackend>
+pub fn vaultkeeper_core::backend::secret_tool::SecretToolBackend::backend_type(&self) -> &str
+pub fn vaultkeeper_core::backend::secret_tool::SecretToolBackend::delete<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<(), vaultkeeper_core::errors::VaultError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn vaultkeeper_core::backend::secret_tool::SecretToolBackend::display_name(&self) -> &str
+pub fn vaultkeeper_core::backend::secret_tool::SecretToolBackend::exists<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<bool, vaultkeeper_core::errors::VaultError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn vaultkeeper_core::backend::secret_tool::SecretToolBackend::is_available<'life0, 'async_trait>(&'life0 self) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = bool> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub fn vaultkeeper_core::backend::secret_tool::SecretToolBackend::retrieve<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<alloc::string::String, vaultkeeper_core::errors::VaultError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn vaultkeeper_core::backend::secret_tool::SecretToolBackend::store<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 str, &'life2 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<(), vaultkeeper_core::errors::VaultError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
+pub struct vaultkeeper_core::backend::YubikeyBackend
+impl vaultkeeper_core::backend::yubikey::YubikeyBackend
+pub fn vaultkeeper_core::backend::yubikey::YubikeyBackend::new(alloc::sync::Arc<dyn vaultkeeper_core::backend::HostPlatform>, bool) -> Self
+impl vaultkeeper_core::PresenceCapableBackend for vaultkeeper_core::backend::yubikey::YubikeyBackend
+pub fn vaultkeeper_core::backend::yubikey::YubikeyBackend::get_capabilities<'life0, 'async_trait>(&'life0 self) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<vaultkeeper_core::BackendCapabilities, vaultkeeper_core::errors::VaultError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+impl vaultkeeper_core::backend::ListableBackend for vaultkeeper_core::backend::yubikey::YubikeyBackend
+pub fn vaultkeeper_core::backend::yubikey::YubikeyBackend::list<'life0, 'async_trait>(&'life0 self) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<alloc::vec::Vec<alloc::string::String>, vaultkeeper_core::errors::VaultError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+impl vaultkeeper_core::backend::SecretBackend for vaultkeeper_core::backend::yubikey::YubikeyBackend
+pub fn vaultkeeper_core::backend::yubikey::YubikeyBackend::as_presence_capable(&self) -> core::option::Option<&dyn vaultkeeper_core::PresenceCapableBackend>
+pub fn vaultkeeper_core::backend::yubikey::YubikeyBackend::backend_type(&self) -> &str
+pub fn vaultkeeper_core::backend::yubikey::YubikeyBackend::delete<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<(), vaultkeeper_core::errors::VaultError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn vaultkeeper_core::backend::yubikey::YubikeyBackend::display_name(&self) -> &str
+pub fn vaultkeeper_core::backend::yubikey::YubikeyBackend::exists<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<bool, vaultkeeper_core::errors::VaultError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn vaultkeeper_core::backend::yubikey::YubikeyBackend::is_available<'life0, 'async_trait>(&'life0 self) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = bool> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub fn vaultkeeper_core::backend::yubikey::YubikeyBackend::retrieve<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<alloc::string::String, vaultkeeper_core::errors::VaultError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn vaultkeeper_core::backend::yubikey::YubikeyBackend::store<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 str, &'life2 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<(), vaultkeeper_core::errors::VaultError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
+pub trait vaultkeeper_core::backend::HostPlatform: core::marker::Send + core::marker::Sync
+pub fn vaultkeeper_core::backend::HostPlatform::config_dir(&self) -> &std::path::Path
+pub fn vaultkeeper_core::backend::HostPlatform::delete_file<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 std::path::Path) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<(), vaultkeeper_core::errors::VaultError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn vaultkeeper_core::backend::HostPlatform::exec<'life0, 'life1, 'life2, 'life3, 'life4, 'async_trait>(&'life0 self, &'life1 str, &'life2 [&'life3 str], vaultkeeper_core::backend::ExecOptions<'life4>) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<vaultkeeper_core::backend::ExecOutput, vaultkeeper_core::errors::VaultError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait, 'life3: 'async_trait, 'life4: 'async_trait
+pub fn vaultkeeper_core::backend::HostPlatform::file_exists<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 std::path::Path) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<bool, vaultkeeper_core::errors::VaultError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn vaultkeeper_core::backend::HostPlatform::http_fetch<'life0, 'async_trait>(&'life0 self, vaultkeeper_core::backend::HttpRequest) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<vaultkeeper_core::backend::HttpResponse, vaultkeeper_core::errors::VaultError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub fn vaultkeeper_core::backend::HostPlatform::list_dir<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 std::path::Path) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<alloc::vec::Vec<alloc::string::String>, vaultkeeper_core::errors::VaultError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn vaultkeeper_core::backend::HostPlatform::platform(&self) -> vaultkeeper_core::backend::Platform
+pub fn vaultkeeper_core::backend::HostPlatform::prompt_approval<'life0, 'life1, 'async_trait>(&'life0 self, vaultkeeper_core::backend::ApprovalContext<'life1>) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<bool, vaultkeeper_core::errors::VaultError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn vaultkeeper_core::backend::HostPlatform::read_file<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 std::path::Path) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<alloc::vec::Vec<u8>, vaultkeeper_core::errors::VaultError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn vaultkeeper_core::backend::HostPlatform::rename_file<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 std::path::Path, &'life2 std::path::Path) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<(), vaultkeeper_core::errors::VaultError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
+pub fn vaultkeeper_core::backend::HostPlatform::try_create_lock_file<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 std::path::Path, &'life2 [u8]) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<(), vaultkeeper_core::errors::VaultError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
+pub fn vaultkeeper_core::backend::HostPlatform::write_file<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 std::path::Path, &'life2 [u8], u32) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<(), vaultkeeper_core::errors::VaultError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
+pub trait vaultkeeper_core::backend::ListableBackend: vaultkeeper_core::backend::SecretBackend
+pub fn vaultkeeper_core::backend::ListableBackend::list<'life0, 'async_trait>(&'life0 self) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<alloc::vec::Vec<alloc::string::String>, vaultkeeper_core::errors::VaultError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+impl vaultkeeper_core::backend::ListableBackend for vaultkeeper_core::backend::dpapi::DpapiBackend
+pub fn vaultkeeper_core::backend::dpapi::DpapiBackend::list<'life0, 'async_trait>(&'life0 self) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<alloc::vec::Vec<alloc::string::String>, vaultkeeper_core::errors::VaultError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+impl vaultkeeper_core::backend::ListableBackend for vaultkeeper_core::backend::file::FileBackend
+pub fn vaultkeeper_core::backend::file::FileBackend::list<'life0, 'async_trait>(&'life0 self) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<alloc::vec::Vec<alloc::string::String>, vaultkeeper_core::errors::VaultError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+impl vaultkeeper_core::backend::ListableBackend for vaultkeeper_core::backend::in_memory::InMemoryBackend
+pub fn vaultkeeper_core::backend::in_memory::InMemoryBackend::list<'life0, 'async_trait>(&'life0 self) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<alloc::vec::Vec<alloc::string::String>, vaultkeeper_core::errors::VaultError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+impl vaultkeeper_core::backend::ListableBackend for vaultkeeper_core::backend::keychain::KeychainBackend
+pub fn vaultkeeper_core::backend::keychain::KeychainBackend::list<'life0, 'async_trait>(&'life0 self) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<alloc::vec::Vec<alloc::string::String>, vaultkeeper_core::errors::VaultError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+impl vaultkeeper_core::backend::ListableBackend for vaultkeeper_core::backend::secret_tool::SecretToolBackend
+pub fn vaultkeeper_core::backend::secret_tool::SecretToolBackend::list<'life0, 'async_trait>(&'life0 self) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<alloc::vec::Vec<alloc::string::String>, vaultkeeper_core::errors::VaultError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+impl vaultkeeper_core::backend::ListableBackend for vaultkeeper_core::backend::yubikey::YubikeyBackend
+pub fn vaultkeeper_core::backend::yubikey::YubikeyBackend::list<'life0, 'async_trait>(&'life0 self) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<alloc::vec::Vec<alloc::string::String>, vaultkeeper_core::errors::VaultError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub trait vaultkeeper_core::backend::PresenceCapableBackend: vaultkeeper_core::backend::SecretBackend
+pub fn vaultkeeper_core::backend::PresenceCapableBackend::get_capabilities<'life0, 'async_trait>(&'life0 self) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<vaultkeeper_core::BackendCapabilities, vaultkeeper_core::errors::VaultError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+impl vaultkeeper_core::PresenceCapableBackend for vaultkeeper_core::backend::in_memory::InMemoryBackend
+pub fn vaultkeeper_core::backend::in_memory::InMemoryBackend::get_capabilities<'life0, 'async_trait>(&'life0 self) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<vaultkeeper_core::BackendCapabilities, vaultkeeper_core::errors::VaultError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+impl vaultkeeper_core::PresenceCapableBackend for vaultkeeper_core::backend::yubikey::YubikeyBackend
+pub fn vaultkeeper_core::backend::yubikey::YubikeyBackend::get_capabilities<'life0, 'async_trait>(&'life0 self) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<vaultkeeper_core::BackendCapabilities, vaultkeeper_core::errors::VaultError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub trait vaultkeeper_core::backend::SecretBackend: core::marker::Send + core::marker::Sync
+pub fn vaultkeeper_core::backend::SecretBackend::as_presence_capable(&self) -> core::option::Option<&dyn vaultkeeper_core::PresenceCapableBackend>
+pub fn vaultkeeper_core::backend::SecretBackend::backend_type(&self) -> &str
+pub fn vaultkeeper_core::backend::SecretBackend::delete<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<(), vaultkeeper_core::errors::VaultError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn vaultkeeper_core::backend::SecretBackend::display_name(&self) -> &str
+pub fn vaultkeeper_core::backend::SecretBackend::exists<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<bool, vaultkeeper_core::errors::VaultError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn vaultkeeper_core::backend::SecretBackend::is_available<'life0, 'async_trait>(&'life0 self) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = bool> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub fn vaultkeeper_core::backend::SecretBackend::retrieve<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<alloc::string::String, vaultkeeper_core::errors::VaultError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn vaultkeeper_core::backend::SecretBackend::store<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 str, &'life2 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<(), vaultkeeper_core::errors::VaultError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
+impl vaultkeeper_core::backend::SecretBackend for vaultkeeper_core::backend::dpapi::DpapiBackend
+pub fn vaultkeeper_core::backend::dpapi::DpapiBackend::as_presence_capable(&self) -> core::option::Option<&dyn vaultkeeper_core::PresenceCapableBackend>
+pub fn vaultkeeper_core::backend::dpapi::DpapiBackend::backend_type(&self) -> &str
+pub fn vaultkeeper_core::backend::dpapi::DpapiBackend::delete<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<(), vaultkeeper_core::errors::VaultError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn vaultkeeper_core::backend::dpapi::DpapiBackend::display_name(&self) -> &str
+pub fn vaultkeeper_core::backend::dpapi::DpapiBackend::exists<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<bool, vaultkeeper_core::errors::VaultError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn vaultkeeper_core::backend::dpapi::DpapiBackend::is_available<'life0, 'async_trait>(&'life0 self) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = bool> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub fn vaultkeeper_core::backend::dpapi::DpapiBackend::retrieve<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<alloc::string::String, vaultkeeper_core::errors::VaultError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn vaultkeeper_core::backend::dpapi::DpapiBackend::store<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 str, &'life2 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<(), vaultkeeper_core::errors::VaultError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
+impl vaultkeeper_core::backend::SecretBackend for vaultkeeper_core::backend::file::FileBackend
+pub fn vaultkeeper_core::backend::file::FileBackend::as_presence_capable(&self) -> core::option::Option<&dyn vaultkeeper_core::PresenceCapableBackend>
+pub fn vaultkeeper_core::backend::file::FileBackend::backend_type(&self) -> &str
+pub fn vaultkeeper_core::backend::file::FileBackend::delete<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<(), vaultkeeper_core::errors::VaultError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn vaultkeeper_core::backend::file::FileBackend::display_name(&self) -> &str
+pub fn vaultkeeper_core::backend::file::FileBackend::exists<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<bool, vaultkeeper_core::errors::VaultError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn vaultkeeper_core::backend::file::FileBackend::is_available<'life0, 'async_trait>(&'life0 self) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = bool> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub fn vaultkeeper_core::backend::file::FileBackend::retrieve<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<alloc::string::String, vaultkeeper_core::errors::VaultError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn vaultkeeper_core::backend::file::FileBackend::store<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 str, &'life2 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<(), vaultkeeper_core::errors::VaultError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
+impl vaultkeeper_core::backend::SecretBackend for vaultkeeper_core::backend::in_memory::InMemoryBackend
+pub fn vaultkeeper_core::backend::in_memory::InMemoryBackend::as_presence_capable(&self) -> core::option::Option<&dyn vaultkeeper_core::PresenceCapableBackend>
+pub fn vaultkeeper_core::backend::in_memory::InMemoryBackend::backend_type(&self) -> &str
+pub fn vaultkeeper_core::backend::in_memory::InMemoryBackend::delete<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<(), vaultkeeper_core::errors::VaultError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn vaultkeeper_core::backend::in_memory::InMemoryBackend::display_name(&self) -> &str
+pub fn vaultkeeper_core::backend::in_memory::InMemoryBackend::exists<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<bool, vaultkeeper_core::errors::VaultError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn vaultkeeper_core::backend::in_memory::InMemoryBackend::is_available<'life0, 'async_trait>(&'life0 self) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = bool> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub fn vaultkeeper_core::backend::in_memory::InMemoryBackend::retrieve<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<alloc::string::String, vaultkeeper_core::errors::VaultError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn vaultkeeper_core::backend::in_memory::InMemoryBackend::store<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 str, &'life2 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<(), vaultkeeper_core::errors::VaultError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
+impl vaultkeeper_core::backend::SecretBackend for vaultkeeper_core::backend::keychain::KeychainBackend
+pub fn vaultkeeper_core::backend::keychain::KeychainBackend::as_presence_capable(&self) -> core::option::Option<&dyn vaultkeeper_core::PresenceCapableBackend>
+pub fn vaultkeeper_core::backend::keychain::KeychainBackend::backend_type(&self) -> &str
+pub fn vaultkeeper_core::backend::keychain::KeychainBackend::delete<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<(), vaultkeeper_core::errors::VaultError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn vaultkeeper_core::backend::keychain::KeychainBackend::display_name(&self) -> &str
+pub fn vaultkeeper_core::backend::keychain::KeychainBackend::exists<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<bool, vaultkeeper_core::errors::VaultError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn vaultkeeper_core::backend::keychain::KeychainBackend::is_available<'life0, 'async_trait>(&'life0 self) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = bool> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub fn vaultkeeper_core::backend::keychain::KeychainBackend::retrieve<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<alloc::string::String, vaultkeeper_core::errors::VaultError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn vaultkeeper_core::backend::keychain::KeychainBackend::store<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 str, &'life2 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<(), vaultkeeper_core::errors::VaultError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
+impl vaultkeeper_core::backend::SecretBackend for vaultkeeper_core::backend::secret_tool::SecretToolBackend
+pub fn vaultkeeper_core::backend::secret_tool::SecretToolBackend::as_presence_capable(&self) -> core::option::Option<&dyn vaultkeeper_core::PresenceCapableBackend>
+pub fn vaultkeeper_core::backend::secret_tool::SecretToolBackend::backend_type(&self) -> &str
+pub fn vaultkeeper_core::backend::secret_tool::SecretToolBackend::delete<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<(), vaultkeeper_core::errors::VaultError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn vaultkeeper_core::backend::secret_tool::SecretToolBackend::display_name(&self) -> &str
+pub fn vaultkeeper_core::backend::secret_tool::SecretToolBackend::exists<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<bool, vaultkeeper_core::errors::VaultError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn vaultkeeper_core::backend::secret_tool::SecretToolBackend::is_available<'life0, 'async_trait>(&'life0 self) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = bool> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub fn vaultkeeper_core::backend::secret_tool::SecretToolBackend::retrieve<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<alloc::string::String, vaultkeeper_core::errors::VaultError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn vaultkeeper_core::backend::secret_tool::SecretToolBackend::store<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 str, &'life2 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<(), vaultkeeper_core::errors::VaultError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
+impl vaultkeeper_core::backend::SecretBackend for vaultkeeper_core::backend::yubikey::YubikeyBackend
+pub fn vaultkeeper_core::backend::yubikey::YubikeyBackend::as_presence_capable(&self) -> core::option::Option<&dyn vaultkeeper_core::PresenceCapableBackend>
+pub fn vaultkeeper_core::backend::yubikey::YubikeyBackend::backend_type(&self) -> &str
+pub fn vaultkeeper_core::backend::yubikey::YubikeyBackend::delete<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<(), vaultkeeper_core::errors::VaultError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn vaultkeeper_core::backend::yubikey::YubikeyBackend::display_name(&self) -> &str
+pub fn vaultkeeper_core::backend::yubikey::YubikeyBackend::exists<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<bool, vaultkeeper_core::errors::VaultError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn vaultkeeper_core::backend::yubikey::YubikeyBackend::is_available<'life0, 'async_trait>(&'life0 self) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = bool> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub fn vaultkeeper_core::backend::yubikey::YubikeyBackend::retrieve<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<alloc::string::String, vaultkeeper_core::errors::VaultError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn vaultkeeper_core::backend::yubikey::YubikeyBackend::store<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 str, &'life2 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<(), vaultkeeper_core::errors::VaultError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
+pub trait vaultkeeper_core::backend::SigningBackend: vaultkeeper_core::backend::SecretBackend
+pub fn vaultkeeper_core::backend::SigningBackend::generate_signing_key<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 str, vaultkeeper_core::types::SigningAlgorithm) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<(), vaultkeeper_core::errors::VaultError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn vaultkeeper_core::backend::SigningBackend::get_public_key<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<vaultkeeper_core::types::SigningPublicKey, vaultkeeper_core::errors::VaultError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn vaultkeeper_core::backend::SigningBackend::sign_with_key<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 str, &'life2 [u8]) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<alloc::vec::Vec<u8>, vaultkeeper_core::errors::VaultError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
+impl vaultkeeper_core::backend::SigningBackend for vaultkeeper_core::backend::file::FileBackend
+pub fn vaultkeeper_core::backend::file::FileBackend::generate_signing_key<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 str, vaultkeeper_core::types::SigningAlgorithm) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<(), vaultkeeper_core::errors::VaultError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn vaultkeeper_core::backend::file::FileBackend::get_public_key<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<vaultkeeper_core::types::SigningPublicKey, vaultkeeper_core::errors::VaultError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn vaultkeeper_core::backend::file::FileBackend::sign_with_key<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 str, &'life2 [u8]) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<alloc::vec::Vec<u8>, vaultkeeper_core::errors::VaultError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
+impl vaultkeeper_core::backend::SigningBackend for vaultkeeper_core::backend::in_memory::InMemoryBackend
+pub fn vaultkeeper_core::backend::in_memory::InMemoryBackend::generate_signing_key<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 str, vaultkeeper_core::types::SigningAlgorithm) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<(), vaultkeeper_core::errors::VaultError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn vaultkeeper_core::backend::in_memory::InMemoryBackend::get_public_key<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<vaultkeeper_core::types::SigningPublicKey, vaultkeeper_core::errors::VaultError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn vaultkeeper_core::backend::in_memory::InMemoryBackend::sign_with_key<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 str, &'life2 [u8]) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<alloc::vec::Vec<u8>, vaultkeeper_core::errors::VaultError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
+pub async fn vaultkeeper_core::backend::get_backend_capabilities(&dyn vaultkeeper_core::backend::SecretBackend) -> core::result::Result<vaultkeeper_core::BackendCapabilities, vaultkeeper_core::errors::VaultError>
+pub fn vaultkeeper_core::backend::is_presence_capable_backend(&dyn vaultkeeper_core::backend::SecretBackend) -> bool
+pub mod vaultkeeper_core::config
+pub const vaultkeeper_core::config::DEFAULT_BACKEND_TYPE: &str
+pub fn vaultkeeper_core::config::default_backend_type_for_platform(vaultkeeper_core::backend::Platform) -> &'static str
+pub fn vaultkeeper_core::config::default_config() -> vaultkeeper_core::types::VaultConfig
+pub async fn vaultkeeper_core::config::load_config(&dyn vaultkeeper_core::backend::HostPlatform) -> core::result::Result<vaultkeeper_core::types::VaultConfig, vaultkeeper_core::errors::VaultError>
+pub fn vaultkeeper_core::config::load_config_from_str(&str) -> core::result::Result<vaultkeeper_core::types::VaultConfig, vaultkeeper_core::errors::VaultError>
+pub fn vaultkeeper_core::config::validate_config(&vaultkeeper_core::types::VaultConfig) -> core::result::Result<(), vaultkeeper_core::errors::VaultError>
+pub mod vaultkeeper_core::doctor
+pub async fn vaultkeeper_core::doctor::run_doctor(&dyn vaultkeeper_core::backend::HostPlatform, core::option::Option<&[vaultkeeper_core::types::BackendConfig]>) -> vaultkeeper_core::types::PreflightResult
+pub type vaultkeeper_core::doctor::DoctorCheckFn = alloc::boxed::Box<(dyn core::ops::function::Fn(&str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = vaultkeeper_core::types::PreflightCheck> + core::marker::Send)>> + core::marker::Send + core::marker::Sync)>
+pub mod vaultkeeper_core::errors
+pub enum vaultkeeper_core::errors::ExecutableTrustRequiredReason
+pub vaultkeeper_core::errors::ExecutableTrustRequiredReason::ConflictingChoice
+pub vaultkeeper_core::errors::ExecutableTrustRequiredReason::LegacyDevSentinel
+pub vaultkeeper_core::errors::ExecutableTrustRequiredReason::MissingChoice
+impl vaultkeeper_core::errors::ExecutableTrustRequiredReason
+pub fn vaultkeeper_core::errors::ExecutableTrustRequiredReason::as_str(self) -> &'static str
+pub enum vaultkeeper_core::errors::VaultError
+pub vaultkeeper_core::errors::VaultError::AccessorConsumed
+pub vaultkeeper_core::errors::VaultError::AccessorConsumed::message: alloc::string::String
+pub vaultkeeper_core::errors::VaultError::AuthorizationDenied
+pub vaultkeeper_core::errors::VaultError::AuthorizationDenied::message: alloc::string::String
+pub vaultkeeper_core::errors::VaultError::BackendLocked
+pub vaultkeeper_core::errors::VaultError::BackendLocked::interactive: bool
+pub vaultkeeper_core::errors::VaultError::BackendLocked::message: alloc::string::String
+pub vaultkeeper_core::errors::VaultError::BackendUnavailable
+pub vaultkeeper_core::errors::VaultError::BackendUnavailable::attempted: alloc::vec::Vec<alloc::string::String>
+pub vaultkeeper_core::errors::VaultError::BackendUnavailable::message: alloc::string::String
+pub vaultkeeper_core::errors::VaultError::BackendUnavailable::reason: alloc::string::String
+pub vaultkeeper_core::errors::VaultError::ConfigParse
+pub vaultkeeper_core::errors::VaultError::ConfigParse::column: core::option::Option<u32>
+pub vaultkeeper_core::errors::VaultError::ConfigParse::line: core::option::Option<u32>
+pub vaultkeeper_core::errors::VaultError::ConfigParse::message: alloc::string::String
+pub vaultkeeper_core::errors::VaultError::ConfigParse::path: alloc::string::String
+pub vaultkeeper_core::errors::VaultError::ConfigValidation
+pub vaultkeeper_core::errors::VaultError::ConfigValidation::config_file_path: core::option::Option<alloc::string::String>
+pub vaultkeeper_core::errors::VaultError::ConfigValidation::field: alloc::string::String
+pub vaultkeeper_core::errors::VaultError::ConfigValidation::message: alloc::string::String
+pub vaultkeeper_core::errors::VaultError::Decryption
+pub vaultkeeper_core::errors::VaultError::Decryption::message: alloc::string::String
+pub vaultkeeper_core::errors::VaultError::Decryption::path: alloc::string::String
+pub vaultkeeper_core::errors::VaultError::DeviceNotPresent
+pub vaultkeeper_core::errors::VaultError::DeviceNotPresent::message: alloc::string::String
+pub vaultkeeper_core::errors::VaultError::DeviceNotPresent::timeout_ms: u64
+pub vaultkeeper_core::errors::VaultError::Exec
+pub vaultkeeper_core::errors::VaultError::Exec::command: alloc::string::String
+pub vaultkeeper_core::errors::VaultError::Exec::message: alloc::string::String
+pub vaultkeeper_core::errors::VaultError::ExecutableTrustRequired
+pub vaultkeeper_core::errors::VaultError::ExecutableTrustRequired::message: alloc::string::String
+pub vaultkeeper_core::errors::VaultError::ExecutableTrustRequired::reason: vaultkeeper_core::errors::ExecutableTrustRequiredReason
+pub vaultkeeper_core::errors::VaultError::Fetch
+pub vaultkeeper_core::errors::VaultError::Fetch::message: alloc::string::String
+pub vaultkeeper_core::errors::VaultError::Fetch::url: alloc::string::String
+pub vaultkeeper_core::errors::VaultError::Filesystem
+pub vaultkeeper_core::errors::VaultError::Filesystem::code: core::option::Option<alloc::string::String>
+pub vaultkeeper_core::errors::VaultError::Filesystem::message: alloc::string::String
+pub vaultkeeper_core::errors::VaultError::Filesystem::path: alloc::string::String
+pub vaultkeeper_core::errors::VaultError::Filesystem::permission: alloc::string::String
+pub vaultkeeper_core::errors::VaultError::IdentityMismatch
+pub vaultkeeper_core::errors::VaultError::IdentityMismatch::current_hash: alloc::string::String
+pub vaultkeeper_core::errors::VaultError::IdentityMismatch::message: alloc::string::String
+pub vaultkeeper_core::errors::VaultError::IdentityMismatch::previous_hash: alloc::string::String
+pub vaultkeeper_core::errors::VaultError::InvalidAlgorithm
+pub vaultkeeper_core::errors::VaultError::InvalidAlgorithm::algorithm: alloc::string::String
+pub vaultkeeper_core::errors::VaultError::InvalidAlgorithm::allowed: alloc::vec::Vec<alloc::string::String>
+pub vaultkeeper_core::errors::VaultError::InvalidAlgorithm::message: alloc::string::String
+pub vaultkeeper_core::errors::VaultError::InvalidKeyMaterial
+pub vaultkeeper_core::errors::VaultError::InvalidKeyMaterial::message: alloc::string::String
+pub vaultkeeper_core::errors::VaultError::InvalidToken
+pub vaultkeeper_core::errors::VaultError::InvalidToken::message: alloc::string::String
+pub vaultkeeper_core::errors::VaultError::KeyRevoked
+pub vaultkeeper_core::errors::VaultError::KeyRevoked::message: alloc::string::String
+pub vaultkeeper_core::errors::VaultError::KeyRotated
+pub vaultkeeper_core::errors::VaultError::KeyRotated::message: alloc::string::String
+pub vaultkeeper_core::errors::VaultError::LockingNotSupported
+pub vaultkeeper_core::errors::VaultError::LockingNotSupported::message: alloc::string::String
+pub vaultkeeper_core::errors::VaultError::MaterializeModeUnsupported
+pub vaultkeeper_core::errors::VaultError::MaterializeModeUnsupported::message: alloc::string::String
+pub vaultkeeper_core::errors::VaultError::MaterializeModeUnsupported::mode: alloc::string::String
+pub vaultkeeper_core::errors::VaultError::NotCapable
+pub vaultkeeper_core::errors::VaultError::NotCapable::backend_type: alloc::string::String
+pub vaultkeeper_core::errors::VaultError::NotCapable::capability: alloc::string::String
+pub vaultkeeper_core::errors::VaultError::NotCapable::message: alloc::string::String
+pub vaultkeeper_core::errors::VaultError::Other(alloc::string::String)
+pub vaultkeeper_core::errors::VaultError::PluginNotFound
+pub vaultkeeper_core::errors::VaultError::PluginNotFound::install_url: alloc::string::String
+pub vaultkeeper_core::errors::VaultError::PluginNotFound::message: alloc::string::String
+pub vaultkeeper_core::errors::VaultError::PluginNotFound::plugin: alloc::string::String
+pub vaultkeeper_core::errors::VaultError::PresenceDeclined
+pub vaultkeeper_core::errors::VaultError::PresenceDeclined::backend_type: alloc::string::String
+pub vaultkeeper_core::errors::VaultError::PresenceDeclined::message: alloc::string::String
+pub vaultkeeper_core::errors::VaultError::PresenceTimeout
+pub vaultkeeper_core::errors::VaultError::PresenceTimeout::backend_type: alloc::string::String
+pub vaultkeeper_core::errors::VaultError::PresenceTimeout::message: alloc::string::String
+pub vaultkeeper_core::errors::VaultError::PresenceTimeout::timeout_ms: u64
+pub vaultkeeper_core::errors::VaultError::RotationInProgress
+pub vaultkeeper_core::errors::VaultError::RotationInProgress::message: alloc::string::String
+pub vaultkeeper_core::errors::VaultError::SecretNotFound
+pub vaultkeeper_core::errors::VaultError::SecretNotFound::message: alloc::string::String
+pub vaultkeeper_core::errors::VaultError::Setup
+pub vaultkeeper_core::errors::VaultError::Setup::dependency: alloc::string::String
+pub vaultkeeper_core::errors::VaultError::Setup::message: alloc::string::String
+pub vaultkeeper_core::errors::VaultError::SigningKeyAlreadyExists
+pub vaultkeeper_core::errors::VaultError::SigningKeyAlreadyExists::id: alloc::string::String
+pub vaultkeeper_core::errors::VaultError::SigningKeyAlreadyExists::message: alloc::string::String
+pub vaultkeeper_core::errors::VaultError::SigningKeyNotFound
+pub vaultkeeper_core::errors::VaultError::SigningKeyNotFound::id: alloc::string::String
+pub vaultkeeper_core::errors::VaultError::SigningKeyNotFound::message: alloc::string::String
+pub vaultkeeper_core::errors::VaultError::SigningNotSupported
+pub vaultkeeper_core::errors::VaultError::SigningNotSupported::backend_type: alloc::string::String
+pub vaultkeeper_core::errors::VaultError::SigningNotSupported::built_in_signing_backends: alloc::vec::Vec<alloc::string::String>
+pub vaultkeeper_core::errors::VaultError::SigningNotSupported::message: alloc::string::String
+pub vaultkeeper_core::errors::VaultError::TokenExpired
+pub vaultkeeper_core::errors::VaultError::TokenExpired::can_refresh: bool
+pub vaultkeeper_core::errors::VaultError::TokenExpired::message: alloc::string::String
+pub vaultkeeper_core::errors::VaultError::TokenRevoked
+pub vaultkeeper_core::errors::VaultError::TokenRevoked::message: alloc::string::String
+pub vaultkeeper_core::errors::VaultError::UnknownBackendType
+pub vaultkeeper_core::errors::VaultError::UnknownBackendType::backend_type: alloc::string::String
+pub vaultkeeper_core::errors::VaultError::UnknownBackendType::config_file_path: core::option::Option<alloc::string::String>
+pub vaultkeeper_core::errors::VaultError::UnknownBackendType::field: alloc::string::String
+pub vaultkeeper_core::errors::VaultError::UnknownBackendType::known_backend_types: alloc::vec::Vec<alloc::string::String>
+pub vaultkeeper_core::errors::VaultError::UnknownBackendType::message: alloc::string::String
+pub vaultkeeper_core::errors::VaultError::UsageLimitExceeded
+pub vaultkeeper_core::errors::VaultError::UsageLimitExceeded::message: alloc::string::String
+impl vaultkeeper_core::errors::VaultError
+pub fn vaultkeeper_core::errors::VaultError::with_config_file_path(self, impl core::convert::Into<alloc::string::String>) -> Self
+pub const vaultkeeper_core::errors::ALL_ERROR_CODES: &[&str]
+pub fn vaultkeeper_core::errors::vault_error_code(&vaultkeeper_core::errors::VaultError) -> &'static str
+pub fn vaultkeeper_core::errors::vault_error_fields(&vaultkeeper_core::errors::VaultError) -> serde_json::map::Map<alloc::string::String, serde_json::value::Value>
+pub mod vaultkeeper_core::identity
+pub mod vaultkeeper_core::identity::handles
+pub enum vaultkeeper_core::identity::handles::StoredClaims
+pub vaultkeeper_core::identity::handles::StoredClaims::Secret(alloc::boxed::Box<vaultkeeper_core::types::VaultClaims>)
+pub vaultkeeper_core::identity::handles::StoredClaims::Signing(vaultkeeper_core::types::SigningClaims)
+impl vaultkeeper_core::identity::handles::StoredClaims
+pub fn vaultkeeper_core::identity::handles::StoredClaims::is_signing(&self) -> bool
+pub struct vaultkeeper_core::identity::handles::HandleId(_)
+impl vaultkeeper_core::identity::handles::HandleId
+pub fn vaultkeeper_core::identity::handles::HandleId::as_str(&self) -> &str
+pub fn vaultkeeper_core::identity::handles::HandleId::redacted(&self) -> alloc::string::String
+impl core::convert::From<alloc::string::String> for vaultkeeper_core::identity::handles::HandleId
+pub fn vaultkeeper_core::identity::handles::HandleId::from(alloc::string::String) -> Self
+impl core::convert::From<vaultkeeper_core::identity::handles::HandleId> for alloc::string::String
+pub fn alloc::string::String::from(vaultkeeper_core::identity::handles::HandleId) -> Self
+impl core::fmt::Debug for vaultkeeper_core::identity::handles::HandleId
+pub fn vaultkeeper_core::identity::handles::HandleId::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for vaultkeeper_core::identity::handles::HandleId
+pub fn vaultkeeper_core::identity::handles::HandleId::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct vaultkeeper_core::identity::handles::HandleTable
+impl vaultkeeper_core::identity::handles::HandleTable
+pub fn vaultkeeper_core::identity::handles::HandleTable::current_usage(&self, &str) -> u64
+pub fn vaultkeeper_core::identity::handles::HandleTable::insert_secret(&mut self, vaultkeeper_core::types::VaultClaims, core::option::Option<u64>) -> vaultkeeper_core::identity::handles::HandleId
+pub fn vaultkeeper_core::identity::handles::HandleTable::is_empty(&self) -> bool
+pub fn vaultkeeper_core::identity::handles::HandleTable::len(&self) -> usize
+pub fn vaultkeeper_core::identity::handles::HandleTable::new() -> Self
+pub fn vaultkeeper_core::identity::handles::HandleTable::read_secret(&mut self, &vaultkeeper_core::identity::handles::HandleId) -> core::result::Result<zeroize::Zeroizing<alloc::string::String>, vaultkeeper_core::errors::VaultError>
+pub fn vaultkeeper_core::identity::handles::HandleTable::record_usage(&mut self, &str) -> u64
+pub fn vaultkeeper_core::identity::handles::HandleTable::release(&mut self, &vaultkeeper_core::identity::handles::HandleId) -> bool
+pub fn vaultkeeper_core::identity::handles::HandleTable::resolve_secret_claims(&mut self, &vaultkeeper_core::identity::handles::HandleId) -> core::result::Result<vaultkeeper_core::types::VaultClaims, vaultkeeper_core::errors::VaultError>
+pub fn vaultkeeper_core::identity::handles::HandleTable::resolve_signing_claims(&mut self, &vaultkeeper_core::identity::handles::HandleId) -> core::result::Result<vaultkeeper_core::types::SigningClaims, vaultkeeper_core::errors::VaultError>
+pub fn vaultkeeper_core::identity::handles::HandleTable::sweep_expired(&mut self) -> usize
+pub const vaultkeeper_core::identity::handles::HANDLE_TABLE_MAX_SIZE: usize
+pub mod vaultkeeper_core::identity::hash
+pub fn vaultkeeper_core::identity::hash::hash_bytes(&[u8]) -> alloc::string::String
+pub async fn vaultkeeper_core::identity::hash::hash_executable(&dyn vaultkeeper_core::backend::HostPlatform, &std::path::Path) -> core::result::Result<alloc::string::String, vaultkeeper_core::errors::VaultError>
+pub mod vaultkeeper_core::identity::manifest
+pub fn vaultkeeper_core::identity::manifest::add_trusted_hash(&vaultkeeper_core::identity::TrustManifest, &str, &str) -> vaultkeeper_core::identity::TrustManifest
+pub fn vaultkeeper_core::identity::manifest::is_trusted(&vaultkeeper_core::identity::TrustManifest, &str, &str) -> bool
+pub async fn vaultkeeper_core::identity::manifest::load_manifest(&dyn vaultkeeper_core::backend::HostPlatform) -> core::result::Result<vaultkeeper_core::identity::TrustManifest, vaultkeeper_core::errors::VaultError>
+pub async fn vaultkeeper_core::identity::manifest::save_manifest(&dyn vaultkeeper_core::backend::HostPlatform, &vaultkeeper_core::identity::TrustManifest) -> core::result::Result<(), vaultkeeper_core::errors::VaultError>
+pub mod vaultkeeper_core::identity::trust
+pub struct vaultkeeper_core::identity::trust::PendingTrust
+pub vaultkeeper_core::identity::trust::PendingTrust::approved_hashes: alloc::vec::Vec<alloc::string::String>
+pub vaultkeeper_core::identity::trust::PendingTrust::identity: vaultkeeper_core::identity::IdentityInfo
+pub vaultkeeper_core::identity::trust::PendingTrust::reason: alloc::string::String
+pub vaultkeeper_core::identity::trust::PendingTrust::tofu_conflict: bool
+impl vaultkeeper_core::identity::trust::PendingTrust
+pub async fn vaultkeeper_core::identity::trust::PendingTrust::commit(&self, &dyn vaultkeeper_core::backend::HostPlatform) -> core::result::Result<(), vaultkeeper_core::errors::VaultError>
+pub async fn vaultkeeper_core::identity::trust::verify_trust(&dyn vaultkeeper_core::backend::HostPlatform, &str, core::option::Option<&vaultkeeper_core::identity::TrustOptions>) -> core::result::Result<vaultkeeper_core::identity::TrustVerificationResult, vaultkeeper_core::errors::VaultError>
+pub async fn vaultkeeper_core::identity::trust::verify_trust_pending(&dyn vaultkeeper_core::backend::HostPlatform, &str, core::option::Option<&vaultkeeper_core::identity::TrustOptions>) -> core::result::Result<vaultkeeper_core::identity::trust::PendingTrust, vaultkeeper_core::errors::VaultError>
+pub enum vaultkeeper_core::identity::StoredClaims
+pub vaultkeeper_core::identity::StoredClaims::Secret(alloc::boxed::Box<vaultkeeper_core::types::VaultClaims>)
+pub vaultkeeper_core::identity::StoredClaims::Signing(vaultkeeper_core::types::SigningClaims)
+impl vaultkeeper_core::identity::handles::StoredClaims
+pub fn vaultkeeper_core::identity::handles::StoredClaims::is_signing(&self) -> bool
+pub struct vaultkeeper_core::identity::HandleId(_)
+impl vaultkeeper_core::identity::handles::HandleId
+pub fn vaultkeeper_core::identity::handles::HandleId::as_str(&self) -> &str
+pub fn vaultkeeper_core::identity::handles::HandleId::redacted(&self) -> alloc::string::String
+impl core::convert::From<alloc::string::String> for vaultkeeper_core::identity::handles::HandleId
+pub fn vaultkeeper_core::identity::handles::HandleId::from(alloc::string::String) -> Self
+impl core::convert::From<vaultkeeper_core::identity::handles::HandleId> for alloc::string::String
+pub fn alloc::string::String::from(vaultkeeper_core::identity::handles::HandleId) -> Self
+impl core::fmt::Debug for vaultkeeper_core::identity::handles::HandleId
+pub fn vaultkeeper_core::identity::handles::HandleId::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for vaultkeeper_core::identity::handles::HandleId
+pub fn vaultkeeper_core::identity::handles::HandleId::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct vaultkeeper_core::identity::HandleTable
+impl vaultkeeper_core::identity::handles::HandleTable
+pub fn vaultkeeper_core::identity::handles::HandleTable::current_usage(&self, &str) -> u64
+pub fn vaultkeeper_core::identity::handles::HandleTable::insert_secret(&mut self, vaultkeeper_core::types::VaultClaims, core::option::Option<u64>) -> vaultkeeper_core::identity::handles::HandleId
+pub fn vaultkeeper_core::identity::handles::HandleTable::is_empty(&self) -> bool
+pub fn vaultkeeper_core::identity::handles::HandleTable::len(&self) -> usize
+pub fn vaultkeeper_core::identity::handles::HandleTable::new() -> Self
+pub fn vaultkeeper_core::identity::handles::HandleTable::read_secret(&mut self, &vaultkeeper_core::identity::handles::HandleId) -> core::result::Result<zeroize::Zeroizing<alloc::string::String>, vaultkeeper_core::errors::VaultError>
+pub fn vaultkeeper_core::identity::handles::HandleTable::record_usage(&mut self, &str) -> u64
+pub fn vaultkeeper_core::identity::handles::HandleTable::release(&mut self, &vaultkeeper_core::identity::handles::HandleId) -> bool
+pub fn vaultkeeper_core::identity::handles::HandleTable::resolve_secret_claims(&mut self, &vaultkeeper_core::identity::handles::HandleId) -> core::result::Result<vaultkeeper_core::types::VaultClaims, vaultkeeper_core::errors::VaultError>
+pub fn vaultkeeper_core::identity::handles::HandleTable::resolve_signing_claims(&mut self, &vaultkeeper_core::identity::handles::HandleId) -> core::result::Result<vaultkeeper_core::types::SigningClaims, vaultkeeper_core::errors::VaultError>
+pub fn vaultkeeper_core::identity::handles::HandleTable::sweep_expired(&mut self) -> usize
+pub struct vaultkeeper_core::identity::IdentityInfo
+pub vaultkeeper_core::identity::IdentityInfo::hash: alloc::string::String
+pub vaultkeeper_core::identity::IdentityInfo::trust_tier: vaultkeeper_core::types::TrustTier
+pub vaultkeeper_core::identity::IdentityInfo::verified: bool
+pub struct vaultkeeper_core::identity::TrustManifestEntry
+pub vaultkeeper_core::identity::TrustManifestEntry::hashes: alloc::vec::Vec<alloc::string::String>
+pub vaultkeeper_core::identity::TrustManifestEntry::trust_tier: vaultkeeper_core::types::TrustTier
+pub struct vaultkeeper_core::identity::TrustOptions
+pub vaultkeeper_core::identity::TrustOptions::config_dir: core::option::Option<alloc::string::String>
+pub vaultkeeper_core::identity::TrustOptions::namespace: core::option::Option<alloc::string::String>
+pub vaultkeeper_core::identity::TrustOptions::skip_sigstore: core::option::Option<bool>
+pub struct vaultkeeper_core::identity::TrustVerificationResult
+pub vaultkeeper_core::identity::TrustVerificationResult::identity: vaultkeeper_core::identity::IdentityInfo
+pub vaultkeeper_core::identity::TrustVerificationResult::reason: alloc::string::String
+pub vaultkeeper_core::identity::TrustVerificationResult::tofu_conflict: bool
+pub const vaultkeeper_core::identity::HANDLE_TABLE_MAX_SIZE: usize
+pub type vaultkeeper_core::identity::TrustManifest = std::collections::hash::map::HashMap<alloc::string::String, vaultkeeper_core::identity::TrustManifestEntry>
+pub mod vaultkeeper_core::jwe
+pub struct vaultkeeper_core::jwe::CreateTokenOptions
+pub vaultkeeper_core::jwe::CreateTokenOptions::kid: core::option::Option<alloc::string::String>
+pub struct vaultkeeper_core::jwe::VaultJweHeader
+pub vaultkeeper_core::jwe::VaultJweHeader::alg: alloc::string::String
+pub vaultkeeper_core::jwe::VaultJweHeader::enc: alloc::string::String
+pub vaultkeeper_core::jwe::VaultJweHeader::kid: core::option::Option<alloc::string::String>
+impl core::default::Default for vaultkeeper_core::jwe::VaultJweHeader
+pub fn vaultkeeper_core::jwe::VaultJweHeader::default() -> Self
+pub fn vaultkeeper_core::jwe::block_token(&str)
+pub fn vaultkeeper_core::jwe::clear_blocklist()
+pub fn vaultkeeper_core::jwe::create_token(&[u8], &vaultkeeper_core::types::VaultClaims, &vaultkeeper_core::jwe::CreateTokenOptions) -> core::result::Result<alloc::string::String, vaultkeeper_core::errors::VaultError>
+pub fn vaultkeeper_core::jwe::decrypt_token(&[u8], &str) -> core::result::Result<vaultkeeper_core::types::VaultClaims, vaultkeeper_core::errors::VaultError>
+pub fn vaultkeeper_core::jwe::extract_kid(&str) -> core::result::Result<core::option::Option<alloc::string::String>, vaultkeeper_core::errors::VaultError>
+pub fn vaultkeeper_core::jwe::is_blocked(&str) -> bool
+pub fn vaultkeeper_core::jwe::validate_claims(&vaultkeeper_core::types::VaultClaims, u64) -> core::result::Result<(), vaultkeeper_core::errors::VaultError>
+pub mod vaultkeeper_core::keys
+pub mod vaultkeeper_core::keys::storage
+pub async fn vaultkeeper_core::keys::storage::load_key_state(&dyn vaultkeeper_core::backend::HostPlatform) -> core::result::Result<core::option::Option<vaultkeeper_core::keys::KeyStateSnapshot>, vaultkeeper_core::errors::VaultError>
+pub async fn vaultkeeper_core::keys::storage::load_revocation_for_validation(&dyn vaultkeeper_core::backend::HostPlatform, u64) -> core::result::Result<vaultkeeper_core::keys::RevocationState, vaultkeeper_core::errors::VaultError>
+pub async fn vaultkeeper_core::keys::storage::mutate_revocation_state(&dyn vaultkeeper_core::backend::HostPlatform, impl core::ops::function::FnOnce(&mut vaultkeeper_core::keys::RevocationState)) -> core::result::Result<vaultkeeper_core::keys::RevocationState, vaultkeeper_core::errors::VaultError>
+pub async fn vaultkeeper_core::keys::storage::save_key_state(&dyn vaultkeeper_core::backend::HostPlatform, &vaultkeeper_core::keys::KeyStateSnapshot) -> core::result::Result<(), vaultkeeper_core::errors::VaultError>
+pub struct vaultkeeper_core::keys::JtiEntry
+pub vaultkeeper_core::keys::JtiEntry::exp: u64
+pub vaultkeeper_core::keys::JtiEntry::jti: alloc::string::String
+pub struct vaultkeeper_core::keys::KeyManager
+impl vaultkeeper_core::keys::KeyManager
+pub fn vaultkeeper_core::keys::KeyManager::find_key_by_id(&mut self, &str) -> core::option::Option<(&vaultkeeper_core::keys::KeyMaterial, bool)>
+pub fn vaultkeeper_core::keys::KeyManager::get_current_key(&self) -> core::result::Result<&vaultkeeper_core::keys::KeyMaterial, vaultkeeper_core::errors::VaultError>
+pub fn vaultkeeper_core::keys::KeyManager::get_previous_key(&mut self) -> core::option::Option<&vaultkeeper_core::keys::KeyMaterial>
+pub fn vaultkeeper_core::keys::KeyManager::hydrate(&mut self, vaultkeeper_core::keys::KeyStateSnapshot)
+pub fn vaultkeeper_core::keys::KeyManager::init(&mut self) -> core::result::Result<(), vaultkeeper_core::errors::VaultError>
+pub fn vaultkeeper_core::keys::KeyManager::new() -> Self
+pub fn vaultkeeper_core::keys::KeyManager::revoke_key(&mut self) -> core::result::Result<(), vaultkeeper_core::errors::VaultError>
+pub fn vaultkeeper_core::keys::KeyManager::rotate_key(&mut self, u64) -> core::result::Result<(), vaultkeeper_core::errors::VaultError>
+pub fn vaultkeeper_core::keys::KeyManager::snapshot(&mut self) -> core::result::Result<vaultkeeper_core::keys::KeyStateSnapshot, vaultkeeper_core::errors::VaultError>
+impl core::default::Default for vaultkeeper_core::keys::KeyManager
+pub fn vaultkeeper_core::keys::KeyManager::default() -> Self
+pub struct vaultkeeper_core::keys::KeyMaterial
+pub vaultkeeper_core::keys::KeyMaterial::created_at: u64
+pub vaultkeeper_core::keys::KeyMaterial::id: alloc::string::String
+pub vaultkeeper_core::keys::KeyMaterial::key: alloc::vec::Vec<u8>
+impl core::ops::drop::Drop for vaultkeeper_core::keys::KeyMaterial
+pub fn vaultkeeper_core::keys::KeyMaterial::drop(&mut self)
+pub struct vaultkeeper_core::keys::KeyRotationConfig
+pub vaultkeeper_core::keys::KeyRotationConfig::grace_period_ms: u64
+pub struct vaultkeeper_core::keys::KeyState
+pub vaultkeeper_core::keys::KeyState::current: vaultkeeper_core::keys::KeyMaterial
+pub vaultkeeper_core::keys::KeyState::grace_period_ms: core::option::Option<u64>
+pub vaultkeeper_core::keys::KeyState::previous: core::option::Option<vaultkeeper_core::keys::KeyMaterial>
+pub vaultkeeper_core::keys::KeyState::rotated_at_ms: core::option::Option<u128>
+pub struct vaultkeeper_core::keys::KeyStateSnapshot
+pub vaultkeeper_core::keys::KeyStateSnapshot::current: vaultkeeper_core::keys::KeyMaterial
+pub vaultkeeper_core::keys::KeyStateSnapshot::grace_period_expires_at_ms: core::option::Option<u64>
+pub vaultkeeper_core::keys::KeyStateSnapshot::previous: core::option::Option<vaultkeeper_core::keys::KeyMaterial>
+pub struct vaultkeeper_core::keys::RevocationState
+pub vaultkeeper_core::keys::RevocationState::jti: alloc::vec::Vec<vaultkeeper_core::keys::JtiEntry>
+pub vaultkeeper_core::keys::RevocationState::key_generations: std::collections::hash::map::HashMap<alloc::string::String, u64>
+pub vaultkeeper_core::keys::RevocationState::rev_state_gen: u64
+impl vaultkeeper_core::keys::RevocationState
+pub fn vaultkeeper_core::keys::RevocationState::is_jti_revoked(&self, &str) -> bool
+pub fn vaultkeeper_core::keys::RevocationState::min_generation_for(&self, &str) -> u64
+pub fn vaultkeeper_core::keys::RevocationState::revoke_jti(&mut self, impl core::convert::Into<alloc::string::String>, u64)
+pub fn vaultkeeper_core::keys::RevocationState::revoke_key(&mut self, impl core::convert::Into<alloc::string::String>)
+pub fn vaultkeeper_core::keys::RevocationState::sweep_expired(&mut self, u64) -> usize
+pub async fn vaultkeeper_core::keys::load_key_state(&dyn vaultkeeper_core::backend::HostPlatform) -> core::result::Result<core::option::Option<vaultkeeper_core::keys::KeyStateSnapshot>, vaultkeeper_core::errors::VaultError>
+pub async fn vaultkeeper_core::keys::load_revocation_for_validation(&dyn vaultkeeper_core::backend::HostPlatform, u64) -> core::result::Result<vaultkeeper_core::keys::RevocationState, vaultkeeper_core::errors::VaultError>
+pub async fn vaultkeeper_core::keys::mutate_revocation_state(&dyn vaultkeeper_core::backend::HostPlatform, impl core::ops::function::FnOnce(&mut vaultkeeper_core::keys::RevocationState)) -> core::result::Result<vaultkeeper_core::keys::RevocationState, vaultkeeper_core::errors::VaultError>
+pub async fn vaultkeeper_core::keys::save_key_state(&dyn vaultkeeper_core::backend::HostPlatform, &vaultkeeper_core::keys::KeyStateSnapshot) -> core::result::Result<(), vaultkeeper_core::errors::VaultError>
+pub mod vaultkeeper_core::profile
+pub mod vaultkeeper_core::profile::lint
+pub struct vaultkeeper_core::profile::lint::LintBaseline
+pub vaultkeeper_core::profile::lint::LintBaseline::require_presence_per_use: bool
+pub vaultkeeper_core::profile::lint::LintBaseline::use_limit: u64
+impl core::default::Default for vaultkeeper_core::profile::lint::LintBaseline
+pub fn vaultkeeper_core::profile::lint::LintBaseline::default() -> Self
+pub struct vaultkeeper_core::profile::lint::LintResult
+pub vaultkeeper_core::profile::lint::LintResult::loosening_warnings: alloc::vec::Vec<vaultkeeper_core::profile::lint::LoosenWarning>
+pub vaultkeeper_core::profile::lint::LintResult::unattended_restart_warnings: alloc::vec::Vec<vaultkeeper_core::profile::lint::UnattendedRestartWarning>
+impl vaultkeeper_core::profile::lint::LintResult
+pub const vaultkeeper_core::profile::lint::LintResult::CAVEAT: &'static str
+pub struct vaultkeeper_core::profile::lint::LoosenWarning
+pub vaultkeeper_core::profile::lint::LoosenWarning::default: alloc::string::String
+pub vaultkeeper_core::profile::lint::LoosenWarning::entry: alloc::string::String
+pub vaultkeeper_core::profile::lint::LoosenWarning::field: &'static str
+pub vaultkeeper_core::profile::lint::LoosenWarning::message: alloc::string::String
+pub vaultkeeper_core::profile::lint::LoosenWarning::profile_value: alloc::string::String
+pub struct vaultkeeper_core::profile::lint::UnattendedRestartWarning
+pub vaultkeeper_core::profile::lint::UnattendedRestartWarning::entry: alloc::string::String
+pub vaultkeeper_core::profile::lint::UnattendedRestartWarning::message: alloc::string::String
+pub fn vaultkeeper_core::profile::lint::lint_profile(&vaultkeeper_core::profile::loader::LoadedProfile, vaultkeeper_core::types::TrustTier, u64, vaultkeeper_core::profile::lint::LintBaseline) -> vaultkeeper_core::profile::lint::LintResult
+pub fn vaultkeeper_core::profile::lint::resolving_backend_for_entry(&vaultkeeper_core::profile::loader::ProfileEntry, &str) -> alloc::string::String
+pub mod vaultkeeper_core::profile::loader
+pub enum vaultkeeper_core::profile::loader::EntrySource
+pub vaultkeeper_core::profile::loader::EntrySource::Secret(alloc::string::String)
+pub vaultkeeper_core::profile::loader::EntrySource::SigningKey(alloc::string::String)
+pub struct vaultkeeper_core::profile::loader::LoadedProfile
+pub vaultkeeper_core::profile::loader::LoadedProfile::entries: alloc::vec::Vec<(alloc::string::String, vaultkeeper_core::profile::loader::ProfileEntry)>
+pub vaultkeeper_core::profile::loader::LoadedProfile::name: alloc::string::String
+pub vaultkeeper_core::profile::loader::LoadedProfile::version: u32
+impl serde_core::ser::Serialize for vaultkeeper_core::profile::loader::LoadedProfile
+pub fn vaultkeeper_core::profile::loader::LoadedProfile::serialize<S>(&self, S) -> core::result::Result<<S as serde_core::ser::Serializer>::Ok, <S as serde_core::ser::Serializer>::Error> where S: serde_core::ser::Serializer
+pub struct vaultkeeper_core::profile::loader::ProfileDefaults
+pub vaultkeeper_core::profile::loader::ProfileDefaults::trust_tier: vaultkeeper_core::types::TrustTier
+pub vaultkeeper_core::profile::loader::ProfileDefaults::ttl_seconds: u64
+impl vaultkeeper_core::profile::loader::ProfileDefaults
+pub fn vaultkeeper_core::profile::loader::ProfileDefaults::from_vault_defaults(&vaultkeeper_core::types::VaultDefaults) -> Self
+pub struct vaultkeeper_core::profile::loader::ProfileEntry
+pub vaultkeeper_core::profile::loader::ProfileEntry::materialize: vaultkeeper_core::profile::types::MaterializeMode
+pub vaultkeeper_core::profile::loader::ProfileEntry::min_trust: vaultkeeper_core::profile::types::MinTrust
+pub vaultkeeper_core::profile::loader::ProfileEntry::require_presence_at_mint: bool
+pub vaultkeeper_core::profile::loader::ProfileEntry::require_presence_per_use: bool
+pub vaultkeeper_core::profile::loader::ProfileEntry::source: vaultkeeper_core::profile::loader::EntrySource
+pub vaultkeeper_core::profile::loader::ProfileEntry::ttl_seconds: core::option::Option<u64>
+pub vaultkeeper_core::profile::loader::ProfileEntry::use_limit: core::option::Option<u64>
+pub const vaultkeeper_core::profile::loader::SIGNING_LEASE_DEFAULT_TTL_SECONDS: u64
+pub const vaultkeeper_core::profile::loader::SIGNING_LEASE_MAX_TTL_SECONDS: u64
+pub fn vaultkeeper_core::profile::loader::load_profile_from_str(&str, &vaultkeeper_core::profile::loader::ProfileDefaults) -> core::result::Result<vaultkeeper_core::profile::loader::LoadedProfile, vaultkeeper_core::errors::VaultError>
+pub mod vaultkeeper_core::profile::render
+pub fn vaultkeeper_core::profile::render::render_lint(&vaultkeeper_core::profile::loader::LoadedProfile, &vaultkeeper_core::profile::lint::LintResult, &str) -> alloc::string::String
+pub fn vaultkeeper_core::profile::render::render_list(&[alloc::string::String]) -> alloc::string::String
+pub fn vaultkeeper_core::profile::render::render_show(&vaultkeeper_core::profile::loader::LoadedProfile) -> alloc::string::String
+pub fn vaultkeeper_core::profile::render::scaffold_profile(&str) -> vaultkeeper_core::profile::types::ProfileFile
+pub mod vaultkeeper_core::profile::types
+pub enum vaultkeeper_core::profile::types::Materialize
+pub vaultkeeper_core::profile::types::Materialize::Extended(vaultkeeper_core::profile::types::MaterializeExtended)
+pub vaultkeeper_core::profile::types::Materialize::Simple(vaultkeeper_core::profile::types::MaterializeMode)
+pub enum vaultkeeper_core::profile::types::MaterializeMode
+pub vaultkeeper_core::profile::types::MaterializeMode::Lease
+pub vaultkeeper_core::profile::types::MaterializeMode::Secret
+impl vaultkeeper_core::profile::types::MaterializeMode
+pub fn vaultkeeper_core::profile::types::MaterializeMode::as_str(self) -> &'static str
+pub enum vaultkeeper_core::profile::types::MinTrust
+pub vaultkeeper_core::profile::types::MinTrust::Registry
+pub vaultkeeper_core::profile::types::MinTrust::Sigstore
+pub vaultkeeper_core::profile::types::MinTrust::Unverified
+impl vaultkeeper_core::profile::types::MinTrust
+pub fn vaultkeeper_core::profile::types::MinTrust::as_str(self) -> &'static str
+pub fn vaultkeeper_core::profile::types::MinTrust::from_trust_tier(vaultkeeper_core::types::TrustTier) -> Self
+pub fn vaultkeeper_core::profile::types::MinTrust::to_trust_tier(self) -> vaultkeeper_core::types::TrustTier
+pub struct vaultkeeper_core::profile::types::MaterializeExtended
+pub vaultkeeper_core::profile::types::MaterializeExtended::extra: serde_json::map::Map<alloc::string::String, serde_json::value::Value>
+pub vaultkeeper_core::profile::types::MaterializeExtended::mode: alloc::string::String
+pub struct vaultkeeper_core::profile::types::ProfileEntries(pub alloc::vec::Vec<(alloc::string::String, vaultkeeper_core::profile::types::ProfileEntryRaw)>)
+impl vaultkeeper_core::profile::types::ProfileEntries
+pub fn vaultkeeper_core::profile::types::ProfileEntries::iter(&self) -> impl core::iter::traits::iterator::Iterator<Item = &(alloc::string::String, vaultkeeper_core::profile::types::ProfileEntryRaw)>
+impl serde_core::ser::Serialize for vaultkeeper_core::profile::types::ProfileEntries
+pub fn vaultkeeper_core::profile::types::ProfileEntries::serialize<S>(&self, S) -> core::result::Result<<S as serde_core::ser::Serializer>::Ok, <S as serde_core::ser::Serializer>::Error> where S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for vaultkeeper_core::profile::types::ProfileEntries
+pub fn vaultkeeper_core::profile::types::ProfileEntries::deserialize<D>(D) -> core::result::Result<Self, <D as serde_core::de::Deserializer>::Error> where D: serde_core::de::Deserializer<'de>
+pub struct vaultkeeper_core::profile::types::ProfileEntryRaw
+pub vaultkeeper_core::profile::types::ProfileEntryRaw::materialize: vaultkeeper_core::profile::types::Materialize
+pub vaultkeeper_core::profile::types::ProfileEntryRaw::min_trust: core::option::Option<vaultkeeper_core::profile::types::MinTrust>
+pub vaultkeeper_core::profile::types::ProfileEntryRaw::require_presence_at_mint: core::option::Option<bool>
+pub vaultkeeper_core::profile::types::ProfileEntryRaw::require_presence_per_use: core::option::Option<bool>
+pub vaultkeeper_core::profile::types::ProfileEntryRaw::secret: core::option::Option<alloc::string::String>
+pub vaultkeeper_core::profile::types::ProfileEntryRaw::signing_key: core::option::Option<alloc::string::String>
+pub vaultkeeper_core::profile::types::ProfileEntryRaw::ttl_seconds: core::option::Option<u64>
+pub vaultkeeper_core::profile::types::ProfileEntryRaw::use_limit: core::option::Option<u64>
+pub struct vaultkeeper_core::profile::types::ProfileFile
+pub vaultkeeper_core::profile::types::ProfileFile::entries: vaultkeeper_core::profile::types::ProfileEntries
+pub vaultkeeper_core::profile::types::ProfileFile::name: alloc::string::String
+pub vaultkeeper_core::profile::types::ProfileFile::version: u32
+pub enum vaultkeeper_core::profile::EntrySource
+pub vaultkeeper_core::profile::EntrySource::Secret(alloc::string::String)
+pub vaultkeeper_core::profile::EntrySource::SigningKey(alloc::string::String)
+pub enum vaultkeeper_core::profile::Materialize
+pub vaultkeeper_core::profile::Materialize::Extended(vaultkeeper_core::profile::types::MaterializeExtended)
+pub vaultkeeper_core::profile::Materialize::Simple(vaultkeeper_core::profile::types::MaterializeMode)
+pub enum vaultkeeper_core::profile::MaterializeMode
+pub vaultkeeper_core::profile::MaterializeMode::Lease
+pub vaultkeeper_core::profile::MaterializeMode::Secret
+impl vaultkeeper_core::profile::types::MaterializeMode
+pub fn vaultkeeper_core::profile::types::MaterializeMode::as_str(self) -> &'static str
+pub enum vaultkeeper_core::profile::MinTrust
+pub vaultkeeper_core::profile::MinTrust::Registry
+pub vaultkeeper_core::profile::MinTrust::Sigstore
+pub vaultkeeper_core::profile::MinTrust::Unverified
+impl vaultkeeper_core::profile::types::MinTrust
+pub fn vaultkeeper_core::profile::types::MinTrust::as_str(self) -> &'static str
+pub fn vaultkeeper_core::profile::types::MinTrust::from_trust_tier(vaultkeeper_core::types::TrustTier) -> Self
+pub fn vaultkeeper_core::profile::types::MinTrust::to_trust_tier(self) -> vaultkeeper_core::types::TrustTier
+pub struct vaultkeeper_core::profile::LintBaseline
+pub vaultkeeper_core::profile::LintBaseline::require_presence_per_use: bool
+pub vaultkeeper_core::profile::LintBaseline::use_limit: u64
+impl core::default::Default for vaultkeeper_core::profile::lint::LintBaseline
+pub fn vaultkeeper_core::profile::lint::LintBaseline::default() -> Self
+pub struct vaultkeeper_core::profile::LintResult
+pub vaultkeeper_core::profile::LintResult::loosening_warnings: alloc::vec::Vec<vaultkeeper_core::profile::lint::LoosenWarning>
+pub vaultkeeper_core::profile::LintResult::unattended_restart_warnings: alloc::vec::Vec<vaultkeeper_core::profile::lint::UnattendedRestartWarning>
+impl vaultkeeper_core::profile::lint::LintResult
+pub const vaultkeeper_core::profile::lint::LintResult::CAVEAT: &'static str
+pub struct vaultkeeper_core::profile::LoadedProfile
+pub vaultkeeper_core::profile::LoadedProfile::entries: alloc::vec::Vec<(alloc::string::String, vaultkeeper_core::profile::loader::ProfileEntry)>
+pub vaultkeeper_core::profile::LoadedProfile::name: alloc::string::String
+pub vaultkeeper_core::profile::LoadedProfile::version: u32
+impl serde_core::ser::Serialize for vaultkeeper_core::profile::loader::LoadedProfile
+pub fn vaultkeeper_core::profile::loader::LoadedProfile::serialize<S>(&self, S) -> core::result::Result<<S as serde_core::ser::Serializer>::Ok, <S as serde_core::ser::Serializer>::Error> where S: serde_core::ser::Serializer
+pub struct vaultkeeper_core::profile::LoosenWarning
+pub vaultkeeper_core::profile::LoosenWarning::default: alloc::string::String
+pub vaultkeeper_core::profile::LoosenWarning::entry: alloc::string::String
+pub vaultkeeper_core::profile::LoosenWarning::field: &'static str
+pub vaultkeeper_core::profile::LoosenWarning::message: alloc::string::String
+pub vaultkeeper_core::profile::LoosenWarning::profile_value: alloc::string::String
+pub struct vaultkeeper_core::profile::ProfileDefaults
+pub vaultkeeper_core::profile::ProfileDefaults::trust_tier: vaultkeeper_core::types::TrustTier
+pub vaultkeeper_core::profile::ProfileDefaults::ttl_seconds: u64
+impl vaultkeeper_core::profile::loader::ProfileDefaults
+pub fn vaultkeeper_core::profile::loader::ProfileDefaults::from_vault_defaults(&vaultkeeper_core::types::VaultDefaults) -> Self
+pub struct vaultkeeper_core::profile::ProfileEntries(pub alloc::vec::Vec<(alloc::string::String, vaultkeeper_core::profile::types::ProfileEntryRaw)>)
+impl vaultkeeper_core::profile::types::ProfileEntries
+pub fn vaultkeeper_core::profile::types::ProfileEntries::iter(&self) -> impl core::iter::traits::iterator::Iterator<Item = &(alloc::string::String, vaultkeeper_core::profile::types::ProfileEntryRaw)>
+impl serde_core::ser::Serialize for vaultkeeper_core::profile::types::ProfileEntries
+pub fn vaultkeeper_core::profile::types::ProfileEntries::serialize<S>(&self, S) -> core::result::Result<<S as serde_core::ser::Serializer>::Ok, <S as serde_core::ser::Serializer>::Error> where S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for vaultkeeper_core::profile::types::ProfileEntries
+pub fn vaultkeeper_core::profile::types::ProfileEntries::deserialize<D>(D) -> core::result::Result<Self, <D as serde_core::de::Deserializer>::Error> where D: serde_core::de::Deserializer<'de>
+pub struct vaultkeeper_core::profile::ProfileEntry
+pub vaultkeeper_core::profile::ProfileEntry::materialize: vaultkeeper_core::profile::types::MaterializeMode
+pub vaultkeeper_core::profile::ProfileEntry::min_trust: vaultkeeper_core::profile::types::MinTrust
+pub vaultkeeper_core::profile::ProfileEntry::require_presence_at_mint: bool
+pub vaultkeeper_core::profile::ProfileEntry::require_presence_per_use: bool
+pub vaultkeeper_core::profile::ProfileEntry::source: vaultkeeper_core::profile::loader::EntrySource
+pub vaultkeeper_core::profile::ProfileEntry::ttl_seconds: core::option::Option<u64>
+pub vaultkeeper_core::profile::ProfileEntry::use_limit: core::option::Option<u64>
+pub struct vaultkeeper_core::profile::ProfileEntryRaw
+pub vaultkeeper_core::profile::ProfileEntryRaw::materialize: vaultkeeper_core::profile::types::Materialize
+pub vaultkeeper_core::profile::ProfileEntryRaw::min_trust: core::option::Option<vaultkeeper_core::profile::types::MinTrust>
+pub vaultkeeper_core::profile::ProfileEntryRaw::require_presence_at_mint: core::option::Option<bool>
+pub vaultkeeper_core::profile::ProfileEntryRaw::require_presence_per_use: core::option::Option<bool>
+pub vaultkeeper_core::profile::ProfileEntryRaw::secret: core::option::Option<alloc::string::String>
+pub vaultkeeper_core::profile::ProfileEntryRaw::signing_key: core::option::Option<alloc::string::String>
+pub vaultkeeper_core::profile::ProfileEntryRaw::ttl_seconds: core::option::Option<u64>
+pub vaultkeeper_core::profile::ProfileEntryRaw::use_limit: core::option::Option<u64>
+pub struct vaultkeeper_core::profile::ProfileFile
+pub vaultkeeper_core::profile::ProfileFile::entries: vaultkeeper_core::profile::types::ProfileEntries
+pub vaultkeeper_core::profile::ProfileFile::name: alloc::string::String
+pub vaultkeeper_core::profile::ProfileFile::version: u32
+pub struct vaultkeeper_core::profile::UnattendedRestartWarning
+pub vaultkeeper_core::profile::UnattendedRestartWarning::entry: alloc::string::String
+pub vaultkeeper_core::profile::UnattendedRestartWarning::message: alloc::string::String
+pub const vaultkeeper_core::profile::PROFILES_DIR_NAME: &str
+pub const vaultkeeper_core::profile::PROFILE_FILE_EXTENSION: &str
+pub const vaultkeeper_core::profile::SIGNING_LEASE_DEFAULT_TTL_SECONDS: u64
+pub const vaultkeeper_core::profile::SIGNING_LEASE_MAX_TTL_SECONDS: u64
+pub fn vaultkeeper_core::profile::lint_profile(&vaultkeeper_core::profile::loader::LoadedProfile, vaultkeeper_core::types::TrustTier, u64, vaultkeeper_core::profile::lint::LintBaseline) -> vaultkeeper_core::profile::lint::LintResult
+pub fn vaultkeeper_core::profile::load_profile_from_str(&str, &vaultkeeper_core::profile::loader::ProfileDefaults) -> core::result::Result<vaultkeeper_core::profile::loader::LoadedProfile, vaultkeeper_core::errors::VaultError>
+pub fn vaultkeeper_core::profile::profile_path(&std::path::Path, &str) -> core::result::Result<std::path::PathBuf, vaultkeeper_core::errors::VaultError>
+pub fn vaultkeeper_core::profile::render_lint(&vaultkeeper_core::profile::loader::LoadedProfile, &vaultkeeper_core::profile::lint::LintResult, &str) -> alloc::string::String
+pub fn vaultkeeper_core::profile::render_list(&[alloc::string::String]) -> alloc::string::String
+pub fn vaultkeeper_core::profile::render_show(&vaultkeeper_core::profile::loader::LoadedProfile) -> alloc::string::String
+pub fn vaultkeeper_core::profile::scaffold_profile(&str) -> vaultkeeper_core::profile::types::ProfileFile
+pub fn vaultkeeper_core::profile::validate_profile_name(&str) -> core::result::Result<(), vaultkeeper_core::errors::VaultError>
+pub mod vaultkeeper_core::resolve
+pub struct vaultkeeper_core::resolve::ResolveOptions<'a>
+pub vaultkeeper_core::resolve::ResolveOptions::backend: &'a dyn vaultkeeper_core::backend::SecretBackend
+pub vaultkeeper_core::resolve::ResolveOptions::executable_hash: core::option::Option<alloc::string::String>
+pub vaultkeeper_core::resolve::ResolveOptions::key_manager: &'a vaultkeeper_core::keys::KeyManager
+pub async fn vaultkeeper_core::resolve::resolve_profile(&vaultkeeper_core::profile::loader::LoadedProfile, &vaultkeeper_core::resolve::ResolveOptions<'_>) -> core::result::Result<vaultkeeper_core::resolve::ResolvedEnv, vaultkeeper_core::errors::VaultError>
+pub type vaultkeeper_core::resolve::ResolvedEnv = std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>
+pub mod vaultkeeper_core::run
+pub struct vaultkeeper_core::run::RunPlan
+pub vaultkeeper_core::run::RunPlan::ad_hoc: alloc::collections::btree::set::BTreeSet<alloc::string::String>
+pub vaultkeeper_core::run::RunPlan::profile: vaultkeeper_core::profile::loader::LoadedProfile
+pub struct vaultkeeper_core::run::SetEntry
+pub vaultkeeper_core::run::SetEntry::secret_name: alloc::string::String
+pub vaultkeeper_core::run::SetEntry::var: alloc::string::String
+pub const vaultkeeper_core::run::DEFAULT_TOKEN_VAR: &str
+pub const vaultkeeper_core::run::FILE_ONLY_DEGRADATION_NOTICE: &str
+pub fn vaultkeeper_core::run::apply_set_overlay(vaultkeeper_core::profile::loader::LoadedProfile, &[vaultkeeper_core::run::SetEntry], &vaultkeeper_core::profile::loader::ProfileDefaults) -> vaultkeeper_core::run::RunPlan
+pub fn vaultkeeper_core::run::check_as_var_collision(&str, &vaultkeeper_core::run::RunPlan) -> core::result::Result<(), vaultkeeper_core::errors::VaultError>
+pub fn vaultkeeper_core::run::file_only_degradation_applies(&vaultkeeper_core::run::RunPlan, &str) -> bool
+pub fn vaultkeeper_core::run::parse_set_flag(&str) -> core::result::Result<vaultkeeper_core::run::SetEntry, vaultkeeper_core::errors::VaultError>
+pub fn vaultkeeper_core::run::render_dry_run(&vaultkeeper_core::run::RunPlan, &str, bool) -> alloc::string::String
+pub fn vaultkeeper_core::run::render_token_dry_run(&str, &vaultkeeper_core::run::RunPlan, &str) -> alloc::string::String
+pub fn vaultkeeper_core::run::validate_as_var_name(&str) -> core::result::Result<(), vaultkeeper_core::errors::VaultError>
+pub mod vaultkeeper_core::signing
+pub mod vaultkeeper_core::signing::ed25519
+pub fn vaultkeeper_core::signing::ed25519::kid_for_verifying_key(&ed25519_dalek::verifying::VerifyingKey) -> alloc::string::String
+pub fn vaultkeeper_core::signing::ed25519::parse_private_key_pem(&str) -> core::result::Result<ed25519_dalek::signing::SigningKey, vaultkeeper_core::errors::VaultError>
+pub fn vaultkeeper_core::signing::ed25519::parse_public_key_pem(&str) -> core::result::Result<ed25519_dalek::verifying::VerifyingKey, vaultkeeper_core::errors::VaultError>
+pub fn vaultkeeper_core::signing::ed25519::sign(&ed25519_dalek::signing::SigningKey, &[u8]) -> alloc::vec::Vec<u8>
+pub fn vaultkeeper_core::signing::ed25519::verify(&ed25519_dalek::verifying::VerifyingKey, &[u8], &[u8]) -> bool
+pub const vaultkeeper_core::signing::JWS_ALG: &str
+pub async fn vaultkeeper_core::signing::create_detached_jws<B>(&B, &str, &str, &[u8]) -> core::result::Result<alloc::string::String, vaultkeeper_core::errors::VaultError> where B: vaultkeeper_core::backend::SigningBackend + ?core::marker::Sized
+pub fn vaultkeeper_core::signing::verify_detached_jws(&vaultkeeper_core::types::VerifyRequest) -> core::result::Result<bool, vaultkeeper_core::errors::VaultError>
+pub mod vaultkeeper_core::types
+pub enum vaultkeeper_core::types::ClaimsKind
+pub vaultkeeper_core::types::ClaimsKind::Secret
+pub vaultkeeper_core::types::ClaimsKind::SigningKey
+pub enum vaultkeeper_core::types::KeyStatus
+pub vaultkeeper_core::types::KeyStatus::Current
+pub vaultkeeper_core::types::KeyStatus::Deprecated
+pub vaultkeeper_core::types::KeyStatus::Previous
+pub enum vaultkeeper_core::types::PreflightCheckStatus
+pub vaultkeeper_core::types::PreflightCheckStatus::Missing
+pub vaultkeeper_core::types::PreflightCheckStatus::Ok
+pub vaultkeeper_core::types::PreflightCheckStatus::VersionUnsupported
+pub enum vaultkeeper_core::types::SigningAlgorithm
+pub vaultkeeper_core::types::SigningAlgorithm::EdDsa
+pub enum vaultkeeper_core::types::TrustTier
+pub vaultkeeper_core::types::TrustTier::Dev = 3
+pub vaultkeeper_core::types::TrustTier::Sigstore = 1
+pub vaultkeeper_core::types::TrustTier::Tofu = 2
+pub struct vaultkeeper_core::types::BackendConfig
+pub vaultkeeper_core::types::BackendConfig::backend_type: alloc::string::String
+pub vaultkeeper_core::types::BackendConfig::enabled: bool
+pub vaultkeeper_core::types::BackendConfig::options: core::option::Option<std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>>
+pub vaultkeeper_core::types::BackendConfig::path: core::option::Option<alloc::string::String>
+pub vaultkeeper_core::types::BackendConfig::plugin: core::option::Option<bool>
+pub struct vaultkeeper_core::types::DevelopmentMode
+pub vaultkeeper_core::types::DevelopmentMode::executables: alloc::vec::Vec<alloc::string::String>
+pub struct vaultkeeper_core::types::ExecRequest
+pub vaultkeeper_core::types::ExecRequest::args: core::option::Option<alloc::vec::Vec<alloc::string::String>>
+pub vaultkeeper_core::types::ExecRequest::command: alloc::string::String
+pub vaultkeeper_core::types::ExecRequest::cwd: core::option::Option<alloc::string::String>
+pub vaultkeeper_core::types::ExecRequest::env: core::option::Option<std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>>
+pub struct vaultkeeper_core::types::ExecResult
+pub vaultkeeper_core::types::ExecResult::exit_code: i32
+pub vaultkeeper_core::types::ExecResult::stderr: alloc::string::String
+pub vaultkeeper_core::types::ExecResult::stdout: alloc::string::String
+pub struct vaultkeeper_core::types::FetchRequest
+pub vaultkeeper_core::types::FetchRequest::body: core::option::Option<alloc::string::String>
+pub vaultkeeper_core::types::FetchRequest::headers: core::option::Option<std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>>
+pub vaultkeeper_core::types::FetchRequest::method: core::option::Option<alloc::string::String>
+pub vaultkeeper_core::types::FetchRequest::url: alloc::string::String
+pub struct vaultkeeper_core::types::KeyRotationPolicy
+pub vaultkeeper_core::types::KeyRotationPolicy::grace_period_days: u32
+pub struct vaultkeeper_core::types::LeasePresence
+pub vaultkeeper_core::types::LeasePresence::at: u64
+pub vaultkeeper_core::types::LeasePresence::backend: alloc::string::String
+pub vaultkeeper_core::types::LeasePresence::method: alloc::string::String
+pub vaultkeeper_core::types::LeasePresence::op: alloc::string::String
+pub struct vaultkeeper_core::types::PreflightCheck
+pub vaultkeeper_core::types::PreflightCheck::name: alloc::string::String
+pub vaultkeeper_core::types::PreflightCheck::reason: core::option::Option<alloc::string::String>
+pub vaultkeeper_core::types::PreflightCheck::status: vaultkeeper_core::types::PreflightCheckStatus
+pub vaultkeeper_core::types::PreflightCheck::version: core::option::Option<alloc::string::String>
+pub struct vaultkeeper_core::types::PreflightResult
+pub vaultkeeper_core::types::PreflightResult::checks: alloc::vec::Vec<vaultkeeper_core::types::ScopedPreflightCheck>
+pub vaultkeeper_core::types::PreflightResult::next_steps: alloc::vec::Vec<alloc::string::String>
+pub vaultkeeper_core::types::PreflightResult::ready: bool
+pub vaultkeeper_core::types::PreflightResult::warnings: alloc::vec::Vec<alloc::string::String>
+pub struct vaultkeeper_core::types::ScopedPreflightCheck
+pub vaultkeeper_core::types::ScopedPreflightCheck::check: vaultkeeper_core::types::PreflightCheck
+pub vaultkeeper_core::types::ScopedPreflightCheck::required: bool
+pub struct vaultkeeper_core::types::SecretAccessor
+impl vaultkeeper_core::types::SecretAccessor
+pub fn vaultkeeper_core::types::SecretAccessor::new(alloc::vec::Vec<u8>) -> Self
+pub fn vaultkeeper_core::types::SecretAccessor::read<F, R>(&mut self, F) -> core::result::Result<R, vaultkeeper_core::errors::VaultError> where F: core::ops::function::FnOnce(&[u8]) -> R
+impl core::ops::drop::Drop for vaultkeeper_core::types::SecretAccessor
+pub fn vaultkeeper_core::types::SecretAccessor::drop(&mut self)
+pub struct vaultkeeper_core::types::SigningClaims
+pub vaultkeeper_core::types::SigningClaims::backend_ref: alloc::string::String
+pub vaultkeeper_core::types::SigningClaims::kid: alloc::string::String
+pub struct vaultkeeper_core::types::SigningPublicKey
+pub vaultkeeper_core::types::SigningPublicKey::algorithm: vaultkeeper_core::types::SigningAlgorithm
+pub vaultkeeper_core::types::SigningPublicKey::kid: alloc::string::String
+pub vaultkeeper_core::types::SigningPublicKey::public_key_pem: alloc::string::String
+pub struct vaultkeeper_core::types::VaultClaims
+pub vaultkeeper_core::types::VaultClaims::bkd: core::option::Option<alloc::string::String>
+pub vaultkeeper_core::types::VaultClaims::exe: alloc::string::String
+pub vaultkeeper_core::types::VaultClaims::exp: u64
+pub vaultkeeper_core::types::VaultClaims::iat: u64
+pub vaultkeeper_core::types::VaultClaims::jti: alloc::string::String
+pub vaultkeeper_core::types::VaultClaims::kgen: core::option::Option<u64>
+pub vaultkeeper_core::types::VaultClaims::kid: core::option::Option<alloc::string::String>
+pub vaultkeeper_core::types::VaultClaims::kty: core::option::Option<vaultkeeper_core::types::ClaimsKind>
+pub vaultkeeper_core::types::VaultClaims::pres: core::option::Option<vaultkeeper_core::types::LeasePresence>
+pub vaultkeeper_core::types::VaultClaims::reference: alloc::string::String
+pub vaultkeeper_core::types::VaultClaims::sub: alloc::string::String
+pub vaultkeeper_core::types::VaultClaims::tid: vaultkeeper_core::types::TrustTier
+pub vaultkeeper_core::types::VaultClaims::use_limit: core::option::Option<u64>
+pub vaultkeeper_core::types::VaultClaims::val: core::option::Option<alloc::string::String>
+pub struct vaultkeeper_core::types::VaultConfig
+pub vaultkeeper_core::types::VaultConfig::backends: alloc::vec::Vec<vaultkeeper_core::types::BackendConfig>
+pub vaultkeeper_core::types::VaultConfig::defaults: vaultkeeper_core::types::VaultDefaults
+pub vaultkeeper_core::types::VaultConfig::development_mode: core::option::Option<vaultkeeper_core::types::DevelopmentMode>
+pub vaultkeeper_core::types::VaultConfig::key_rotation: vaultkeeper_core::types::KeyRotationPolicy
+pub vaultkeeper_core::types::VaultConfig::version: u32
+pub struct vaultkeeper_core::types::VaultDefaults
+pub vaultkeeper_core::types::VaultDefaults::trust_tier: vaultkeeper_core::types::TrustTier
+pub vaultkeeper_core::types::VaultDefaults::ttl_minutes: u32
+pub struct vaultkeeper_core::types::VaultResponse
+pub vaultkeeper_core::types::VaultResponse::key_status: vaultkeeper_core::types::KeyStatus
+pub vaultkeeper_core::types::VaultResponse::rotated_jwt: core::option::Option<alloc::string::String>
+pub struct vaultkeeper_core::types::VerifyRequest
+pub vaultkeeper_core::types::VerifyRequest::jws: alloc::string::String
+pub vaultkeeper_core::types::VerifyRequest::payload: alloc::vec::Vec<u8>
+pub vaultkeeper_core::types::VerifyRequest::public_key: alloc::string::String
+pub mod vaultkeeper_core::vault
+pub struct vaultkeeper_core::vault::MintLeaseOptions<'a>
+pub vaultkeeper_core::vault::MintLeaseOptions::entry_name: &'a str
+pub vaultkeeper_core::vault::MintLeaseOptions::interactive: bool
+pub vaultkeeper_core::vault::MintLeaseOptions::materialize: vaultkeeper_core::profile::types::MaterializeMode
+pub vaultkeeper_core::vault::MintLeaseOptions::profile_name: &'a str
+pub vaultkeeper_core::vault::MintLeaseOptions::require_presence_at_mint: bool
+pub vaultkeeper_core::vault::MintLeaseOptions::source: &'a vaultkeeper_core::profile::loader::EntrySource
+pub vaultkeeper_core::vault::MintLeaseOptions::trust_tier: vaultkeeper_core::types::TrustTier
+pub vaultkeeper_core::vault::MintLeaseOptions::ttl_seconds: u64
+pub vaultkeeper_core::vault::MintLeaseOptions::use_limit: core::option::Option<u64>
+pub struct vaultkeeper_core::vault::SetupOptions
+pub vaultkeeper_core::vault::SetupOptions::backend_type: core::option::Option<alloc::string::String>
+pub vaultkeeper_core::vault::SetupOptions::executable_path: core::option::Option<alloc::string::String>
+pub vaultkeeper_core::vault::SetupOptions::skip_trust: core::option::Option<bool>
+pub vaultkeeper_core::vault::SetupOptions::trust_tier: core::option::Option<vaultkeeper_core::types::TrustTier>
+pub vaultkeeper_core::vault::SetupOptions::ttl_minutes: core::option::Option<u32>
+pub vaultkeeper_core::vault::SetupOptions::use_limit: core::option::Option<u64>
+pub struct vaultkeeper_core::vault::VaultKeeper
+impl vaultkeeper_core::vault::VaultKeeper
+pub fn vaultkeeper_core::vault::VaultKeeper::authorize(&mut self, &str) -> core::result::Result<(vaultkeeper_core::identity::handles::HandleId, vaultkeeper_core::types::VaultClaims, vaultkeeper_core::types::VaultResponse), vaultkeeper_core::errors::VaultError>
+pub fn vaultkeeper_core::vault::VaultKeeper::config(&self) -> &vaultkeeper_core::types::VaultConfig
+pub async fn vaultkeeper_core::vault::VaultKeeper::doctor(&dyn vaultkeeper_core::backend::HostPlatform) -> vaultkeeper_core::types::PreflightResult
+pub async fn vaultkeeper_core::vault::VaultKeeper::init(&dyn vaultkeeper_core::backend::HostPlatform, core::option::Option<vaultkeeper_core::vault::VaultKeeperOptions>) -> core::result::Result<Self, vaultkeeper_core::errors::VaultError>
+pub fn vaultkeeper_core::vault::VaultKeeper::key_manager(&self) -> &vaultkeeper_core::keys::KeyManager
+pub fn vaultkeeper_core::vault::VaultKeeper::key_manager_mut(&mut self) -> &mut vaultkeeper_core::keys::KeyManager
+pub async fn vaultkeeper_core::vault::VaultKeeper::mint_signing_lease(&mut self, &dyn vaultkeeper_core::backend::HostPlatform, &dyn vaultkeeper_core::backend::SigningBackend, &vaultkeeper_core::vault::MintLeaseOptions<'_>) -> core::result::Result<alloc::string::String, vaultkeeper_core::errors::VaultError>
+pub fn vaultkeeper_core::vault::VaultKeeper::read_secret(&mut self, &vaultkeeper_core::identity::handles::HandleId) -> core::result::Result<zeroize::Zeroizing<alloc::string::String>, vaultkeeper_core::errors::VaultError>
+pub async fn vaultkeeper_core::vault::VaultKeeper::redeem_signing_lease(&mut self, &dyn vaultkeeper_core::backend::HostPlatform, &str) -> core::result::Result<(vaultkeeper_core::identity::handles::HandleId, vaultkeeper_core::types::SigningClaims, vaultkeeper_core::types::VaultResponse), vaultkeeper_core::errors::VaultError>
+pub fn vaultkeeper_core::vault::VaultKeeper::release_handle(&mut self, &vaultkeeper_core::identity::handles::HandleId) -> bool
+pub fn vaultkeeper_core::vault::VaultKeeper::resolve_secret_claims(&mut self, &vaultkeeper_core::identity::handles::HandleId) -> core::result::Result<vaultkeeper_core::types::VaultClaims, vaultkeeper_core::errors::VaultError>
+pub fn vaultkeeper_core::vault::VaultKeeper::resolve_signing_claims(&mut self, &vaultkeeper_core::identity::handles::HandleId) -> core::result::Result<vaultkeeper_core::types::SigningClaims, vaultkeeper_core::errors::VaultError>
+pub async fn vaultkeeper_core::vault::VaultKeeper::revoke_key(&mut self, &dyn vaultkeeper_core::backend::HostPlatform) -> core::result::Result<(), vaultkeeper_core::errors::VaultError>
+pub async fn vaultkeeper_core::vault::VaultKeeper::revoke_lease_jti(&mut self, &dyn vaultkeeper_core::backend::HostPlatform, &str, u64) -> core::result::Result<(), vaultkeeper_core::errors::VaultError>
+pub async fn vaultkeeper_core::vault::VaultKeeper::revoke_lease_key(&mut self, &dyn vaultkeeper_core::backend::HostPlatform, &str) -> core::result::Result<(), vaultkeeper_core::errors::VaultError>
+pub async fn vaultkeeper_core::vault::VaultKeeper::rotate_key(&mut self, &dyn vaultkeeper_core::backend::HostPlatform) -> core::result::Result<(), vaultkeeper_core::errors::VaultError>
+pub async fn vaultkeeper_core::vault::VaultKeeper::setup(&self, &dyn vaultkeeper_core::backend::HostPlatform, &str, &str, core::option::Option<&vaultkeeper_core::vault::SetupOptions>) -> core::result::Result<alloc::string::String, vaultkeeper_core::errors::VaultError>
+pub fn vaultkeeper_core::vault::VaultKeeper::sweep_expired_handles(&mut self) -> usize
+pub async fn vaultkeeper_core::vault::VaultKeeper::validate_lease_revocation(&mut self, &dyn vaultkeeper_core::backend::HostPlatform, &vaultkeeper_core::types::VaultClaims) -> core::result::Result<(), vaultkeeper_core::errors::VaultError>
+pub struct vaultkeeper_core::vault::VaultKeeperOptions
+pub vaultkeeper_core::vault::VaultKeeperOptions::config: core::option::Option<vaultkeeper_core::types::VaultConfig>
+pub vaultkeeper_core::vault::VaultKeeperOptions::skip_doctor: bool
+pub async fn vaultkeeper_core::vault::enforce_presence_requirement(&dyn vaultkeeper_core::backend::SecretBackend, vaultkeeper_core::PresenceOperation, core::option::Option<bool>) -> core::result::Result<(), vaultkeeper_core::errors::VaultError>
+pub enum vaultkeeper_core::ClaimsKind
+pub vaultkeeper_core::ClaimsKind::Secret
+pub vaultkeeper_core::ClaimsKind::SigningKey
+pub enum vaultkeeper_core::ExecutableTrustRequiredReason
+pub vaultkeeper_core::ExecutableTrustRequiredReason::ConflictingChoice
+pub vaultkeeper_core::ExecutableTrustRequiredReason::LegacyDevSentinel
+pub vaultkeeper_core::ExecutableTrustRequiredReason::MissingChoice
+impl vaultkeeper_core::errors::ExecutableTrustRequiredReason
+pub fn vaultkeeper_core::errors::ExecutableTrustRequiredReason::as_str(self) -> &'static str
+pub enum vaultkeeper_core::KeyStatus
+pub vaultkeeper_core::KeyStatus::Current
+pub vaultkeeper_core::KeyStatus::Deprecated
+pub vaultkeeper_core::KeyStatus::Previous
+pub enum vaultkeeper_core::PreflightCheckStatus
+pub vaultkeeper_core::PreflightCheckStatus::Missing
+pub vaultkeeper_core::PreflightCheckStatus::Ok
+pub vaultkeeper_core::PreflightCheckStatus::VersionUnsupported
+pub enum vaultkeeper_core::PresenceOperation
+pub vaultkeeper_core::PresenceOperation::Delete
+pub vaultkeeper_core::PresenceOperation::Read
+pub vaultkeeper_core::PresenceOperation::Sign
+pub vaultkeeper_core::PresenceOperation::Store
+impl vaultkeeper_core::PresenceOperation
+pub fn vaultkeeper_core::PresenceOperation::as_str(self) -> &'static str
+impl core::fmt::Display for vaultkeeper_core::PresenceOperation
+pub fn vaultkeeper_core::PresenceOperation::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub enum vaultkeeper_core::SigningAlgorithm
+pub vaultkeeper_core::SigningAlgorithm::EdDsa
+pub enum vaultkeeper_core::StoredClaims
+pub vaultkeeper_core::StoredClaims::Secret(alloc::boxed::Box<vaultkeeper_core::types::VaultClaims>)
+pub vaultkeeper_core::StoredClaims::Signing(vaultkeeper_core::types::SigningClaims)
+impl vaultkeeper_core::identity::handles::StoredClaims
+pub fn vaultkeeper_core::identity::handles::StoredClaims::is_signing(&self) -> bool
+pub enum vaultkeeper_core::TrustTier
+pub vaultkeeper_core::TrustTier::Dev = 3
+pub vaultkeeper_core::TrustTier::Sigstore = 1
+pub vaultkeeper_core::TrustTier::Tofu = 2
+pub enum vaultkeeper_core::VaultError
+pub vaultkeeper_core::VaultError::AccessorConsumed
+pub vaultkeeper_core::VaultError::AccessorConsumed::message: alloc::string::String
+pub vaultkeeper_core::VaultError::AuthorizationDenied
+pub vaultkeeper_core::VaultError::AuthorizationDenied::message: alloc::string::String
+pub vaultkeeper_core::VaultError::BackendLocked
+pub vaultkeeper_core::VaultError::BackendLocked::interactive: bool
+pub vaultkeeper_core::VaultError::BackendLocked::message: alloc::string::String
+pub vaultkeeper_core::VaultError::BackendUnavailable
+pub vaultkeeper_core::VaultError::BackendUnavailable::attempted: alloc::vec::Vec<alloc::string::String>
+pub vaultkeeper_core::VaultError::BackendUnavailable::message: alloc::string::String
+pub vaultkeeper_core::VaultError::BackendUnavailable::reason: alloc::string::String
+pub vaultkeeper_core::VaultError::ConfigParse
+pub vaultkeeper_core::VaultError::ConfigParse::column: core::option::Option<u32>
+pub vaultkeeper_core::VaultError::ConfigParse::line: core::option::Option<u32>
+pub vaultkeeper_core::VaultError::ConfigParse::message: alloc::string::String
+pub vaultkeeper_core::VaultError::ConfigParse::path: alloc::string::String
+pub vaultkeeper_core::VaultError::ConfigValidation
+pub vaultkeeper_core::VaultError::ConfigValidation::config_file_path: core::option::Option<alloc::string::String>
+pub vaultkeeper_core::VaultError::ConfigValidation::field: alloc::string::String
+pub vaultkeeper_core::VaultError::ConfigValidation::message: alloc::string::String
+pub vaultkeeper_core::VaultError::Decryption
+pub vaultkeeper_core::VaultError::Decryption::message: alloc::string::String
+pub vaultkeeper_core::VaultError::Decryption::path: alloc::string::String
+pub vaultkeeper_core::VaultError::DeviceNotPresent
+pub vaultkeeper_core::VaultError::DeviceNotPresent::message: alloc::string::String
+pub vaultkeeper_core::VaultError::DeviceNotPresent::timeout_ms: u64
+pub vaultkeeper_core::VaultError::Exec
+pub vaultkeeper_core::VaultError::Exec::command: alloc::string::String
+pub vaultkeeper_core::VaultError::Exec::message: alloc::string::String
+pub vaultkeeper_core::VaultError::ExecutableTrustRequired
+pub vaultkeeper_core::VaultError::ExecutableTrustRequired::message: alloc::string::String
+pub vaultkeeper_core::VaultError::ExecutableTrustRequired::reason: vaultkeeper_core::errors::ExecutableTrustRequiredReason
+pub vaultkeeper_core::VaultError::Fetch
+pub vaultkeeper_core::VaultError::Fetch::message: alloc::string::String
+pub vaultkeeper_core::VaultError::Fetch::url: alloc::string::String
+pub vaultkeeper_core::VaultError::Filesystem
+pub vaultkeeper_core::VaultError::Filesystem::code: core::option::Option<alloc::string::String>
+pub vaultkeeper_core::VaultError::Filesystem::message: alloc::string::String
+pub vaultkeeper_core::VaultError::Filesystem::path: alloc::string::String
+pub vaultkeeper_core::VaultError::Filesystem::permission: alloc::string::String
+pub vaultkeeper_core::VaultError::IdentityMismatch
+pub vaultkeeper_core::VaultError::IdentityMismatch::current_hash: alloc::string::String
+pub vaultkeeper_core::VaultError::IdentityMismatch::message: alloc::string::String
+pub vaultkeeper_core::VaultError::IdentityMismatch::previous_hash: alloc::string::String
+pub vaultkeeper_core::VaultError::InvalidAlgorithm
+pub vaultkeeper_core::VaultError::InvalidAlgorithm::algorithm: alloc::string::String
+pub vaultkeeper_core::VaultError::InvalidAlgorithm::allowed: alloc::vec::Vec<alloc::string::String>
+pub vaultkeeper_core::VaultError::InvalidAlgorithm::message: alloc::string::String
+pub vaultkeeper_core::VaultError::InvalidKeyMaterial
+pub vaultkeeper_core::VaultError::InvalidKeyMaterial::message: alloc::string::String
+pub vaultkeeper_core::VaultError::InvalidToken
+pub vaultkeeper_core::VaultError::InvalidToken::message: alloc::string::String
+pub vaultkeeper_core::VaultError::KeyRevoked
+pub vaultkeeper_core::VaultError::KeyRevoked::message: alloc::string::String
+pub vaultkeeper_core::VaultError::KeyRotated
+pub vaultkeeper_core::VaultError::KeyRotated::message: alloc::string::String
+pub vaultkeeper_core::VaultError::LockingNotSupported
+pub vaultkeeper_core::VaultError::LockingNotSupported::message: alloc::string::String
+pub vaultkeeper_core::VaultError::MaterializeModeUnsupported
+pub vaultkeeper_core::VaultError::MaterializeModeUnsupported::message: alloc::string::String
+pub vaultkeeper_core::VaultError::MaterializeModeUnsupported::mode: alloc::string::String
+pub vaultkeeper_core::VaultError::NotCapable
+pub vaultkeeper_core::VaultError::NotCapable::backend_type: alloc::string::String
+pub vaultkeeper_core::VaultError::NotCapable::capability: alloc::string::String
+pub vaultkeeper_core::VaultError::NotCapable::message: alloc::string::String
+pub vaultkeeper_core::VaultError::Other(alloc::string::String)
+pub vaultkeeper_core::VaultError::PluginNotFound
+pub vaultkeeper_core::VaultError::PluginNotFound::install_url: alloc::string::String
+pub vaultkeeper_core::VaultError::PluginNotFound::message: alloc::string::String
+pub vaultkeeper_core::VaultError::PluginNotFound::plugin: alloc::string::String
+pub vaultkeeper_core::VaultError::PresenceDeclined
+pub vaultkeeper_core::VaultError::PresenceDeclined::backend_type: alloc::string::String
+pub vaultkeeper_core::VaultError::PresenceDeclined::message: alloc::string::String
+pub vaultkeeper_core::VaultError::PresenceTimeout
+pub vaultkeeper_core::VaultError::PresenceTimeout::backend_type: alloc::string::String
+pub vaultkeeper_core::VaultError::PresenceTimeout::message: alloc::string::String
+pub vaultkeeper_core::VaultError::PresenceTimeout::timeout_ms: u64
+pub vaultkeeper_core::VaultError::RotationInProgress
+pub vaultkeeper_core::VaultError::RotationInProgress::message: alloc::string::String
+pub vaultkeeper_core::VaultError::SecretNotFound
+pub vaultkeeper_core::VaultError::SecretNotFound::message: alloc::string::String
+pub vaultkeeper_core::VaultError::Setup
+pub vaultkeeper_core::VaultError::Setup::dependency: alloc::string::String
+pub vaultkeeper_core::VaultError::Setup::message: alloc::string::String
+pub vaultkeeper_core::VaultError::SigningKeyAlreadyExists
+pub vaultkeeper_core::VaultError::SigningKeyAlreadyExists::id: alloc::string::String
+pub vaultkeeper_core::VaultError::SigningKeyAlreadyExists::message: alloc::string::String
+pub vaultkeeper_core::VaultError::SigningKeyNotFound
+pub vaultkeeper_core::VaultError::SigningKeyNotFound::id: alloc::string::String
+pub vaultkeeper_core::VaultError::SigningKeyNotFound::message: alloc::string::String
+pub vaultkeeper_core::VaultError::SigningNotSupported
+pub vaultkeeper_core::VaultError::SigningNotSupported::backend_type: alloc::string::String
+pub vaultkeeper_core::VaultError::SigningNotSupported::built_in_signing_backends: alloc::vec::Vec<alloc::string::String>
+pub vaultkeeper_core::VaultError::SigningNotSupported::message: alloc::string::String
+pub vaultkeeper_core::VaultError::TokenExpired
+pub vaultkeeper_core::VaultError::TokenExpired::can_refresh: bool
+pub vaultkeeper_core::VaultError::TokenExpired::message: alloc::string::String
+pub vaultkeeper_core::VaultError::TokenRevoked
+pub vaultkeeper_core::VaultError::TokenRevoked::message: alloc::string::String
+pub vaultkeeper_core::VaultError::UnknownBackendType
+pub vaultkeeper_core::VaultError::UnknownBackendType::backend_type: alloc::string::String
+pub vaultkeeper_core::VaultError::UnknownBackendType::config_file_path: core::option::Option<alloc::string::String>
+pub vaultkeeper_core::VaultError::UnknownBackendType::field: alloc::string::String
+pub vaultkeeper_core::VaultError::UnknownBackendType::known_backend_types: alloc::vec::Vec<alloc::string::String>
+pub vaultkeeper_core::VaultError::UnknownBackendType::message: alloc::string::String
+pub vaultkeeper_core::VaultError::UsageLimitExceeded
+pub vaultkeeper_core::VaultError::UsageLimitExceeded::message: alloc::string::String
+impl vaultkeeper_core::errors::VaultError
+pub fn vaultkeeper_core::errors::VaultError::with_config_file_path(self, impl core::convert::Into<alloc::string::String>) -> Self
+pub struct vaultkeeper_core::BackendCapabilities
+pub vaultkeeper_core::BackendCapabilities::presence_enforced_operations: core::option::Option<alloc::vec::Vec<vaultkeeper_core::PresenceOperation>>
+pub vaultkeeper_core::BackendCapabilities::presence_per_use: bool
+impl vaultkeeper_core::BackendCapabilities
+pub fn vaultkeeper_core::BackendCapabilities::enforces(&self, vaultkeeper_core::PresenceOperation) -> bool
+pub fn vaultkeeper_core::BackendCapabilities::none() -> Self
+pub struct vaultkeeper_core::BackendConfig
+pub vaultkeeper_core::BackendConfig::backend_type: alloc::string::String
+pub vaultkeeper_core::BackendConfig::enabled: bool
+pub vaultkeeper_core::BackendConfig::options: core::option::Option<std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>>
+pub vaultkeeper_core::BackendConfig::path: core::option::Option<alloc::string::String>
+pub vaultkeeper_core::BackendConfig::plugin: core::option::Option<bool>
+pub struct vaultkeeper_core::ExecRequest
+pub vaultkeeper_core::ExecRequest::args: core::option::Option<alloc::vec::Vec<alloc::string::String>>
+pub vaultkeeper_core::ExecRequest::command: alloc::string::String
+pub vaultkeeper_core::ExecRequest::cwd: core::option::Option<alloc::string::String>
+pub vaultkeeper_core::ExecRequest::env: core::option::Option<std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>>
+pub struct vaultkeeper_core::ExecResult
+pub vaultkeeper_core::ExecResult::exit_code: i32
+pub vaultkeeper_core::ExecResult::stderr: alloc::string::String
+pub vaultkeeper_core::ExecResult::stdout: alloc::string::String
+pub struct vaultkeeper_core::FetchRequest
+pub vaultkeeper_core::FetchRequest::body: core::option::Option<alloc::string::String>
+pub vaultkeeper_core::FetchRequest::headers: core::option::Option<std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>>
+pub vaultkeeper_core::FetchRequest::method: core::option::Option<alloc::string::String>
+pub vaultkeeper_core::FetchRequest::url: alloc::string::String
+pub struct vaultkeeper_core::HandleId(_)
+impl vaultkeeper_core::identity::handles::HandleId
+pub fn vaultkeeper_core::identity::handles::HandleId::as_str(&self) -> &str
+pub fn vaultkeeper_core::identity::handles::HandleId::redacted(&self) -> alloc::string::String
+impl core::convert::From<alloc::string::String> for vaultkeeper_core::identity::handles::HandleId
+pub fn vaultkeeper_core::identity::handles::HandleId::from(alloc::string::String) -> Self
+impl core::convert::From<vaultkeeper_core::identity::handles::HandleId> for alloc::string::String
+pub fn alloc::string::String::from(vaultkeeper_core::identity::handles::HandleId) -> Self
+impl core::fmt::Debug for vaultkeeper_core::identity::handles::HandleId
+pub fn vaultkeeper_core::identity::handles::HandleId::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for vaultkeeper_core::identity::handles::HandleId
+pub fn vaultkeeper_core::identity::handles::HandleId::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct vaultkeeper_core::HandleTable
+impl vaultkeeper_core::identity::handles::HandleTable
+pub fn vaultkeeper_core::identity::handles::HandleTable::current_usage(&self, &str) -> u64
+pub fn vaultkeeper_core::identity::handles::HandleTable::insert_secret(&mut self, vaultkeeper_core::types::VaultClaims, core::option::Option<u64>) -> vaultkeeper_core::identity::handles::HandleId
+pub fn vaultkeeper_core::identity::handles::HandleTable::is_empty(&self) -> bool
+pub fn vaultkeeper_core::identity::handles::HandleTable::len(&self) -> usize
+pub fn vaultkeeper_core::identity::handles::HandleTable::new() -> Self
+pub fn vaultkeeper_core::identity::handles::HandleTable::read_secret(&mut self, &vaultkeeper_core::identity::handles::HandleId) -> core::result::Result<zeroize::Zeroizing<alloc::string::String>, vaultkeeper_core::errors::VaultError>
+pub fn vaultkeeper_core::identity::handles::HandleTable::record_usage(&mut self, &str) -> u64
+pub fn vaultkeeper_core::identity::handles::HandleTable::release(&mut self, &vaultkeeper_core::identity::handles::HandleId) -> bool
+pub fn vaultkeeper_core::identity::handles::HandleTable::resolve_secret_claims(&mut self, &vaultkeeper_core::identity::handles::HandleId) -> core::result::Result<vaultkeeper_core::types::VaultClaims, vaultkeeper_core::errors::VaultError>
+pub fn vaultkeeper_core::identity::handles::HandleTable::resolve_signing_claims(&mut self, &vaultkeeper_core::identity::handles::HandleId) -> core::result::Result<vaultkeeper_core::types::SigningClaims, vaultkeeper_core::errors::VaultError>
+pub fn vaultkeeper_core::identity::handles::HandleTable::sweep_expired(&mut self) -> usize
+pub struct vaultkeeper_core::InMemoryBackend
+impl vaultkeeper_core::backend::in_memory::InMemoryBackend
+pub fn vaultkeeper_core::backend::in_memory::InMemoryBackend::clear(&self)
+pub fn vaultkeeper_core::backend::in_memory::InMemoryBackend::new() -> Self
+pub fn vaultkeeper_core::backend::in_memory::InMemoryBackend::size(&self) -> usize
+impl core::default::Default for vaultkeeper_core::backend::in_memory::InMemoryBackend
+pub fn vaultkeeper_core::backend::in_memory::InMemoryBackend::default() -> Self
+impl vaultkeeper_core::PresenceCapableBackend for vaultkeeper_core::backend::in_memory::InMemoryBackend
+pub fn vaultkeeper_core::backend::in_memory::InMemoryBackend::get_capabilities<'life0, 'async_trait>(&'life0 self) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<vaultkeeper_core::BackendCapabilities, vaultkeeper_core::errors::VaultError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+impl vaultkeeper_core::backend::ListableBackend for vaultkeeper_core::backend::in_memory::InMemoryBackend
+pub fn vaultkeeper_core::backend::in_memory::InMemoryBackend::list<'life0, 'async_trait>(&'life0 self) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<alloc::vec::Vec<alloc::string::String>, vaultkeeper_core::errors::VaultError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+impl vaultkeeper_core::backend::SecretBackend for vaultkeeper_core::backend::in_memory::InMemoryBackend
+pub fn vaultkeeper_core::backend::in_memory::InMemoryBackend::as_presence_capable(&self) -> core::option::Option<&dyn vaultkeeper_core::PresenceCapableBackend>
+pub fn vaultkeeper_core::backend::in_memory::InMemoryBackend::backend_type(&self) -> &str
+pub fn vaultkeeper_core::backend::in_memory::InMemoryBackend::delete<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<(), vaultkeeper_core::errors::VaultError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn vaultkeeper_core::backend::in_memory::InMemoryBackend::display_name(&self) -> &str
+pub fn vaultkeeper_core::backend::in_memory::InMemoryBackend::exists<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<bool, vaultkeeper_core::errors::VaultError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn vaultkeeper_core::backend::in_memory::InMemoryBackend::is_available<'life0, 'async_trait>(&'life0 self) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = bool> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub fn vaultkeeper_core::backend::in_memory::InMemoryBackend::retrieve<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<alloc::string::String, vaultkeeper_core::errors::VaultError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn vaultkeeper_core::backend::in_memory::InMemoryBackend::store<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 str, &'life2 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<(), vaultkeeper_core::errors::VaultError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
+impl vaultkeeper_core::backend::SigningBackend for vaultkeeper_core::backend::in_memory::InMemoryBackend
+pub fn vaultkeeper_core::backend::in_memory::InMemoryBackend::generate_signing_key<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 str, vaultkeeper_core::types::SigningAlgorithm) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<(), vaultkeeper_core::errors::VaultError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn vaultkeeper_core::backend::in_memory::InMemoryBackend::get_public_key<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<vaultkeeper_core::types::SigningPublicKey, vaultkeeper_core::errors::VaultError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn vaultkeeper_core::backend::in_memory::InMemoryBackend::sign_with_key<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 str, &'life2 [u8]) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<alloc::vec::Vec<u8>, vaultkeeper_core::errors::VaultError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
+pub struct vaultkeeper_core::LeasePresence
+pub vaultkeeper_core::LeasePresence::at: u64
+pub vaultkeeper_core::LeasePresence::backend: alloc::string::String
+pub vaultkeeper_core::LeasePresence::method: alloc::string::String
+pub vaultkeeper_core::LeasePresence::op: alloc::string::String
+pub struct vaultkeeper_core::PreflightCheck
+pub vaultkeeper_core::PreflightCheck::name: alloc::string::String
+pub vaultkeeper_core::PreflightCheck::reason: core::option::Option<alloc::string::String>
+pub vaultkeeper_core::PreflightCheck::status: vaultkeeper_core::types::PreflightCheckStatus
+pub vaultkeeper_core::PreflightCheck::version: core::option::Option<alloc::string::String>
+pub struct vaultkeeper_core::PreflightResult
+pub vaultkeeper_core::PreflightResult::checks: alloc::vec::Vec<vaultkeeper_core::types::ScopedPreflightCheck>
+pub vaultkeeper_core::PreflightResult::next_steps: alloc::vec::Vec<alloc::string::String>
+pub vaultkeeper_core::PreflightResult::ready: bool
+pub vaultkeeper_core::PreflightResult::warnings: alloc::vec::Vec<alloc::string::String>
+pub struct vaultkeeper_core::ResolveOptions<'a>
+pub vaultkeeper_core::ResolveOptions::backend: &'a dyn vaultkeeper_core::backend::SecretBackend
+pub vaultkeeper_core::ResolveOptions::executable_hash: core::option::Option<alloc::string::String>
+pub vaultkeeper_core::ResolveOptions::key_manager: &'a vaultkeeper_core::keys::KeyManager
+pub struct vaultkeeper_core::RunPlan
+pub vaultkeeper_core::RunPlan::ad_hoc: alloc::collections::btree::set::BTreeSet<alloc::string::String>
+pub vaultkeeper_core::RunPlan::profile: vaultkeeper_core::profile::loader::LoadedProfile
+pub struct vaultkeeper_core::ScopedPreflightCheck
+pub vaultkeeper_core::ScopedPreflightCheck::check: vaultkeeper_core::types::PreflightCheck
+pub vaultkeeper_core::ScopedPreflightCheck::required: bool
+pub struct vaultkeeper_core::SecretAccessor
+impl vaultkeeper_core::types::SecretAccessor
+pub fn vaultkeeper_core::types::SecretAccessor::new(alloc::vec::Vec<u8>) -> Self
+pub fn vaultkeeper_core::types::SecretAccessor::read<F, R>(&mut self, F) -> core::result::Result<R, vaultkeeper_core::errors::VaultError> where F: core::ops::function::FnOnce(&[u8]) -> R
+impl core::ops::drop::Drop for vaultkeeper_core::types::SecretAccessor
+pub fn vaultkeeper_core::types::SecretAccessor::drop(&mut self)
+pub struct vaultkeeper_core::SetEntry
+pub vaultkeeper_core::SetEntry::secret_name: alloc::string::String
+pub vaultkeeper_core::SetEntry::var: alloc::string::String
+pub struct vaultkeeper_core::SigningClaims
+pub vaultkeeper_core::SigningClaims::backend_ref: alloc::string::String
+pub vaultkeeper_core::SigningClaims::kid: alloc::string::String
+pub struct vaultkeeper_core::SigningPublicKey
+pub vaultkeeper_core::SigningPublicKey::algorithm: vaultkeeper_core::types::SigningAlgorithm
+pub vaultkeeper_core::SigningPublicKey::kid: alloc::string::String
+pub vaultkeeper_core::SigningPublicKey::public_key_pem: alloc::string::String
+pub struct vaultkeeper_core::VaultClaims
+pub vaultkeeper_core::VaultClaims::bkd: core::option::Option<alloc::string::String>
+pub vaultkeeper_core::VaultClaims::exe: alloc::string::String
+pub vaultkeeper_core::VaultClaims::exp: u64
+pub vaultkeeper_core::VaultClaims::iat: u64
+pub vaultkeeper_core::VaultClaims::jti: alloc::string::String
+pub vaultkeeper_core::VaultClaims::kgen: core::option::Option<u64>
+pub vaultkeeper_core::VaultClaims::kid: core::option::Option<alloc::string::String>
+pub vaultkeeper_core::VaultClaims::kty: core::option::Option<vaultkeeper_core::types::ClaimsKind>
+pub vaultkeeper_core::VaultClaims::pres: core::option::Option<vaultkeeper_core::types::LeasePresence>
+pub vaultkeeper_core::VaultClaims::reference: alloc::string::String
+pub vaultkeeper_core::VaultClaims::sub: alloc::string::String
+pub vaultkeeper_core::VaultClaims::tid: vaultkeeper_core::types::TrustTier
+pub vaultkeeper_core::VaultClaims::use_limit: core::option::Option<u64>
+pub vaultkeeper_core::VaultClaims::val: core::option::Option<alloc::string::String>
+pub struct vaultkeeper_core::VaultConfig
+pub vaultkeeper_core::VaultConfig::backends: alloc::vec::Vec<vaultkeeper_core::types::BackendConfig>
+pub vaultkeeper_core::VaultConfig::defaults: vaultkeeper_core::types::VaultDefaults
+pub vaultkeeper_core::VaultConfig::development_mode: core::option::Option<vaultkeeper_core::types::DevelopmentMode>
+pub vaultkeeper_core::VaultConfig::key_rotation: vaultkeeper_core::types::KeyRotationPolicy
+pub vaultkeeper_core::VaultConfig::version: u32
+pub struct vaultkeeper_core::VaultKeeper
+impl vaultkeeper_core::vault::VaultKeeper
+pub fn vaultkeeper_core::vault::VaultKeeper::authorize(&mut self, &str) -> core::result::Result<(vaultkeeper_core::identity::handles::HandleId, vaultkeeper_core::types::VaultClaims, vaultkeeper_core::types::VaultResponse), vaultkeeper_core::errors::VaultError>
+pub fn vaultkeeper_core::vault::VaultKeeper::config(&self) -> &vaultkeeper_core::types::VaultConfig
+pub async fn vaultkeeper_core::vault::VaultKeeper::doctor(&dyn vaultkeeper_core::backend::HostPlatform) -> vaultkeeper_core::types::PreflightResult
+pub async fn vaultkeeper_core::vault::VaultKeeper::init(&dyn vaultkeeper_core::backend::HostPlatform, core::option::Option<vaultkeeper_core::vault::VaultKeeperOptions>) -> core::result::Result<Self, vaultkeeper_core::errors::VaultError>
+pub fn vaultkeeper_core::vault::VaultKeeper::key_manager(&self) -> &vaultkeeper_core::keys::KeyManager
+pub fn vaultkeeper_core::vault::VaultKeeper::key_manager_mut(&mut self) -> &mut vaultkeeper_core::keys::KeyManager
+pub async fn vaultkeeper_core::vault::VaultKeeper::mint_signing_lease(&mut self, &dyn vaultkeeper_core::backend::HostPlatform, &dyn vaultkeeper_core::backend::SigningBackend, &vaultkeeper_core::vault::MintLeaseOptions<'_>) -> core::result::Result<alloc::string::String, vaultkeeper_core::errors::VaultError>
+pub fn vaultkeeper_core::vault::VaultKeeper::read_secret(&mut self, &vaultkeeper_core::identity::handles::HandleId) -> core::result::Result<zeroize::Zeroizing<alloc::string::String>, vaultkeeper_core::errors::VaultError>
+pub async fn vaultkeeper_core::vault::VaultKeeper::redeem_signing_lease(&mut self, &dyn vaultkeeper_core::backend::HostPlatform, &str) -> core::result::Result<(vaultkeeper_core::identity::handles::HandleId, vaultkeeper_core::types::SigningClaims, vaultkeeper_core::types::VaultResponse), vaultkeeper_core::errors::VaultError>
+pub fn vaultkeeper_core::vault::VaultKeeper::release_handle(&mut self, &vaultkeeper_core::identity::handles::HandleId) -> bool
+pub fn vaultkeeper_core::vault::VaultKeeper::resolve_secret_claims(&mut self, &vaultkeeper_core::identity::handles::HandleId) -> core::result::Result<vaultkeeper_core::types::VaultClaims, vaultkeeper_core::errors::VaultError>
+pub fn vaultkeeper_core::vault::VaultKeeper::resolve_signing_claims(&mut self, &vaultkeeper_core::identity::handles::HandleId) -> core::result::Result<vaultkeeper_core::types::SigningClaims, vaultkeeper_core::errors::VaultError>
+pub async fn vaultkeeper_core::vault::VaultKeeper::revoke_key(&mut self, &dyn vaultkeeper_core::backend::HostPlatform) -> core::result::Result<(), vaultkeeper_core::errors::VaultError>
+pub async fn vaultkeeper_core::vault::VaultKeeper::revoke_lease_jti(&mut self, &dyn vaultkeeper_core::backend::HostPlatform, &str, u64) -> core::result::Result<(), vaultkeeper_core::errors::VaultError>
+pub async fn vaultkeeper_core::vault::VaultKeeper::revoke_lease_key(&mut self, &dyn vaultkeeper_core::backend::HostPlatform, &str) -> core::result::Result<(), vaultkeeper_core::errors::VaultError>
+pub async fn vaultkeeper_core::vault::VaultKeeper::rotate_key(&mut self, &dyn vaultkeeper_core::backend::HostPlatform) -> core::result::Result<(), vaultkeeper_core::errors::VaultError>
+pub async fn vaultkeeper_core::vault::VaultKeeper::setup(&self, &dyn vaultkeeper_core::backend::HostPlatform, &str, &str, core::option::Option<&vaultkeeper_core::vault::SetupOptions>) -> core::result::Result<alloc::string::String, vaultkeeper_core::errors::VaultError>
+pub fn vaultkeeper_core::vault::VaultKeeper::sweep_expired_handles(&mut self) -> usize
+pub async fn vaultkeeper_core::vault::VaultKeeper::validate_lease_revocation(&mut self, &dyn vaultkeeper_core::backend::HostPlatform, &vaultkeeper_core::types::VaultClaims) -> core::result::Result<(), vaultkeeper_core::errors::VaultError>
+pub struct vaultkeeper_core::VaultResponse
+pub vaultkeeper_core::VaultResponse::key_status: vaultkeeper_core::types::KeyStatus
+pub vaultkeeper_core::VaultResponse::rotated_jwt: core::option::Option<alloc::string::String>
+pub struct vaultkeeper_core::VerifyRequest
+pub vaultkeeper_core::VerifyRequest::jws: alloc::string::String
+pub vaultkeeper_core::VerifyRequest::payload: alloc::vec::Vec<u8>
+pub vaultkeeper_core::VerifyRequest::public_key: alloc::string::String
+pub const vaultkeeper_core::FILE_ONLY_DEGRADATION_NOTICE: &str
+pub const vaultkeeper_core::HANDLE_TABLE_MAX_SIZE: usize
+pub trait vaultkeeper_core::PresenceCapableBackend: vaultkeeper_core::backend::SecretBackend
+pub fn vaultkeeper_core::PresenceCapableBackend::get_capabilities<'life0, 'async_trait>(&'life0 self) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<vaultkeeper_core::BackendCapabilities, vaultkeeper_core::errors::VaultError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+impl vaultkeeper_core::PresenceCapableBackend for vaultkeeper_core::backend::in_memory::InMemoryBackend
+pub fn vaultkeeper_core::backend::in_memory::InMemoryBackend::get_capabilities<'life0, 'async_trait>(&'life0 self) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<vaultkeeper_core::BackendCapabilities, vaultkeeper_core::errors::VaultError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+impl vaultkeeper_core::PresenceCapableBackend for vaultkeeper_core::backend::yubikey::YubikeyBackend
+pub fn vaultkeeper_core::backend::yubikey::YubikeyBackend::get_capabilities<'life0, 'async_trait>(&'life0 self) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<vaultkeeper_core::BackendCapabilities, vaultkeeper_core::errors::VaultError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub fn vaultkeeper_core::apply_set_overlay(vaultkeeper_core::profile::loader::LoadedProfile, &[vaultkeeper_core::run::SetEntry], &vaultkeeper_core::profile::loader::ProfileDefaults) -> vaultkeeper_core::run::RunPlan
+pub async fn vaultkeeper_core::enforce_presence_requirement(&dyn vaultkeeper_core::backend::SecretBackend, vaultkeeper_core::PresenceOperation, core::option::Option<bool>) -> core::result::Result<(), vaultkeeper_core::errors::VaultError>
+pub fn vaultkeeper_core::file_only_degradation_applies(&vaultkeeper_core::run::RunPlan, &str) -> bool
+pub async fn vaultkeeper_core::get_backend_capabilities(&dyn vaultkeeper_core::backend::SecretBackend) -> core::result::Result<vaultkeeper_core::BackendCapabilities, vaultkeeper_core::errors::VaultError>
+pub fn vaultkeeper_core::is_presence_capable_backend(&dyn vaultkeeper_core::backend::SecretBackend) -> bool
+pub fn vaultkeeper_core::parse_set_flag(&str) -> core::result::Result<vaultkeeper_core::run::SetEntry, vaultkeeper_core::errors::VaultError>
+pub fn vaultkeeper_core::render_dry_run(&vaultkeeper_core::run::RunPlan, &str, bool) -> alloc::string::String
+pub async fn vaultkeeper_core::resolve_profile(&vaultkeeper_core::profile::loader::LoadedProfile, &vaultkeeper_core::resolve::ResolveOptions<'_>) -> core::result::Result<vaultkeeper_core::resolve::ResolvedEnv, vaultkeeper_core::errors::VaultError>
+pub type vaultkeeper_core::ResolvedEnv = std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>

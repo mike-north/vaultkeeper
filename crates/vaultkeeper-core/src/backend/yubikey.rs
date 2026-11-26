@@ -50,7 +50,7 @@ use zeroize::{Zeroize, Zeroizing};
 use crate::backend::file::hex_encode;
 use crate::backend::types::{
     BackendCapabilities, ExecOptions, HostPlatform, ListableBackend, PresenceCapableBackend,
-    SecretBackend,
+    PresenceOperation, SecretBackend,
 };
 use crate::errors::VaultError;
 
@@ -589,13 +589,31 @@ impl ListableBackend for YubikeyBackend {
 /// `getCapabilities` exactly: the answer always comes from the
 /// operator-declared configuration, never derived from the backend type
 /// alone.
+///
+/// **Operation coverage (issue #326):** the touch-per-operation policy only
+/// actually fires for `store()` and `retrieve()` — both perform the
+/// HMAC-SHA1 challenge-response (`ykman otp calculate 2 ...`) that demands
+/// the physical tap. [`SecretBackend::delete`] only calls `require_device()`
+/// (a presence *probe*: is a YubiKey plugged in at all) plus a filesystem
+/// unlink — it never invokes challenge-response, so it never actually
+/// demands a fresh touch. Reporting `presence_enforced_operations: None`
+/// (meaning "all keyed operations") would therefore be dishonest: a caller
+/// relying on `presencePerUse` to mean "deleting this secret requires a
+/// physical touch" would be misled. This reports
+/// `Some([PresenceOperation::Read, PresenceOperation::Store])`, excluding
+/// `Delete`, so a `--require-presence-per-use` delete fails closed via
+/// [`crate::vault::enforce_presence_requirement`] instead of silently
+/// succeeding with no touch. `Sign` does not apply — this backend does not
+/// implement `SigningBackend`.
 #[cfg_attr(target_arch = "wasm32", async_trait::async_trait(?Send))]
 #[cfg_attr(not(target_arch = "wasm32"), async_trait::async_trait)]
 impl PresenceCapableBackend for YubikeyBackend {
     async fn get_capabilities(&self) -> Result<BackendCapabilities, VaultError> {
         Ok(BackendCapabilities {
             presence_per_use: self.require_touch,
-            presence_enforced_operations: None,
+            presence_enforced_operations: self
+                .require_touch
+                .then(|| vec![PresenceOperation::Read, PresenceOperation::Store]),
         })
     }
 }
@@ -701,41 +719,35 @@ mod tests {
                 });
             }
 
-            match args.first().copied() {
-                Some("--version") => Ok(ExecOutput {
-                    stdout: b"YubiKey Manager (ykman) version: 5.4.0".to_vec(),
-                    stderr: Vec::new(),
-                    exit_code: 0,
-                }),
-                Some("list") => {
-                    if self.device_available {
-                        Ok(ExecOutput {
-                            stdout: b"YubiKey 5 NFC (5.4.3) [OTP+FIDO+CCID] Serial: 12345".to_vec(),
-                            stderr: Vec::new(),
-                            exit_code: 0,
-                        })
-                    } else {
-                        Ok(ExecOutput {
-                            stdout: Vec::new(),
-                            stderr: Vec::new(),
-                            exit_code: 0,
-                        })
-                    }
-                }
-                Some("otp") => {
-                    // ["otp", "calculate", "2", <hex-challenge>]
-                    assert_eq!(args.get(1).copied(), Some("calculate"));
-                    assert_eq!(args.get(2).copied(), Some("2"));
-                    assert!(args.get(3).is_some(), "challenge hex value must be present");
-                    let response = self.hmac_response.lock().unwrap().clone();
-                    Ok(ExecOutput {
-                        stdout: response.into_bytes(),
-                        stderr: Vec::new(),
-                        exit_code: 0,
-                    })
-                }
-                other => panic!("unexpected ykman invocation: {other:?}"),
+            // Ported onto the generalized `StubTool` engine (issue #313
+            // AC6): this used to be a hand-written match over `args.first()`
+            // — now it's the exact same `ykman` behavior table
+            // `vk-stub-ykman` (a real subprocess binary) loads, driven
+            // in-process here for speed/hermeticity. `device_available` and
+            // `hmac_response` seed a fresh `World` per call rather than
+            // persisting one across calls, matching this double's original
+            // per-call semantics (`hmac_response` can be swapped mid-test —
+            // see e.g. `wrong_key_decrypt_surfaces_typed_error_never_a_garbage_secret`).
+            let hmac_response = self.hmac_response.lock().unwrap().clone();
+            let table = vaultkeeper_stub_tools::tables::ykman(&hmac_response);
+            let mut world = vaultkeeper_stub_tools::World::new();
+            world.flags.insert(
+                vaultkeeper_stub_tools::tables::YKMAN_DEVICE_AVAILABLE_FLAG.to_string(),
+                self.device_available,
+            );
+            let args_owned: Vec<String> = args.iter().map(|s| s.to_string()).collect();
+            let result =
+                vaultkeeper_stub_tools::StubTool::run(&table, &mut world, &args_owned, b"");
+
+            if result.exit_code == vaultkeeper_stub_tools::NO_MATCH_EXIT_CODE {
+                panic!("unexpected ykman invocation: {args_owned:?}");
             }
+
+            Ok(ExecOutput {
+                stdout: result.stdout,
+                stderr: result.stderr,
+                exit_code: result.exit_code,
+            })
         }
         async fn read_file(&self, path: &Path) -> Result<Vec<u8>, VaultError> {
             if self.deny_read.lock().unwrap().contains(path) {
@@ -1279,6 +1291,51 @@ mod tests {
         let no_touch_backend = YubikeyBackend::new(host, false);
         let caps = no_touch_backend.get_capabilities().await.unwrap();
         assert!(!caps.presence_per_use);
+    }
+
+    /// Regression test for issue #326: `delete()` never performs
+    /// challenge-response — it only probes device presence
+    /// (`require_device`) and unlinks the entry — so `get_capabilities` must
+    /// not claim `Delete` is presence-enforced when `require_touch` is set.
+    /// Before the fix, `presence_enforced_operations` was `None`, which
+    /// `BackendCapabilities::enforces` treats as "every keyed operation is
+    /// covered" — silently misrepresenting `delete` as touch-gated. This
+    /// asserts the honest, operation-scoped contract: `Read` and `Store` are
+    /// covered (both perform challenge-response), `Delete` is not.
+    #[tokio::test]
+    async fn get_capabilities_excludes_delete_from_presence_enforced_operations_issue_326() {
+        let host = TestHost::new();
+        let backend = YubikeyBackend::new(host, true);
+        let caps = backend.get_capabilities().await.unwrap();
+
+        assert!(caps.presence_per_use);
+        assert_eq!(
+            caps.presence_enforced_operations,
+            Some(vec![PresenceOperation::Read, PresenceOperation::Store])
+        );
+        assert!(caps.enforces(PresenceOperation::Read));
+        assert!(caps.enforces(PresenceOperation::Store));
+        assert!(!caps.enforces(PresenceOperation::Delete));
+    }
+
+    /// Regression test for issue #326: a `--require-presence-per-use` delete
+    /// must fail closed via `enforce_presence_requirement` rather than
+    /// silently succeeding with no touch, now that `delete` is correctly
+    /// excluded from `presence_enforced_operations`.
+    #[tokio::test]
+    async fn require_presence_per_use_delete_fails_closed_issue_326() {
+        let host = TestHost::new();
+        let backend = YubikeyBackend::new(host, true);
+
+        let err = crate::vault::enforce_presence_requirement(
+            &backend,
+            PresenceOperation::Delete,
+            Some(true),
+        )
+        .await
+        .unwrap_err();
+
+        assert!(matches!(err, VaultError::NotCapable { .. }));
     }
 
     #[tokio::test]

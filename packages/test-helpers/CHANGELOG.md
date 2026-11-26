@@ -1,5 +1,13 @@
 # @vaultkeeper/test-helpers
 
+## 0.4.0
+
+### Minor Changes
+
+- [#317](https://github.com/mike-north/vaultkeeper/pull/317) [`5231999`](https://github.com/mike-north/vaultkeeper/commit/52319994a609c13f55d3a698e9797957e2d69324) Thanks [@mike-north](https://github.com/mike-north)! - Add deterministic fault injection (`FaultPlan`, `InMemoryBackend.injectFault`/`clearFault`/`clearAllFaults`) and `TestVault.signCeremony` for exercising a consumer's error-handling paths and full signing-ceremony flow without hardware.
+
+- [#317](https://github.com/mike-north/vaultkeeper/pull/317) [`5231999`](https://github.com/mike-north/vaultkeeper/commit/52319994a609c13f55d3a698e9797957e2d69324) Thanks [@mike-north](https://github.com/mike-north)! - Add `PresenceSimulatorBackend` to `@vaultkeeper/test-helpers`: a test-only backend that scripts vaultkeeper's presence signal (including its absence) so a consumer can prove in CI that an automation signer attempting a presence-gated operation is refused. Per-operation outcomes are scriptable across `'grant'` / `'refuse'` / `'timeout'` / `'not-capable'` via `forTesting({ operations })`, or armed one call at a time via `armPresence` to prove presence is demanded fresh on every call. Three stacked guards keep it unreachable from production: it is never registered with the backend registry, has no default constructor, and its `forTesting()` factory throws a new `TestDoubleMisuseError` (exported from `vaultkeeper`) when `NODE_ENV` is `'production'`.
+
 ## 0.3.0
 
 ### Minor Changes

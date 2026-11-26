@@ -16,13 +16,9 @@ import * as os from 'node:os'
 import * as path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, it, expect } from 'vitest'
+import { matchesOutput, type OutputMatcher } from './matches-output.js'
 
 // ─── Types mirroring the Rust ConformanceCase / OutputMatcher ────
-
-interface OutputMatcher {
-  type: 'Any' | 'Exact' | 'Contains' | 'Regex' | 'JsonContains'
-  value?: string | Record<string, unknown>
-}
 
 interface ConformanceCase {
   name: string
@@ -33,6 +29,8 @@ interface ConformanceCase {
   expectedStdout: OutputMatcher
   expectedStderr: OutputMatcher
   expectedConfigFile: OutputMatcher | null
+  /** [path relative to the config dir, content] pairs, written before running. */
+  extraFiles: [string, string][]
 }
 
 // ─── Load cases ──────────────────────────────────────────────────
@@ -84,56 +82,27 @@ const DEFAULT_CONFIG = JSON.stringify(
   2,
 )
 
-// ─── Output matching ─────────────────────────────────────────────
+// ─── Fixture path validation ──────────────────────────────────────
 
-function matcherValueAsString(matcher: OutputMatcher): string {
-  if (typeof matcher.value === 'string') return matcher.value
-  return ''
-}
-
-function matchesOutput(matcher: OutputMatcher, output: string): boolean {
-  switch (matcher.type) {
-    case 'Any':
-      return true
-    case 'Exact':
-      return output.trim() === matcherValueAsString(matcher).trim()
-    case 'Contains':
-      return output.includes(matcherValueAsString(matcher))
-    case 'Regex': {
-      let pattern = matcherValueAsString(matcher)
-      let flags = ''
-      // Translate Rust inline (?s) flag to JS 's' flag (dotall mode)
-      if (pattern.startsWith('(?s)')) {
-        pattern = pattern.slice(4)
-        flags = 's'
-      }
-      return new RegExp(pattern, flags).test(output)
-    }
-    case 'JsonContains': {
-      try {
-        const parsed: unknown = JSON.parse(output)
-        return jsonContains(parsed, matcher.value)
-      } catch {
-        return false
-      }
-    }
-    default:
-      return false
+/**
+ * Reject any `extraFiles` path that is absolute or contains a
+ * parent-directory (`..`) segment, so a malicious/malformed conformance case
+ * can never write outside the case's isolated temp directory.
+ */
+function validateExtraFilePath(relPath: string): void {
+  if (path.isAbsolute(relPath)) {
+    throw new Error(`extraFiles path ${JSON.stringify(relPath)} must be relative, not absolute`)
   }
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === 'object' && !Array.isArray(value)
-}
-
-function jsonContains(haystack: unknown, needle: unknown): boolean {
-  if (isRecord(haystack) && isRecord(needle)) {
-    return Object.entries(needle).every(([k, v]) => k in haystack && jsonContains(haystack[k], v))
+  // Mirrors the Rust runner's `Component::Normal`-only rule: every segment
+  // must be a plain name, so '.', '..', and empty segments are all rejected.
+  const segments = relPath.split(/[/\\]/)
+  const isSafeRelative =
+    segments.length > 0 && segments.every((s) => s !== '' && s !== '.' && s !== '..')
+  if (!isSafeRelative) {
+    throw new Error(
+      `extraFiles path ${JSON.stringify(relPath)} must be relative and contain no '.', '..', or empty path segments`,
+    )
   }
-  if (Array.isArray(haystack) && Array.isArray(needle)) {
-    return needle.every((nv: unknown) => haystack.some((hv: unknown) => jsonContains(hv, nv)))
-  }
-  return haystack === needle
 }
 
 // ─── Run a single case ───────────────────────────────────────────
@@ -155,6 +124,13 @@ async function runCase(testCase: ConformanceCase): Promise<RunResult> {
       await fs.writeFile(configPath, DEFAULT_CONFIG + '\n', {
         mode: 0o600,
       })
+    }
+
+    for (const [relPath, content] of testCase.extraFiles) {
+      validateExtraFilePath(relPath)
+      const filePath = path.join(configDir, relPath)
+      await fs.mkdir(path.dirname(filePath), { recursive: true })
+      await fs.writeFile(filePath, content)
     }
 
     const { stdout, stderr, exitCode } = await new Promise<Omit<RunResult, 'configFileContent'>>(
@@ -212,6 +188,56 @@ async function runCase(testCase: ConformanceCase): Promise<RunResult> {
 }
 
 // ─── Test suite ──────────────────────────────────────────────────
+
+describe('validateExtraFilePath', () => {
+  it('accepts a plain relative path', () => {
+    expect(() => {
+      validateExtraFilePath('profiles/empty-profile.json')
+    }).not.toThrow()
+  })
+
+  it('rejects an absolute path', () => {
+    expect(() => {
+      validateExtraFilePath('/etc/passwd')
+    }).toThrow(/must be relative/)
+  })
+
+  it('rejects a parent-directory traversal', () => {
+    expect(() => {
+      validateExtraFilePath('../../etc/passwd')
+    }).toThrow(/\.\./)
+  })
+
+  it('rejects a parent-directory segment in the middle of the path', () => {
+    expect(() => {
+      validateExtraFilePath('profiles/../../escape.json')
+    }).toThrow(/\.\./)
+  })
+
+  it('rejects an empty path', () => {
+    expect(() => {
+      validateExtraFilePath('')
+    }).toThrow()
+  })
+
+  it("rejects a leading './' current-directory segment", () => {
+    expect(() => {
+      validateExtraFilePath('./profiles/x.json')
+    }).toThrow(/'\.'/)
+  })
+
+  it("rejects a './' segment in the middle of the path", () => {
+    expect(() => {
+      validateExtraFilePath('a/./b')
+    }).toThrow(/'\.'/)
+  })
+
+  it('rejects a doubled path separator (empty segment)', () => {
+    expect(() => {
+      validateExtraFilePath('a//b')
+    }).toThrow(/empty/)
+  })
+})
 
 // Skip the entire suite when the Rust binary isn't available (e.g., in CI
 // where only the TypeScript packages are built).

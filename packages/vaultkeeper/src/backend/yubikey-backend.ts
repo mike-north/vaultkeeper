@@ -300,16 +300,36 @@ export class YubikeyBackend implements ListableBackend, PresenceCapableBackend {
    *
    * @remarks
    * `presencePerUse` is `true` only when the configured slot enforces a
-   * touch-per-operation policy (`requireTouch`), in which case every
-   * challenge-response — and therefore every `store`/`retrieve`/`delete` — forces
-   * a fresh physical tap that cannot be satisfied from any cached state. A slot
-   * without a touch policy reports `false`; the answer is never derived from the
-   * backend `type` alone. Truth-basis: the reported value comes from the
+   * touch-per-operation policy (`requireTouch`). A slot without a touch
+   * policy reports `false`; the answer is never derived from the backend
+   * `type` alone. Truth-basis: the reported value comes from the
    * operator-declared `touchPolicy` configuration; confirm it matches the
    * physical slot with `ykman otp info` (a manual verification).
+   *
+   * **Operation coverage (issue #326):** the touch-per-operation policy only
+   * actually fires for {@link YubikeyBackend.store} and
+   * {@link YubikeyBackend.retrieve} — both perform the HMAC-SHA1
+   * challenge-response (`ykman otp calculate 2 ...`) that demands the
+   * physical tap. {@link YubikeyBackend.delete} only calls
+   * `requireDevice()` (a presence *probe*: is a YubiKey plugged in at all)
+   * plus a filesystem unlink — it never invokes challenge-response, so it
+   * never actually demands a fresh touch. Reporting
+   * `presenceEnforcedOperations` omitted (meaning "all keyed operations")
+   * would therefore be dishonest: a caller relying on `presencePerUse` to
+   * mean "deleting this secret requires a physical touch" would be misled.
+   * This reports `presenceEnforcedOperations: ['read', 'store']`, excluding
+   * `'delete'`, so a `--require-presence-per-use` delete fails closed
+   * instead of silently succeeding with no touch. `'sign'` does not apply —
+   * this backend does not implement signing.
    */
   getCapabilities(): Promise<BackendCapabilities> {
-    return Promise.resolve({ presencePerUse: this.#requireTouch })
+    if (this.#requireTouch) {
+      return Promise.resolve({
+        presencePerUse: true,
+        presenceEnforcedOperations: ['read', 'store'],
+      })
+    }
+    return Promise.resolve({ presencePerUse: false })
   }
 
   async isAvailable(): Promise<boolean> {

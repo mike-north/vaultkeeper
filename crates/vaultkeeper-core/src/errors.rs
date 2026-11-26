@@ -303,9 +303,14 @@ pub enum VaultError {
     ///    refused at resolve time. `mode` then carries a stable kebab-case
     ///    slug naming the unsupported request — currently
     ///    `"signing-key-lease"` (session signing leases, pending the epic's
-    ///    session-mint work) and `"secret-lease-presence-at-mint"`
+    ///    session-mint work), `"secret-lease-presence-at-mint"`
     ///    (`requirePresenceAtMint` on a secret-backed lease; no
-    ///    `HostPlatform` exists at resolve time to prompt with). These slugs
+    ///    `HostPlatform` exists at resolve time to prompt with), and
+    ///    `"run-require-presence-at-issuance"` (the CLI `run` command's
+    ///    `--require-presence-at-issuance` flag; presence-at-issuance
+    ///    verification of every minted lease entry's `pres` claim is not yet
+    ///    wired into `resolve_profile`, so `run` refuses outright rather than
+    ///    proceeding without the guarantee the flag promises). These slugs
     ///    are a documented, stable contract for programmatic callers.
     #[error("{message}")]
     MaterializeModeUnsupported {
@@ -314,6 +319,24 @@ pub enum VaultError {
         /// variant docs for the enumerated values.
         mode: String,
     },
+
+    // --- Cross-process exclusive locking (issue #322) ---
+    /// [`crate::backend::HostPlatform::try_create_lock_file`] is not
+    /// implemented by the active host platform.
+    ///
+    /// Deliberately its own variant rather than [`VaultError::Other`]: this
+    /// is a well-known, expected condition (every `HostPlatform`
+    /// implementation other than `NativeHostPlatform` is currently in this
+    /// state) that `keys::storage::acquire_lock` must be able to detect
+    /// unambiguously to fall back to the pre-existing sequential-ordering-
+    /// only guarantee. Matching on `Other(_)` instead would silently
+    /// downgrade *any* other `Other`-shaped failure from
+    /// `try_create_lock_file` (a bug, a future call site's mistake) into
+    /// "proceed unlocked" as well — the trait method's default impl returns
+    /// this variant specifically so callers can match on it by type instead
+    /// of pattern-matching a string message.
+    #[error("{message}")]
+    LockingNotSupported { message: String },
 
     /// Generic vault error for cases that don't fit a specific variant.
     #[error("{0}")]
@@ -448,6 +471,7 @@ pub const ALL_ERROR_CODES: &[&str] = &[
     "unknown-backend-type",
     "config-parse",
     "materialize-mode-unsupported",
+    "locking-not-supported",
     "vault-error",
 ];
 
@@ -494,6 +518,7 @@ pub fn vault_error_code(e: &VaultError) -> &'static str {
         VaultError::UnknownBackendType { .. } => "unknown-backend-type",
         VaultError::ConfigParse { .. } => "config-parse",
         VaultError::MaterializeModeUnsupported { .. } => "materialize-mode-unsupported",
+        VaultError::LockingNotSupported { .. } => "locking-not-supported",
         VaultError::Other(_) => "vault-error",
     }
 }
@@ -816,6 +841,9 @@ pub fn all_variants_for_parity_test() -> Vec<VaultError> {
         VaultError::MaterializeModeUnsupported {
             message: "materialize mode unsupported".into(),
             mode: "reference".into(),
+        },
+        VaultError::LockingNotSupported {
+            message: "locking not supported".into(),
         },
         VaultError::Other("generic vault error".into()),
     ]

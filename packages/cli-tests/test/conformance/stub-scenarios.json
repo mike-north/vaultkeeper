@@ -1,0 +1,175 @@
+[
+  {
+    "name": "secret-tool: store then lookup round-trips through the shared world",
+    "command": [],
+    "stdin": null,
+    "needsConfig": false,
+    "expectedExitCode": -1,
+    "expectedStdout": {
+      "type": "Any"
+    },
+    "expectedStderr": {
+      "type": "Any"
+    },
+    "expectedConfigFile": null,
+    "extraFiles": [],
+    "stubScenario": {
+      "tool": "secret-tool",
+      "steps": [
+        {
+          "note": "world-mutation: store upserts an item into the shared world",
+          "args": [
+            "store",
+            "--label",
+            "vaultkeeper: axis-demo",
+            "--",
+            "vaultkeeper-id",
+            "axis-demo"
+          ],
+          "stdin": "axis-secret",
+          "expectedExitCode": 0,
+          "expectedStdout": {
+            "type": "Exact",
+            "value": ""
+          },
+          "expectedStderr": {
+            "type": "Any"
+          }
+        },
+        {
+          "note": "world-mutation: lookup observes the earlier store's mutation",
+          "args": [
+            "lookup",
+            "--",
+            "vaultkeeper-id",
+            "axis-demo"
+          ],
+          "stdin": null,
+          "expectedExitCode": 0,
+          "expectedStdout": {
+            "type": "Exact",
+            "value": "axis-secret"
+          },
+          "expectedStderr": {
+            "type": "Any"
+          }
+        }
+      ]
+    }
+  },
+  {
+    "name": "secret-tool: unlocked lookup of an existing item succeeds (locked-vs-unlocked axis)",
+    "command": [],
+    "stdin": null,
+    "needsConfig": false,
+    "expectedExitCode": -1,
+    "expectedStdout": {
+      "type": "Any"
+    },
+    "expectedStderr": {
+      "type": "Any"
+    },
+    "expectedConfigFile": null,
+    "extraFiles": [],
+    "stubScenario": {
+      "tool": "secret-tool",
+      "steps": [
+        {
+          "note": "seed: store an item while unlocked",
+          "args": [
+            "store",
+            "--label",
+            "vaultkeeper: axis-locked-demo",
+            "--",
+            "vaultkeeper-id",
+            "axis-locked-demo"
+          ],
+          "stdin": "axis-secret",
+          "expectedExitCode": 0,
+          "expectedStdout": {
+            "type": "Exact",
+            "value": ""
+          },
+          "expectedStderr": {
+            "type": "Any"
+          }
+        },
+        {
+          "note": "state-conditional: unlocked lookup of an existing item succeeds",
+          "args": [
+            "lookup",
+            "--",
+            "vaultkeeper-id",
+            "axis-locked-demo"
+          ],
+          "stdin": null,
+          "expectedExitCode": 0,
+          "expectedStdout": {
+            "type": "Exact",
+            "value": "axis-secret"
+          },
+          "expectedStderr": {
+            "type": "Any"
+          }
+        }
+      ]
+    }
+  },
+  {
+    "name": "op: item create then item get round-trips the password through the real field shape",
+    "command": [],
+    "stdin": null,
+    "needsConfig": false,
+    "expectedExitCode": -1,
+    "expectedStdout": {
+      "type": "Any"
+    },
+    "expectedStderr": {
+      "type": "Any"
+    },
+    "expectedConfigFile": null,
+    "extraFiles": [],
+    "stubScenario": {
+      "tool": "op",
+      "steps": [
+        {
+          "note": "shape-assertion: stdin puts the value at the real fields.password.value path",
+          "args": [
+            "item",
+            "create",
+            "--format",
+            "json"
+          ],
+          "stdin": "{\"fields\":{\"password\":{\"value\":\"axis-shape-secret\"}}}",
+          "expectedExitCode": 0,
+          "expectedStdout": {
+            "type": "Contains",
+            "value": "op-item"
+          },
+          "expectedStderr": {
+            "type": "Any"
+          }
+        },
+        {
+          "note": "shape-assertion: the round trip must return the value, not just a field with the right id",
+          "args": [
+            "item",
+            "get",
+            "op-item",
+            "--format",
+            "json"
+          ],
+          "stdin": null,
+          "expectedExitCode": 0,
+          "expectedStdout": {
+            "type": "Contains",
+            "value": "axis-shape-secret"
+          },
+          "expectedStderr": {
+            "type": "Any"
+          }
+        }
+      ]
+    }
+  }
+]

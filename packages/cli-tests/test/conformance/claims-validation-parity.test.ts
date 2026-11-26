@@ -309,9 +309,13 @@ describe('validateClaims / validate_claims cross-language parity (issue #280)', 
       throw new Error('unreachable: base claims always satisfy the minimal shape')
     }
 
+    // TS: routed through UnreachableError (issue #340) — the switch's
+    // `default` arm for a `kty` that is neither 'secret' nor 'signing-key'.
     expect(() => {
       validateClaims(record)
-    }).toThrow('Invalid token: unrecognized claim kind kty=wat')
+    }).toThrow(
+      'Reached unreachable code (Invalid token: unrecognized claim kind): unexpected value "wat"',
+    )
 
     // Rust: `serde_json::from_str::<VaultClaims>` fails outright for an
     // unknown `ClaimsKind` string — bridged as `invalid-token`, not the

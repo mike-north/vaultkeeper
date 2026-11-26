@@ -197,10 +197,16 @@ per-backend truth basis and the cached-OS-unlock caveat.
 ## Available commands
 
 `doctor`, `config init` / `config show`, `store`, `delete`, `backend capabilities`, `key create` /
-`key export`, `sign`, `verify`, `exec`, `approve`, `dev-mode`, `rotate-key`, `revoke-key`. The native Rust CLI
-(`vaultkeeper-cli`, installable via `cargo install vaultkeeper-cli`) shares the secret-management
+`key export`, `sign`, `verify`, `run`, `exec`, `approve`, `dev-mode`, `rotate-key`, `revoke-key`. The native
+Rust CLI (`vaultkeeper-cli`, installable via `cargo install vaultkeeper-cli`) shares the secret-management
 command surface; signing (`key`/`sign`/`verify`) currently ships in the Node CLI, with Rust parity
 tracked separately.
+
+`run --token <jwe> [--as VAR]` redeems an already-minted JWE and launches a command with it injected as
+an env var (default `VAULTKEEPER_SECRET`), with full stdio and signal transparency — `run` is now the
+single launcher verb (surface-governance ruling B9, `docs/specs/001-surface-governance.md`). `exec`'s
+own `--secret`/`--env`/`--caller` flow (mint a token from scratch, enforcing the TOFU trust gate) is
+unaffected and still the way to go from a bare secret name to a running command in one step.
 
 ## Full documentation
 
