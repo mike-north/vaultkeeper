@@ -8,6 +8,7 @@
     "build": "NX_TUI=false nx run-many -t build --exclude=vaultkeeper-workspace",
     "clean": "pnpm -r run clean",
     "test": "NX_TUI=false nx run-many -t test --exclude=vaultkeeper-workspace",
+    "test:api-cache": "node --test scripts/test-api-cache.mjs",
     "test:watch": "vitest",
     "check": "NX_TUI=false nx run-many -t check:typecheck check:lint-ts check:format check:api-report --exclude=vaultkeeper-workspace && pnpm check:typecheck:crates",
     "check:typecheck": "NX_TUI=false nx run-many -t check:typecheck --exclude=vaultkeeper-workspace && pnpm check:typecheck:crates",

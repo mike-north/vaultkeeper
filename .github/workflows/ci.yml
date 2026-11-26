@@ -317,6 +317,8 @@ jobs:
 
       - run: pnpm check:api-docs
 
+      - run: pnpm test:api-cache
+
       - name: Download Rust binary
         uses: actions/download-artifact@v4
         with:
