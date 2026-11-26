@@ -22,7 +22,7 @@ import type {
 } from './types.js'
 import { loadConfig, getDefaultConfigDir } from './config.js'
 import { KeyManager } from './keys/manager.js'
-import { loadKeyState, saveKeyState } from './keys/storage.js'
+import { loadKeyState, updateKeyState } from './keys/storage.js'
 import { BackendRegistry } from './backend/registry.js'
 import { isSigningBackend, getBackendCapabilities } from './backend/types.js'
 import type {
@@ -50,6 +50,7 @@ import { createDetachedJws, verifyDetachedJws } from './access/jws.js'
 import { runDoctor } from './doctor/runner.js'
 import type { RunDoctorOptions } from './doctor/runner.js'
 import {
+  DecryptionError,
   AuthorizationDeniedError,
   IdentityMismatchError,
   ExecutableTrustRequiredError,
@@ -383,6 +384,8 @@ export class VaultKeeper {
    * {@link VaultKeeper.checkExecutableTrust}) therefore succeed even when the
    * configured backend or plugin is unavailable or unregistered; a
    * misconfigured backend surfaces only when a secret operation is invoked.
+   * @throws {DecryptionError} If persisted key state fails authentication or
+   * validation. Restore the snapshot and its wrapping key from a matching backup.
    */
   static async init(options?: VaultKeeperOptions): Promise<VaultKeeper> {
     const configDir = options?.configDir ?? getDefaultConfigDir()
@@ -408,12 +411,13 @@ export class VaultKeeper {
     const keyManager = new KeyManager()
     if (persistKeys) {
       const loaded = await loadKeyState(configDir)
-      if (loaded !== undefined) {
-        keyManager.hydrate(loaded)
-      } else {
-        await keyManager.init()
-        await saveKeyState(configDir, keyManager.snapshot())
-      }
+      keyManager.hydrate(
+        loaded ??
+          (await updateKeyState(
+            configDir,
+            (current) => current ?? { current: keyManager.generateKey() },
+          )),
+      )
     } else {
       await keyManager.init()
     }
@@ -1122,10 +1126,9 @@ export class VaultKeeper {
    */
   async rotateKey(): Promise<void> {
     const gracePeriodMs = this.#config.keyRotation.gracePeriodDays * 24 * 60 * 60 * 1000
-    // Throws RotationInProgressError synchronously if a prior rotation's grace
-    // period is still active — including one persisted by an earlier process.
-    this.#keyManager.rotateKey(gracePeriodMs)
-    await this.#persistKeyState()
+    await this.#updateKeys((manager) => {
+      manager.rotateKey(gracePeriodMs)
+    })
   }
 
   /**
@@ -1136,19 +1139,29 @@ export class VaultKeeper {
    * so that `setup()` can be called immediately after revocation.
    */
   async revokeKey(): Promise<void> {
-    this.#keyManager.revokeKey()
-    await this.#persistKeyState()
+    await this.#updateKeys((manager) => {
+      manager.revokeKey()
+    })
   }
 
-  /**
-   * Persist the current key state to the config dir when persistence is
-   * enabled. A no-op for injected-config/backend instances (in-memory keys).
-   */
-  async #persistKeyState(): Promise<void> {
+  async #updateKeys(update: (manager: KeyManager) => void): Promise<void> {
     if (!this.#persistKeys) {
+      update(this.#keyManager)
       return
     }
-    await saveKeyState(this.#configDir, this.#keyManager.snapshot())
+    const snapshot = await updateKeyState(this.#configDir, (current) => {
+      if (current === undefined) {
+        throw new DecryptionError(
+          'Persisted key state disappeared. Restore keys.enc and .keys.wrap from a matching backup before retrying.',
+          this.#configDir,
+        )
+      }
+      const staged = new KeyManager()
+      staged.hydrate(current, false)
+      update(staged)
+      return staged.snapshot()
+    })
+    this.#keyManager.hydrate(snapshot)
   }
 
   /**

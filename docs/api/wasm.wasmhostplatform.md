@@ -80,6 +80,17 @@ Perform an HTTP request through the host's networking stack (issue \#239). [crea
 </td></tr>
 <tr><td>
 
+[linkFile(from, to)?](./wasm.wasmhostplatform.linkfile.md)
+
+
+</td><td>
+
+_(Optional)_ Publish a staged file at an unused destination through an atomic hard link. Leave the staging path intact and reject an occupied destination with code EEXIST. Hosts that omit this hook support sequential creation or writers using the shared lock.
+
+
+</td></tr>
+<tr><td>
+
 [listDir(path)](./wasm.wasmhostplatform.listdir.md)
 
 
@@ -122,6 +133,17 @@ _(Optional)_ Optional interactive human-approval capability (issue \#239). Absen
 
 
 </td><td>
+
+
+</td></tr>
+<tr><td>
+
+[tryCreateLockFile(path, content)?](./wasm.wasmhostplatform.trycreatelockfile.md)
+
+
+</td><td>
+
+_(Optional)_ Atomically create the writer lock. Reject an occupied path with code EEXIST.
 
 
 </td></tr>

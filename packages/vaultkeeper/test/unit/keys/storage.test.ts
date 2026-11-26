@@ -6,21 +6,26 @@
  * - it is encrypted at rest (never written as plaintext JSON),
  * - the on-disk files are owner-only (mode 0600),
  * - an expired grace period is dropped on load,
- * - a tampered/corrupt envelope degrades to "no state" rather than crashing.
+ * - a tampered or corrupt envelope is rejected and preserved.
  *
  * @see https://github.com/mike-north/vaultkeeper/issues/59
  */
+import { writeFileSync } from 'node:fs'
 import * as fs from 'node:fs/promises'
 import * as os from 'node:os'
 import * as path from 'node:path'
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { loadKeyState, saveKeyState } from '../../../src/keys/storage.js'
+import { loadKeyState, updateKeyState } from '../../../src/keys/storage.js'
 import type { KeyMaterial, KeyStateSnapshot } from '../../../src/keys/types.js'
 
 const CREATED_AT = new Date('2024-01-15T10:30:00.000Z')
 
 function makeKey(id: string, byte: number): KeyMaterial {
   return { id, key: new Uint8Array(32).fill(byte), createdAt: CREATED_AT }
+}
+
+function saveKeyState(configDir: string, snapshot: KeyStateSnapshot): Promise<KeyStateSnapshot> {
+  return updateKeyState(configDir, () => snapshot)
 }
 
 let dir: string
@@ -34,6 +39,16 @@ afterEach(async () => {
 })
 
 describe('saveKeyState / loadKeyState round-trip', () => {
+  it('accepts an existing fractional grace expiry', async () => {
+    const expiry = Date.now() + 60_000.5
+    await saveKeyState(dir, {
+      current: makeKey('current', 1),
+      previous: makeKey('previous', 2),
+      gracePeriodExpiresAt: expiry,
+    })
+    expect((await loadKeyState(dir))?.gracePeriodExpiresAt).toBe(expiry)
+  })
+
   it('persists the current key so a later load resolves the same id and bytes', async () => {
     const current = makeKey('k-1-aaaa', 0x11)
     await saveKeyState(dir, { current })
@@ -61,6 +76,44 @@ describe('saveKeyState / loadKeyState round-trip', () => {
     const loaded = await loadKeyState(dir)
     expect(loaded?.previous?.id).toBe('k-1-aaaa')
     expect(loaded?.gracePeriodExpiresAt).toBe(snapshot.gracePeriodExpiresAt)
+  })
+})
+
+describe('first snapshot publication', () => {
+  it('keeps a file that appears after the initial absence check', async () => {
+    const statePath = path.join(dir, 'keys.enc')
+    await fs.writeFile(path.join(dir, '.keys.wrap'), Buffer.alloc(32), { mode: 0o600 })
+    const occupied = Buffer.from('recoverable state')
+    const key = makeKey('unused', 0x11)
+    await expect(
+      updateKeyState(dir, (existing) => {
+        expect(existing).toBeUndefined()
+        writeFileSync(statePath, occupied, { flag: 'wx', mode: 0o600 })
+        return { current: key }
+      }),
+    ).rejects.toMatchObject({ code: 'EEXIST' })
+    expect(await fs.readFile(statePath)).toEqual(occupied)
+    expect(key.key.every((byte) => byte === 0)).toBe(true)
+    expect((await fs.readdir(dir)).sort()).toEqual(['.keys.wrap', 'keys.enc'])
+  })
+})
+
+describe('shared key state writer lock', () => {
+  it.each(['fresh', 'unrecognized'])('leaves a %s marker and key state alone', async (kind) => {
+    const lockPath = path.join(dir, 'keys.enc.lock')
+    // Hex is parseable as a JavaScript number, but is not a native epoch-ms marker.
+    const marker = kind === 'fresh' ? String(Date.now()) : '0x0'
+    await fs.writeFile(lockPath, marker)
+    const update = vi.fn(() => ({ current: makeKey('unused', 0x11) }))
+
+    await expect(updateKeyState(dir, update)).rejects.toMatchObject({
+      path: lockPath,
+      permission: 'lock',
+      code: 'EEXIST',
+    })
+    expect(update).not.toHaveBeenCalled()
+    expect(await fs.readFile(lockPath, 'utf8')).toBe(marker)
+    expect(await fs.readdir(dir)).toEqual(['keys.enc.lock'])
   })
 })
 
@@ -115,14 +168,14 @@ describe('encryption at rest and file permissions', () => {
   })
 })
 
-describe('corrupt / tampered state degrades safely', () => {
-  it('returns undefined for a non-envelope (garbage) state file', async () => {
+describe('corrupt / tampered state is preserved', () => {
+  it('rejects a non-envelope (garbage) state file', async () => {
     await saveKeyState(dir, { current: makeKey('k-1-aaaa', 0x11) })
     await fs.writeFile(path.join(dir, 'keys.enc'), 'not-an-envelope', 'utf8')
-    expect(await loadKeyState(dir)).toBeUndefined()
+    await expect(loadKeyState(dir)).rejects.toThrow(/Restore keys.enc and .keys.wrap/)
   })
 
-  it('returns undefined when the ciphertext fails authentication (tampered)', async () => {
+  it('rejects when the ciphertext fails authentication (tampered)', async () => {
     await saveKeyState(dir, { current: makeKey('k-1-aaaa', 0x11) })
     const statePath = path.join(dir, 'keys.enc')
     const envelope = await fs.readFile(statePath, 'utf8')
@@ -131,30 +184,30 @@ describe('corrupt / tampered state degrades safely', () => {
     const tampered = Buffer.from(ct ?? '', 'base64')
     if (tampered.length > 0) tampered[0] ^= 0xff
     await fs.writeFile(statePath, `${iv ?? ''}:${tag ?? ''}:${tampered.toString('base64')}`, 'utf8')
-    expect(await loadKeyState(dir)).toBeUndefined()
+    await expect(loadKeyState(dir)).rejects.toThrow(/Restore keys.enc and .keys.wrap/)
   })
 
-  it('recovers from a corrupt (wrong-length) wrapping key by regenerating it', async () => {
-    // First save establishes both keys.enc and a valid .keys.wrap.
-    await saveKeyState(dir, { current: makeKey('k-old-aaaa', 0x11) })
+  it.each([true, false])(
+    'preserves state when the wrapping key is wrong-length (%s) or missing',
+    async (truncated) => {
+      const current = makeKey('k-old-aaaa', 0x11)
+      await saveKeyState(dir, { current })
+      const statePath = path.join(dir, 'keys.enc')
+      const original = await fs.readFile(statePath)
+      const wrapPath = path.join(dir, '.keys.wrap')
+      const damaged = Buffer.alloc(7, 0xab)
+      if (truncated) await fs.writeFile(wrapPath, damaged)
+      else await fs.unlink(wrapPath)
 
-    // Truncate the wrapping key to a non-32-byte length, as a partial write or
-    // disk corruption would. The old state is now unrecoverable (load degrades
-    // to "no state") — but a subsequent save must not throw "Invalid key
-    // length"; it regenerates the wrap key and persists fresh state.
-    const wrapPath = path.join(dir, '.keys.wrap')
-    await fs.writeFile(wrapPath, Buffer.alloc(7, 0xab), { mode: 0o600 })
-
-    // Load degrades gracefully rather than crashing.
-    expect(await loadKeyState(dir)).toBeUndefined()
-
-    // Save succeeds (no throw) and the freshly wrapped state round-trips.
-    const fresh = makeKey('k-new-bbbb', 0x22)
-    await saveKeyState(dir, { current: fresh })
-    expect((await fs.stat(wrapPath)).size).toBe(32)
-    const loaded = await loadKeyState(dir)
-    expect(loaded?.current.id).toBe('k-new-bbbb')
-  })
+      await expect(loadKeyState(dir)).rejects.toThrow(/Restore keys.enc and .keys.wrap/)
+      await expect(saveKeyState(dir, { current })).rejects.toThrow(
+        /Restore keys.enc and .keys.wrap/,
+      )
+      expect(await fs.readFile(statePath)).toEqual(original)
+      if (truncated) expect(await fs.readFile(wrapPath)).toEqual(damaged)
+      else await expect(fs.lstat(wrapPath)).rejects.toMatchObject({ code: 'ENOENT' })
+    },
+  )
 })
 
 // Regression: issue #228. The first `store` persists key state before any

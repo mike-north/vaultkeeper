@@ -75,8 +75,23 @@ export function decryptGcm(key: Buffer, encoded: string, path = ''): string {
       authTagLength: GCM_TAG_LENGTH_BITS / 8,
     })
     decipher.setAuthTag(authTag)
-    const decrypted = Buffer.concat([decipher.update(ciphertext), decipher.final()])
-    return decrypted.toString('utf8')
+    const plaintext = decipher.update(ciphertext)
+    try {
+      // GCM releases plaintext through update before the tag is verified.
+      const final = decipher.final()
+      try {
+        const decoded = Buffer.concat([plaintext, final])
+        try {
+          return new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(decoded)
+        } finally {
+          decoded.fill(0)
+        }
+      } finally {
+        final.fill(0)
+      }
+    } finally {
+      plaintext.fill(0)
+    }
   } catch (err) {
     // Wrap every native crypto failure so the documented
     // @throws {DecryptionError} contract holds on every path.

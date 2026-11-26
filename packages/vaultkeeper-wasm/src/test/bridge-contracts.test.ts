@@ -13,9 +13,9 @@ import { describe, it } from 'node:test'
 import * as assert from 'node:assert/strict'
 import { createServer } from 'node:http'
 import type { AddressInfo } from 'node:net'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { basename, join } from 'node:path'
 import { createNodeHost } from '../node-host.js'
 import {
   mapWasmError,
@@ -730,4 +730,98 @@ describe('WasmVaultKeeper handle-based entry points reject a malformed handleId 
       })
     })
   }
+})
+
+describe('persisted key state (issue #383)', () => {
+  it('preserves a snapshot published while bootstrap stages its first snapshot', async () => {
+    await withTempConfigDir(async (dir) => {
+      const bindings = await loadHandleBindings()
+      const host = createNodeHost(dir)
+      const write = host.writeFile.bind(host)
+      const statePath = join(dir, 'keys.enc')
+      const restored = Buffer.from('restored snapshot')
+      host.writeFile = async (path, content, mode) => {
+        await write(path, content, mode)
+        if (basename(path).startsWith('keys.') && path.endsWith('.tmp')) {
+          await writeFile(statePath, restored, { mode: 0o600 })
+        }
+      }
+      await assert.rejects(bindings.createVaultKeeper(host, { skipDoctor: true }))
+      assert.deepEqual(await readFile(statePath), restored)
+    })
+  })
+
+  it('preserves both restored files when they appear during wrapping-key staging', async () => {
+    await withTempConfigDir(async (dir) => {
+      const bindings = await loadHandleBindings()
+      const host = createNodeHost(dir)
+      const write = host.writeFile.bind(host)
+      const statePath = join(dir, 'keys.enc')
+      const wrapPath = join(dir, '.keys.wrap')
+      const restoredState = Buffer.from('restored snapshot')
+      const restoredWrap = Buffer.alloc(32, 7)
+      host.writeFile = async (path, content, mode) => {
+        await write(path, content, mode)
+        if (basename(path).startsWith('.keys.') && path.endsWith('.tmp')) {
+          // Model a backup restore that does not participate in vaultkeeper's lock.
+          await writeFile(wrapPath, restoredWrap, { mode: 0o600 })
+          await writeFile(statePath, restoredState, { mode: 0o600 })
+        }
+      }
+      await assert.rejects(bindings.createVaultKeeper(host, { skipDoctor: true }))
+      assert.deepEqual(await readFile(statePath), restoredState)
+      assert.deepEqual(await readFile(wrapPath), restoredWrap)
+      assert.deepEqual((await readdir(dir)).sort(), ['.keys.wrap', 'keys.enc'])
+    })
+  })
+
+  it(
+    'shares the bootstrap lock and preserves an existing snapshot if authentication fails',
+    { timeout: 5000 },
+    async () => {
+      await withTempConfigDir(async (dir) => {
+        const bindings = await loadHandleBindings()
+        const lockPath = join(dir, 'keys.enc.lock')
+        const host = createNodeHost(dir)
+        const createLock = host.tryCreateLockFile?.bind(host)
+        assert.ok(createLock)
+        let acquisitions = 0
+        await writeFile(lockPath, String(Date.now()), { mode: 0o600 })
+        // Hold the lock until an acquisition attempt reaches the WASM host.
+        const firstAttempt = new Promise<void>((resolve) => {
+          host.tryCreateLockFile = async (path, content) => {
+            try {
+              await createLock(path, content)
+              acquisitions++
+            } finally {
+              resolve()
+            }
+          }
+        })
+        const pending = bindings.createVaultKeeper(host, { skipDoctor: true })
+        await firstAttempt
+        await assert.rejects(readFile(join(dir, 'keys.enc')), { code: 'ENOENT' })
+        await rm(lockPath)
+        await pending
+        assert.equal(acquisitions, 1)
+
+        const statePath = join(dir, 'keys.enc')
+        const wrapPath = join(dir, '.keys.wrap')
+        const state = await readFile(statePath)
+        const wrongWrap = await readFile(wrapPath)
+        wrongWrap.writeUInt8(wrongWrap.readUInt8(0) ^ 0xff, 0)
+        await writeFile(wrapPath, wrongWrap)
+        await assert.rejects(
+          bindings.createVaultKeeper(host, { skipDoctor: true }),
+          (error: unknown) =>
+            isBridgeErrorShape(error) &&
+            error.vaultErrorCode === 'decryption' &&
+            /Restore keys.enc and .keys.wrap/.test(error.message),
+        )
+        assert.deepEqual(await readFile(statePath), state)
+        assert.deepEqual(await readFile(wrapPath), wrongWrap)
+        wrongWrap.fill(0)
+      })
+    },
+  )
 })

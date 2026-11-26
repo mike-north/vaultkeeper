@@ -40,34 +40,9 @@ use vaultkeeper_core::{ClaimsKind, ExecutableTrustRequiredReason, VaultClaims, V
 ///
 /// # Locking contract (issue #322)
 ///
-/// This bridge deliberately does **not** implement
-/// `HostPlatform::try_create_lock_file` — there is no `createLockFile`/
-/// `tryCreateLockFile` entry in the JS host contract above, and this `impl`
-/// block has no override for it, so every call falls through to the trait's
-/// fail-closed default (`crates/vaultkeeper-core/src/backend/types.rs`):
-/// `Err(VaultError::LockingNotSupported { .. })` (wire code
-/// `locking-not-supported`), never a silent `Ok(())`. This is the same
-/// variant the TS `LockingNotSupportedError` bridge (`packages/vaultkeeper-wasm/src/errors.ts`)
-/// reconstructs from the code table.
-///
-/// Concretely, this means `keys::storage`'s revocation-state read-modify-write
-/// (`mutate_revocation_state`/`save_key_state`) runs under the WASM SDK with
-/// the pre-#322 sequential-ordering-only guarantee: two writes that are
-/// *sequenced* one after the other (in either order) each carry the other's
-/// portion forward untouched, but two writers whose read-modify-write windows
-/// genuinely overlap (e.g. two separate Node processes both using
-/// `@vaultkeeper/wasm` against the same config directory) can still race
-/// last-writer-wins — see `mutate_revocation_state`'s doc comment for the
-/// full concurrency-scope statement this bridge is bound by.
-///
-/// This is a deliberate scope cut, not an oversight: Node's `fs` module could
-/// implement genuine `O_EXCL` semantics via `fs.open(path, 'wx')` (mirroring
-/// `NativeHostPlatform`'s real lock in `crates/vaultkeeper-cli/src/host.rs`
-/// closely enough that adding it later is a small, additive change to
-/// `node-host.ts` plus this bridge — no `HostPlatform` trait change needed,
-/// since the primitive already exists), but wiring that through the Node host
-/// bridge and its test double contract is separate follow-on work, not part
-/// of landing the primitive itself.
+/// The built-in Node host implements `tryCreateLockFile` with exclusive
+/// creation. Custom hosts without this optional callback provide sequential
+/// ordering only.
 ///
 /// # No-reentrancy contract
 ///
@@ -430,7 +405,35 @@ impl HostPlatform for JsHostPlatform {
             .await
             .map_err(|e| fs_rejection_to_vault_error(&e, path, "read"))?;
 
-        Ok(result.as_bool().unwrap_or(false))
+        result
+            .as_bool()
+            .ok_or_else(|| js_err("fileExists() must resolve to a boolean"))
+    }
+
+    async fn try_create_lock_file(&self, path: &Path, content: &[u8]) -> Result<(), VaultError> {
+        let method = Reflect::get(&self.host, &JsValue::from_str("tryCreateLockFile"))
+            .map_err(|err| fs_rejection_to_vault_error(&err, path, "lock"))?;
+        if method.is_undefined() {
+            return Err(VaultError::LockingNotSupported {
+                message: "The JS host does not implement tryCreateLockFile".to_string(),
+            });
+        }
+        let method = method
+            .dyn_into::<Function>()
+            .map_err(|_| js_err("tryCreateLockFile must be a function"))?;
+        let js_content = Uint8Array::new_with_length(content.len() as u32);
+        js_content.copy_from(content);
+        let result = method
+            .call2(
+                &self.host,
+                &JsValue::from_str(&path.to_string_lossy()),
+                &js_content.into(),
+            )
+            .map_err(|err| fs_rejection_to_vault_error(&err, path, "lock"))?;
+        JsFuture::from(Promise::from(result))
+            .await
+            .map_err(|err| fs_rejection_to_vault_error(&err, path, "lock"))?;
+        Ok(())
     }
 
     async fn delete_file(&self, path: &Path) -> Result<(), VaultError> {
@@ -464,6 +467,28 @@ impl HostPlatform for JsHostPlatform {
             .map_err(|e| fs_rejection_to_vault_error(&e, to, "write"))?;
 
         Ok(())
+    }
+
+    async fn try_link_file(&self, from: &Path, to: &Path) -> Result<bool, VaultError> {
+        let method = Reflect::get(&self.host, &JsValue::from_str("linkFile"))
+            .map_err(|err| fs_rejection_to_vault_error(&err, to, "write"))?;
+        if method.is_undefined() {
+            return Ok(false);
+        }
+        let method = method
+            .dyn_into::<Function>()
+            .map_err(|_| js_err("linkFile must be a function"))?;
+        let result = method
+            .call2(
+                &self.host,
+                &JsValue::from_str(&from.to_string_lossy()),
+                &JsValue::from_str(&to.to_string_lossy()),
+            )
+            .map_err(|err| fs_rejection_to_vault_error(&err, to, "write"))?;
+        JsFuture::from(Promise::from(result))
+            .await
+            .map_err(|err| fs_rejection_to_vault_error(&err, to, "write"))?;
+        Ok(true)
     }
 
     async fn list_dir(&self, path: &Path) -> Result<Vec<String>, VaultError> {
@@ -559,7 +584,9 @@ impl HostPlatform for JsHostPlatform {
             .await
             .map_err(|e| js_err(&format!("promptApproval() promise rejected: {e:?}")))?;
 
-        Ok(result.as_bool().unwrap_or(false))
+        result
+            .as_bool()
+            .ok_or_else(|| js_err("fileExists() must resolve to a boolean"))
     }
 }
 

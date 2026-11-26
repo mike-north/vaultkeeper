@@ -4,7 +4,7 @@
 
 ## LockingNotSupportedError class
 
-Thrown when the active host platform does not implement exclusive lock-file creation (`HostPlatform::try_create_lock_file` on the Rust side). This is the WASM/JS host bridge's own state as of issue \#322 — it has no locking primitive of its own to wire in yet — so any operation that depends on cross-process mutual exclusion instead falls back to the pre-existing sequential-ordering-only guarantee rather than actually blocking a concurrent writer.
+Thrown when the active host platform does not implement exclusive lock-file creation (`HostPlatform::try_create_lock_file` on the Rust side). The built-in Node host implements this operation. Custom hosts without it provide sequential ordering for persisted key writes.
 
 Reserved for forward compatibility with hosts that surface locking errors directly: today the only production caller of `try_create_lock_file` (`acquire_lock` in `keys::storage`<!-- -->) absorbs this variant internally and degrades to unlocked operation, so no current SDK path actually throws this error.
 

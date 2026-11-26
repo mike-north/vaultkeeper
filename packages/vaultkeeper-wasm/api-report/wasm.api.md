@@ -447,6 +447,7 @@ export interface WasmHostPlatform {
     // (undocumented)
     fileExists(path: string): Promise<boolean>;
     httpFetch(request: HttpFetchRequest): Promise<HttpFetchResponse>;
+    linkFile?(from: string, to: string): Promise<void>;
     // (undocumented)
     listDir(path: string): Promise<string[]>;
     // (undocumented)
@@ -456,6 +457,7 @@ export interface WasmHostPlatform {
     readFile(path: string): Promise<Uint8Array>;
     // (undocumented)
     renameFile(from: string, to: string): Promise<void>;
+    tryCreateLockFile?(path: string, content: Uint8Array): Promise<void>;
     // (undocumented)
     writeFile(path: string, content: Uint8Array, mode: number): Promise<void>;
 }

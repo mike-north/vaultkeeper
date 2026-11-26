@@ -70,8 +70,16 @@ export interface WasmHostPlatform {
   readFile(path: string): Promise<Uint8Array>
   writeFile(path: string, content: Uint8Array, mode: number): Promise<void>
   fileExists(path: string): Promise<boolean>
+  /** Atomically create the writer lock. Reject an occupied path with code EEXIST. */
+  tryCreateLockFile?(path: string, content: Uint8Array): Promise<void>
   deleteFile(path: string): Promise<void>
   renameFile(from: string, to: string): Promise<void>
+  /**
+   * Publish a staged file at an unused destination through an atomic hard link.
+   * Leave the staging path intact and reject an occupied destination with code EEXIST.
+   * Hosts that omit this hook support sequential creation or writers using the shared lock.
+   */
+  linkFile?(from: string, to: string): Promise<void>
   listDir(path: string): Promise<string[]>
   platform(): string
   configDir(): string

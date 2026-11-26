@@ -19,7 +19,9 @@ import * as os from 'node:os'
 import * as path from 'node:path'
 import { VaultKeeper } from '../../src/vault.js'
 import { registerBuiltinBackends } from '../../src/backend/register-builtins.js'
-import { KeyRevokedError, RotationInProgressError } from '../../src/errors.js'
+import { DecryptionError, KeyRevokedError, RotationInProgressError } from '../../src/errors.js'
+
+import { decryptGcm, encryptGcm } from '../../src/util/at-rest.js'
 
 const SECRET_NAME = 'API_KEY'
 const SECRET_VALUE = 's3cr3t-value'
@@ -83,6 +85,19 @@ describe('cross-process token reuse (criterion 2)', () => {
 })
 
 describe('cross-process rotation guard (criterion 5)', () => {
+  it('reopens state written with a fractional grace expiry', async () => {
+    await writeConfig(0.010000001)
+    const first = await newProcess()
+    await first.rotateKey()
+    const wrap = await fs.readFile(path.join(configDir, '.keys.wrap'))
+    const envelope = await fs.readFile(path.join(configDir, 'keys.enc'), 'utf8')
+    const state: unknown = JSON.parse(decryptGcm(wrap, envelope))
+    expect(state).toHaveProperty('gracePeriodExpiresAt', expect.any(Number))
+    if (typeof state !== 'object' || state === null || !('gracePeriodExpiresAt' in state)) return
+    expect(Number.isSafeInteger(state.gracePeriodExpiresAt)).toBe(true)
+    await expect(newProcess()).resolves.toBeDefined()
+  })
+
   it('rejects a second rotation while the previous rotation is still in grace', async () => {
     const first = await newProcess()
     await first.rotateKey()
@@ -106,5 +121,102 @@ describe('revoked-key error accuracy (criterion 4)', () => {
     // A third process cannot resolve the revoked kid — the error is specific.
     const authorizer = await newProcess()
     await expect(authorizer.authorize(jwe)).rejects.toBeInstanceOf(KeyRevokedError)
+  })
+})
+
+describe('key state recovery (issue #383)', () => {
+  it('preserves both files when a mismatched wrapping key prevents authentication', async () => {
+    const original = await newProcess()
+    await original.store(SECRET_NAME, SECRET_VALUE)
+    const jwe = await original.setup(SECRET_NAME, { skipTrust: true })
+    const statePath = path.join(configDir, 'keys.enc')
+    const wrapPath = path.join(configDir, '.keys.wrap')
+    const state = await fs.readFile(statePath)
+    const wrap = await fs.readFile(wrapPath)
+    const wrongWrap = Buffer.from(wrap)
+    wrongWrap.writeUInt8(wrongWrap.readUInt8(0) ^ 0xff, 0)
+    await fs.writeFile(wrapPath, wrongWrap)
+
+    await expect(newProcess()).rejects.toThrow(/Restore keys.enc and .keys.wrap/)
+    await expect(original.rotateKey()).rejects.toBeInstanceOf(DecryptionError)
+    await expect(original.revokeKey()).rejects.toBeInstanceOf(DecryptionError)
+    expect(await fs.readFile(statePath)).toEqual(state)
+    expect(await fs.readFile(wrapPath)).toEqual(wrongWrap)
+
+    await fs.writeFile(wrapPath, wrap)
+    expect((await original.authorize(jwe)).vaultResponse.keyStatus).toBe('current')
+    expect((await (await newProcess()).authorize(jwe)).vaultResponse.keyStatus).toBe('current')
+  })
+
+  it('rejects an authenticated snapshot with a malformed expired key', async () => {
+    await newProcess()
+    const statePath = path.join(configDir, 'keys.enc')
+    const wrap = await fs.readFile(path.join(configDir, '.keys.wrap'))
+    const envelope = await fs.readFile(statePath, 'utf8')
+    const malformed = encryptGcm(
+      wrap,
+      decryptGcm(wrap, envelope).replace(
+        /}$/,
+        ',"previous":{"id":"expired","key":"invalid","createdAt":"2024-01-01T00:00:00Z"},"gracePeriodExpiresAt":1}',
+      ),
+    )
+    await fs.writeFile(statePath, malformed)
+    await expect(newProcess()).rejects.toThrow(/invalid key material/)
+    expect(await fs.readFile(statePath, 'utf8')).toBe(malformed)
+  })
+
+  it('preserves native lease revocation metadata on a TypeScript key update', async () => {
+    const vault = await newProcess()
+    const statePath = path.join(configDir, 'keys.enc')
+    const wrap = await fs.readFile(path.join(configDir, '.keys.wrap'))
+    const envelope = await fs.readFile(statePath, 'utf8')
+    const native = {
+      revStateGen: 2,
+      jti: [{ jti: 'revoked', exp: 2_000_000_000 }],
+      keyGenerations: { billing: 1 },
+    }
+    const json = decryptGcm(wrap, envelope).replace(/}$/, `,${JSON.stringify(native).slice(1)}`)
+    await fs.writeFile(statePath, encryptGcm(wrap, json))
+    await vault.rotateKey()
+    const updated: unknown = JSON.parse(decryptGcm(wrap, await fs.readFile(statePath, 'utf8')))
+    expect(updated).toMatchObject(native)
+  })
+
+  it('refuses an unreadable snapshot path before touching the wrapping key', async () => {
+    const statePath = path.join(configDir, 'keys.enc')
+    const wrapPath = path.join(configDir, '.keys.wrap')
+    await fs.mkdir(statePath)
+    await expect(newProcess()).rejects.toThrow(/expected a regular file/)
+    expect((await fs.stat(statePath)).isDirectory()).toBe(true)
+    await expect(fs.lstat(wrapPath)).rejects.toMatchObject({ code: 'ENOENT' })
+  })
+
+  it.skipIf(process.platform === 'win32')('does not replace a dangling state symlink', async () => {
+    const statePath = path.join(configDir, 'keys.enc')
+    await fs.symlink('missing', statePath)
+    await expect(newProcess()).rejects.toThrow(/expected a regular file/)
+    expect(await fs.readlink(statePath)).toBe('missing')
+    await expect(fs.lstat(path.join(configDir, '.keys.wrap'))).rejects.toMatchObject({
+      code: 'ENOENT',
+    })
+  })
+
+  it('concurrent bootstrap returns the same persisted key to every caller', async () => {
+    const vaults = await Promise.all(Array.from({ length: 8 }, newProcess))
+    const [minter] = vaults
+    if (minter === undefined) return
+    await minter.store(SECRET_NAME, SECRET_VALUE)
+    const jwe = await minter.setup(SECRET_NAME, { skipTrust: true })
+    for (const vault of vaults) {
+      expect((await vault.authorize(jwe)).vaultResponse.keyStatus).toBe('current')
+    }
+  })
+
+  it('recovers an abandoned native-format lock during bootstrap', async () => {
+    const lockPath = path.join(configDir, 'keys.enc.lock')
+    await fs.writeFile(lockPath, '0')
+    await newProcess()
+    await expect(fs.stat(path.join(configDir, 'keys.enc'))).resolves.toBeDefined()
+    await expect(fs.stat(lockPath)).rejects.toMatchObject({ code: 'ENOENT' })
   })
 })

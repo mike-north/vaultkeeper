@@ -168,7 +168,18 @@ impl HostPlatform for NativeHostPlatform {
     }
 
     async fn read_file(&self, path: &Path) -> Result<Vec<u8>, VaultError> {
-        std::fs::read(path).map_err(|e| VaultError::Filesystem {
+        let read = || {
+            if (path.ends_with("keys.enc") || path.ends_with(".keys.wrap"))
+                && !std::fs::symlink_metadata(path)?.is_file()
+            {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "expected a regular key storage file",
+                ));
+            }
+            std::fs::read(path)
+        };
+        read().map_err(|e| VaultError::Filesystem {
             message: format!("Failed to read {}: {e}", path.display()),
             path: path.display().to_string(),
             permission: "read".to_string(),
@@ -220,9 +231,9 @@ impl HostPlatform for NativeHostPlatform {
         // `Path::exists()` swallows every error (including EACCES) and
         // reports `false`, which would let a permission failure masquerade
         // as "does not exist" for callers (like FileBackend::retrieve) that
-        // rely on this to distinguish the two. Use `metadata` directly so
+        // rely on this to distinguish the two. Use `symlink_metadata` directly so
         // only a genuine ENOENT-equivalent maps to `Ok(false)`.
-        match std::fs::metadata(path) {
+        match std::fs::symlink_metadata(path) {
             Ok(_) => Ok(true),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(false),
             Err(e) => Err(VaultError::Filesystem {
@@ -263,6 +274,16 @@ impl HostPlatform for NativeHostPlatform {
             permission: "write".to_string(),
             code: None,
         })
+    }
+
+    async fn try_link_file(&self, from: &Path, to: &Path) -> Result<bool, VaultError> {
+        std::fs::hard_link(from, to).map_err(|e| VaultError::Filesystem {
+            message: format!("Failed to publish {}: {e}", to.display()),
+            path: to.display().to_string(),
+            permission: "write".to_string(),
+            code: (e.kind() == std::io::ErrorKind::AlreadyExists).then(|| "EEXIST".to_string()),
+        })?;
+        Ok(true)
     }
 
     async fn list_dir(&self, path: &Path) -> Result<Vec<String>, VaultError> {

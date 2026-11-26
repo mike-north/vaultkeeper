@@ -249,6 +249,18 @@ whether membership is intentional.
   `VaultResponse` **⚠ name under workshop** — this operation-metadata wrapper's name collides with the
   adjacent tools' "vault" noun and predates the glossary; the rename is adjudicated at the tiering pass (§2.3)
   (candidate shapes: per-operation result/receipt types). Do not invent the final name here.
+  Persisted key state initializes only when the snapshot is absent. A failed read,
+  authentication, or format check stops initialization and leaves the snapshot
+  and wrapping key intact. The TypeScript SDK, native CLI, and built-in WASM Node
+  host share the same key-state writer lock and atomically publish the first
+  snapshot and wrapping key at unused paths. The native CLI and built-in Node
+  host require hard-link support in the configuration directory for first
+  publication. Custom hosts can implement
+  `HostPlatform::try_link_file` (Rust) or `WasmHostPlatform.linkFile` (WASM)
+  for atomic first publication. A host without the publication hook relies on
+  sequential writes or serialization among cooperating writers. Custom WASM
+  hosts can implement `WasmHostPlatform.tryCreateLockFile` to participate in
+  cross-process locking.
 - **Setup / identity / trust:** `setup` (**normative clarification:** `setup()` is **per-process
   initialization by the embedding application** — load config, verify caller identity, wire the backend — run
   each time a host process starts; it is **not** one-time user onboarding, which is the CLI's `config init`.
