@@ -1,59 +1,78 @@
 import { Transform } from 'node:stream'
 import type { TransformCallback } from 'node:stream'
-import { redactSecrets } from 'vaultkeeper'
+import { REDACTED } from 'vaultkeeper'
 
 /**
  * A Transform stream that replaces all occurrences of a secret value
  * with a replacement string in the piped output.
  *
  * Handles secrets that may be split across chunk boundaries by buffering
- * up to `secret.length - 1` bytes from the end of each chunk. The actual
- * substitution is delegated to `vaultkeeper`'s {@link redactSecrets} so the
- * CLI's streaming redaction and the library's buffered `exec()` redaction
- * share one code path.
+ * up to one byte fewer than the UTF-8 secret's byte length.
  *
  * @internal
  */
 export class RedactingStream extends Transform {
-  readonly #secret: string
-  readonly #replacement: string
-  #tail: string
+  readonly #secret: Buffer
+  readonly #replacement: Buffer
+  #tail: Buffer
 
-  constructor(secret: string, replacement = '[REDACTED]') {
+  constructor(secret: string, replacement = REDACTED) {
     super()
-    this.#secret = secret
-    this.#replacement = replacement
-    this.#tail = ''
+    this.#secret = Buffer.alloc(Buffer.byteLength(secret))
+    this.#secret.write(secret)
+    this.#replacement = Buffer.from(replacement)
+    this.#tail = Buffer.alloc(0)
   }
 
   override _transform(chunk: Buffer, _encoding: BufferEncoding, callback: TransformCallback): void {
-    if (this.#secret.length === 0) {
+    const bufferSize = this.#secret.length - 1
+    if (bufferSize < 0) {
       this.push(chunk)
       callback()
       return
     }
 
-    const str = this.#tail + chunk.toString('utf8')
-    const redacted = redactSecrets(str, [this.#secret], this.#replacement)
+    // Keep raw input in private storage. Emitted chunks must survive cleanup.
+    const bytes = Buffer.alloc(this.#tail.length + chunk.length)
+    this.#tail.copy(bytes)
+    chunk.copy(bytes, this.#tail.length)
+    this.#tail.fill(0)
 
-    // Buffer the last (secret.length - 1) chars in case the secret
-    // is split across this chunk and the next one.
-    const bufferSize = this.#secret.length - 1
-    if (redacted.length > bufferSize) {
-      this.#tail = redacted.slice(-bufferSize)
-      this.push(redacted.slice(0, -bufferSize))
-    } else {
-      this.#tail = redacted
+    try {
+      let position = 0
+      let match = bytes.indexOf(this.#secret, position)
+      while (match !== -1) {
+        this.push(Buffer.from(bytes.subarray(position, match)))
+        this.push(Buffer.from(this.#replacement))
+        // A downstream data listener may destroy the stream during push().
+        if (this.destroyed) {
+          callback()
+          return
+        }
+        position = match + this.#secret.length
+        match = bytes.indexOf(this.#secret, position)
+      }
+
+      const end = bytes.length - Math.min(bufferSize, bytes.length - position)
+      this.#tail = Buffer.alloc(bytes.length - end)
+      bytes.copy(this.#tail, 0, end)
+      this.push(Buffer.from(bytes.subarray(position, end)))
+    } finally {
+      bytes.fill(0)
     }
 
     callback()
   }
 
   override _flush(callback: TransformCallback): void {
-    if (this.#tail.length > 0) {
-      this.push(this.#tail)
-      this.#tail = ''
-    }
-    callback()
+    const tail = Buffer.from(this.#tail)
+    this.#tail.fill(0)
+    callback(null, tail)
+  }
+
+  override _destroy(error: Error | null, callback: (error: Error | null) => void): void {
+    this.#secret.fill(0)
+    this.#tail.fill(0)
+    callback(error)
   }
 }

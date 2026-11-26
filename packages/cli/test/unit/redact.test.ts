@@ -1,14 +1,18 @@
 import { describe, it, expect } from 'vitest'
 import { RedactingStream } from '../../src/redact.js'
 
-function collectStream(stream: RedactingStream, chunks: Buffer[]): Promise<string> {
+async function collectStream(stream: RedactingStream, chunks: Buffer[]): Promise<string> {
+  return (await collectBytes(stream, chunks)).toString('utf8')
+}
+
+function collectBytes(stream: RedactingStream, chunks: Buffer[]): Promise<Buffer> {
   return new Promise((resolve, reject) => {
     const result: Buffer[] = []
     stream.on('data', (chunk: Buffer) => {
       result.push(chunk)
     })
     stream.on('end', () => {
-      resolve(Buffer.concat(result).toString('utf8'))
+      resolve(Buffer.concat(result))
     })
     stream.on('error', reject)
     for (const chunk of chunks) {
@@ -69,5 +73,51 @@ describe('RedactingStream', () => {
     const stream = new RedactingStream('start')
     const result = await collectStream(stream, [Buffer.from('starting')])
     expect(result).toBe('[REDACTED]ing')
+  })
+
+  it('preserves multibyte output split across writes', async () => {
+    const bytes = Buffer.from('before 🔐 after')
+    const result = await collectBytes(new RedactingStream('secret'), [
+      bytes.subarray(0, 9),
+      bytes.subarray(9),
+    ])
+    expect(result).toEqual(bytes)
+  })
+
+  it('preserves nonmatching bytes exactly', async () => {
+    const bytes = Buffer.from([0xff, 0xfe, 0x00, 0x61, 0x80])
+    const result = await collectBytes(new RedactingStream('secret'), [bytes])
+    expect(result).toEqual(bytes)
+  })
+
+  it('redacts a multibyte secret split at every byte boundary', async () => {
+    const secret = '🔐é'
+    const input = Buffer.from(`a ${secret}${secret} b`)
+    for (let split = 1; split < input.length; split++) {
+      const result = await collectStream(new RedactingStream(secret), [
+        input.subarray(0, split),
+        input.subarray(split),
+      ])
+      expect(result).toBe('a [REDACTED][REDACTED] b')
+    }
+  })
+
+  it('does not scan a literal replacement for more matches on a later write', async () => {
+    const result = await collectStream(new RedactingStream('abc', '[$&]ab'), [
+      Buffer.from('abc'),
+      Buffer.from('c more'),
+    ])
+    expect(result).toBe('[$&]abc more')
+  })
+
+  it('emits output before EOF for a one-byte secret', () => {
+    const stream = new RedactingStream('x')
+    const output: Buffer[] = []
+    stream.on('data', (chunk: Buffer) => output.push(chunk))
+
+    stream.write(Buffer.from('progress x'))
+
+    expect(Buffer.concat(output).toString()).toBe('progress [REDACTED]')
+    stream.end()
   })
 })
