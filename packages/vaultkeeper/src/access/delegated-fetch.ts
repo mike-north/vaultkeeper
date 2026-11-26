@@ -2,7 +2,7 @@
  * Delegated HTTP fetch access pattern.
  *
  * Replaces `{{secret}}` or `{{secret:name}}` placeholders in the request
- * URL, headers, and body with actual secret values, then executes the fetch.
+ * URL, headers, and body with actual secret values for the initial request.
  */
 
 import type { FetchRequest } from '../types.js'
@@ -41,9 +41,9 @@ function redactSecretMaterial(
  * @param secrets - A single secret string (replaces `{{secret}}`) or a
  *   name-to-value map (replaces `{{secret:name}}`)
  * @param request - The fetch request template with placeholders
- * @returns The fetch Response
- * @throws {FetchError} If the URL is malformed or the underlying network
- *   request fails (e.g. DNS failure, connection refused, TLS error).
+ * @returns The Response for a non-redirecting request.
+ * @throws {FetchError} If the URL is malformed, the server sends a Fetch
+ *   redirect, or the underlying network request fails.
  * @internal
  */
 export async function delegatedFetch(
@@ -57,7 +57,9 @@ export async function delegatedFetch(
       : undefined
   const body = request.body !== undefined ? resolvePlaceholders(request.body, secrets) : undefined
 
-  const init: RequestInit = {}
+  // Delegation covers the initial destination. Reject redirects in the
+  // transport and keep redirect response metadata out of the return value.
+  const init: RequestInit = { redirect: 'error' }
   if (request.method !== undefined) {
     init.method = request.method
   }

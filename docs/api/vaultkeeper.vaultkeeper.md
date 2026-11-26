@@ -242,7 +242,7 @@ Execute a delegated HTTP fetch, injecting secrets from the token(s).
 
 \*\*Token map ([SecretTokenMap](./vaultkeeper.secrettokenmap.md)<!-- -->):\*\* every `{{secret:name}}` placeholder is replaced with the secret from the corresponding named token.
 
-The raw secret is never exposed in the return value.
+The delegation covers only the requested URL. Fetch redirect statuses (301, 302, 303, 307, and 308) reject with [FetchError](./vaultkeeper.fetcherror.md)<!-- -->, including same-origin redirects and requests without placeholders.
 
 
 </td></tr>
