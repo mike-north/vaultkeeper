@@ -9,6 +9,7 @@
 import type { VaultClaims, SigningClaims } from './types.js'
 import { AuthorizationDeniedError, TokenExpiredError } from '../errors.js'
 import { getTokenExpiryError } from '../jwe/claims.js'
+import { tokenExpiryTime } from '../jwe/expiry-clock.js'
 
 /**
  * The claims a capability token can wrap: either an ordinary secret's
@@ -111,7 +112,8 @@ export function createSigningCapabilityToken(
  *
  * @param token - The opaque capability presented for use.
  * @param owner - The consuming vault's private identity.
- * @param nowSec - The clock sample in epoch seconds for this expiry check.
+ * @param nowSec - An optional shared clock sample in epoch seconds. By default,
+ *   only a live JWE capability presented by its issuer samples the clock.
  * @throws {AuthorizationDeniedError} If the token has no entry or its
  *   issuer differs from the consuming vault.
  * @throws {TokenExpiredError} If the JWE deadline has been reached.
@@ -120,7 +122,7 @@ export function createSigningCapabilityToken(
 export function validateCapabilityToken(
   token: CapabilityToken,
   owner: symbol,
-  nowSec = Date.now() / 1000,
+  nowSec?: number,
 ): StoredClaims {
   const entry = requireCapabilityEntry(token, owner)
   if (entry.kind === 'signing') {
@@ -129,7 +131,7 @@ export function validateCapabilityToken(
   if (entry.kind === 'expired') {
     throw new TokenExpiredError(`Token expired at ${String(entry.deadline)}`, false)
   }
-  const expiryError = getTokenExpiryError(entry.deadline, nowSec)
+  const expiryError = getTokenExpiryError(entry.deadline, nowSec ?? tokenExpiryTime())
   if (expiryError !== undefined) {
     // Drop the claims and prevent a backwards clock correction from reviving them.
     claimsStore.set(token, { kind: 'expired', owner: entry.owner, deadline: entry.deadline })
