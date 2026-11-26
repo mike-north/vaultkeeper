@@ -10,21 +10,13 @@
 
 import type { FetchRequest } from '../types.js'
 import { FetchError } from '../errors.js'
+import { detachBody } from './detached-body.js'
 import { resolvePlaceholders, resolvePlaceholdersInRecord } from './placeholder.js'
 
 /**
- * Keep Fetch's response alive while the detached response owns its body. Node
- * can cancel an unread stream when its transport response is collected. A
- * weak key lets Fetch reclaim abandoned responses and keeps transport metadata
- * off the public object.
- */
-const bodyOwners = new WeakMap<Response, Response>()
-
-/**
- * Fetch's finalizer can no longer cancel the source after clone() locks it.
- * Detached responses have no transport URL list, so Node may not register
- * cleanup for their tee branches. Cancel abandoned unread branches so the
- * source can close once neither branch needs it.
+ * When an ordinary clone is abandoned, release its unread tee branch even if
+ * another branch is still alive and waiting for its cancellation to finish.
+ * The detached body separately handles an entirely abandoned stream graph.
  */
 const clonedBodies = new FinalizationRegistry<WeakRef<ReadableStream<Uint8Array>>>((bodyRef) => {
   const body = bodyRef.deref()
@@ -76,8 +68,8 @@ function redactSecretMaterial(
 }
 
 /**
- * Preserve safe metadata that the Response constructor cannot represent. Each
- * clone carries the same status and redirect flag with native body semantics.
+ * Preserve safe metadata that the Response constructor cannot represent.
+ * Instance clones carry that metadata and track abandoned tee branches.
  */
 function preserveResponseMetadata(
   response: Response,
@@ -113,10 +105,9 @@ function sanitizeResponse(transportResponse: Response): Response {
   // Fetch can deliver statuses outside the constructor's range. Use a backing
   // status that permits a body and has the same `ok` value as those statuses.
   const constructorStatus = status >= 200 && status <= 599 ? status : 500
-  const response = new Response(body, { status: constructorStatus })
-  if (body !== null) {
-    bodyOwners.set(response, transportResponse)
-  }
+  const response = new Response(body === null ? null : detachBody(transportResponse, body), {
+    status: constructorStatus,
+  })
   return preserveResponseMetadata(response, status, redirected)
 }
 

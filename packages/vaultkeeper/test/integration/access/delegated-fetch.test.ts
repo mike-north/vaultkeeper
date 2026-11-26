@@ -175,6 +175,96 @@ describe('VaultKeeper.fetch response metadata', () => {
     },
   )
 
+  it('cancels a stalled response after its ordinary clone is collected', async () => {
+    let pending: ServerResponse | undefined
+    const server = createServer((_request, response) => {
+      pending = response
+      response.writeHead(200, { 'Content-Length': '4' }).flushHeaders()
+    })
+    const endpoint = await listen(server)
+
+    try {
+      const { vault, token } = await authorizeFixture('synthetic credential')
+      const { response } = await vault.fetch(token, { url: `${endpoint}/?credential={{secret}}` })
+      // Cancellation of a tee branch waits until the other branch is released.
+      response.clone()
+      await collectGarbage()
+      if (pending === undefined || response.body === null) {
+        throw new VaultError('Expected a stalled response with an unread body')
+      }
+      const closed = once(pending, 'close', { signal: AbortSignal.timeout(1000) })
+      await Promise.all([closed, response.body.cancel()])
+      expect(pending.destroyed).toBe(true)
+    } finally {
+      await close(server)
+    }
+  })
+
+  it('keeps a stalled body readable when only the native clone reader survives GC', async () => {
+    const expected = 'body read through the retained reader'
+    let pending: ServerResponse | undefined
+    const server = createServer((_request, response) => {
+      pending = response
+      response.writeHead(200, { 'Content-Length': Buffer.byteLength(expected) }).flushHeaders()
+    })
+    const endpoint = await listen(server)
+
+    try {
+      const { vault, token } = await authorizeFixture('synthetic credential')
+      // Keeping the reader is enough to own the stream, even after both Responses are gone.
+      async function openCloneReader(): Promise<ReadableStreamDefaultReader<Uint8Array>> {
+        const { response } = await vault.fetch(token, { url: `${endpoint}/?credential={{secret}}` })
+        const body = Response.prototype.clone.call(response).body
+        if (body === null) {
+          throw new VaultError('Expected a native clone with a body')
+        }
+        return body.getReader()
+      }
+
+      const reader = await openCloneReader()
+      const next = reader.read()
+      await collectGarbage()
+      if (pending === undefined) {
+        throw new VaultError('Expected a response waiting to send its body')
+      }
+      expect(pending.destroyed).toBe(false)
+      pending.end(expected)
+      const decoder = new TextDecoder()
+      let received = ''
+      for (let chunk = await next; !chunk.done; chunk = await reader.read()) {
+        received += decoder.decode(chunk.value, { stream: true })
+      }
+      expect(received + decoder.decode()).toBe(expected)
+    } finally {
+      await close(server)
+    }
+  })
+
+  it('reports a partial BYOB element through the body reader', async () => {
+    const server = createServer((_request, response) => {
+      response.end('x')
+    })
+    const endpoint = await listen(server)
+
+    try {
+      const { vault, token } = await authorizeFixture('synthetic credential')
+      const { response } = await vault.fetch(token, { url: `${endpoint}/?credential={{secret}}` })
+      const reader = response.body?.getReader({ mode: 'byob' })
+      if (reader === undefined) {
+        throw new VaultError('Expected a response with a byte stream')
+      }
+      try {
+        // One byte cannot fill a Uint16Array element. Only the read should reject.
+        await expect(reader.read(new Uint16Array(8))).rejects.toThrow(TypeError)
+        await setImmediate()
+      } finally {
+        reader.releaseLock()
+      }
+    } finally {
+      await close(server)
+    }
+  })
+
   it.concurrent.each([599, 600, 700, 999])(
     'preserves transport status %i and its body',
     async (status) => {
