@@ -8,7 +8,7 @@ Execute a delegated command, injecting secrets from the token(s).
 
 \*\*Single token:\*\* every `{{secret}}` placeholder in `request.env` values is replaced with the secret value.
 
-\*\*Token map ([SecretTokenMap](./vaultkeeper.secrettokenmap.md)<!-- -->):\*\* every `{{secret:name}}` placeholder is replaced with the secret from the corresponding named token.
+\*\*Token map ([SecretTokenMap](./vaultkeeper.secrettokenmap.md)<!-- -->):\*\* every `{{secret:name}}` placeholder is replaced with the secret from the corresponding named token. The map must contain at least one token.
 
 Secret placeholders are not supported in `request.command` or `request.args` — process arguments are visible to other processes via `ps` and often collected in logs and telemetry.
 
@@ -83,7 +83,7 @@ The command result (`stdout`<!-- -->, `stderr`<!-- -->, `exitCode`<!-- -->) toge
 
 ## Exceptions
 
-{<!-- -->AuthorizationDeniedError<!-- -->} If any token is invalid or was not created by this vault instance.
+{<!-- -->AuthorizationDeniedError<!-- -->} If the token map is empty, or any token is invalid or was not created by this vault instance.
 
 {<!-- -->TokenExpiredError<!-- -->} If any token reaches its JWE deadline before dispatch.
 

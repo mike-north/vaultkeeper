@@ -742,7 +742,8 @@ export class VaultKeeper {
    * `request.headers`, and `request.body` is replaced with the secret value.
    *
    * **Token map ({@link SecretTokenMap}):** every `{{secret:name}}` placeholder
-   * is replaced with the secret from the corresponding named token.
+   * is replaced with the secret from the corresponding named token. The map
+   * must contain at least one token.
    *
    * The delegation covers only the requested URL. Fetch redirect statuses
    * (301, 302, 303, 307, and 308) reject with {@link FetchError}, including
@@ -754,8 +755,8 @@ export class VaultKeeper {
    * @returns The `Response` from the underlying `fetch()` call, together with
    *   the vault metadata (`vaultResponse`). `Response.url` can include
    * substitutions made in the request URL.
-   * @throws {AuthorizationDeniedError} If any token is invalid or was not
-   *   created by this vault instance.
+   * @throws {AuthorizationDeniedError} If the token map is empty, or any token
+   *   is invalid or was not created by this vault instance.
    * @throws {TokenExpiredError} If any token reaches its JWE deadline before
    *   dispatch.
    * @throws {VaultError} If a named placeholder references an unknown
@@ -782,7 +783,8 @@ export class VaultKeeper {
    * is replaced with the secret value.
    *
    * **Token map ({@link SecretTokenMap}):** every `{{secret:name}}` placeholder
-   * is replaced with the secret from the corresponding named token.
+   * is replaced with the secret from the corresponding named token. The map
+   * must contain at least one token.
    *
    * Secret placeholders are not supported in `request.command` or
    * `request.args` — process arguments are visible to other processes via
@@ -801,8 +803,8 @@ export class VaultKeeper {
    *   `redact: false` to opt out of output redaction.
    * @returns The command result (`stdout`, `stderr`, `exitCode`) together with
    *   the vault metadata (`vaultResponse`).
-   * @throws {AuthorizationDeniedError} If any token is invalid or was not
-   *   created by this vault instance.
+   * @throws {AuthorizationDeniedError} If the token map is empty, or any token
+   *   is invalid or was not created by this vault instance.
    * @throws {TokenExpiredError} If any token reaches its JWE deadline before
    *   dispatch.
    * @throws {ExecError} If the command cannot be started (e.g. ENOENT),
@@ -1253,7 +1255,7 @@ export class VaultKeeper {
   // Private helpers
   // ---------------------------------------------------------------------------
 
-  /** Snapshot the authorized secrets and retain their leases for the dispatch boundary. */
+  /** Snapshot at least one authorized secret and retain the leases for the dispatch boundary. */
   static #resolveSecrets(token: CapabilityToken | SecretTokenMap): {
     secrets: string | Record<string, string>
     beforeDispatch: () => void
@@ -1279,8 +1281,15 @@ export class VaultKeeper {
       capabilities.push(token)
       return { secrets: VaultKeeper.#requireSecretValue(token), beforeDispatch }
     }
+    const entries = Object.entries(token)
+    if (entries.length === 0) {
+      throw new AuthorizationDeniedError(
+        'At least one capability token is required for delegated access',
+      )
+    }
+
     const result: Record<string, string> = {}
-    for (const [name, t] of Object.entries(token)) {
+    for (const [name, t] of entries) {
       if (!(t instanceof CapabilityToken)) {
         throw new AuthorizationDeniedError(
           `Invalid capability token for secret "${name}" — expected a CapabilityToken from authorize()`,

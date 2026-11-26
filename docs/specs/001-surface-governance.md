@@ -251,6 +251,8 @@ whether membership is intentional.
   language — the library method today named `exec` and its `Exec*` request/result/error types rename to the
   `run` family at the tiering pass, §2.3, so the launcher is spelled `run` in both surfaces), `FetchRequest`,
   `ExecRequest`, `ExecResult`, `redactSecrets`, `REDACTED`, `FetchError`, `ExecError`.
+  Delegated `fetch` and `exec` require at least one capability token: an empty token map
+  fails with `AuthorizationDeniedError` before the request or command is delegated.
   Each delegated `fetch` authorizes a single request destination. Fetch redirect statuses
   (301, 302, 303, 307, and 308) produce a `FetchError` before any follow-up request, regardless
   of origin or placeholder use. The error carries the unresolved URL template.

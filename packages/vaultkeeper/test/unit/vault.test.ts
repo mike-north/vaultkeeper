@@ -754,6 +754,18 @@ describe('VaultKeeper', () => {
   })
 
   describe('fetch', () => {
+    it('rejects an empty token map before delegating', async () => {
+      const vault = await initVault()
+      const fetchSpy = vi
+        .spyOn(delegatedFetchModule, 'delegatedFetch')
+        .mockResolvedValue(new Response())
+
+      await expect(vault.fetch({}, { url: 'https://example.com/api' })).rejects.toBeInstanceOf(
+        AuthorizationDeniedError,
+      )
+      expect(fetchSpy).not.toHaveBeenCalled()
+    })
+
     it('delegates to delegatedFetch and returns the response with current keyStatus', async () => {
       const vault = await initVault()
       const jwe = await vault.setup('my-secret', { skipTrust: true })
@@ -777,6 +789,20 @@ describe('VaultKeeper', () => {
   })
 
   describe('exec', () => {
+    it('rejects an empty token map before delegating', async () => {
+      const vault = await initVault()
+      const execSpy = vi.spyOn(delegatedExecModule, 'delegatedExec').mockResolvedValue({
+        stdout: '',
+        stderr: '',
+        exitCode: 0,
+      })
+
+      await expect(vault.exec({}, { command: 'echo', args: ['no token'] })).rejects.toBeInstanceOf(
+        AuthorizationDeniedError,
+      )
+      expect(execSpy).not.toHaveBeenCalled()
+    })
+
     it('delegates to delegatedExec and returns the result with current keyStatus', async () => {
       const vault = await initVault()
       const jwe = await vault.setup('my-secret', { skipTrust: true })
