@@ -13,9 +13,9 @@ import { describe, it } from 'node:test'
 import * as assert from 'node:assert/strict'
 import { createServer } from 'node:http'
 import type { AddressInfo } from 'node:net'
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { basename, join } from 'node:path'
 import { createNodeHost } from '../node-host.js'
 import {
   mapWasmError,
@@ -742,12 +742,36 @@ describe('persisted key state (issue #383)', () => {
       const restored = Buffer.from('restored snapshot')
       host.writeFile = async (path, content, mode) => {
         await write(path, content, mode)
-        if (path.includes('keys.') && path.endsWith('.tmp')) {
+        if (basename(path).startsWith('keys.') && path.endsWith('.tmp')) {
           await writeFile(statePath, restored, { mode: 0o600 })
         }
       }
       await assert.rejects(bindings.createVaultKeeper(host, { skipDoctor: true }))
       assert.deepEqual(await readFile(statePath), restored)
+    })
+  })
+
+  it('preserves both restored files when they appear during wrapping-key staging', async () => {
+    await withTempConfigDir(async (dir) => {
+      const bindings = await loadHandleBindings()
+      const host = createNodeHost(dir)
+      const write = host.writeFile.bind(host)
+      const statePath = join(dir, 'keys.enc')
+      const wrapPath = join(dir, '.keys.wrap')
+      const restoredState = Buffer.from('restored snapshot')
+      const restoredWrap = Buffer.alloc(32, 7)
+      host.writeFile = async (path, content, mode) => {
+        await write(path, content, mode)
+        if (basename(path).startsWith('.keys.') && path.endsWith('.tmp')) {
+          // Model a backup restore that does not participate in vaultkeeper's lock.
+          await writeFile(wrapPath, restoredWrap, { mode: 0o600 })
+          await writeFile(statePath, restoredState, { mode: 0o600 })
+        }
+      }
+      await assert.rejects(bindings.createVaultKeeper(host, { skipDoctor: true }))
+      assert.deepEqual(await readFile(statePath), restoredState)
+      assert.deepEqual(await readFile(wrapPath), restoredWrap)
+      assert.deepEqual((await readdir(dir)).sort(), ['.keys.wrap', 'keys.enc'])
     })
   })
 

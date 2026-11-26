@@ -469,6 +469,28 @@ impl HostPlatform for JsHostPlatform {
         Ok(())
     }
 
+    async fn try_link_file(&self, from: &Path, to: &Path) -> Result<bool, VaultError> {
+        let method = Reflect::get(&self.host, &JsValue::from_str("linkFile"))
+            .map_err(|err| fs_rejection_to_vault_error(&err, to, "write"))?;
+        if method.is_undefined() {
+            return Ok(false);
+        }
+        let method = method
+            .dyn_into::<Function>()
+            .map_err(|_| js_err("linkFile must be a function"))?;
+        let result = method
+            .call2(
+                &self.host,
+                &JsValue::from_str(&from.to_string_lossy()),
+                &JsValue::from_str(&to.to_string_lossy()),
+            )
+            .map_err(|err| fs_rejection_to_vault_error(&err, to, "write"))?;
+        JsFuture::from(Promise::from(result))
+            .await
+            .map_err(|err| fs_rejection_to_vault_error(&err, to, "write"))?;
+        Ok(true)
+    }
+
     async fn list_dir(&self, path: &Path) -> Result<Vec<String>, VaultError> {
         let list_fn = get_method(&self.host, "listDir").map_err(|e| js_err(&format!("{e:?}")))?;
 

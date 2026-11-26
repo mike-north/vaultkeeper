@@ -203,6 +203,14 @@ export function createNodeHost(configDirOverride?: string): WasmHostPlatform {
       }
     },
 
+    async linkFile(from: string, to: string): Promise<void> {
+      try {
+        await link(from, to)
+      } catch (err) {
+        throw toHostFilesystemError(err, to)
+      }
+    },
+
     async listDir(path: string): Promise<string[]> {
       try {
         return await readdir(path)

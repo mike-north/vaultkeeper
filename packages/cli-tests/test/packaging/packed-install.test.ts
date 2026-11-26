@@ -28,6 +28,8 @@ import * as os from 'node:os'
 import * as path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
+import { installTarballs } from './npm-install-fixture.js'
+
 const execFileAsync = promisify(execFile)
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
@@ -136,13 +138,7 @@ describe('packed-install smoke test', () => {
       ),
     )
 
-    await execFileAsync(
-      'npm',
-      ['install', '--no-save', '--no-audit', '--no-fund', vaultkeeperTarball, cliTarball],
-      {
-        cwd: projectDir,
-      },
-    )
+    await installTarballs(projectDir, vaultkeeperTarball, cliTarball)
 
     // --no-install keeps this hermetic: if the local bin link is missing —
     // the exact regression this test guards against — npx must fail rather

@@ -272,6 +272,7 @@ pub fn vaultkeeper_core::backend::HostPlatform::prompt_approval<'life0, 'life1, 
 pub fn vaultkeeper_core::backend::HostPlatform::read_file<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 std::path::Path) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<alloc::vec::Vec<u8>, vaultkeeper_core::errors::VaultError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
 pub fn vaultkeeper_core::backend::HostPlatform::rename_file<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 std::path::Path, &'life2 std::path::Path) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<(), vaultkeeper_core::errors::VaultError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
 pub fn vaultkeeper_core::backend::HostPlatform::try_create_lock_file<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 std::path::Path, &'life2 [u8]) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<(), vaultkeeper_core::errors::VaultError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
+pub fn vaultkeeper_core::backend::HostPlatform::try_link_file<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 std::path::Path, &'life2 std::path::Path) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<bool, vaultkeeper_core::errors::VaultError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
 pub fn vaultkeeper_core::backend::HostPlatform::write_file<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 std::path::Path, &'life2 [u8], u32) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<(), vaultkeeper_core::errors::VaultError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
 pub trait vaultkeeper_core::backend::ListableBackend: vaultkeeper_core::backend::SecretBackend
 pub fn vaultkeeper_core::backend::ListableBackend::list<'life0, 'async_trait>(&'life0 self) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<alloc::vec::Vec<alloc::string::String>, vaultkeeper_core::errors::VaultError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
@@ -853,7 +854,7 @@ pub fn vaultkeeper_core::profile::validate_profile_name(&str) -> core::result::R
 pub mod vaultkeeper_core::resolve
 pub struct vaultkeeper_core::resolve::ResolveOptions<'a>
 pub vaultkeeper_core::resolve::ResolveOptions::backend: &'a dyn vaultkeeper_core::backend::SecretBackend
-pub vaultkeeper_core::resolve::ResolveOptions::executable_hash: core::option::Option<alloc::string::String>
+pub vaultkeeper_core::resolve::ResolveOptions::executable_identity: core::option::Option<vaultkeeper_core::identity::IdentityInfo>
 pub vaultkeeper_core::resolve::ResolveOptions::key_manager: &'a vaultkeeper_core::keys::KeyManager
 pub async fn vaultkeeper_core::resolve::resolve_profile(&vaultkeeper_core::profile::loader::LoadedProfile, &vaultkeeper_core::resolve::ResolveOptions<'_>) -> core::result::Result<vaultkeeper_core::resolve::ResolvedEnv, vaultkeeper_core::errors::VaultError>
 pub type vaultkeeper_core::resolve::ResolvedEnv = std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>
@@ -1269,7 +1270,7 @@ pub vaultkeeper_core::PreflightResult::ready: bool
 pub vaultkeeper_core::PreflightResult::warnings: alloc::vec::Vec<alloc::string::String>
 pub struct vaultkeeper_core::ResolveOptions<'a>
 pub vaultkeeper_core::ResolveOptions::backend: &'a dyn vaultkeeper_core::backend::SecretBackend
-pub vaultkeeper_core::ResolveOptions::executable_hash: core::option::Option<alloc::string::String>
+pub vaultkeeper_core::ResolveOptions::executable_identity: core::option::Option<vaultkeeper_core::identity::IdentityInfo>
 pub vaultkeeper_core::ResolveOptions::key_manager: &'a vaultkeeper_core::keys::KeyManager
 pub struct vaultkeeper_core::RunPlan
 pub vaultkeeper_core::RunPlan::ad_hoc: alloc::collections::btree::set::BTreeSet<alloc::string::String>

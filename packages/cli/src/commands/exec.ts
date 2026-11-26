@@ -208,14 +208,14 @@ function printExecHelp(): void {
 }
 
 export async function execCommand(args: string[], configDir: string): Promise<number> {
-  // Handle --help / -h before any other processing.
-  if (args.includes('--help') || args.includes('-h')) {
+  const dashDashIdx = args.indexOf('--')
+  const flagArgs = dashDashIdx === -1 ? args : args.slice(0, dashDashIdx)
+
+  if (flagArgs.includes('--help') || flagArgs.includes('-h')) {
     printExecHelp()
     return 0
   }
 
-  // Find the -- separator to split CLI flags from the wrapped command
-  const dashDashIdx = args.indexOf('--')
   if (dashDashIdx === -1) {
     process.stderr.write('Error: Must provide command after --\n')
     process.stderr.write(
@@ -225,7 +225,6 @@ export async function execCommand(args: string[], configDir: string): Promise<nu
     return 2
   }
 
-  const flagArgs = args.slice(0, dashDashIdx)
   const command = args.slice(dashDashIdx + 1)
 
   if (command.length === 0) {

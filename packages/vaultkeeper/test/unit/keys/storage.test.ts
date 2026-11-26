@@ -98,6 +98,25 @@ describe('first snapshot publication', () => {
   })
 })
 
+describe('shared key state writer lock', () => {
+  it.each(['fresh', 'unrecognized'])('leaves a %s marker and key state alone', async (kind) => {
+    const lockPath = path.join(dir, 'keys.enc.lock')
+    // Hex is parseable as a JavaScript number, but is not a native epoch-ms marker.
+    const marker = kind === 'fresh' ? String(Date.now()) : '0x0'
+    await fs.writeFile(lockPath, marker)
+    const update = vi.fn(() => ({ current: makeKey('unused', 0x11) }))
+
+    await expect(updateKeyState(dir, update)).rejects.toMatchObject({
+      path: lockPath,
+      permission: 'lock',
+      code: 'EEXIST',
+    })
+    expect(update).not.toHaveBeenCalled()
+    expect(await fs.readFile(lockPath, 'utf8')).toBe(marker)
+    expect(await fs.readdir(dir)).toEqual(['keys.enc.lock'])
+  })
+})
+
 describe('grace-period expiry on load', () => {
   beforeEach(() => {
     vi.useFakeTimers()

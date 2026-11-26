@@ -9,6 +9,10 @@
 //!   base64) of the JSON-serialized key state.
 //! - `.keys.wrap` — the random 32-byte wrapping key that protects `keys.enc`.
 //!
+//! First publication of either file must preserve an occupied destination.
+//! Once a snapshot has been authenticated, an update replaces it under the
+//! shared writer lock and carries forward its revocation state.
+//!
 //! Persisting key material lets a JWE minted by one process be authorized by
 //! a later process within the token's validity window: the `kid` a token
 //! embeds still resolves to a known key after the minting process exits.
@@ -244,17 +248,11 @@ async fn generate_and_write_wrap_key(
     host: &dyn HostPlatform,
     wrap_path: &Path,
 ) -> Result<Vec<u8>, VaultError> {
-    let mut key = vec![0u8; GCM_KEY_BYTES];
+    let mut key = zeroize::Zeroizing::new(vec![0u8; GCM_KEY_BYTES]);
     getrandom::fill(&mut key)
         .map_err(|e| VaultError::Other(format!("Failed to generate wrap key: {e}")))?;
-    // Zeroize on a failed write too — this freshly generated key is real key
-    // material, and an early `?` return would otherwise drop it un-wiped,
-    // leaving it resident in memory after a failed persistence attempt.
-    if let Err(err) = write_atomically(host, wrap_path, &key).await {
-        key.zeroize();
-        return Err(err);
-    }
-    Ok(key)
+    write_atomically(host, wrap_path, &key, Publication::Create).await?;
+    Ok(std::mem::take(&mut *key))
 }
 
 /// Outcome of reading and authenticating the shared encrypted snapshot.
@@ -808,10 +806,8 @@ where
 /// that prove this against real OS threads and a real filesystem — not two
 /// sequential calls dressed up as concurrent.
 ///
-/// On a host that does **not** implement `try_create_lock_file` (every host
-/// as of this change other than `NativeHostPlatform`, including the current
-/// WASM/JS bridge — see that trait method's doc comment for why) this
-/// degrades to the weaker guarantee this function previously documented: a
+/// On a host that does **not** implement `try_create_lock_file`, writes
+/// have a sequential guarantee: a
 /// `rotateKey`/`revokeKey` write and a revocation write that are *sequenced*
 /// one after the other (in either order) each carry the other's portion
 /// forward untouched (`ac10_sequential_revoke_and_rotate_clobber_neither_order`
@@ -823,10 +819,7 @@ where
 /// [`crate::vault::VaultKeeper::init`] has run against this config dir) —
 /// there is nothing meaningful to revoke against before any key material
 /// exists. A genuinely corrupt store is also refused rather than silently
-/// reset to empty: unlike [`save_key_state`] (whose caller only ever supplies
-/// fresh key material and has nothing to lose from a reset), a reset here
-/// would silently discard real revocations rather than merely refuse to
-/// validate against them.
+/// reset to empty: a reset would silently discard real revocations.
 pub async fn mutate_revocation_state(
     host: &dyn HostPlatform,
     mutate: impl FnOnce(&mut RevocationState),
@@ -869,12 +862,15 @@ async fn mutate_revocation_state_locked(
         parsed.previous,
         parsed.grace_period_expires_at,
         &revocation,
+        Publication::Replace,
     )
     .await?;
 
     Ok(revocation)
 }
 
+/// Hydrate authenticated state or publish a first snapshot without replacing
+/// a file restored by a writer outside the shared lock on hosts with atomic publication.
 pub(crate) async fn initialize_key_state(
     host: &dyn HostPlatform,
     manager: &mut crate::keys::KeyManager,
@@ -883,8 +879,16 @@ pub(crate) async fn initialize_key_state(
         if let Some(snapshot) = load_key_state(host).await? {
             manager.hydrate(snapshot);
         } else {
-            manager.init()?;
-            save_key_state_locked(host, &manager.snapshot()?).await?;
+            let mut fresh = crate::keys::KeyManager::new();
+            fresh.init()?;
+            write_key_snapshot(
+                host,
+                &fresh.snapshot()?,
+                &RevocationState::default(),
+                Publication::Create,
+            )
+            .await?;
+            *manager = fresh;
         }
         Ok(())
     })
@@ -911,8 +915,10 @@ pub(crate) async fn update_key_state(
 /// Persist `snapshot` to the host's config directory. The state file and its
 /// wrapping key are both written owner-only (`0o600`).
 ///
-/// Uses write-to-temp-then-rename (via [`HostPlatform::rename_file`]) so a
-/// concurrent [`load_key_state`] never observes a half-written envelope.
+/// Stages the envelope before publishing, so a concurrent [`load_key_state`]
+/// never observes a half-written envelope on hosts with atomic publication.
+/// Creation uses [`HostPlatform::try_link_file`] where available. An update
+/// replaces the authenticated snapshot via [`HostPlatform::rename_file`].
 /// Every filesystem step (wrap-key read/write, temp write, rename) surfaces
 /// the host's typed `VaultError::Filesystem` on failure rather than a generic
 /// error, matching the `HostFilesystemError` contract at the wasm boundary.
@@ -952,9 +958,9 @@ async fn save_key_state_locked(
     host: &dyn HostPlatform,
     snapshot: &KeyStateSnapshot,
 ) -> Result<(), VaultError> {
-    let revocation = match try_load_raw(host).await? {
-        RawLoad::Present(parsed) => revocation_from_raw(&parsed),
-        RawLoad::Absent => RevocationState::default(),
+    let (revocation, publication) = match try_load_raw(host).await? {
+        RawLoad::Present(parsed) => (revocation_from_raw(&parsed), Publication::Replace),
+        RawLoad::Absent => (RevocationState::default(), Publication::Create),
         RawLoad::Corrupt => {
             let state_path = host.config_dir().join(KEY_STATE_FILE);
             return Err(VaultError::Decryption {
@@ -969,6 +975,16 @@ async fn save_key_state_locked(
         }
     };
 
+    write_key_snapshot(host, snapshot, &revocation, publication).await
+}
+
+/// Serialize the key portion of the shared envelope while carrying its revocations forward.
+async fn write_key_snapshot(
+    host: &dyn HostPlatform,
+    snapshot: &KeyStateSnapshot,
+    revocation: &RevocationState,
+    publication: Publication,
+) -> Result<(), VaultError> {
     write_raw_state(
         host,
         serialize_key(&snapshot.current),
@@ -977,7 +993,8 @@ async fn save_key_state_locked(
             (Some(_), Some(expiry)) => Some(expiry),
             _ => None,
         },
-        &revocation,
+        revocation,
+        publication,
     )
     .await
 }
@@ -990,6 +1007,7 @@ async fn write_raw_state(
     previous: Option<RawKeyMaterial>,
     grace_period_expires_at: Option<u64>,
     revocation: &RevocationState,
+    publication: Publication,
 ) -> Result<(), VaultError> {
     let wrap_path = host.config_dir().join(KEY_WRAP_FILE);
     let wrap_key =
@@ -1021,13 +1039,21 @@ async fn write_raw_state(
     let envelope = encrypt_gcm(&wrap_key, &json)?;
 
     let state_path = host.config_dir().join(KEY_STATE_FILE);
-    write_atomically(host, &state_path, envelope.as_bytes()).await
+    write_atomically(host, &state_path, envelope.as_bytes(), publication).await
 }
 
+/// Whether the caller is creating the first file or updating authenticated state.
+enum Publication {
+    Create,
+    Replace,
+}
+
+/// Stage complete contents before making the destination visible to other readers.
 async fn write_atomically(
     host: &dyn HostPlatform,
     path: &Path,
     content: &[u8],
+    publication: Publication,
 ) -> Result<(), VaultError> {
     let mut suffix = [0u8; 16];
     getrandom::fill(&mut suffix)
@@ -1036,10 +1062,24 @@ async fn write_atomically(
     let tmp_path = path.with_extension(format!("{suffix_hex}.tmp"));
     let result = async {
         host.write_file(&tmp_path, content, 0o600).await?;
-        host.rename_file(&tmp_path, path).await
+        match publication {
+            Publication::Replace => host.rename_file(&tmp_path, path).await,
+            Publication::Create if host.try_link_file(&tmp_path, path).await? => Ok(()),
+            Publication::Create if host.file_exists(path).await? => Err(VaultError::Filesystem {
+                message: format!(
+                    "Cannot publish {} because it already exists",
+                    path.display()
+                ),
+                path: path.display().to_string(),
+                permission: "write".to_string(),
+                code: Some("EEXIST".to_string()),
+            }),
+            Publication::Create => host.rename_file(&tmp_path, path).await,
+        }
     }
     .await;
-    if result.is_err() {
+    // Linking publishes the file without consuming its staging name.
+    if matches!(publication, Publication::Create) || result.is_err() {
         let _ = host.delete_file(&tmp_path).await;
     }
     result
@@ -1254,7 +1294,8 @@ mod tests {
         files: Mutex<HashMap<PathBuf, Vec<u8>>>,
         config_dir: PathBuf,
         deny_read: Mutex<HashSet<PathBuf>>,
-        restore_on_stage: bool,
+        // Select which staged file coincides with a restore outside the writer lock.
+        restore_on_stage: Option<&'static str>,
     }
 
     impl TestHost {
@@ -1263,7 +1304,7 @@ mod tests {
                 files: Mutex::new(HashMap::new()),
                 config_dir: PathBuf::from("/test/config"),
                 deny_read: Mutex::new(HashSet::new()),
-                restore_on_stage: false,
+                restore_on_stage: None,
             }
         }
     }
@@ -1306,11 +1347,18 @@ mod tests {
         ) -> Result<(), VaultError> {
             let mut files = self.files.lock().unwrap();
             files.insert(path.to_path_buf(), content.to_vec());
-            if self.restore_on_stage && path.extension().is_some_and(|ext| ext == "tmp") {
+            if self.restore_on_stage.is_some_and(|prefix| {
+                path.file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|name| name.starts_with(prefix) && name.ends_with(".tmp"))
+            }) {
                 files.insert(
                     self.config_dir.join(KEY_STATE_FILE),
                     b"restored snapshot".to_vec(),
                 );
+                if self.restore_on_stage == Some(".keys.") {
+                    files.insert(self.config_dir.join(KEY_WRAP_FILE), vec![7; GCM_KEY_BYTES]);
+                }
             }
             Ok(())
         }
@@ -1367,7 +1415,7 @@ mod tests {
     #[tokio::test]
     async fn bootstrap_preserves_snapshot_restored_during_staging() {
         let mut host = TestHost::new();
-        host.restore_on_stage = true;
+        host.restore_on_stage = Some("keys.");
         let mut manager = crate::keys::KeyManager::new();
         assert!(initialize_key_state(&host, &mut manager).await.is_err());
         assert_eq!(
@@ -1375,6 +1423,28 @@ mod tests {
                 .await
                 .unwrap(),
             b"restored snapshot"
+        );
+    }
+
+    #[tokio::test]
+    async fn bootstrap_preserves_snapshot_and_wrap_restored_during_wrap_staging() {
+        let mut host = TestHost::new();
+        host.restore_on_stage = Some(".keys.");
+        let mut manager = crate::keys::KeyManager::new();
+        assert!(initialize_key_state(&host, &mut manager).await.is_err());
+        let files = host.files.lock().unwrap();
+        assert_eq!(
+            files.get(&host.config_dir.join(KEY_STATE_FILE)).unwrap(),
+            b"restored snapshot"
+        );
+        assert_eq!(
+            files.get(&host.config_dir.join(KEY_WRAP_FILE)).unwrap(),
+            &[7; GCM_KEY_BYTES]
+        );
+        assert_eq!(
+            files.len(),
+            2,
+            "bootstrap must clean up its lock and staging file"
         );
     }
 

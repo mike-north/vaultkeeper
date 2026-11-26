@@ -29,6 +29,8 @@ import type { KeyMaterial, KeyStateSnapshot } from './types.js'
 
 const KEY_STATE_FILE = 'keys.enc'
 const KEY_WRAP_FILE = '.keys.wrap'
+/** Stale-lock threshold shared with Rust. On-disk markers are epoch milliseconds. */
+const LOCK_STALE_AFTER_MS = 30_000
 
 interface RawKeyMaterial {
   id: string
@@ -294,6 +296,26 @@ async function writeSnapshot(
   }
 }
 
+/**
+ * Recover an abandoned native-format lock. Recheck the exact marker before
+ * removing it so a fresh acquisition observed during inspection stays held.
+ * The final read and unlink are separate filesystem operations.
+ */
+async function takeOverIfStale(lockPath: string): Promise<void> {
+  try {
+    const existing = await readRegularFile(lockPath, 'key state lock')
+    if (existing === undefined) return
+    const marker = existing.toString('utf8').trim()
+    if (!/^\d+$/.test(marker)) return
+    const createdAt = Number(marker)
+    if (!Number.isSafeInteger(createdAt) || Date.now() - createdAt <= LOCK_STALE_AFTER_MS) return
+    const current = await readRegularFile(lockPath, 'key state lock')
+    if (current?.equals(existing) === true) await fs.unlink(lockPath)
+  } catch {
+    // An unreadable or concurrently removed marker gives no authority to reap it.
+  }
+}
+
 /** Serialize persisted read-modify-write operations with native writers. @internal */
 export async function updateKeyState(
   configDir: string,
@@ -314,6 +336,7 @@ export async function updateKeyState(
       break
     } catch (error) {
       if (!hasCode(error, 'EEXIST')) throw error
+      await takeOverIfStale(lockPath)
       if (attempt === 49) {
         throw new FilesystemError(
           `Timed out waiting for the key state lock at ${lockPath}. Retry after other vault writers finish. If no writer is active, remove the abandoned lock file and retry.`,

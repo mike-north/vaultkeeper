@@ -276,6 +276,16 @@ impl HostPlatform for NativeHostPlatform {
         })
     }
 
+    async fn try_link_file(&self, from: &Path, to: &Path) -> Result<bool, VaultError> {
+        std::fs::hard_link(from, to).map_err(|e| VaultError::Filesystem {
+            message: format!("Failed to publish {}: {e}", to.display()),
+            path: to.display().to_string(),
+            permission: "write".to_string(),
+            code: (e.kind() == std::io::ErrorKind::AlreadyExists).then(|| "EEXIST".to_string()),
+        })?;
+        Ok(true)
+    }
+
     async fn list_dir(&self, path: &Path) -> Result<Vec<String>, VaultError> {
         match std::fs::read_dir(path) {
             Ok(entries) => {

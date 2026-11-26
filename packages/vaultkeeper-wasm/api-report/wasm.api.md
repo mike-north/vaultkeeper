@@ -447,6 +447,7 @@ export interface WasmHostPlatform {
     // (undocumented)
     fileExists(path: string): Promise<boolean>;
     httpFetch(request: HttpFetchRequest): Promise<HttpFetchResponse>;
+    linkFile?(from: string, to: string): Promise<void>;
     // (undocumented)
     listDir(path: string): Promise<string[]>;
     // (undocumented)

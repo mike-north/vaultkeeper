@@ -156,6 +156,18 @@ pub trait HostPlatform: Send + Sync {
         self.delete_file(from).await
     }
 
+    /// Publish a complete staged file at an unused path by creating a hard link.
+    /// On success, both names refer to the same file and the caller owns cleanup
+    /// of the staging name. An occupied destination returns a filesystem error
+    /// with code `EEXIST` and leaves both entries intact.
+    ///
+    /// `Ok(false)` means the host did not opt in and made no changes. Key storage
+    /// then uses a separate existence check and rename, with sequential safety
+    /// or serialization among writers that honor the same lock.
+    async fn try_link_file(&self, _from: &Path, _to: &Path) -> Result<bool, VaultError> {
+        Ok(false)
+    }
+
     /// List filenames in a directory. Returns an empty vec if the dir doesn't exist.
     async fn list_dir(&self, path: &Path) -> Result<Vec<String>, VaultError>;
 
