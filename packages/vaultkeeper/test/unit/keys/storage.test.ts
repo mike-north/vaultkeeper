@@ -23,10 +23,39 @@ const renameBarrier = vi.hoisted(() => ({
   pending: new Array<{ source: string; release: (fail?: boolean) => void }>(),
 }))
 
+// Faults apply only to the next exclusively created key-state staging file.
+const stageFault = vi.hoisted(() => ({
+  write: false,
+  close: false,
+  path: '',
+  writeError: Object.assign(new Error('disk full'), { code: 'ENOSPC' }),
+  closeError: Object.assign(new Error('close failed'), { code: 'EIO' }),
+}))
+
 vi.mock('node:fs/promises', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:fs/promises')>()
   return {
     ...actual,
+    open: async (...args: Parameters<typeof actual.open>): Promise<fs.FileHandle> => {
+      const handle = await actual.open(...args)
+      if (args[1] === 'wx' && (stageFault.write || stageFault.close)) {
+        stageFault.path = String(args[0])
+        if (stageFault.write) {
+          vi.spyOn(handle, 'writeFile').mockImplementation(async () => {
+            await handle.write('partial')
+            throw stageFault.writeError
+          })
+        }
+        if (stageFault.close) {
+          const close = handle.close.bind(handle)
+          vi.spyOn(handle, 'close').mockImplementation(async () => {
+            await close()
+            throw stageFault.closeError
+          })
+        }
+      }
+      return handle
+    },
     rename: async (...args: Parameters<typeof actual.rename>): Promise<void> => {
       if (renameBarrier.enabled) {
         const fail = await new Promise<boolean>((resolve) => {
@@ -60,10 +89,36 @@ beforeEach(async () => {
 })
 
 afterEach(async () => {
+  stageFault.write = false
+  stageFault.close = false
+  stageFault.path = ''
   await fs.rm(dir, { recursive: true, force: true })
 })
 
 describe('saveKeyState / loadKeyState round-trip', () => {
+  it.each([
+    { write: true, code: 'ENOSPC', cause: stageFault.writeError },
+    { write: false, code: 'EIO', cause: stageFault.closeError },
+  ])('preserves the primary staging error when write failure is $write', async ({ write, code, cause }) => {
+    const initial = { current: makeKey('k-initial', 0x10) }
+    await saveKeyState(dir, initial)
+    stageFault.write = write
+    stageFault.close = true
+
+    const result = await saveKeyState(dir, { current: makeKey('k-next', 0x11) }).catch(
+      (error: unknown) => error,
+    )
+    expect(result).toBeInstanceOf(FilesystemError)
+    expect(result).toMatchObject({
+      name: 'FilesystemError',
+      code,
+      cause,
+      path: stageFault.path,
+    })
+    expect(stageFault.path).toMatch(/keys\.enc\..*\.tmp$/)
+    await expect(fs.stat(stageFault.path)).rejects.toMatchObject({ code: 'ENOENT' })
+    expect(await loadKeyState(dir)).toEqual(initial)
+  })
   it('persists the current key so a later load resolves the same id and bytes', async () => {
     const current = makeKey('k-1-aaaa', 0x11)
     await saveKeyState(dir, { current })

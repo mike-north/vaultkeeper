@@ -198,9 +198,12 @@ export async function saveKeyState(configDir: string, snapshot: KeyStateSnapshot
   try {
     try {
       await stage.writeFile(envelope, 'utf8')
-    } finally {
-      await stage.close()
+    } catch (err) {
+      // A failed close must not obscure the write failure that prevented publication.
+      await stage.close().catch(() => undefined)
+      throw err
     }
+    await stage.close()
     errorPath = statePath
     await fs.rename(tmpPath, statePath)
   } catch (err) {
