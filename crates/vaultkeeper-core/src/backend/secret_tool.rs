@@ -51,23 +51,6 @@ impl SecretToolBackend {
             .map(|id| id.to_string())
             .collect()
     }
-
-    /// Strip exactly one trailing `\n` from `secret-tool lookup` output, if
-    /// present — not a full `.trim()`.
-    ///
-    /// `secret-tool lookup` prints the stored secret followed by a single
-    /// trailing newline that it adds itself; that newline is not part of the
-    /// secret and must be removed. A full trim would also strip legitimate
-    /// leading/trailing whitespace that is part of the secret value itself (a
-    /// secret may intentionally be or contain whitespace), so only the one
-    /// newline `secret-tool` appends is removed here. Must match the TS
-    /// backend's `stripSecretToolTrailingNewline` exactly.
-    fn strip_trailing_newline(stdout: String) -> String {
-        stdout
-            .strip_suffix('\n')
-            .map(str::to_string)
-            .unwrap_or(stdout)
-    }
 }
 
 #[cfg_attr(target_arch = "wasm32", async_trait::async_trait(?Send))]
@@ -138,21 +121,17 @@ impl SecretBackend for SecretToolBackend {
                 ExecOptions::default(),
             )
             .await?;
-        // Not-found is determined solely by exit code — never by whether
-        // stdout is empty (after stripping secret-tool's own trailing
-        // newline). A stored secret may legitimately be an empty string or
-        // whitespace-only; both would otherwise be indistinguishable from
-        // "no such entry" (see issue #297). Must match the TS backend's
-        // `retrieve` exactly.
+        // Exit status distinguishes a missing item from a stored empty value.
         if output.exit_code != 0 {
             return Err(VaultError::SecretNotFound {
                 message: format!("Secret not found in Secret Service: {id}"),
             });
         }
-        let stdout = String::from_utf8(output.stdout).map_err(|e| {
+        // secret-tool adds a display newline only on a TTY. Captured stdout
+        // consists entirely of the stored value, including any final newline.
+        String::from_utf8(output.stdout).map_err(|e| {
             VaultError::Other(format!("secret-tool lookup returned non-UTF-8 output: {e}"))
-        })?;
-        Ok(Self::strip_trailing_newline(stdout))
+        })
     }
 
     async fn delete(&self, id: &str) -> Result<(), VaultError> {
@@ -306,7 +285,8 @@ mod tests {
                     let id = args.get(3).expect("id arg").to_string();
                     match self.entries.lock().unwrap().get(&id) {
                         Some((_, secret)) => Ok(ExecOutput {
-                            stdout: format!("{secret}\n").into_bytes(),
+                            // Captured lookup stdout has no terminal presentation newline.
+                            stdout: secret.as_bytes().to_vec(),
                             stderr: Vec::new(),
                             exit_code: 0,
                         }),
@@ -477,14 +457,11 @@ mod tests {
     // ── AC2: byte-for-byte round trip of spaces/quotes/newlines/non-ASCII ──
 
     #[tokio::test]
-    async fn round_trips_secret_with_spaces_quotes_and_embedded_newlines() {
+    async fn round_trips_secret_with_spaces_quotes_and_final_line_endings() {
         let host = TestHost::new();
         let backend = SecretToolBackend::new(host.clone());
-        // secret-tool appends exactly one trailing newline of its own to
-        // `lookup` output, which is stripped (see `strip_trailing_newline`);
-        // an *embedded* newline (not the final character) is part of the
-        // secret and is preserved byte-for-byte, matching the TS backend.
-        let secret = "hello \"world\" 'quoted'\nmiddle line\nend";
+        // Every byte written to the lookup pipe belongs to the stored value.
+        let secret = "hello \"world\" 'quoted'\nmiddle line\nend \t\r\n";
         backend.store("spaces-quotes-id", secret).await.unwrap();
         let retrieved = backend.retrieve("spaces-quotes-id").await.unwrap();
         assert_eq!(retrieved, secret);

@@ -321,10 +321,10 @@ Before calling `setup()`, the secret must exist in the backend. There are three 
 echo "my-secret-value" | vaultkeeper store --name MY_API_KEY
 ```
 
-`store` accepts UTF-8 text and rejects malformed input. By default, it removes one final LF or CRLF from stdin, so line-oriented
-commands such as `echo` work naturally. All other trailing characters are
-preserved. Use `store --raw` to preserve the final line ending too; supply
-the secret through stdin in either mode.
+`store` accepts UTF-8 text and rejects malformed input. By default, it removes one final LF or CRLF
+from stdin, so line-oriented commands such as `echo` work naturally. All other trailing characters
+are preserved. Use `store --raw` to preserve the final line ending too. Both modes read from stdin
+and reject empty or whitespace-only values.
 
 **TypeScript API:**
 

@@ -14,22 +14,6 @@ const ATTRIBUTE_KEY = 'vaultkeeper-id'
 const LABEL_PREFIX = 'vaultkeeper: '
 
 /**
- * Strip exactly one trailing `\n` from `secret-tool lookup` output, if
- * present — not a full `.trim()`.
- *
- * @remarks
- * `secret-tool lookup` prints the stored secret followed by a single
- * trailing newline that it adds itself; that newline is not part of the
- * secret and must be removed. A full `.trim()` would also strip legitimate
- * leading/trailing whitespace that is part of the secret value itself (a
- * secret may intentionally be or contain whitespace), so only the one
- * newline `secret-tool` appends is removed here.
- */
-function stripSecretToolTrailingNewline(stdout: string): string {
-  return stdout.endsWith('\n') ? stdout.slice(0, -1) : stdout
-}
-
-/**
  * Linux secret-tool (Secret Service API) backend.
  *
  * @remarks
@@ -68,14 +52,13 @@ export class SecretToolBackend implements ListableBackend {
 
   async retrieve(id: string): Promise<string> {
     const result = await execCommandFull('secret-tool', ['lookup', '--', ATTRIBUTE_KEY, id])
-    // Not-found is determined solely by exit code — never by whether the
-    // trimmed stdout is empty. A stored secret may legitimately be an empty
-    // string or whitespace-only, and both trim to '', which would otherwise
-    // be indistinguishable from "no such entry" (see issue #297).
+    // Exit status distinguishes a missing item from a stored empty value.
     if (result.exitCode !== 0) {
       throw new SecretNotFoundError(`Secret not found in Secret Service: ${id}`)
     }
-    return stripSecretToolTrailingNewline(result.stdout)
+    // secret-tool adds a display newline only on a TTY. Captured stdout
+    // consists entirely of the stored value, including any final newline.
+    return result.stdout
   }
 
   async delete(id: string): Promise<void> {

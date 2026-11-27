@@ -70,8 +70,10 @@ range. "Secrets" = does a secret value transit this command, and by what channel
 | `session revoke` | — | `--jti <j>` \| `--key <k>` (xor) | — | confirmation | — | 0 / 1 |
 
 `store` accepts UTF-8 text and rejects malformed input. By default it removes
-one final LF or CRLF; `--raw` preserves the entire input, including a final
-line ending. All other characters are preserved in either mode.
+one final LF or CRLF. Both modes reject an empty or whitespace-only value
+before writing, consistent with secret token validation. For accepted input,
+the default mode preserves all remaining characters and `--raw` preserves the
+entire input, including a final line ending.
 
 Native `run` does not yet verify the receiving executable, so it exits 1 for
 raw or lease entries requiring elevated trust, including `--set` entries

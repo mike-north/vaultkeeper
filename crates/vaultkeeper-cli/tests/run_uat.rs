@@ -122,6 +122,43 @@ fn store_preserves_significant_trailing_input() {
     }
 }
 
+#[test]
+fn store_rejects_whitespace_only_input_without_overwriting_a_usable_secret() {
+    let dir = run_test_env(&single_secret_profile());
+    store_secret(&dir, "greeting", "original");
+
+    // A value made entirely of whitespace cannot be authorized as a secret.
+    for (flags, input) in [(&[][..], " \t\n"), (&["--raw"][..], " \t\u{a0}\n")] {
+        let mut child = Command::new(vk_bin())
+            .env("VAULTKEEPER_CONFIG_DIR", dir.path())
+            .args(["store", "--name", "greeting"])
+            .args(flags)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(input.as_bytes())
+            .unwrap();
+        let output = child.wait_with_output().unwrap();
+        assert_eq!(output.status.code(), Some(1));
+        assert!(output.stdout.is_empty());
+        assert!(String::from_utf8_lossy(&output.stderr).contains("No secret provided on stdin"));
+    }
+
+    let output = Command::new(vk_bin())
+        .env("VAULTKEEPER_CONFIG_DIR", dir.path())
+        .args(["run", "--profile", "uat", "--", "printenv", "GREETING"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    assert_eq!(output.stdout, b"original\n");
+}
+
 fn empty_profile() -> serde_json::Value {
     serde_json::json!({ "version": 1, "name": "uat", "entries": {} })
 }

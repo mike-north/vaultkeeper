@@ -66,6 +66,7 @@ Run `vaultkeeper <command> --help` for full flag reference on any subcommand —
 
 `store` accepts UTF-8 text and rejects malformed input. By default it removes one final LF or
 CRLF, preserving other trailing characters. Use `store --raw` to preserve the final line ending too.
+Both modes reject empty or whitespace-only values.
 
 ## Example config
 

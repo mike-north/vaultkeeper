@@ -1,3 +1,4 @@
+/** CLI ingestion for UTF-8 secrets supplied on stdin. */
 import { parseArgs } from 'node:util'
 import { VaultKeeper, defaultBackendType } from 'vaultkeeper'
 import { shouldSkipDoctor } from '../skip-doctor.js'
@@ -113,7 +114,9 @@ export async function storeCommand(args: string[], configDir: string): Promise<n
     // Consume only one line terminator in the echo-friendly default mode.
     const secret = values.raw ? text : text.replace(/\r?\n$/, '')
 
-    if (secret.length === 0) {
+    // Token validation treats an empty or whitespace-only value as unusable.
+    // Test for content without modifying the value handed to the backend.
+    if (!/\S/.test(secret)) {
       // Exit code 2, not 1: empty stdin is equivalent misuse to an empty or
       // missing `--name` above — both mean "no usable input was given" — and
       // must be reported the same way (regression: issue #118 exit-code

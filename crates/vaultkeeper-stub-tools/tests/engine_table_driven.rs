@@ -91,7 +91,9 @@ fn secret_tool_store_then_lookup_round_trips_the_secret_through_the_same_process
     );
 
     assert_eq!(lookup.exit_code, 0);
-    assert_eq!(String::from_utf8(lookup.stdout).unwrap(), "s3cret\n");
+    // The engine models captured stdout. The real tool adds a newline only
+    // when lookup writes directly to a terminal.
+    assert_eq!(String::from_utf8(lookup.stdout).unwrap(), "s3cret");
 }
 
 #[test]

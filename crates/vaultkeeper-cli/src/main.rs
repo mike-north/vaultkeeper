@@ -338,7 +338,9 @@ async fn cmd_store(name: &str, raw: bool, require_presence_per_use: bool) -> i32
             .unwrap_or(&secret)
     };
 
-    if secret.is_empty() {
+    // Apply the token validator's nonblank requirement without changing the
+    // value handed to the backend.
+    if secret.trim().is_empty() {
         eprintln!("Error: No secret provided on stdin");
         return 1;
     }
