@@ -1,5 +1,16 @@
 # @vaultkeeper/cli
 
+## 0.2.3
+
+### Patch Changes
+
+- [#416](https://github.com/mike-north/vaultkeeper/pull/416) [`2fb3c3a`](https://github.com/mike-north/vaultkeeper/commit/2fb3c3ae141c1359c76c15dd247a6246b9eb7824) Thanks [@mike-north](https://github.com/mike-north)! - Forward `--help` and `-h` after the `run` and `exec` command separator to the child process.
+
+- [#418](https://github.com/mike-north/vaultkeeper/pull/418) [`b7e5bf5`](https://github.com/mike-north/vaultkeeper/commit/b7e5bf5f6d44ee98d90b66024163e478d0423d1f) Thanks [@mike-north](https://github.com/mike-north)! - Preserve child-process output bytes and stream output immediately while redacting secrets.
+
+- Updated dependencies [[`1634277`](https://github.com/mike-north/vaultkeeper/commit/1634277934d256e207a0a5fd086fc602bd1e1a12), [`bfd80e4`](https://github.com/mike-north/vaultkeeper/commit/bfd80e426314e401380732c9c08cefb882b1756a), [`764f8e7`](https://github.com/mike-north/vaultkeeper/commit/764f8e786ca218df56bd4a88bbdf00b2d492a595), [`af22ccb`](https://github.com/mike-north/vaultkeeper/commit/af22ccb7a4cc3c6b99a987e558931bb8aab34cb5), [`db08e7a`](https://github.com/mike-north/vaultkeeper/commit/db08e7a25217c81b9f262789b48b453437c8889e), [`88857e0`](https://github.com/mike-north/vaultkeeper/commit/88857e0355de4ddeaf7f583dbbbb6a611a6a91d6), [`2410202`](https://github.com/mike-north/vaultkeeper/commit/241020293f478f13d59794b9982e466bd48f1c8e), [`e1689eb`](https://github.com/mike-north/vaultkeeper/commit/e1689ebe68350c203a9df3a686de1e11240dfaeb)]:
+  - vaultkeeper@0.8.1
+
 ## 0.2.2
 
 ### Patch Changes

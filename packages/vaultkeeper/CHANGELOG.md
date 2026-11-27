@@ -1,5 +1,33 @@
 # vaultkeeper
 
+## 0.8.1
+
+### Patch Changes
+
+- [#421](https://github.com/mike-north/vaultkeeper/pull/421) [`1634277`](https://github.com/mike-north/vaultkeeper/commit/1634277934d256e207a0a5fd086fc602bd1e1a12) Thanks [@mike-north](https://github.com/mike-north)! - Publish file-backed signing identities atomically without replacing an existing key. Concurrent first-time writers reuse the wrapping key selected by the filesystem, and a later writer can complete an interrupted wrapping-key repair using the selected key.
+
+  Ordinary storage continues to work on filesystems without hard links. The TypeScript SDK can initialize and repair wrapping keys in macOS config directories up to the 1,009-byte limit supported by key-state persistence. TypeScript, native Rust, and WASM use the same repair filename for shared wrapping keys.
+
+  The TypeScript file backend can also initialize and repair wrapping keys in ordinary secret storage directories up to 1,018 bytes on macOS when the secret filename fits.
+
+- [#406](https://github.com/mike-north/vaultkeeper/pull/406) [`bfd80e4`](https://github.com/mike-north/vaultkeeper/commit/bfd80e426314e401380732c9c08cefb882b1756a) Thanks [@mike-north](https://github.com/mike-north)! - Make delegated fetch reject HTTP redirects with `FetchError`. This keeps delegated credentials from being forwarded to a redirect destination or disclosed through redirect response metadata.
+
+  `FetchError` reports the original URL template even if the caller changes the request object while the fetch is in flight.
+
+- [#407](https://github.com/mike-north/vaultkeeper/pull/407) [`764f8e7`](https://github.com/mike-north/vaultkeeper/commit/764f8e786ca218df56bd4a88bbdf00b2d492a595) Thanks [@mike-north](https://github.com/mike-north)! - Enforce the original JWE expiry when a TypeScript capability is used. Direct reads and delegated fetch or exec reject expired capabilities, including when the earliest lease in a named operation expires during request preparation. `sign()` rejects secret capabilities with `AuthorizationDeniedError` regardless of expiry. Delegated fetch continues to report an unavailable fetch implementation as a `FetchError`.
+
+- [#401](https://github.com/mike-north/vaultkeeper/pull/401) [`af22ccb`](https://github.com/mike-north/vaultkeeper/commit/af22ccb7a4cc3c6b99a987e558931bb8aab34cb5) Thanks [@mike-north](https://github.com/mike-north)! - Preserve leading and trailing whitespace when retrieving secrets from Windows DPAPI.
+
+- [#417](https://github.com/mike-north/vaultkeeper/pull/417) [`db08e7a`](https://github.com/mike-north/vaultkeeper/commit/db08e7a25217c81b9f262789b48b453437c8889e) Thanks [@mike-north](https://github.com/mike-north)! - Give every concurrent key-state save its own exclusively created staging file.
+
+- [#420](https://github.com/mike-north/vaultkeeper/pull/420) [`88857e0`](https://github.com/mike-north/vaultkeeper/commit/88857e0355de4ddeaf7f583dbbbb6a611a6a91d6) Thanks [@mike-north](https://github.com/mike-north)! - Preserve multibyte UTF-8 characters when buffered subprocess output is split across chunks.
+
+- [#408](https://github.com/mike-north/vaultkeeper/pull/408) [`2410202`](https://github.com/mike-north/vaultkeeper/commit/241020293f478f13d59794b9982e466bd48f1c8e) Thanks [@mike-north](https://github.com/mike-north)! - Preserve finite-use token budgets and denial records through expiry, even under capacity pressure or a backward clock adjustment. When the TypeScript authorization table is full of live entries, new finite-use authorizations fail with `AuthorizationDeniedError` until space can be reclaimed. A failed previous-key token refresh preserves the remaining budget.
+
+  Redemption and capability use honor fractional JWE deadlines. During a backward clock adjustment, expired tokens stay expired and newly issued tokens continue to age.
+
+- [#404](https://github.com/mike-north/vaultkeeper/pull/404) [`e1689eb`](https://github.com/mike-north/vaultkeeper/commit/e1689ebe68350c203a9df3a686de1e11240dfaeb) Thanks [@mike-north](https://github.com/mike-north)! - Reject capability tokens presented to a different vault instance than the one that issued them.
+
 ## 0.8.0
 
 ### Minor Changes
