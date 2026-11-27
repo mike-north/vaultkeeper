@@ -42,13 +42,13 @@
       "dependsOn": ["build"],
       "cache": true,
       "inputs": ["production", "^production"],
-      "outputs": ["{projectRoot}/api-report"]
+      "outputs": ["{projectRoot}/api-report", "{projectRoot}/tmp/api-extractor"]
     },
     "generate:api-report": {
       "dependsOn": ["build"],
       "cache": true,
       "inputs": ["production", "^production"],
-      "outputs": ["{projectRoot}/api-report"]
+      "outputs": ["{projectRoot}/api-report", "{projectRoot}/tmp/api-extractor"]
     },
     "clean": {
       "cache": false
