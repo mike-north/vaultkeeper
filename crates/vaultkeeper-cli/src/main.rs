@@ -635,12 +635,10 @@ async fn cmd_run_profile(
         // launched command (that would require resolving `command[0]` to a
         // real file path — via `$PATH` — and hashing it, mirroring
         // `VaultKeeper::setup`'s `executable_path`/TOFU flow). Until that
-        // lands, a `materialize: "lease"` entry whose resolved trust tier is
-        // `sigstore`/`registry` is refused by `resolve_profile` itself
-        // (`VaultError::ExecutableTrustRequired`) rather than silently
-        // minted with an incoherent "dev" exe marker — see the PR
-        // description for the tracked follow-up.
-        executable_hash: None,
+        // lands, raw and lease entries requiring `sigstore`/`registry`,
+        // including `--set` entries inheriting that default, are refused by
+        // `resolve_profile` before retrieving the secret.
+        executable_identity: None,
     };
 
     let resolved = match resolve_profile(&plan.profile, &resolve_options).await {
@@ -805,7 +803,7 @@ async fn cmd_run_token(
         let resolve_options = ResolveOptions {
             backend: &backend,
             key_manager: vault.key_manager(),
-            executable_hash: None,
+            executable_identity: None,
         };
         let resolved = match resolve_profile(&plan.profile, &resolve_options).await {
             Ok(r) => r,
@@ -1609,7 +1607,7 @@ async fn cmd_profile(action: ProfileAction) -> i32 {
     match action {
         ProfileAction::Init { name, profile_file } => cmd_profile_init(&name, profile_file).await,
         ProfileAction::Show { name, profile_file } => cmd_profile_show(name, profile_file).await,
-        ProfileAction::List => cmd_profile_list().await,
+        ProfileAction::List => cmd_profile_list(),
         ProfileAction::Lint { name, profile_file } => cmd_profile_lint(name, profile_file).await,
     }
 }
@@ -1745,13 +1743,14 @@ async fn cmd_profile_show(name: Option<String>, profile_file: Option<String>) ->
     }
 }
 
-async fn cmd_profile_list() -> i32 {
+fn cmd_profile_list() -> i32 {
     let host = make_host();
     let profiles_dir = host
         .config_dir()
         .join(vaultkeeper_core::profile::PROFILES_DIR_NAME);
 
-    let entries = match host.list_dir(&profiles_dir).await {
+    // Profile lookup accepts links, so list the same names it can resolve.
+    let entries = match host::read_directory_entries(&profiles_dir) {
         Ok(e) => e,
         Err(e) => {
             eprintln!("Error: {e}");
@@ -1763,6 +1762,8 @@ async fn cmd_profile_list() -> i32 {
         .into_iter()
         .filter_map(|entry| {
             entry
+                .file_name()
+                .to_str()?
                 .strip_suffix(vaultkeeper_core::profile::PROFILE_FILE_EXTENSION)
                 .map(str::to_string)
         })

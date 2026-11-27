@@ -280,23 +280,35 @@ const TSCONFIG = {
 }
 
 /**
- * Type-check a TS/JS fence against the built package types. The snippet is
- * written into `packages/cli-tests/` (whose `node_modules` links the workspace
- * packages) so NodeNext resolution finds each package's built `.d.ts` through
- * its `exports` map, exactly as an external consumer would.
+ * Give a scratch snippet the same ESM package scope and installed dependencies
+ * as a workspace consumer. Keeping the fixture outside the source tree prevents
+ * concurrent lint from collecting a snippet that the harness will delete.
+ */
+function writeCodeFence(scratch: string, fence: Fence): string {
+  fs.writeFileSync(path.join(scratch, 'package.json'), JSON.stringify({ type: 'module' }), 'utf8')
+  fs.symlinkSync(
+    path.join(REPO_ROOT, 'packages', 'cli-tests', 'node_modules'),
+    path.join(scratch, 'node_modules'),
+    'junction',
+  )
+  const ext = JS_LANGS.has(fence.lang) ? 'js' : 'ts'
+  const snippet = path.join(scratch, `snippet.${ext}`)
+  fs.writeFileSync(snippet, fence.code, 'utf8')
+  return snippet
+}
+
+/**
+ * Type-check a TS/JS fence against the built package types that NodeNext
+ * resolves through the packages' published export maps.
  */
 export function typecheckCodeFence(fence: Fence): TypecheckResult {
-  const scratch = fs.mkdtempSync(path.join(REPO_ROOT, 'packages', 'cli-tests', '.readme-tc-'))
+  const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'vk-readme-tc-'))
   try {
-    const ext = JS_LANGS.has(fence.lang) ? 'js' : 'ts'
-    fs.writeFileSync(path.join(scratch, `snippet.${ext}`), fence.code, 'utf8')
-    fs.writeFileSync(
-      path.join(scratch, 'tsconfig.json'),
-      JSON.stringify({ ...TSCONFIG, include: [`snippet.${ext}`] }, null, 2),
-      'utf8',
-    )
+    const snippet = writeCodeFence(scratch, fence)
+    const tsconfig = path.join(scratch, 'tsconfig.json')
+    fs.writeFileSync(tsconfig, JSON.stringify({ ...TSCONFIG, include: [path.basename(snippet)] }), 'utf8')
     const tsc = path.join(REPO_ROOT, 'node_modules', '.bin', 'tsc')
-    const result = spawnSync(tsc, ['-p', path.join(scratch, 'tsconfig.json')], {
+    const result = spawnSync(tsc, ['-p', tsconfig], {
       cwd: REPO_ROOT,
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -340,32 +352,27 @@ const RUN_FETCH_STUB = [
 ].join('\n')
 
 /**
- * Execute a `run`-marked TS/JS fence against the *built* package. The snippet is
- * written into `packages/cli-tests/` (so NodeNext resolution finds each package's
- * built output through its `exports` map, exactly as an external consumer would)
- * and run with `tsx`, with {@link RUN_FETCH_STUB} preloaded so the network is
- * never touched. It runs in a fresh, ambient-free `VAULTKEEPER_CONFIG_DIR` so
+ * Execute a `run`-marked TS/JS fence against the *built* package through its
+ * export map using `tsx`. Preload {@link RUN_FETCH_STUB} to keep network calls
+ * local. It runs in a fresh, ambient-free `VAULTKEEPER_CONFIG_DIR` so
  * `store()`/`setup()` are hermetic and reproducible. Returns the process exit
  * code and output; a non-zero exit means the documented example threw at
  * runtime — the class of bug a type-only check misses (issue #227).
  */
 export function runCodeFence(fence: Fence): RunResult {
-  const scratch = fs.mkdtempSync(path.join(REPO_ROOT, 'packages', 'cli-tests', '.readme-run-'))
-  const configRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'vk-readme-run-'))
+  const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'vk-readme-run-'))
   try {
-    const ext = JS_LANGS.has(fence.lang) ? 'js' : 'ts'
-    const snippet = path.join(scratch, `snippet.${ext}`)
-    fs.writeFileSync(snippet, fence.code, 'utf8')
+    const snippet = writeCodeFence(scratch, fence)
     const preload = path.join(scratch, 'network-stub.mjs')
     fs.writeFileSync(preload, RUN_FETCH_STUB, 'utf8')
 
-    const configDir = path.join(configRoot, 'config')
+    const configDir = path.join(scratch, 'config')
     fs.mkdirSync(configDir, { recursive: true })
     // Ambient-free env (mirrors runShellFence): a run fence must not depend on
     // the developer's VAULTKEEPER_* toggles, and CI secrets must not leak in.
     const env: NodeJS.ProcessEnv = {
       PATH: process.env.PATH ?? '',
-      HOME: configRoot,
+      HOME: scratch,
       VAULTKEEPER_CONFIG_DIR: configDir,
     }
     for (const key of ['LANG', 'LC_ALL', 'LC_CTYPE', 'TMPDIR', 'TERM']) {
@@ -396,6 +403,5 @@ export function runCodeFence(fence: Fence): RunResult {
     }
   } finally {
     fs.rmSync(scratch, { recursive: true, force: true })
-    fs.rmSync(configRoot, { recursive: true, force: true })
   }
 }

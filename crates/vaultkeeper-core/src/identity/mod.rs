@@ -1,5 +1,6 @@
 //! Executable identity verification, TOFU manifest, and session tokens.
 
+mod expiry_clock;
 pub mod handles;
 pub mod hash;
 pub mod manifest;

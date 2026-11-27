@@ -3,8 +3,7 @@
 //! Ports the TypeScript `YubikeyBackend`
 //! (`packages/vaultkeeper/src/backend/yubikey-backend.ts`) into
 //! `vaultkeeper-core`, preserving its on-disk contract exactly: same
-//! `<hex(id)>.enc` entry-path scheme and the same
-//! versioned `1:<iv>:<authTag>:<ciphertext>` AES-256-GCM envelope with a key
+//! entry-path schemes and versioned AES-256-GCM envelopes with a key
 //! derived via HKDF-SHA-256 from the YubiKey's HMAC-SHA1 challenge-response
 //! (slot 2), binding the derived key to the secret's `id` via the HKDF
 //! `info` field. Entries written by either implementation are mutually
@@ -32,14 +31,17 @@
 //! blob written by a different OpenSSL version rather than failing cleanly.
 //! This port matches that behavior exactly (see issue #293 discussion).
 
-use std::path::PathBuf;
+use std::collections::BTreeMap;
+use std::ffi::OsStr;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use aes_gcm::aead::Aead;
+use aes_gcm::aead::{Aead, Payload};
 use aes_gcm::{Aes256Gcm, KeyInit, Nonce};
 use base64ct::{Base64, Encoding};
 use hkdf::Hkdf;
-use sha2::Sha256;
+use serde::{Deserialize, Deserializer, de};
+use sha2::{Digest, Sha256};
 use zeroize::{Zeroize, Zeroizing};
 
 use crate::backend::file::hex_encode;
@@ -58,9 +60,86 @@ const GCM_IV_BYTES: usize = 12;
 const GCM_KEY_BYTES: usize = 32;
 const GCM_TAG_BYTES: usize = 16;
 
-/// Version prefix written at the start of every encrypted file. Must match
-/// the TS backend's `FORMAT_VERSION` exactly.
+/// Version prefix for records whose filename preserves the exact ID spelling.
 const FORMAT_VERSION: &str = "1";
+
+/// Records whose UTF-8 path can have several JS spellings carry their exact
+/// Base64 UTF-16LE ID as a fifth field and authenticate it as GCM AAD.
+const IDENTITY_FORMAT_VERSION: &str = "2";
+
+/// OpenSSL's legacy salted envelope still identifies a record for inventory and cleanup.
+const LEGACY_OPENSSL_MAGIC: &[u8] = b"Salted__";
+
+/// A read-only spelling hint for legacy records that predate exact identity filenames.
+#[derive(Default, Deserialize)]
+struct LegacyIndex {
+    entries: BTreeMap<LegacyId, String>,
+}
+
+/// Serde's JSON byte-string mode preserves unpaired surrogates as WTF-8.
+/// Rust cannot construct these IDs, but it can recognize when a TS record
+/// belongs to one instead of to a literal replacement character.
+#[derive(Eq, Ord, PartialEq, PartialOrd)]
+struct LegacyId(Vec<u8>);
+
+impl<'de> Deserialize<'de> for LegacyId {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct IdVisitor;
+
+        impl de::Visitor<'_> for IdVisitor {
+            type Value = LegacyId;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("a legacy YubiKey ID")
+            }
+
+            fn visit_bytes<E: de::Error>(self, bytes: &[u8]) -> Result<LegacyId, E> {
+                Ok(LegacyId(bytes.to_vec()))
+            }
+        }
+
+        deserializer.deserialize_bytes(IdVisitor)
+    }
+}
+
+impl LegacyIndex {
+    /// Match TypeScript's preference for a canonical spelling or a sole alias.
+    fn identifies_typescript_alias(&self, id: &str) -> bool {
+        !self.entries.contains_key(&LegacyId(id.as_bytes().to_vec()))
+            && self
+                .entries
+                .keys()
+                .filter(|key| key.normalizes_to(id))
+                .take(2)
+                .count()
+                == 1
+    }
+}
+
+impl LegacyId {
+    /// Compare the exact ID against the old UTF-8 path without losing the
+    /// distinction between a literal replacement character and a surrogate.
+    fn normalizes_to(&self, canonical: &str) -> bool {
+        let mut original = self.0.as_slice();
+        let mut canonical = canonical.as_bytes();
+        let mut replaced = false;
+        while let ([byte, rest @ ..], [expected, expected_rest @ ..]) = (original, canonical) {
+            if byte == expected {
+                original = rest;
+                canonical = expected_rest;
+            } else if matches!(original, [0xed, 0xa0..=0xbf, 0x80..=0xbf, ..])
+                && canonical.starts_with("\u{fffd}".as_bytes())
+            {
+                original = &original[3..];
+                canonical = &canonical[3..];
+                replaced = true;
+            } else {
+                return false;
+            }
+        }
+        replaced && original.is_empty() && canonical.is_empty()
+    }
+}
 
 /// Expected byte length of a YubiKey HMAC-SHA1 response (20 bytes = 40 hex
 /// chars). Must match the TS backend's `HMAC_RESPONSE_HEX_LENGTH` exactly.
@@ -103,8 +182,83 @@ impl YubikeyBackend {
     }
 
     fn entry_path(&self, id: &str) -> PathBuf {
+        match exact_identity(id) {
+            Some(identity) => self.storage_dir().join(exact_entry_name(&identity)),
+            None => self.legacy_entry_path(id),
+        }
+    }
+
+    /// Older clients encoded every ID using the same UTF-8 filename scheme.
+    fn legacy_entry_path(&self, id: &str) -> PathBuf {
         let safe_id = hex_encode(id.as_bytes());
         self.storage_dir().join(format!("{safe_id}.enc"))
+    }
+
+    /// Treat only a confirmed absence as missing. An unreadable record is a failed read.
+    async fn read_entry(&self, path: &Path) -> Result<Option<Zeroizing<Vec<u8>>>, VaultError> {
+        match self.host.read_file(path).await {
+            Ok(data) => Ok(Some(Zeroizing::new(data))),
+            Err(error) => match self.host.file_exists(path).await {
+                Ok(false) => Ok(None),
+                Ok(true) | Err(_) => Err(error),
+            },
+        }
+    }
+
+    /// Rust can address only the UTF-8 spelling of legacy names. Exact-format
+    /// records and other backends' records cannot be used as a legacy fallback.
+    async fn read_legacy_entry(
+        &self,
+        id: &str,
+    ) -> Result<Option<(PathBuf, Zeroizing<Vec<u8>>)>, VaultError> {
+        if !id.contains('\u{fffd}') {
+            return Ok(None);
+        }
+        let path = self.legacy_entry_path(id);
+        // The UTF-8 legacy name can exceed the filesystem's path limits even
+        // when the exact name fits. Only read legacy paths that actually exist.
+        if !self
+            .host
+            .list_dir(&self.storage_dir())
+            .await?
+            .iter()
+            .any(|name| path.file_name() == Some(OsStr::new(name)))
+        {
+            return Ok(None);
+        }
+        let Some(data) = self
+            .read_entry(&path)
+            .await?
+            .filter(|entry| is_legacy_envelope(entry))
+        else {
+            return Ok(None);
+        };
+        Ok((!self
+            .read_legacy_index()
+            .await
+            .identifies_typescript_alias(id))
+        .then_some((path, data)))
+    }
+
+    /// A missing or damaged spelling hint leaves UTF-8 legacy records reachable.
+    async fn read_legacy_index(&self) -> LegacyIndex {
+        self.host
+            .read_file(&self.storage_dir().join("metadata.json"))
+            .await
+            .ok()
+            .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+            .unwrap_or_default()
+    }
+
+    /// A delete that loses a race to another delete can proceed to an older generation.
+    async fn delete_entry(&self, path: &Path) -> Result<bool, VaultError> {
+        match self.host.delete_file(path).await {
+            Ok(()) => Ok(true),
+            Err(error) => match self.host.file_exists(path).await {
+                Ok(false) => Ok(false),
+                Ok(true) | Err(_) => Err(error),
+            },
+        }
     }
 
     /// Perform the YubiKey HMAC-SHA1 challenge-response for `id` and return
@@ -235,6 +389,20 @@ fn derive_key(hmac_response: &str, id: &str) -> Result<Zeroizing<Vec<u8>>, Vault
     Ok(key)
 }
 
+/// Only U+FFFD is ambiguous for Rust. TypeScript also encodes lone surrogates.
+fn exact_identity(id: &str) -> Option<Vec<u8>> {
+    id.contains('\u{fffd}').then(|| {
+        id.encode_utf16()
+            .flat_map(u16::to_le_bytes)
+            .collect::<Vec<_>>()
+    })
+}
+
+/// Exact identity names occupy a separate namespace and stay within path limits.
+fn exact_entry_name(identity: &[u8]) -> String {
+    format!("id-{}.enc", hex_encode(&Sha256::digest(identity)))
+}
+
 fn hex_decode(hex: &str) -> Result<Vec<u8>, VaultError> {
     if !hex.len().is_multiple_of(2) {
         return Err(VaultError::Other("Invalid hex string length".to_string()));
@@ -249,11 +417,15 @@ fn hex_decode(hex: &str) -> Result<Vec<u8>, VaultError> {
 }
 
 // ---------------------------------------------------------------------------
-// Versioned AES-256-GCM envelope: `1:<iv>:<authTag>:<ciphertext>` (each
-// binary part base64), matching the TS backend's `encryptGcm`/`decryptGcm`.
+// Versioned AES-256-GCM envelope: `1:<iv>:<authTag>:<ciphertext>` or
+// `2:<iv>:<authTag>:<ciphertext>:<id>`, with Base64 binary fields.
 // ---------------------------------------------------------------------------
 
-fn encrypt_gcm_versioned(key: &[u8], plaintext: &str) -> Result<String, VaultError> {
+fn encrypt_gcm_versioned(
+    key: &[u8],
+    plaintext: &str,
+    identity: Option<&[u8]>,
+) -> Result<String, VaultError> {
     let cipher = Aes256Gcm::new_from_slice(key)
         .map_err(|e| VaultError::Other(format!("Invalid key: {e}")))?;
 
@@ -263,26 +435,42 @@ fn encrypt_gcm_versioned(key: &[u8], plaintext: &str) -> Result<String, VaultErr
     let nonce = Nonce::from_slice(&iv);
 
     let ciphertext_with_tag = cipher
-        .encrypt(nonce, plaintext.as_bytes())
+        .encrypt(
+            nonce,
+            Payload {
+                msg: plaintext.as_bytes(),
+                aad: identity.unwrap_or_default(),
+            },
+        )
         .map_err(|e| VaultError::Other(format!("Encryption failed: {e}")))?;
 
     let tag_start = ciphertext_with_tag.len() - GCM_TAG_BYTES;
     let ciphertext = &ciphertext_with_tag[..tag_start];
     let auth_tag = &ciphertext_with_tag[tag_start..];
 
-    Ok(format!(
-        "{FORMAT_VERSION}:{}:{}:{}",
+    let version = if identity.is_some() {
+        IDENTITY_FORMAT_VERSION
+    } else {
+        FORMAT_VERSION
+    };
+    let mut envelope = format!(
+        "{version}:{}:{}:{}",
         Base64::encode_string(&iv),
         Base64::encode_string(auth_tag),
         Base64::encode_string(ciphertext),
-    ))
+    );
+    if let Some(identity) = identity {
+        envelope.push(':');
+        envelope.push_str(&Base64::encode_string(identity));
+    }
+    Ok(envelope)
 }
 
 /// Decrypt a versioned GCM blob produced by [`encrypt_gcm_versioned`].
 ///
 /// Version detection distinguishes three cases, matching the TS backend's
 /// `decryptGcm` exactly:
-/// - First segment is exactly [`FORMAT_VERSION`] → current format, proceed.
+/// - First segment identifies a supported GCM version → proceed.
 /// - First segment is a different (but well-formed) unsigned integer → an
 ///   unsupported *future* version this build cannot decode.
 /// - First segment is not a plain non-negative integer at all (e.g. OpenSSL's
@@ -302,6 +490,7 @@ fn encrypt_gcm_versioned(key: &[u8], plaintext: &str) -> Result<String, VaultErr
 fn decrypt_gcm_versioned(
     key: &[u8],
     encoded: &str,
+    expected_identity: Option<&[u8]>,
     path: &str,
 ) -> Result<Zeroizing<String>, VaultError> {
     let legacy_err = || VaultError::Decryption {
@@ -328,22 +517,27 @@ fn decrypt_gcm_versioned(
         return Err(legacy_err());
     }
 
-    if version_segment != FORMAT_VERSION {
+    let has_identity = version_segment == IDENTITY_FORMAT_VERSION;
+    if version_segment != FORMAT_VERSION && !has_identity {
         return Err(VaultError::Decryption {
             message: format!(
                 "Unsupported encrypted file version: {version_segment}. This vaultkeeper \
-                 build only supports version {FORMAT_VERSION}. Upgrade vaultkeeper to read \
+                 build supports versions {FORMAT_VERSION} and {IDENTITY_FORMAT_VERSION}. Upgrade vaultkeeper to read \
                  this secret."
             ),
             path: path.to_string(),
         });
     }
-
-    if parts.len() != 4 {
+    if has_identity != expected_identity.is_some() {
         return Err(VaultError::Decryption {
-            message: format!(
-                "Invalid encrypted file format: expected {FORMAT_VERSION}:iv:authTag:ciphertext"
-            ),
+            message: "Encrypted file version does not match its record path".to_string(),
+            path: path.to_string(),
+        });
+    }
+
+    if parts.len() != if has_identity { 5 } else { 4 } {
+        return Err(VaultError::Decryption {
+            message: format!("Invalid encrypted file format for version {version_segment}"),
             path: path.to_string(),
         });
     }
@@ -375,6 +569,25 @@ fn decrypt_gcm_versioned(
         message: format!("Invalid ciphertext base64: {e}"),
         path: path.to_string(),
     })?;
+    let identity = if has_identity {
+        let invalid_identity = || VaultError::Decryption {
+            message: "Invalid encrypted file ID field".to_string(),
+            path: path.to_string(),
+        };
+        let identity = Base64::decode_vec(parts[4]).map_err(|_| invalid_identity())?;
+        if identity.is_empty() || !identity.len().is_multiple_of(2) {
+            return Err(invalid_identity());
+        }
+        if Some(identity.as_slice()) != expected_identity {
+            return Err(VaultError::Decryption {
+                message: "Encrypted file ID does not match the requested ID".to_string(),
+                path: path.to_string(),
+            });
+        }
+        identity
+    } else {
+        Vec::new()
+    };
 
     let cipher = Aes256Gcm::new_from_slice(key).map_err(|e| VaultError::Decryption {
         message: format!("Invalid key: {e}"),
@@ -385,15 +598,20 @@ fn decrypt_gcm_versioned(
     let mut combined = ciphertext;
     combined.extend_from_slice(&auth_tag);
 
-    let plaintext =
-        cipher
-            .decrypt(nonce, combined.as_slice())
-            .map_err(|e| VaultError::Decryption {
-                message: format!(
-                    "GCM authentication failed — ciphertext may be tampered or corrupt: {e}"
-                ),
-                path: path.to_string(),
-            })?;
+    let plaintext = cipher
+        .decrypt(
+            nonce,
+            Payload {
+                msg: &combined,
+                aad: &identity,
+            },
+        )
+        .map_err(|e| VaultError::Decryption {
+            message: format!(
+                "GCM authentication failed — ciphertext may be tampered or corrupt: {e}"
+            ),
+            path: path.to_string(),
+        })?;
 
     match String::from_utf8(plaintext) {
         Ok(s) => Ok(Zeroizing::new(s)),
@@ -435,7 +653,8 @@ impl SecretBackend for YubikeyBackend {
 
         let hmac_response = self.challenge_response(id).await?;
         let key = derive_key(&hmac_response, id)?;
-        let encrypted = encrypt_gcm_versioned(&key, secret)?;
+        let identity = exact_identity(id);
+        let encrypted = encrypt_gcm_versioned(&key, secret, identity.as_deref())?;
 
         let entry_path = self.entry_path(id);
         // `write_file` creates every missing ancestor directory owner-only
@@ -451,26 +670,14 @@ impl SecretBackend for YubikeyBackend {
         self.require_device().await?;
 
         let entry_path = self.entry_path(id);
-
-        // Act first, then disambiguate on failure — never probe existence
-        // before acting. A `file_exists` check followed by a separate
-        // `read_file` call is a TOCTOU race: the entry can be deleted (or
-        // fail to exist for unrelated reasons) between the two calls, and a
-        // caller relying on the up-front probe would misreport a genuine
-        // filesystem error as `SecretNotFound` or vice versa. Only a
-        // definitive read failure is disambiguated afterward, mirroring
-        // `FileBackend::retrieve` and `signing_store::load_signing_key`
-        // exactly: a confirmed-missing entry becomes `SecretNotFound`; any
-        // other read failure (e.g. EACCES/EPERM) propagates unchanged.
-        let data = match self.host.read_file(&entry_path).await {
-            Ok(data) => data,
-            Err(read_err) => {
-                return match self.host.file_exists(&entry_path).await {
-                    Ok(false) => Err(VaultError::SecretNotFound {
+        let (entry_path, data) = match self.read_entry(&entry_path).await? {
+            Some(data) => (entry_path, data),
+            None => {
+                self.read_legacy_entry(id)
+                    .await?
+                    .ok_or_else(|| VaultError::SecretNotFound {
                         message: format!("Secret not found in YubiKey store: {id}"),
-                    }),
-                    Ok(true) | Err(_) => Err(read_err),
-                };
+                    })?
             }
         };
         // The stored entry is UTF-8 text by design for the current versioned
@@ -479,12 +686,22 @@ impl SecretBackend for YubikeyBackend {
         // still reaches `decrypt_gcm_versioned`'s version-detection branch
         // and surfaces the intended typed error, matching the TS backend's
         // `fs.readFile(path, 'utf8')` (which never throws on invalid UTF-8).
-        let encoded = String::from_utf8_lossy(&data).into_owned();
+        let encoded = String::from_utf8_lossy(&data);
 
         let hmac_response = self.challenge_response(id).await?;
         let key = derive_key(&hmac_response, id)?;
 
-        let plaintext = decrypt_gcm_versioned(&key, &encoded, &entry_path.display().to_string())?;
+        let identity = if entry_path == self.legacy_entry_path(id) {
+            None
+        } else {
+            exact_identity(id)
+        };
+        let plaintext = decrypt_gcm_versioned(
+            &key,
+            &encoded,
+            identity.as_deref(),
+            &entry_path.display().to_string(),
+        )?;
         // The `SecretBackend` trait returns a plain `String` — this is the
         // one point where the secret must leave `Zeroizing` custody and be
         // handed to the caller, who becomes responsible for it from here.
@@ -498,28 +715,24 @@ impl SecretBackend for YubikeyBackend {
     async fn delete(&self, id: &str) -> Result<(), VaultError> {
         self.require_device().await?;
 
-        let entry_path = self.entry_path(id);
-
-        // Same act-first-then-disambiguate shape as `retrieve` above: never
-        // probe existence before acting, only afterward to distinguish a
-        // genuine "already gone" from a real filesystem error.
-        match self.host.delete_file(&entry_path).await {
-            Ok(()) => {}
-            Err(delete_err) => {
-                return match self.host.file_exists(&entry_path).await {
-                    Ok(false) => Err(VaultError::SecretNotFound {
-                        message: format!("Secret not found in YubiKey store: {id}"),
-                    }),
-                    Ok(true) | Err(_) => Err(delete_err),
-                };
-            }
+        // Delete the older generation first so it cannot be revealed after
+        // deleting the exact record. New stores never reuse the legacy path.
+        let legacy_deleted = match self.read_legacy_entry(id).await? {
+            Some((path, _)) => self.delete_entry(&path).await?,
+            None => false,
+        };
+        if self.delete_entry(&self.entry_path(id)).await? || legacy_deleted {
+            Ok(())
+        } else {
+            Err(VaultError::SecretNotFound {
+                message: format!("Secret not found in YubiKey store: {id}"),
+            })
         }
-
-        Ok(())
     }
 
     async fn exists(&self, id: &str) -> Result<bool, VaultError> {
-        self.host.file_exists(&self.entry_path(id)).await
+        Ok(self.host.file_exists(&self.entry_path(id)).await?
+            || self.read_legacy_entry(id).await?.is_some())
     }
 
     fn as_presence_capable(&self) -> Option<&dyn PresenceCapableBackend> {
@@ -533,22 +746,88 @@ impl ListableBackend for YubikeyBackend {
     async fn list(&self) -> Result<Vec<String>, VaultError> {
         // The entry files are authoritative; the old shared index can be
         // stale after concurrent writes or an interrupted metadata update.
-        let filenames = self.host.list_dir(&self.storage_dir()).await?;
+        let storage_dir = self.storage_dir();
+        let filenames = self.host.list_dir(&storage_dir).await?;
         let mut ids = Vec::new();
+        let mut legacy_index = None;
         for filename in filenames {
-            if let Some(hex) = filename.strip_suffix(".enc")
-                && hex
+            let Some(stem) = filename.strip_suffix(".enc") else {
+                continue;
+            };
+            let hex = stem.strip_prefix("id-").unwrap_or(stem);
+            if !hex.len().is_multiple_of(2)
+                || !hex
                     .bytes()
                     .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
-                && let Ok(bytes) = hex_decode(hex)
-                && let Ok(id) = String::from_utf8(bytes)
-                && hex_encode(id.as_bytes()) == hex
             {
+                continue;
+            }
+            if stem != hex && hex.len() != 64 {
+                continue;
+            }
+            let Some(entry) = self.read_entry(&storage_dir.join(&filename)).await? else {
+                continue;
+            };
+            if stem == hex {
+                if is_legacy_envelope(&entry)
+                    && let Ok(bytes) = hex_decode(hex)
+                    && let Ok(id) = String::from_utf8(bytes)
+                {
+                    if id.contains('\u{fffd}') {
+                        if legacy_index.is_none() {
+                            legacy_index = Some(self.read_legacy_index().await);
+                        }
+                        if legacy_index
+                            .as_ref()
+                            .is_some_and(|index| index.identifies_typescript_alias(&id))
+                        {
+                            continue;
+                        }
+                    }
+                    ids.push(id);
+                }
+            } else if let Some(id) = exact_envelope_id(&entry, &filename) {
                 ids.push(id);
             }
         }
+        ids.sort();
+        ids.dedup();
         Ok(ids)
     }
+}
+
+/// The version or legacy magic identifies ownership without a device touch or
+/// successful decryption. Other backends can use the same filename scheme.
+fn is_legacy_envelope(entry: &[u8]) -> bool {
+    if entry.starts_with(LEGACY_OPENSSL_MAGIC) {
+        return true;
+    }
+    let mut fields = entry.splitn(5, |&byte| byte == b':');
+    let Some(version) = fields.next() else {
+        return false;
+    };
+    // FileBackend's three-field envelope can have an all-digit Base64 IV.
+    !version.is_empty()
+        && version != IDENTITY_FORMAT_VERSION.as_bytes()
+        && version.iter().all(u8::is_ascii_digit)
+        && fields.count() == 3
+}
+
+/// Recover a representable ID only when its spelling agrees with the exact
+/// filename. Rust cannot address IDs with lone UTF-16 code units.
+fn exact_envelope_id(entry: &[u8], filename: &str) -> Option<String> {
+    let mut fields = entry.splitn(5, |&byte| byte == b':');
+    if fields.next()? != IDENTITY_FORMAT_VERSION.as_bytes() {
+        return None;
+    }
+    let identity = Base64::decode_vec(std::str::from_utf8(fields.nth(3)?).ok()?).ok()?;
+    let (units, remainder) = identity.as_chunks::<2>();
+    if units.is_empty() || !remainder.is_empty() || exact_entry_name(&identity) != filename {
+        return None;
+    }
+    let units: Vec<_> = units.iter().copied().map(u16::from_le_bytes).collect();
+    let id = String::from_utf16(&units).ok()?;
+    id.contains('\u{fffd}').then_some(id)
 }
 
 /// `presence_per_use` is `true` only when the configured slot enforces a
@@ -762,6 +1041,15 @@ mod tests {
             Ok(())
         }
         async fn file_exists(&self, path: &Path) -> Result<bool, VaultError> {
+            // Model a filesystem that rejects overlong legacy path components.
+            if path.file_name().is_some_and(|name| name.len() > 255) {
+                return Err(VaultError::Filesystem {
+                    message: "Filename too long".to_string(),
+                    path: path.display().to_string(),
+                    permission: "read".to_string(),
+                    code: None,
+                });
+            }
             Ok(self.files.lock().unwrap().contains_key(path))
         }
         async fn delete_file(&self, path: &Path) -> Result<(), VaultError> {
@@ -876,11 +1164,11 @@ mod tests {
     #[tokio::test]
     async fn versioned_gcm_envelope_round_trips() {
         let key = derive_key(FAKE_HMAC_RESPONSE, "id-a").unwrap();
-        let encoded = encrypt_gcm_versioned(&key, "hello yubikey").unwrap();
+        let encoded = encrypt_gcm_versioned(&key, "hello yubikey", None).unwrap();
         let parts: Vec<&str> = encoded.split(':').collect();
         assert_eq!(parts.len(), 4);
         assert_eq!(parts[0], "1");
-        let decoded = decrypt_gcm_versioned(&key, &encoded, "/fake/path").unwrap();
+        let decoded = decrypt_gcm_versioned(&key, &encoded, None, "/fake/path").unwrap();
         assert_eq!(*decoded, "hello yubikey");
     }
 
@@ -944,14 +1232,15 @@ mod tests {
         // Sanity-check the pure decrypt function against a simple non-binary
         // stand-in, independent of the real OpenSSL fixture above.
         let key = vec![0u8; GCM_KEY_BYTES];
-        let err = decrypt_gcm_versioned(&key, "Salted__somebinarycbcdata", "/p").unwrap_err();
+        let err = decrypt_gcm_versioned(&key, "Salted__somebinarycbcdata", None, "/p").unwrap_err();
         assert!(matches!(err, VaultError::Decryption { .. }));
     }
 
     #[test]
     fn unsupported_future_version_is_distinguished_from_legacy() {
         let key = vec![0u8; GCM_KEY_BYTES];
-        let err = decrypt_gcm_versioned(&key, "42:aXY=:dGFn:Y2lwaGVydGV4dA==", "/p").unwrap_err();
+        let err =
+            decrypt_gcm_versioned(&key, "42:aXY=:dGFn:Y2lwaGVydGV4dA==", None, "/p").unwrap_err();
         match err {
             VaultError::Decryption { message, .. } => {
                 assert!(
@@ -975,6 +1264,88 @@ mod tests {
     const TS_FIXTURE_ID: &str = "yubikey-ts-fixture-id";
     const TS_FIXTURE_HMAC_RESPONSE: &str = "deadbeefcafe01234567deadbeefcafe01234567";
     const TS_FIXTURE_PLAINTEXT: &str = "ts-core-compat-secret-\u{1F510}";
+
+    #[tokio::test]
+    async fn inventory_excludes_other_envelopes_and_keeps_openssl_records() {
+        let host = TestHost::new();
+        let backend = YubikeyBackend::new(host.clone(), false);
+        backend.store("current", "value").await.unwrap();
+        host.files.lock().unwrap().extend([
+            (
+                backend.entry_path("foreign"),
+                b"1234567890123456:AAAAAAAAAAAAAAAAAAAAAA==:AA==".to_vec(),
+            ),
+            (backend.entry_path("legacy"), LEGACY_CBC_FIXTURE.to_vec()),
+        ]);
+
+        let mut ids = backend.list().await.unwrap();
+        ids.sort();
+        assert_eq!(ids, ["current", "legacy"]);
+    }
+
+    #[tokio::test]
+    async fn replacement_character_records_carry_spelling_for_typescript_inventory() {
+        let host = TestHost::new();
+        let backend = YubikeyBackend::new(host.clone(), false);
+        let id = "\u{fffd}";
+        backend.store(id, "value").await.unwrap();
+        let bytes = host.read_file(&backend.entry_path(id)).await.unwrap();
+        let encoded = String::from_utf8(bytes).unwrap();
+
+        assert!(encoded.starts_with("2:"));
+        assert_eq!(encoded.split(':').next_back(), Some("/f8="));
+        assert!(
+            backend
+                .entry_path(id)
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .starts_with("id-")
+        );
+        assert_eq!(backend.list().await.unwrap(), [id]);
+        assert_eq!(backend.retrieve(id).await.unwrap(), "value");
+    }
+
+    #[tokio::test]
+    async fn rust_does_not_delete_a_legacy_typescript_alias_as_a_literal_replacement() {
+        let host = TestHost::new();
+        let backend = YubikeyBackend::new(host.clone(), false);
+        let id = "\u{fffd}";
+        let legacy_path = backend.legacy_entry_path(id);
+        let key = derive_key(FAKE_HMAC_RESPONSE, id).unwrap();
+        let legacy = encrypt_gcm_versioned(&key, "legacy value", None).unwrap();
+        host.files.lock().unwrap().extend([
+            (legacy_path.clone(), legacy.as_bytes().to_vec()),
+            (
+                backend.storage_dir().join("metadata.json"),
+                br#"{"entries":{"\ud800":"efbfbd.enc"}}"#.to_vec(),
+            ),
+        ]);
+
+        assert!(!backend.exists(id).await.unwrap());
+        assert!(backend.list().await.unwrap().is_empty());
+        backend.store(id, "canonical value").await.unwrap();
+        assert_eq!(backend.retrieve(id).await.unwrap(), "canonical value");
+        backend.delete(id).await.unwrap();
+        assert_eq!(
+            host.read_file(&legacy_path).await.unwrap(),
+            legacy.as_bytes()
+        );
+    }
+
+    #[tokio::test]
+    async fn deletes_an_exact_record_with_an_unaddressable_legacy_filename() {
+        let host = TestHost::new();
+        let backend = YubikeyBackend::new(host.clone(), false);
+        let id = "\u{fffd}".repeat(50);
+        backend.store(&id, "value").await.unwrap();
+        let reopened = YubikeyBackend::new(host, false);
+        assert_eq!(reopened.list().await.unwrap(), [id.as_str()]);
+        assert_eq!(reopened.retrieve(&id).await.unwrap(), "value");
+        reopened.delete(&id).await.unwrap();
+        assert!(!reopened.exists(&id).await.unwrap());
+        assert!(reopened.list().await.unwrap().is_empty());
+    }
 
     #[tokio::test]
     async fn inventory_survives_stale_or_unreadable_metadata() {
@@ -1130,7 +1501,7 @@ mod tests {
         let backend = YubikeyBackend::new(host.clone(), false);
         let entry_path = backend.entry_path("orphan");
         let key = derive_key(FAKE_HMAC_RESPONSE, "orphan").unwrap();
-        let blob = encrypt_gcm_versioned(&key, "orphaned-secret").unwrap();
+        let blob = encrypt_gcm_versioned(&key, "orphaned-secret", None).unwrap();
         host.files
             .lock()
             .unwrap()

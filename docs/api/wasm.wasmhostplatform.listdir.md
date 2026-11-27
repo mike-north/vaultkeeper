@@ -4,6 +4,8 @@
 
 ## WasmHostPlatform.listDir() method
 
+List regular filenames without following symlinks. A missing directory yields an empty list.
+
 **Signature:**
 
 ```typescript

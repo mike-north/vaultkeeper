@@ -6,6 +6,8 @@
 mod token;
 mod types;
 
+pub(crate) use token::validate_claims_at;
+
 pub use token::{
     CreateTokenOptions, block_token, clear_blocklist, create_token, decrypt_token, extract_kid,
     is_blocked, validate_claims,

@@ -179,6 +179,17 @@ describe('CLI config-dir override', () => {
     expect(result.stderr).toContain('--config-dir requires a value')
   })
 
+  it.each(['run', 'exec'])(
+    'rejects a missing --config-dir value before the %s separator',
+    async (command) => {
+      env = await createCliTestEnv()
+      const result = await env.run([command, '--config-dir', '--', 'echo', '--help'])
+      expect(result.exitCode).toBe(2)
+      expect(result.stderr).toContain('--config-dir requires a value')
+      expect(result.stdout).toBe('')
+    },
+  )
+
   // Negative: an empty --config-dir value must not be silently treated as
   // "no override" — that would mask a malformed invocation by falling back
   // to env/default resolution instead of failing loudly.

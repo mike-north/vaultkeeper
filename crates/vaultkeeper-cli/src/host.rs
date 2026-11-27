@@ -42,6 +42,49 @@ fn dirs_fallback() -> PathBuf {
         .unwrap_or_else(|_| PathBuf::from("/tmp"))
 }
 
+/// Enumerate native entries without imposing record-file rules on profile lookup.
+pub(crate) fn read_directory_entries(path: &Path) -> Result<Vec<std::fs::DirEntry>, VaultError> {
+    match std::fs::read_dir(path) {
+        Ok(entries) => entries
+            .map(|entry| entry.map_err(|error| list_directory_error(path, error)))
+            .collect(),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
+        Err(error) => Err(list_directory_error(path, error)),
+    }
+}
+
+/// A failed enumeration is different from an empty inventory.
+fn list_directory_error(path: &Path, error: std::io::Error) -> VaultError {
+    VaultError::Filesystem {
+        message: format!("Failed to list {}: {error}", path.display()),
+        path: path.display().to_string(),
+        permission: "read".to_string(),
+        code: None,
+    }
+}
+
+/// Classify errors from linking an owned sibling. Linux filesystems can
+/// report EPERM when links are unavailable despite permitting ordinary I/O.
+fn hard_link_unavailable(error: &std::io::Error) -> bool {
+    if error.kind() == std::io::ErrorKind::Unsupported {
+        return true;
+    }
+    #[cfg(unix)]
+    return matches!(error.raw_os_error(), Some(libc::EPERM | libc::ENOSYS));
+    #[cfg(windows)]
+    {
+        // CreateHardLinkW can return ERROR_INVALID_FUNCTION on exFAT.
+        const ERROR_INVALID_FUNCTION: i32 = 1;
+        const ERROR_NOT_SUPPORTED: i32 = 50;
+        return matches!(
+            error.raw_os_error(),
+            Some(ERROR_INVALID_FUNCTION | ERROR_NOT_SUPPORTED)
+        );
+    }
+    #[cfg(not(any(unix, windows)))]
+    false
+}
+
 /// Create a directory (and any missing parents), setting owner-only
 /// (`0o700`) permissions atomically at creation time on every directory this
 /// call actually creates — mirroring the TS library's
@@ -180,6 +223,8 @@ impl HostPlatform for NativeHostPlatform {
     }
 
     async fn write_file(&self, path: &Path, content: &[u8], mode: u32) -> Result<(), VaultError> {
+        use std::io::Write;
+
         // Ensure parent directory exists, created owner-only (0o700) on Unix
         // per #255 — matches the TS library's `fs.mkdir(dir, { mode: 0o700 })`
         // contract for config/key/secret storage directories.
@@ -192,28 +237,107 @@ impl HostPlatform for NativeHostPlatform {
             })?;
         }
 
-        std::fs::write(path, content).map_err(|e| VaultError::Filesystem {
+        let error = |e| VaultError::Filesystem {
             message: format!("Failed to write {}: {e}", path.display()),
             path: path.display().to_string(),
             permission: "write".to_string(),
             code: None,
-        })?;
+        };
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create(true).truncate(true);
+        // Newly created wrapping-key stages must be owner-only before the
+        // first byte is written, even when atomic publication is unavailable.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(mode);
+        }
+        let mut file = options.open(path).map_err(error)?;
+        file.write_all(content).map_err(error)?;
 
         // Set permissions on Unix
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
             let perms = std::fs::Permissions::from_mode(mode);
-            std::fs::set_permissions(path, perms).map_err(|e| VaultError::Filesystem {
-                message: format!("Failed to set permissions on {}: {e}", path.display()),
-                path: path.display().to_string(),
-                permission: "write".to_string(),
-                code: None,
-            })?;
+            file.set_permissions(perms)
+                .map_err(|e| VaultError::Filesystem {
+                    message: format!("Failed to set permissions on {}: {e}", path.display()),
+                    path: path.display().to_string(),
+                    permission: "write".to_string(),
+                    code: None,
+                })?;
         }
 
         let _ = mode; // suppress unused warning on non-Unix
         Ok(())
+    }
+
+    async fn write_file_if_absent(
+        &self,
+        path: &Path,
+        content: &[u8],
+        mode: u32,
+    ) -> Result<bool, VaultError> {
+        use std::io::{ErrorKind, Write};
+        use std::sync::atomic::{AtomicU64, Ordering};
+
+        static NEXT_TEMP: AtomicU64 = AtomicU64::new(0);
+
+        let error = |e| VaultError::Filesystem {
+            message: format!("Failed to publish {}: {e}", path.display()),
+            path: path.display().to_string(),
+            permission: "write".to_string(),
+            code: None,
+        };
+        let parent = path.parent().filter(|p| !p.as_os_str().is_empty());
+        if let Some(parent) = parent {
+            create_dir_all_secure(parent).map_err(error)?;
+        }
+
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(mode);
+        }
+        let _ = mode;
+
+        let (temp, mut file) = loop {
+            let counter = NEXT_TEMP.fetch_add(1, Ordering::Relaxed);
+            // A short sibling keeps staging within the wrapping-key path budget.
+            let temp = path.with_file_name(format!(".v{:x}-{counter:x}", std::process::id()));
+            match options.open(&temp) {
+                Ok(file) => break (temp, file),
+                Err(e) if e.kind() == ErrorKind::AlreadyExists => continue,
+                Err(e) => return Err(error(e)),
+            }
+        };
+
+        let written = file.write_all(content);
+        #[cfg(unix)]
+        let written = written.and_then(|()| {
+            use std::os::unix::fs::PermissionsExt;
+            file.set_permissions(std::fs::Permissions::from_mode(mode))
+        });
+        drop(file);
+        let published =
+            written
+                .map_err(error)
+                .and_then(|()| match std::fs::hard_link(&temp, path) {
+                    Ok(()) => Ok(true),
+                    Err(e) if e.kind() == ErrorKind::AlreadyExists => Ok(false),
+                    // Only a link capability failure permits the core's
+                    // sequential wrapping-key fallback for ordinary storage.
+                    Err(e) if hard_link_unavailable(&e) => Err(VaultError::LockingNotSupported {
+                        message: format!("Cannot atomically publish {}: {e}", path.display()),
+                    }),
+                    Err(e) => Err(error(e)),
+                });
+        // Publication is the commit point. Cleanup cannot turn it into a failure.
+        let _ = std::fs::remove_file(&temp);
+        published
     }
 
     async fn file_exists(&self, path: &Path) -> Result<bool, VaultError> {
@@ -266,30 +390,18 @@ impl HostPlatform for NativeHostPlatform {
     }
 
     async fn list_dir(&self, path: &Path) -> Result<Vec<String>, VaultError> {
-        match std::fs::read_dir(path) {
-            Ok(entries) => {
-                let mut names = Vec::new();
-                for entry in entries {
-                    let e = entry.map_err(|error| VaultError::Filesystem {
-                        message: format!("Failed to list {}: {error}", path.display()),
-                        path: path.display().to_string(),
-                        permission: "read".to_string(),
-                        code: None,
-                    })?;
-                    if let Some(name) = e.file_name().to_str() {
-                        names.push(name.to_string());
-                    }
-                }
-                Ok(names)
+        let mut names = Vec::new();
+        for entry in read_directory_entries(path)? {
+            if entry
+                .file_type()
+                .map_err(|error| list_directory_error(path, error))?
+                .is_file()
+                && let Some(name) = entry.file_name().to_str()
+            {
+                names.push(name.to_string());
             }
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
-            Err(e) => Err(VaultError::Filesystem {
-                message: format!("Failed to list {}: {e}", path.display()),
-                path: path.display().to_string(),
-                permission: "read".to_string(),
-                code: None,
-            }),
         }
+        Ok(names)
     }
 
     /// Real `O_EXCL`-based exclusive create, overriding the trait's
@@ -404,6 +516,44 @@ fn write_lock_file_contents(
 mod tests {
     use super::*;
     use std::fs;
+
+    /// Record inventories consume filenames, so a matching directory must never be opened.
+    #[tokio::test]
+    async fn list_dir_returns_regular_files_only() {
+        let dir = tempfile::tempdir().unwrap();
+        let host = NativeHostPlatform::new(dir.path().to_path_buf());
+        fs::create_dir(dir.path().join("616c706861.enc")).unwrap();
+        fs::write(dir.path().join("62657461.enc"), b"entry").unwrap();
+
+        assert_eq!(host.list_dir(dir.path()).await.unwrap(), ["62657461.enc"]);
+    }
+
+    /// Ordinary persistence can recover from a missing link primitive.
+    /// A write-permission failure must still propagate to the caller.
+    #[test]
+    fn hard_link_unavailability_preserves_permission_errors() {
+        use std::io::{Error, ErrorKind};
+
+        assert!(hard_link_unavailable(&Error::from(ErrorKind::Unsupported)));
+        assert!(!hard_link_unavailable(&Error::from(
+            ErrorKind::PermissionDenied
+        )));
+        #[cfg(unix)]
+        {
+            assert!(hard_link_unavailable(&Error::from_raw_os_error(
+                libc::EPERM
+            )));
+            assert!(!hard_link_unavailable(&Error::from_raw_os_error(
+                libc::EACCES
+            )));
+        }
+        #[cfg(windows)]
+        {
+            assert!(hard_link_unavailable(&Error::from_raw_os_error(1)));
+            assert!(hard_link_unavailable(&Error::from_raw_os_error(50)));
+            assert!(!hard_link_unavailable(&Error::from_raw_os_error(5)));
+        }
+    }
 
     /// Regression test for PR #135 review feedback: `file_exists` must map a
     /// genuine "does not exist" (ENOENT) to `Ok(false)`, not lose that
@@ -727,7 +877,7 @@ mod tests {
     /// Signing-key private material (issue #289) is sealed under
     /// `<config_dir>/signing/`, a directory `FileBackend::generate_signing_key`
     /// creates the same way every other storage directory is created — via
-    /// `write_file`'s implicit parent-dir creation. Mirrors the `file/`-dir
+    /// the host's implicit parent-dir creation. Mirrors the `file/`-dir
     /// permission tests above: driven through the real production path
     /// (`FileBackend` + `NativeHostPlatform`, not the generic `write_file`
     /// helper directly), this proves `signing/` itself, not just an
@@ -756,6 +906,122 @@ mod tests {
             mode, 0o700,
             "freshly created signing/ dir must be 0o700, got {mode:o}"
         );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn racing_signing_creators_agree_with_a_reopened_native_store() {
+        use std::sync::Arc;
+        use tokio::sync::Barrier;
+        use vaultkeeper_core::backend::{FileBackend, SigningBackend};
+        use vaultkeeper_core::types::SigningAlgorithm;
+
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        let enroll = |barrier: Arc<Barrier>, backend: FileBackend| async move {
+            barrier.wait().await;
+            backend
+                .generate_signing_key("release", SigningAlgorithm::EdDsa)
+                .await?;
+            backend.get_public_key("release").await
+        };
+        let barrier = Arc::new(Barrier::new(2));
+        let open = || FileBackend::new(Arc::new(NativeHostPlatform::new(root.clone())));
+        let first = tokio::spawn(enroll(Arc::clone(&barrier), open()));
+        let second = tokio::spawn(enroll(barrier, open()));
+
+        let (winner, loser) = match (first.await.unwrap(), second.await.unwrap()) {
+            (Ok(key), Err(err)) | (Err(err), Ok(key)) => (key, err),
+            outcome => panic!("expected one successful enrollment, got {outcome:?}"),
+        };
+        assert!(matches!(loser, VaultError::SigningKeyAlreadyExists { .. }));
+        let persisted = open().get_public_key("release").await.unwrap();
+        assert_eq!(winner.public_key_pem, persisted.public_key_pem);
+        assert_eq!(winner.kid, persisted.kid);
+        assert_eq!(winner.algorithm, persisted.algorithm);
+        assert_eq!(fs::read_dir(root.join("signing")).unwrap().count(), 1);
+    }
+
+    /// A complete candidate left by an interrupted repair still selects the
+    /// wrapping key for native signing enrollments in the same store.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn signing_enrollment_resumes_interrupted_wrap_key_repair() {
+        use std::sync::Arc;
+        use vaultkeeper_core::backend::{FileBackend, SigningBackend};
+        use vaultkeeper_core::types::SigningAlgorithm;
+
+        let dir = tempfile::tempdir().unwrap();
+        let key_path = dir.path().join(".keys.wrap");
+        let repair_path = dir.path().join(".keys.wrap.r");
+        let candidate = [0x42; 32];
+        let host = NativeHostPlatform::new(dir.path().to_path_buf());
+        host.write_file(&key_path, &[0], 0o600).await.unwrap();
+        host.write_file(&repair_path, &candidate, 0o600)
+            .await
+            .unwrap();
+
+        let open = || FileBackend::new(Arc::new(NativeHostPlatform::new(dir.path().to_path_buf())));
+        let enroll = |backend: FileBackend, label: &'static str| async move {
+            backend
+                .generate_signing_key(label, SigningAlgorithm::EdDsa)
+                .await
+                .unwrap();
+            backend.get_public_key(label).await.unwrap().kid
+        };
+        let first = tokio::spawn(enroll(open(), "first"));
+        let second = tokio::spawn(enroll(open(), "second"));
+        let (first_kid, second_kid) = (first.await.unwrap(), second.await.unwrap());
+
+        assert!(fs::read(&key_path).unwrap() == candidate);
+        assert!(!repair_path.exists());
+        let reopened = open();
+        assert_eq!(
+            reopened.get_public_key("first").await.unwrap().kid,
+            first_kid
+        );
+        assert_eq!(
+            reopened.get_public_key("second").await.unwrap().kid,
+            second_kid
+        );
+    }
+
+    /// The valid wrapping key and its repair candidate fit in a 990-byte
+    /// config directory. Installing the repair must fit there as well.
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    async fn signing_enrollment_repairs_wrap_key_at_macos_path_boundary() {
+        use std::sync::Arc;
+        use vaultkeeper_core::backend::{FileBackend, SigningBackend};
+        use vaultkeeper_core::types::SigningAlgorithm;
+
+        let dir = tempfile::tempdir().unwrap();
+        let mut root = dir.path().to_path_buf();
+        while root.as_os_str().len() < 990 {
+            let remaining = 989 - root.as_os_str().len();
+            let component = if remaining == 201 {
+                199
+            } else {
+                remaining.min(200)
+            };
+            root.push("a".repeat(component));
+        }
+        assert_eq!(root.as_os_str().len(), 990);
+        let key_path = root.join(".keys.wrap");
+        let repair_path = root.join(".keys.wrap.r");
+        let candidate = [0x42; 32];
+        let host = Arc::new(NativeHostPlatform::new(root));
+        host.write_file(&key_path, &[0], 0o600).await.unwrap();
+        host.write_file(&repair_path, &candidate, 0o600)
+            .await
+            .unwrap();
+
+        let backend = FileBackend::new(host);
+        backend
+            .generate_signing_key("a", SigningAlgorithm::EdDsa)
+            .await
+            .unwrap();
+        assert!(fs::read(&key_path).unwrap() == candidate);
+        assert!(!repair_path.exists());
+        assert!(backend.get_public_key("a").await.is_ok());
     }
 
     /// Non-Unix (Windows) sanity check: `create_dir_all_secure` still

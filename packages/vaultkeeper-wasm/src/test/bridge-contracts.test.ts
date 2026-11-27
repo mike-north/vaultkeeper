@@ -13,7 +13,7 @@ import { describe, it } from 'node:test'
 import * as assert from 'node:assert/strict'
 import { createServer } from 'node:http'
 import type { AddressInfo } from 'node:net'
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createNodeHost } from '../node-host.js'
@@ -27,6 +27,17 @@ import {
 import type { HostSecretBackend } from '../types.js'
 
 describe('directory inventory errors', () => {
+  it('returns regular filenames without including directories', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'vk-list-'))
+    try {
+      await mkdir(join(dir, '616c706861.enc'))
+      await writeFile(join(dir, '62657461.enc'), 'entry')
+      assert.deepEqual(await createNodeHost(dir).listDir(dir), ['62657461.enc'])
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
   it('distinguishes a missing directory from an unreadable inventory', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'vk-list-'))
     try {

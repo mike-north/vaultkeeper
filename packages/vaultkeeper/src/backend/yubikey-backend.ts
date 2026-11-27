@@ -9,11 +9,13 @@
  * Encrypted file format (version 1, all parts base64-encoded, colon-separated):
  *   1:<iv>:<authTag>:<ciphertext>
  *
- * The leading "1:" version prefix allows future format migrations and enables
- * detection of legacy CBC files (which lack this prefix).
+ * Version 2 adds a Base64 UTF-16LE ID as the fifth field for IDs whose UTF-8
+ * path can have more than one spelling. The field is authenticated as GCM AAD.
+ * Legacy OpenSSL CBC files have no version prefix.
  */
 
 import * as fs from 'node:fs/promises'
+import type { Dirent } from 'node:fs'
 import * as path from 'node:path'
 import * as os from 'node:os'
 import * as crypto from 'node:crypto'
@@ -38,8 +40,12 @@ const GCM_IV_BYTES = 12
 const GCM_KEY_BYTES = 32
 const GCM_TAG_LENGTH_BITS = 128
 
-/** Version prefix written at the start of every encrypted file. */
+/** Ordinary and spelling-bearing GCM records retain the same canonical entry path. */
 const FORMAT_VERSION = '1'
+const IDENTITY_FORMAT_VERSION = '2'
+
+/** OpenSSL's legacy salted envelope still identifies a record for inventory and cleanup. */
+const LEGACY_OPENSSL_MAGIC = Buffer.from('Salted__')
 
 /**
  * Resolve the storage directory for a YubikeyBackend instance.
@@ -57,9 +63,105 @@ function resolveStorageDir(configuredPath?: string): string {
   return path.join(os.homedir(), STORAGE_DIR_NAME)
 }
 
-function getEntryPath(storageDir: string, id: string): string {
+/** Path shared by v1 records and older clients that normalized every ID to UTF-8. */
+function getLegacyEntryPath(storageDir: string, id: string): string {
   const safeId = Buffer.from(id, 'utf8').toString('hex')
   return path.join(storageDir, `${safeId}.enc`)
+}
+
+/** A replacement code point can have more than one original JavaScript spelling. */
+function exactIdentity(id: string): Buffer | undefined {
+  return Buffer.from(id, 'utf8').toString('utf8').includes('\ufffd')
+    ? Buffer.from(id, 'utf16le')
+    : undefined
+}
+
+/** Hash the exact UTF-16 code units so ambiguous spellings occupy disjoint, bounded filenames. */
+function getEntryPath(storageDir: string, id: string): string {
+  const identity = exactIdentity(id)
+  return identity === undefined
+    ? getLegacyEntryPath(storageDir, id)
+    : path.join(storageDir, `id-${crypto.createHash('sha256').update(identity).digest('hex')}.enc`)
+}
+
+/** Decode the byte-preserving ID field without letting permissive Base64 rewrite its value. */
+function decodeIdentity(encoded: string): Buffer | undefined {
+  const identity = Buffer.from(encoded, 'base64')
+  return identity.length > 0 && identity.length % 2 === 0 && identity.toString('base64') === encoded
+    ? identity
+    : undefined
+}
+
+/**
+ * Identify YubiKey envelopes even when another backend uses the same filenames.
+ * Null identifies a legacy record whose spelling may need its original index.
+ */
+function inventoryRecordId(entry: Buffer): string | null | undefined {
+  if (entry.subarray(0, LEGACY_OPENSSL_MAGIC.length).equals(LEGACY_OPENSSL_MAGIC)) {
+    return null
+  }
+  const separator = 0x3a
+  const versionEnd = entry.indexOf(separator)
+  if (
+    versionEnd <= 0 ||
+    !entry.subarray(0, versionEnd).every((byte) => byte >= 0x30 && byte <= 0x39)
+  ) {
+    return undefined
+  }
+  const ivEnd = entry.indexOf(separator, versionEnd + 1)
+  const tagEnd = ivEnd === -1 ? -1 : entry.indexOf(separator, ivEnd + 1)
+  if (tagEnd === -1) {
+    return undefined // A FileBackend envelope has only three fields.
+  }
+  const version = entry.subarray(0, versionEnd).toString('latin1')
+  const ciphertextEnd = entry.indexOf(separator, tagEnd + 1)
+  if (version !== IDENTITY_FORMAT_VERSION) {
+    return ciphertextEnd === -1 ? null : undefined
+  }
+  if (ciphertextEnd === -1 || entry.indexOf(separator, ciphertextEnd + 1) !== -1) {
+    return undefined
+  }
+  const identity = decodeIdentity(entry.subarray(ciphertextEnd + 1).toString('latin1'))
+  return identity?.toString('utf16le')
+}
+
+/** Recover only IDs that legacy UTF-8 filenames could not represent losslessly. */
+async function legacyInventoryAliases(
+  storageDir: string,
+  ids: ReadonlySet<string>,
+): Promise<ReadonlyMap<string, string | null>> {
+  const aliases = new Map<string, string | null>()
+  if (ids.size === 0) {
+    return aliases
+  }
+
+  let metadata: unknown
+  try {
+    metadata = JSON.parse(await fs.readFile(path.join(storageDir, 'metadata.json'), 'utf8'))
+  } catch {
+    // The legacy index can clarify spelling, but its availability cannot determine membership.
+    return aliases
+  }
+  if (typeof metadata !== 'object' || metadata === null || !('entries' in metadata)) {
+    return aliases
+  }
+  const { entries } = metadata
+  if (
+    typeof entries !== 'object' ||
+    entries === null ||
+    Array.isArray(entries) ||
+    !Object.values(entries).every((entry) => typeof entry === 'string')
+  ) {
+    return aliases
+  }
+  for (const id of Object.keys(entries)) {
+    const canonical = Buffer.from(id, 'utf8').toString('utf8')
+    if (id !== canonical && ids.has(canonical) && !Object.hasOwn(entries, canonical)) {
+      // Multiple spellings can share one legacy filename. Keep its canonical ID if ambiguous.
+      aliases.set(canonical, aliases.has(canonical) ? null : id)
+    }
+  }
+  return aliases
 }
 
 /** Expected byte length of a YubiKey HMAC-SHA1 response (20 bytes = 40 hex chars). */
@@ -97,12 +199,13 @@ function deriveKey(hmacResponse: string, id: string): Buffer {
 /**
  * Encrypt `plaintext` with AES-256-GCM using `key`.
  * Returns a versioned, colon-separated string: `1:<iv>:<authTag>:<ciphertext>`
- * (all binary fields base64-encoded).
+ * (all binary fields base64-encoded). An explicit spelling is stored and
+ * authenticated only when the canonical filename alone is ambiguous.
  *
  * The key and all intermediate buffers are zeroed in the finally block,
  * guaranteeing cleanup even if `createCipheriv` or `cipher.final()` throws.
  */
-function encryptGcm(key: Buffer, plaintext: string): string {
+function encryptGcm(key: Buffer, plaintext: string, identity?: Buffer): string {
   const iv = crypto.randomBytes(GCM_IV_BYTES)
   let encrypted: Buffer | undefined
   let authTag: Buffer | undefined
@@ -110,14 +213,18 @@ function encryptGcm(key: Buffer, plaintext: string): string {
     const cipher = crypto.createCipheriv('aes-256-gcm', key, iv, {
       authTagLength: GCM_TAG_LENGTH_BITS / 8,
     })
+    if (identity !== undefined) {
+      cipher.setAAD(identity)
+    }
     encrypted = Buffer.concat([cipher.update(plaintext, 'utf8'), cipher.final()])
     authTag = cipher.getAuthTag()
 
     return [
-      FORMAT_VERSION,
+      identity === undefined ? FORMAT_VERSION : IDENTITY_FORMAT_VERSION,
       iv.toString('base64'),
       authTag.toString('base64'),
       encrypted.toString('base64'),
+      ...(identity === undefined ? [] : [identity.toString('base64')]),
     ].join(':')
   } finally {
     // Zero all secret material regardless of success or failure.
@@ -132,7 +239,7 @@ function encryptGcm(key: Buffer, plaintext: string): string {
  * Decrypt a versioned GCM blob produced by `encryptGcm`.
  *
  * Version detection distinguishes three cases:
- * - First segment is a number matching `FORMAT_VERSION` → current format, proceed.
+ * - First segment matches a supported GCM version → proceed.
  * - First segment is a different number → unsupported future version, throw a
  *   clear "unsupported version N" error.
  * - First segment is not a number at all → legacy/corrupt format (e.g. an
@@ -144,7 +251,13 @@ function encryptGcm(key: Buffer, plaintext: string): string {
  * @param path - The path of the encrypted entry, for attribution on a thrown
  * {@link DecryptionError}.
  */
-function decryptGcm(key: Buffer, encoded: string, path: string): string {
+function decryptGcm(
+  key: Buffer,
+  encoded: string,
+  id: string,
+  requiresIdentity: boolean,
+  path: string,
+): string {
   const parts = encoded.split(':')
   const versionSegment = parts[0] ?? ''
 
@@ -162,26 +275,28 @@ function decryptGcm(key: Buffer, encoded: string, path: string): string {
     )
   }
 
-  if (versionSegment !== FORMAT_VERSION) {
+  const hasIdentity = versionSegment === IDENTITY_FORMAT_VERSION
+  if (versionSegment !== FORMAT_VERSION && !hasIdentity) {
     // A future format version this binary does not know how to decode.
     key.fill(0)
     throw new DecryptionError(
       `Unsupported encrypted file version: ${versionSegment}. ` +
-        `This vaultkeeper build only supports version ${FORMAT_VERSION}. ` +
+        `This vaultkeeper build supports versions ${FORMAT_VERSION} and ${IDENTITY_FORMAT_VERSION}. ` +
         'Upgrade vaultkeeper to read this secret.',
       path,
     )
   }
-
-  if (parts.length !== 4) {
+  if (hasIdentity !== requiresIdentity) {
     key.fill(0)
-    throw new DecryptionError(
-      `Invalid encrypted file format: expected ${FORMAT_VERSION}:iv:authTag:ciphertext`,
-      path,
-    )
+    throw new DecryptionError('Encrypted file version does not match its record path', path)
   }
 
-  const [_version, ivB64, authTagB64, ciphertextB64] = parts
+  if (parts.length !== (hasIdentity ? 5 : 4)) {
+    key.fill(0)
+    throw new DecryptionError(`Invalid encrypted file format for version ${versionSegment}`, path)
+  }
+
+  const [_version, ivB64, authTagB64, ciphertextB64, identityB64] = parts
   if (ivB64 === undefined || authTagB64 === undefined || ciphertextB64 === undefined) {
     key.fill(0)
     throw new DecryptionError('Invalid encrypted file format: missing part', path)
@@ -189,6 +304,13 @@ function decryptGcm(key: Buffer, encoded: string, path: string): string {
 
   let decrypted: Buffer | undefined
   try {
+    const identity = identityB64 === undefined ? undefined : decodeIdentity(identityB64)
+    if (hasIdentity && identity === undefined) {
+      throw new DecryptionError('Invalid encrypted file ID field', path)
+    }
+    if (identity !== undefined && identity.toString('utf16le') !== id) {
+      throw new DecryptionError('Encrypted file ID does not match the requested ID', path)
+    }
     const iv = Buffer.from(ivB64, 'base64')
     const authTag = Buffer.from(authTagB64, 'base64')
     const ciphertext = Buffer.from(ciphertextB64, 'base64')
@@ -201,6 +323,9 @@ function decryptGcm(key: Buffer, encoded: string, path: string): string {
       const decipher = crypto.createDecipheriv('aes-256-gcm', key, iv, {
         authTagLength: GCM_TAG_LENGTH_BITS / 8,
       })
+      if (identity !== undefined) {
+        decipher.setAAD(identity)
+      }
       decipher.setAuthTag(authTag)
       decrypted = Buffer.concat([decipher.update(ciphertext), decipher.final()])
     } catch (err) {
@@ -346,7 +471,7 @@ export class YubikeyBackend implements ListableBackend, PresenceCapableBackend {
 
     const hmacResponse = await this.challengeResponse(id)
     const key = deriveKey(hmacResponse, id)
-    const encrypted = encryptGcm(key, secret)
+    const encrypted = encryptGcm(key, secret, exactIdentity(id))
 
     const entryPath = getEntryPath(storageDir, id)
     await fs.writeFile(entryPath, encrypted, { mode: 0o600 })
@@ -355,12 +480,8 @@ export class YubikeyBackend implements ListableBackend, PresenceCapableBackend {
   async retrieve(id: string): Promise<string> {
     await this.requireDevice()
 
-    const storageDir = this.#storageDir
-    const entryPath = getEntryPath(storageDir, id)
-
-    try {
-      await fs.access(entryPath)
-    } catch {
+    const entryPath = await this.#existingEntryPath(id)
+    if (entryPath === undefined) {
       throw new SecretNotFoundError(`Secret not found in YubiKey store: ${id}`)
     }
 
@@ -368,32 +489,86 @@ export class YubikeyBackend implements ListableBackend, PresenceCapableBackend {
     const hmacResponse = await this.challengeResponse(id)
     const key = deriveKey(hmacResponse, id)
 
-    return decryptGcm(key, encoded, entryPath)
+    return decryptGcm(
+      key,
+      encoded,
+      id,
+      entryPath !== getLegacyEntryPath(this.#storageDir, id),
+      entryPath,
+    )
   }
 
   async delete(id: string): Promise<void> {
     await this.requireDevice()
 
-    const storageDir = this.#storageDir
-    const entryPath = getEntryPath(storageDir, id)
-
-    try {
-      await fs.unlink(entryPath)
-    } catch (err) {
-      if (err instanceof Error && 'code' in err && err.code === 'ENOENT') {
-        throw new SecretNotFoundError(`Secret not found in YubiKey store: ${id}`)
+    const entryPath = getEntryPath(this.#storageDir, id)
+    const legacyPath = await this.#legacyEntryPath(id)
+    // Retire both generations of the same ID so deleting an upgraded record
+    // cannot restore an older credential. The legacy path is never written by
+    // upgraded ambiguous IDs, so a concurrent store of another spelling wins
+    // in its own namespace.
+    let deleted = false
+    for (const candidate of legacyPath === undefined ? [entryPath] : [legacyPath, entryPath]) {
+      try {
+        await fs.unlink(candidate)
+        deleted = true
+      } catch (err) {
+        if (!(err instanceof Error && 'code' in err && err.code === 'ENOENT')) {
+          throw toFilesystemError(err, 'YubiKey inventory entry', candidate, 'write')
+        }
       }
-      throw err
+    }
+    if (!deleted) {
+      throw new SecretNotFoundError(`Secret not found in YubiKey store: ${id}`)
     }
   }
 
-  async exists(id: string): Promise<boolean> {
-    const storageDir = this.#storageDir
-    const entryPath = getEntryPath(storageDir, id)
-
+  /** Prefer the exact path. Legacy records fall back to their recoverable spelling. */
+  async #existingEntryPath(id: string): Promise<string | undefined> {
+    const entryPath = getEntryPath(this.#storageDir, id)
     try {
       await fs.access(entryPath)
-      return true
+      return entryPath
+    } catch {
+      return this.#legacyEntryPath(id)
+    }
+  }
+
+  /** A legacy path may be used only for the spelling recovered by inventory. */
+  async #legacyEntryPath(id: string): Promise<string | undefined> {
+    const canonical = Buffer.from(id, 'utf8').toString('utf8')
+    if (!canonical.includes('\ufffd')) {
+      return undefined
+    }
+    const legacyPath = getLegacyEntryPath(this.#storageDir, canonical)
+    try {
+      const data = await fs.readFile(legacyPath)
+      try {
+        if (inventoryRecordId(data) !== null) {
+          return undefined
+        }
+      } finally {
+        data.fill(0)
+      }
+    } catch (err) {
+      // The digest path can fit a filesystem that cannot address the former
+      // UTF-8 path. Such a path cannot be an accessible legacy generation.
+      if (
+        err instanceof Error &&
+        'code' in err &&
+        (err.code === 'ENOENT' || err.code === 'ENAMETOOLONG')
+      ) {
+        return undefined
+      }
+      throw toFilesystemError(err, 'YubiKey legacy entry', legacyPath, 'read')
+    }
+    const aliases = await legacyInventoryAliases(this.#storageDir, new Set([canonical]))
+    return (aliases.get(canonical) ?? canonical) === id ? legacyPath : undefined
+  }
+
+  async exists(id: string): Promise<boolean> {
+    try {
+      return (await this.#existingEntryPath(id)) !== undefined
     } catch {
       return false
     }
@@ -401,22 +576,53 @@ export class YubikeyBackend implements ListableBackend, PresenceCapableBackend {
 
   async list(): Promise<string[]> {
     // Entry files are authoritative: the legacy shared index may be stale.
-    let filenames: string[]
+    let entries: Dirent[]
     try {
-      filenames = await fs.readdir(this.#storageDir)
+      entries = await fs.readdir(this.#storageDir, { withFileTypes: true })
     } catch (err) {
       if (err instanceof Error && 'code' in err && err.code === 'ENOENT') {
         return []
       }
       throw toFilesystemError(err, 'YubiKey inventory directory', this.#storageDir, 'read')
     }
-    return filenames.flatMap((filename) => {
-      if (!/^(?:[0-9a-f]{2})*\.enc$/.test(filename)) {
-        return []
+    const ids: string[] = []
+    const legacyIds = new Set<string>()
+    for (const entry of entries) {
+      const isExactPath = /^id-[0-9a-f]{64}\.enc$/.test(entry.name)
+      if (!entry.isFile() || (!isExactPath && !/^(?:[0-9a-f]{2})*\.enc$/.test(entry.name))) {
+        continue
       }
-      const hex = filename.slice(0, -4)
+      const hex = entry.name.slice(0, -4)
       const id = Buffer.from(hex, 'hex').toString('utf8')
-      return Buffer.from(id, 'utf8').toString('hex') === hex ? [id] : []
-    })
+      if (!isExactPath && Buffer.from(id, 'utf8').toString('hex') !== hex) {
+        continue
+      }
+      const entryPath = path.join(this.#storageDir, entry.name)
+      try {
+        const data = await fs.readFile(entryPath)
+        try {
+          const spelling = inventoryRecordId(data)
+          if (
+            isExactPath &&
+            typeof spelling === 'string' &&
+            getEntryPath(this.#storageDir, spelling) === entryPath
+          ) {
+            ids.push(spelling)
+          } else if (!isExactPath && spelling === null) {
+            legacyIds.add(id)
+          }
+        } finally {
+          data.fill(0)
+        }
+      } catch (err) {
+        if (err instanceof Error && 'code' in err && err.code === 'ENOENT') {
+          continue // It was deleted after enumeration.
+        }
+        throw toFilesystemError(err, 'YubiKey inventory entry', entryPath, 'read')
+      }
+    }
+    const aliasCandidates = new Set([...legacyIds].filter((id) => id.includes('\ufffd')))
+    const aliases = await legacyInventoryAliases(this.#storageDir, aliasCandidates)
+    return Array.from(new Set([...ids, ...Array.from(legacyIds, (id) => aliases.get(id) ?? id)]))
   }
 }

@@ -450,6 +450,22 @@ mod tests {
                 .insert(path.to_path_buf(), content.to_vec());
             Ok(())
         }
+        async fn write_file_if_absent(
+            &self,
+            path: &Path,
+            content: &[u8],
+            _mode: u32,
+        ) -> Result<bool, VaultError> {
+            use std::collections::hash_map::Entry;
+
+            match self.files.lock().unwrap().entry(path.to_path_buf()) {
+                Entry::Occupied(_) => Ok(false),
+                Entry::Vacant(entry) => {
+                    entry.insert(content.to_vec());
+                    Ok(true)
+                }
+            }
+        }
         async fn file_exists(&self, path: &Path) -> Result<bool, VaultError> {
             if self.deny_exists.lock().unwrap().contains(path) {
                 // `permission` stays within VaultError::Filesystem's

@@ -8,6 +8,7 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import * as crypto from 'node:crypto'
+import type { Dirent } from 'node:fs'
 import * as path from 'node:path'
 import type { ExecCommandResult } from '../../../src/util/exec.js'
 
@@ -16,13 +17,17 @@ vi.mock('../../../src/util/exec.js', () => ({
   execCommandFull: vi.fn(),
 }))
 
+const { readInventoryDir } = vi.hoisted(() => ({
+  readInventoryDir: vi.fn<(path: string, options: { withFileTypes: true }) => Promise<Dirent[]>>(),
+}))
+
 vi.mock('node:fs/promises', () => ({
   mkdir: vi.fn(),
   access: vi.fn(),
   unlink: vi.fn(),
   readFile: vi.fn(),
   writeFile: vi.fn(),
-  readdir: vi.fn(),
+  readdir: readInventoryDir,
 }))
 
 import * as fs from 'node:fs/promises'
@@ -39,6 +44,22 @@ import {
 
 const mockExecCommandFull = vi.mocked(execCommandFull)
 const mockFs = vi.mocked(fs)
+
+/** Model names returned by readdir for ordinary encrypted record files. */
+function regularEntries(...names: string[]): Dirent[] {
+  return names.map((name) => ({
+    name,
+    path: '',
+    parentPath: '',
+    isFile: () => true,
+    isDirectory: () => false,
+    isBlockDevice: () => false,
+    isCharacterDevice: () => false,
+    isSymbolicLink: () => false,
+    isFIFO: () => false,
+    isSocket: () => false,
+  }))
+}
 
 function makeResult(exitCode: number, stdout = '', stderr = ''): ExecCommandResult {
   return { exitCode, stdout, stderr }
@@ -475,29 +496,35 @@ describe('YubikeyBackend', () => {
 
   describe('list', () => {
     it('lists stored records even when the legacy inventory is unreadable', async () => {
-      mockFs.readFile.mockRejectedValue(new Error('injected metadata failure'))
-      mockFs.readdir.mockResolvedValue(['616c706861.enc', '62657461.enc'])
-      await expect(new YubikeyBackend().list()).resolves.toEqual(['alpha', 'beta'])
+      mockFs.readFile.mockImplementation((file) => {
+        if (typeof file === 'string' && file.endsWith('metadata.json')) {
+          return Promise.reject(new Error('injected metadata failure'))
+        }
+        return Promise.resolve(Buffer.from('1:::'))
+      })
+      readInventoryDir.mockResolvedValue(regularEntries('616c706861.enc', 'efbfbd.enc'))
+      await expect(new YubikeyBackend().list()).resolves.toEqual(['alpha', '\ufffd'])
+      expect(mockFs.readFile).toHaveBeenCalledWith(expect.stringContaining('metadata.json'), 'utf8')
     })
     it('should return all entry keys from encrypted filenames', async () => {
-      mockFs.readdir.mockResolvedValue([
-        '6d792d736563726574.enc',
-        '616e6f746865722d736563726574.enc',
-      ])
+      mockFs.readFile.mockImplementation(() => Promise.resolve(Buffer.from('1:::')))
+      readInventoryDir.mockResolvedValue(
+        regularEntries('6d792d736563726574.enc', '616e6f746865722d736563726574.enc'),
+      )
 
       const result = await backend.list()
       expect(result).toEqual(['my-secret', 'another-secret'])
     })
 
     it('should return empty array when storage directory does not exist', async () => {
-      mockFs.readdir.mockRejectedValue(Object.assign(new Error('ENOENT'), { code: 'ENOENT' }))
+      readInventoryDir.mockRejectedValue(Object.assign(new Error('ENOENT'), { code: 'ENOENT' }))
 
       const result = await backend.list()
       expect(result).toEqual([])
     })
 
     it('should return empty array when directory has no entries', async () => {
-      mockFs.readdir.mockResolvedValue([])
+      readInventoryDir.mockResolvedValue([])
 
       const result = await backend.list()
       expect(result).toEqual([])

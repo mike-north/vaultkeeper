@@ -17,7 +17,8 @@
 
 import * as fs from 'node:fs/promises'
 import * as crypto from 'node:crypto'
-import { toFilesystemError, DecryptionError } from '../errors.js'
+import * as path from 'node:path'
+import { toFilesystemError, DecryptionError, FilesystemError } from '../errors.js'
 
 const GCM_IV_BYTES = 12
 const GCM_KEY_BYTES = 32
@@ -88,6 +89,113 @@ export function decryptGcm(key: Buffer, encoded: string, path = ''): string {
 }
 
 /**
+ * Signing requires no-replace publication. Ordinary storage can also use sequential filesystems.
+ * @internal
+ */
+export type WrapKeyPublication = 'atomic' | 'sequential-fallback'
+
+/** A rename consumes the stage. Other outcomes leave it to clean up. */
+type StagedPublication = 'linked' | 'exists' | 'renamed'
+
+/** Reserve a private sibling on the same filesystem as the destination. */
+async function openPrivateStage(
+  dest: string,
+  resource: string,
+): Promise<{ temp: string; file: Awaited<ReturnType<typeof fs.open>> }> {
+  const dir = path.dirname(dest)
+  for (let attempt = 0; ; attempt++) {
+    const regular = attempt === 0
+    // Preserve the four-byte budget of .key and .enc at the path limit. The
+    // compact name has no dot, so it cannot name a live key, repair or entry.
+    const name = regular
+      ? `.${crypto.randomBytes(9).toString('base64url')}`
+      : crypto.randomBytes(3).toString('base64url')
+    const temp = path.join(dir, name)
+    try {
+      return { temp, file: await fs.open(temp, 'wx', 0o600) }
+    } catch (err) {
+      if (err instanceof Error && 'code' in err) {
+        if (regular && err.code === 'ENAMETOOLONG') continue
+        // The compact namespace has fewer names. Retry a collision without
+        // touching the other writer's file, while bounding the attempts.
+        if (!regular && err.code === 'EEXIST' && attempt < 3) continue
+      }
+      throw toFilesystemError(err, resource, dest, 'write')
+    }
+  }
+}
+
+/** Give the publisher exclusive ownership of a complete, owner-only sibling file. */
+async function withPrivateStage(
+  dest: string,
+  content: string | Buffer,
+  resource: string,
+  publish: (temp: string) => Promise<StagedPublication>,
+): Promise<StagedPublication> {
+  const { temp, file } = await openPrivateStage(dest, resource)
+  let result: StagedPublication | undefined
+  try {
+    try {
+      await file.writeFile(content)
+      if (process.platform !== 'win32') await file.chmod(0o600)
+    } catch (err) {
+      await file.close().catch(() => undefined)
+      throw err
+    }
+    await file.close()
+    result = await publish(temp)
+    return result
+  } catch (err) {
+    throw toFilesystemError(err, resource, dest, 'write')
+  } finally {
+    // A rename released the stage path, so it could now belong to another writer.
+    if (result !== 'renamed') await fs.unlink(temp).catch(() => undefined)
+  }
+}
+
+/**
+ * Publish a complete private file without replacement. Ordinary wrapping keys
+ * may opt into a sequential rename when the filesystem lacks hard links.
+ * @internal
+ */
+export async function writeFileIfAbsent(
+  dest: string,
+  content: string | Buffer,
+  resource: string,
+  publication: WrapKeyPublication = 'atomic',
+): Promise<boolean> {
+  const result = await withPrivateStage(dest, content, resource, async (temp) => {
+    try {
+      await fs.link(temp, dest)
+      return 'linked'
+    } catch (err) {
+      if (!(err instanceof Error && 'code' in err)) throw err
+      if (err.code === 'EEXIST') return 'exists'
+      // libuv can report the Windows exFAT link failure as EISDIR.
+      const unavailable =
+        err.code === 'ENOTSUP' ||
+        err.code === 'EOPNOTSUPP' ||
+        err.code === 'ENOSYS' ||
+        err.code === 'EPERM' ||
+        (process.platform === 'win32' && err.code === 'EISDIR')
+      if (publication === 'atomic' || !unavailable) throw err
+    }
+
+    // An owned sibling can still be renamed when the filesystem refuses to
+    // link it with EPERM. Signing requires the hard link's no-replace guarantee.
+    try {
+      await fs.lstat(dest)
+      return 'exists'
+    } catch (err) {
+      if (!(err instanceof Error && 'code' in err && err.code === 'ENOENT')) throw err
+    }
+    await fs.rename(temp, dest)
+    return 'renamed'
+  })
+  return result !== 'exists'
+}
+
+/**
  * Read the 32-byte wrapping key at `keyPath`, generating and persisting a fresh
  * random one (mode `0o600`) when the file does not yet exist **or** holds a
  * value that is not exactly 32 bytes.
@@ -104,9 +212,17 @@ export function decryptGcm(key: Buffer, encoded: string, path = ''): string {
  * returned {@link Buffer} holds key material; zero it after use where practical.
  *
  * @param keyPath - Absolute path to the wrapping-key file.
+ * @param publication - Whether initial creation or repair requires atomic
+ * no-replace publication. Signing must use the atomic mode.
+ * @param candidatePath - The selected repair candidate's stable sibling path.
+ * The default suffix matches Rust for shared `.keys.wrap` repairs.
  * @internal
  */
-export async function getOrCreateWrapKey(keyPath: string): Promise<Buffer> {
+export async function getOrCreateWrapKey(
+  keyPath: string,
+  publication: WrapKeyPublication = 'sequential-fallback',
+  candidatePath = `${keyPath}.r`,
+): Promise<Buffer> {
   let existing: Buffer | undefined
   try {
     existing = await fs.readFile(keyPath)
@@ -116,16 +232,79 @@ export async function getOrCreateWrapKey(keyPath: string): Promise<Buffer> {
     }
   }
 
-  if (existing?.byteLength === GCM_KEY_BYTES) {
-    return existing
+  if (existing?.byteLength === GCM_KEY_BYTES) return existing
+  if (existing !== undefined) {
+    existing.fill(0)
+    return repairWrapKey(keyPath, candidatePath, publication)
   }
 
-  // Missing or corrupt (wrong length): (re)generate a fresh key in place.
   const key = crypto.randomBytes(GCM_KEY_BYTES)
+  let published = false
   try {
-    await fs.writeFile(keyPath, key, { mode: 0o600 })
-  } catch (err) {
-    throw toFilesystemError(err, 'wrapping key file', keyPath, 'write')
+    published = await writeFileIfAbsent(keyPath, key, 'wrapping key file', publication)
+    if (published) return key
+  } finally {
+    if (!published) key.fill(0)
   }
-  return key
+
+  return readValidWrapKey(keyPath)
+}
+
+async function readValidWrapKey(keyPath: string): Promise<Buffer> {
+  let key: Buffer
+  try {
+    key = await fs.readFile(keyPath)
+  } catch (err) {
+    throw toFilesystemError(err, 'wrapping key file', keyPath, 'read')
+  }
+  if (key.byteLength === GCM_KEY_BYTES) return key
+  key.fill(0)
+  throw new DecryptionError('Invalid wrapping key length', keyPath)
+}
+
+/** Resume any published repair so every writer uses the same selected key. */
+async function repairWrapKey(
+  keyPath: string,
+  candidatePath: string,
+  publication: WrapKeyPublication,
+): Promise<Buffer> {
+  let candidate: Buffer = crypto.randomBytes(GCM_KEY_BYTES)
+  let returnCandidate = false
+  try {
+    if (!(await writeFileIfAbsent(candidatePath, candidate, 'wrapping key repair', publication))) {
+      candidate.fill(0)
+      try {
+        candidate = await readValidWrapKey(candidatePath)
+      } catch (err) {
+        // The selected candidate can disappear after a peer installs it.
+        if (err instanceof FilesystemError && err.code === 'ENOENT') {
+          return await readValidWrapKey(keyPath)
+        }
+        throw err
+      }
+    }
+
+    let active: Buffer
+    try {
+      active = await readValidWrapKey(keyPath)
+    } catch (err) {
+      if (!(err instanceof DecryptionError)) throw err
+      await installWrapKeyRepair(keyPath, candidate)
+      active = candidate
+    }
+    // Only remove the shared candidate once a complete active key is available.
+    await fs.unlink(candidatePath).catch(() => undefined)
+    returnCandidate = active === candidate
+    return active
+  } finally {
+    if (!returnCandidate) candidate.fill(0)
+  }
+}
+
+/** Install a private copy of the selected key so a delayed writer cannot rename a reused candidate path. */
+async function installWrapKeyRepair(keyPath: string, candidate: Buffer): Promise<void> {
+  await withPrivateStage(keyPath, candidate, 'wrapping key repair', async (temp) => {
+    await fs.rename(temp, keyPath)
+    return 'renamed'
+  })
 }

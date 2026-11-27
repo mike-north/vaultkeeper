@@ -85,6 +85,8 @@ Perform an HTTP request through the host's networking stack (issue \#239). [crea
 
 </td><td>
 
+List regular filenames without following symlinks. A missing directory yields an empty list.
+
 
 </td></tr>
 <tr><td>
@@ -131,6 +133,17 @@ _(Optional)_ Optional interactive human-approval capability (issue \#239). Absen
 
 
 </td><td>
+
+
+</td></tr>
+<tr><td>
+
+[writeFileIfAbsent(path, content, mode)?](./wasm.wasmhostplatform.writefileifabsent.md)
+
+
+</td><td>
+
+_(Optional)_ Atomically publish a complete file. Resolves to false if the destination already exists. The caller retains ownership of the input bytes. Reject with `LockingNotSupportedError` when atomic publication is unavailable, so ordinary key-state storage can use its sequential fallback.
 
 
 </td></tr>

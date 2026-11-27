@@ -55,5 +55,13 @@ Compact JWE string from setup()
 
 Promise&lt;{ token: [CapabilityToken](./vaultkeeper.capabilitytoken.md)<!-- -->; vaultResponse: [VaultResponse](./vaultkeeper.vaultresponse.md)<!-- -->; }&gt;
 
-Object containing an opaque [CapabilityToken](./vaultkeeper.capabilitytoken.md) for use with fetch/exec/getSecret, and a [VaultResponse](./vaultkeeper.vaultresponse.md) describing key status. When the JWE was decrypted with a non-current key, `vaultResponse.rotatedJwt` contains a re-encrypted JWE for the current key.
+Object containing an opaque [CapabilityToken](./vaultkeeper.capabilitytoken.md) for use with this vault instance's fetch/exec/getSecret, and a [VaultResponse](./vaultkeeper.vaultresponse.md) describing key status. When the JWE was decrypted with a non-current key, `vaultResponse.rotatedJwt` contains a re-encrypted JWE for the current key.
+
+## Exceptions
+
+[AuthorizationDeniedError](./vaultkeeper.authorizationdeniederror.md) If a new finite-use budget cannot be tracked because all accounting entries are still live.
+
+## Remarks
+
+Vault instances using the same loaded TypeScript module share in-memory accounting for up to 10,000 finite-use tokens. A tracked budget is retained through expiry. At capacity, a first finite-use authorization requires an expired entry to reclaim. Unlimited-use tokens need no entry. JWE redemption and capability use share an expiry clock that advances with elapsed time during a backward wall-clock adjustment. Expired tokens stay expired, and newly issued tokens continue to age. Each process maintains its own accounting.
 
