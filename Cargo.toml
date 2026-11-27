@@ -3,7 +3,7 @@ members = ["crates/*"]
 resolver = "2"
 
 [workspace.package]
-version = "0.4.0"
+version = "0.4.1"
 edition = "2024"
 license = "MIT"
 repository = "https://github.com/mike-north/vaultkeeper"
@@ -56,7 +56,7 @@ clap = { version = "4", features = ["derive"] }
 libc = "0.2"
 
 # Internal
-vaultkeeper-core = { path = "crates/vaultkeeper-core", version = "0.4.0" }
+vaultkeeper-core = { path = "crates/vaultkeeper-core", version = "0.4.1" }
 
 # Security
 zeroize = "1"
