@@ -257,7 +257,11 @@ export function createNodeHost(configDirOverride?: string): WasmHostPlatform {
       }
     },
 
-    async listDir(path: string, lowercaseLookup = false): Promise<string[]> {
+    async listDir(
+      path: string,
+      lowercaseLookup = false,
+      include?: (name: string) => boolean,
+    ): Promise<string[]> {
       if (!lowercaseLookup) {
         // Ordinary Node host consumers have always received an empty list on errors.
         return readdir(path).catch(() => [])
@@ -270,6 +274,10 @@ export function createNodeHost(configDirOverride?: string): WasmHostPlatform {
             continue
           }
           const canonical = entry.name.replace(/[A-Z]/g, (letter) => letter.toLowerCase())
+          // Unrelated links must not participate in record lookup or its failure modes.
+          if (include !== undefined && !include(canonical)) {
+            continue
+          }
           if (entry.isFile() && canonical === entry.name) {
             names.add(canonical)
             continue

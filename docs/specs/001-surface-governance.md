@@ -303,15 +303,20 @@ whether membership is intentional.
   retires the matching legacy record once the exact record is published. Inventory reads legacy
   records before enumerating exact filenames so concurrent upgrades keep their IDs visible.
   Lookup prefers the exact record and can fall back to a matching legacy record, including where
-  the legacy filename fits and the exact filename exceeds filesystem limits. Rust addresses Unicode
-  scalar IDs. TypeScript can also address IDs containing unpaired surrogates. An older reader must
-  upgrade to find or read a version 2 record.
+  the legacy filename fits and the exact filename exceeds filesystem limits. At that boundary, a
+  store can atomically replace an existing, uniquely identified legacy record with a version 1 GCM
+  envelope at its original filename, retaining its index spelling. Rust addresses Unicode scalar IDs. TypeScript
+  can also address IDs containing unpaired surrogates. An older reader must upgrade to find or read
+  a version 2 record.
   Rust `HostPlatform::list_dir` and the default `WasmHostPlatform.listDir` enumerate directory entry
   names without following symbolic links. The ordinary Node host listing returns an empty list on
   enumeration failures. Rust hosts can implement `list_dir_for_lowercase_lookup` and WASM hosts can
   accept `listDir`'s optional `lowercaseLookup` flag for YubiKey-compatible enumeration. Both return
-  ASCII-lowercase names reachable as regular files, including through symbolic links. A missing
-  directory yields an empty inventory and other listing failures propagate.
+  ASCII-lowercase names reachable as regular files, including through symbolic links. They apply the
+  caller's `include` filter to canonical names before resolving paths. The WASM filter is optional
+  and valid until the listing settles. A missing directory yields an empty inventory and failures
+  reading the directory or resolving included candidates propagate. Ordinary inventory never
+  resolves the legacy index to establish record membership.
 - **Config & platform:** `VaultConfig`, `loadConfig`, `getDefaultConfigDir`, `getPlatformDefaultConfigDir`,
   `TrustTier`, `KeyStatus`, `Platform`.
 - **Doctor:** `runDoctor` / `VaultKeeper.doctor`, `RunDoctorOptions`, `PreflightResult`, `PreflightCheck`,

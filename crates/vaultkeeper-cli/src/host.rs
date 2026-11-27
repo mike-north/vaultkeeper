@@ -409,7 +409,7 @@ impl HostPlatform for NativeHostPlatform {
             ),
             path: to.display().to_string(),
             permission: "write".to_string(),
-            code: None,
+            code: path_length_error_code(&e),
         })
     }
 
@@ -424,17 +424,25 @@ impl HostPlatform for NativeHostPlatform {
         }
     }
 
-    async fn list_dir_for_lowercase_lookup(&self, path: &Path) -> Result<Vec<String>, VaultError> {
+    async fn list_dir_for_lowercase_lookup(
+        &self,
+        path: &Path,
+        include: for<'name> fn(&'name str) -> bool,
+    ) -> Result<Vec<String>, VaultError> {
         let mut names = std::collections::BTreeSet::new();
         for entry in read_directory_entries(path)? {
             let name = entry.file_name();
             let Some(name) = name.to_str() else { continue };
+            let canonical = name.to_ascii_lowercase();
+            // Unrelated links must not participate in record lookup or its failure modes.
+            if !include(&canonical) {
+                continue;
+            }
             let file_type = match entry.file_type() {
                 Ok(file_type) => file_type,
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
                 Err(error) => return Err(list_directory_error(path, error)),
             };
-            let canonical = name.to_ascii_lowercase();
             if file_type.is_file() && name == canonical {
                 names.insert(canonical);
             } else if file_type.is_file() || file_type.is_symlink() {
@@ -493,7 +501,7 @@ impl HostPlatform for NativeHostPlatform {
                     message: format!("Failed to create lock file {}: {e}", path.display()),
                     path: path.display().to_string(),
                     permission: "lock".to_string(),
-                    code: None,
+                    code: path_length_error_code(&e),
                 });
             }
         };
@@ -583,7 +591,7 @@ mod tests {
         names.sort();
         assert_eq!(names, ["616c706861.enc", "62657461.enc"]);
         assert_eq!(
-            host.list_dir_for_lowercase_lookup(dir.path())
+            host.list_dir_for_lowercase_lookup(dir.path(), |_| true)
                 .await
                 .unwrap(),
             ["62657461.enc"]
@@ -1686,6 +1694,86 @@ mod tests {
             if case_sensitive {
                 assert_eq!(fs::read(uppercase).unwrap(), old_record);
             }
+        }
+
+        /// Ordinary inventory is independent of an index link whose target cannot be resolved.
+        #[tokio::test]
+        #[serial(stub_tool_path_env)]
+        async fn yubikey_lists_records_when_a_legacy_index_symlink_cannot_be_resolved() {
+            let _fixture = Fixture::with_yubikey();
+            let dir = tempfile::tempdir().unwrap();
+            let host = Arc::new(NativeHostPlatform::new(dir.path().to_path_buf()));
+            let backend = YubikeyBackend::new(host.clone(), false);
+            backend.store("alpha", "first value").await.unwrap();
+            backend.store("beta", "second value").await.unwrap();
+            let storage = dir.path().join("yubikey");
+            let overlong_target = "a".repeat(300);
+            let index = storage.join("metadata.json");
+            symlink(&overlong_target, &index).unwrap();
+            assert_eq!(
+                fs::metadata(index).unwrap_err().raw_os_error(),
+                Some(libc::ENAMETOOLONG)
+            );
+            symlink(&overlong_target, storage.join("unrelated.enc")).unwrap();
+            // Hexadecimal bytes that cannot represent an ID are unrelated too.
+            symlink(overlong_target, storage.join("ff.enc")).unwrap();
+
+            let reopened = YubikeyBackend::new(host, false);
+            assert_eq!(reopened.retrieve("alpha").await.unwrap(), "first value");
+            assert_eq!(reopened.retrieve("beta").await.unwrap(), "second value");
+            assert_eq!(reopened.list().await.unwrap(), ["alpha", "beta"]);
+
+            let unreadable_record = storage.join("63.enc");
+            symlink("a".repeat(300), &unreadable_record).unwrap();
+            assert!(matches!(
+                reopened.list().await,
+                Err(VaultError::Filesystem { path, .. }) if path == unreadable_record.to_string_lossy()
+            ));
+        }
+
+        /// A store can replace a confirmed legacy record when only that filename fits.
+        #[cfg(target_os = "macos")]
+        #[tokio::test]
+        #[serial(stub_tool_path_env)]
+        async fn yubikey_overwrites_legacy_record_when_the_exact_path_cannot_fit() {
+            let _fixture = Fixture::with_yubikey();
+            let dir = tempfile::tempdir().unwrap();
+            let mut config = dir.path().canonicalize().unwrap();
+            while config.as_os_str().len() < 995 {
+                let remaining = 994 - config.as_os_str().len();
+                let component = if remaining == 201 {
+                    199
+                } else {
+                    remaining.min(200)
+                };
+                config.push("a".repeat(component));
+            }
+            let storage = config.join("yubikey");
+            fs::create_dir_all(&storage).unwrap();
+            fs::write(storage.join("efbfbd.enc"), b"Salted__older cipher fixture").unwrap();
+            fs::write(
+                storage.join("metadata.json"),
+                br#"{"entries":{"\ufffd":"efbfbd.enc"}}"#,
+            )
+            .unwrap();
+
+            let host = Arc::new(NativeHostPlatform::new(config));
+            let backend = YubikeyBackend::new(host.clone(), false);
+            let id = "\u{fffd}";
+            assert_eq!(backend.list().await.unwrap(), [id]);
+            assert!(backend.exists(id).await.unwrap());
+            backend.store(id, "new value").await.unwrap();
+
+            let reopened = YubikeyBackend::new(host, false);
+            assert_eq!(reopened.list().await.unwrap(), [id]);
+            assert_eq!(reopened.retrieve(id).await.unwrap(), "new value");
+            reopened.delete(id).await.unwrap();
+            assert!(reopened.list().await.unwrap().is_empty());
+            assert!(matches!(
+                reopened.store(id, "new credential").await,
+                Err(VaultError::Filesystem { code: Some(code), .. }) if code == "ENAMETOOLONG"
+            ));
+            assert!(reopened.list().await.unwrap().is_empty());
         }
 
         /// A legacy credential is addressable when the exact filename would exceed PATH_MAX.

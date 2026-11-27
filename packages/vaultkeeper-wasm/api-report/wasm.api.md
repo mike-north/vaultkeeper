@@ -447,7 +447,7 @@ export interface WasmHostPlatform {
     // (undocumented)
     fileExists(path: string): Promise<boolean>;
     httpFetch(request: HttpFetchRequest): Promise<HttpFetchResponse>;
-    listDir(path: string, lowercaseLookup?: boolean): Promise<string[]>;
+    listDir(path: string, lowercaseLookup?: boolean, include?: (name: string) => boolean): Promise<string[]>;
     // (undocumented)
     platform(): string;
     promptApproval?(context: ApprovalContext): Promise<boolean>;

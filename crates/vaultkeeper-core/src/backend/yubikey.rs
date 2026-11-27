@@ -226,7 +226,7 @@ impl YubikeyBackend {
         // when the exact name fits. Only read legacy paths that actually exist.
         if !self
             .host
-            .list_dir_for_lowercase_lookup(&self.storage_dir())
+            .list_dir_for_lowercase_lookup(&self.storage_dir(), is_legacy_record_name)
             .await?
             .iter()
             .any(|name| path.file_name() == Some(std::ffi::OsStr::new(name)))
@@ -750,8 +750,18 @@ impl SecretBackend for YubikeyBackend {
         let identity = exact_identity(id);
         let encrypted = encrypt_gcm_versioned(&key, secret, identity.as_deref())?;
 
-        self.publish_entry(&self.entry_path(id), encrypted.as_bytes())
-            .await?;
+        let published = self
+            .publish_entry(&self.entry_path(id), encrypted.as_bytes())
+            .await;
+        if let (Some(path), Err(error)) = (&legacy_path, &published)
+            && unaddressable_exact_path(id, error)
+        {
+            // The index already identifies this record. Retain its readable envelope and filename
+            // when the filesystem cannot publish the exact spelling.
+            let encrypted = encrypt_gcm_versioned(&key, secret, None)?;
+            return self.publish_entry(path, encrypted.as_bytes()).await;
+        }
+        published?;
         if let Some(path) = legacy_path {
             // Keep the old value until the exact replacement is published.
             self.delete_entry(&path).await?;
@@ -813,7 +823,8 @@ impl SecretBackend for YubikeyBackend {
         self.require_device().await?;
 
         // Delete the older generation first so it cannot be revealed after
-        // deleting the exact record. New stores never reuse the legacy path.
+        // deleting the exact record. A store of another spelling uses its own
+        // exact path and cannot overwrite this confirmed legacy record.
         let legacy_deleted = match self.read_legacy_entry(id).await? {
             Some((path, _)) => self.delete_entry(&path).await?,
             None => false,
@@ -862,19 +873,10 @@ impl ListableBackend for YubikeyBackend {
         let mut legacy_index = None;
         for filename in self
             .host
-            .list_dir_for_lowercase_lookup(&storage_dir)
+            .list_dir_for_lowercase_lookup(&storage_dir, is_legacy_record_name)
             .await?
         {
-            let Some(hex) = filename
-                .strip_suffix(".enc")
-                .filter(|hex| is_record_hex(hex))
-            else {
-                continue;
-            };
-            let Some(id) = hex_decode(hex)
-                .ok()
-                .and_then(|bytes| String::from_utf8(bytes).ok())
-            else {
+            let Some(id) = legacy_record_id(&filename) else {
                 continue;
             };
             let path = storage_dir.join(&filename);
@@ -901,13 +903,10 @@ impl ListableBackend for YubikeyBackend {
         // Enumerate exact names after reading legacy records so migration cannot fall between scans.
         for filename in self
             .host
-            .list_dir_for_lowercase_lookup(&storage_dir)
+            .list_dir_for_lowercase_lookup(&storage_dir, is_exact_record_name)
             .await?
         {
-            if filename
-                .strip_prefix("id-")
-                .and_then(|name| name.strip_suffix(".enc"))
-                .is_some_and(|hex| hex.len() == 64 && is_record_hex(hex))
+            if is_exact_record_name(&filename)
                 && let Some(entry) = self.read_entry(&storage_dir.join(&filename)).await?
                 && let Some(id) = exact_envelope_id(&entry, &filename)
             {
@@ -918,6 +917,24 @@ impl ListableBackend for YubikeyBackend {
         ids.dedup();
         Ok(ids)
     }
+}
+
+/// Only a decodable legacy name can identify a record worth opening.
+fn is_legacy_record_name(name: &str) -> bool {
+    legacy_record_id(name).is_some()
+}
+
+/// A legacy filename encodes the UTF-8 bytes of the ID, including the empty ID.
+fn legacy_record_id(name: &str) -> Option<String> {
+    let hex = name.strip_suffix(".enc").filter(|hex| is_record_hex(hex))?;
+    String::from_utf8(hex_decode(hex).ok()?).ok()
+}
+
+/// An exact filename encodes the SHA-256 digest of the original spelling.
+fn is_exact_record_name(name: &str) -> bool {
+    name.strip_prefix("id-")
+        .and_then(|name| name.strip_suffix(".enc"))
+        .is_some_and(|hex| hex.len() == 64 && is_record_hex(hex))
 }
 
 /// Canonical record names encode whole bytes in lowercase hexadecimal.

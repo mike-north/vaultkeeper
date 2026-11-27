@@ -94,8 +94,7 @@ function encryptFixture(key: Buffer, iv: Buffer): string {
 }
 
 /** A pre-upgrade record whose exact UTF-16 spelling lived only in the shared index. */
-async function writeLegacyAlias(dir: string): Promise<string> {
-  const id = '\ud800'
+async function writeLegacyAlias(dir: string, id = '\ud800'): Promise<string> {
   const entryPath = join(dir, 'efbfbd.enc')
   const key = Buffer.from(
     hkdfSync(
@@ -328,6 +327,40 @@ describe('YubiKey inventory', () => {
         const reopened = new YubikeyBackend(storage)
         expect(await reopened.list()).toEqual(['z'])
         expect(await reopened.retrieve('z')).toBe('value')
+      } finally {
+        await rm(dir, { recursive: true, force: true })
+      }
+    },
+  )
+
+  it.skipIf(process.platform !== 'darwin')(
+    'overwrites a confirmed legacy record when its exact path cannot fit',
+    async () => {
+      const dir = await mkdtemp(join(tmpdir(), 'vk-yubikey-inventory-'))
+      try {
+        let storage = await realpath(dir)
+        while (Buffer.byteLength(storage) < 995) {
+          const remaining = 994 - Buffer.byteLength(storage)
+          storage = join(storage, 'a'.repeat(remaining === 201 ? 199 : Math.min(remaining, 200)))
+        }
+        await mkdir(storage, { recursive: true })
+        const id = await writeLegacyAlias(storage, '\ufffd')
+        const backend = new YubikeyBackend(storage)
+        await expect(backend.store('\ud800', 'different ID')).rejects.toMatchObject({
+          code: 'ENAMETOOLONG',
+        })
+        expect(await backend.retrieve(id)).toBe('value')
+        await backend.store(id, 'new value')
+
+        const reopened = new YubikeyBackend(storage)
+        expect(await reopened.list()).toEqual([id])
+        expect(await reopened.retrieve(id)).toBe('new value')
+        await reopened.delete(id)
+        expect(await reopened.list()).toEqual([])
+        await expect(reopened.store(id, 'new credential')).rejects.toMatchObject({
+          code: 'ENAMETOOLONG',
+        })
+        expect(await reopened.list()).toEqual([])
       } finally {
         await rm(dir, { recursive: true, force: true })
       }

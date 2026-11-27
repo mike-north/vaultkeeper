@@ -32,7 +32,7 @@ use vaultkeeper_core::{ClaimsKind, ExecutableTrustRequiredReason, VaultClaims, V
 /// - `fileExists(path)` → `Promise<boolean>`
 /// - `deleteFile(path)` → `Promise<void>`
 /// - `renameFile(from, to)` → `Promise<void>`
-/// - `listDir(path)` → `Promise<string[]>`
+/// - `listDir(path, lowercaseLookup?, include?)` → `Promise<string[]>`
 /// - `platform()` → `string` ("darwin"|"linux"|"win32")
 /// - `configDir()` → `string`
 /// - `httpFetch(request)` → `Promise<{status, headers, body}>` (issue #239)
@@ -121,12 +121,18 @@ impl JsHostPlatform {
     async fn list_files(
         &self,
         path: &Path,
-        lowercase_lookup: bool,
+        include: Option<fn(&str) -> bool>,
     ) -> Result<Vec<String>, VaultError> {
         let list_fn = get_method(&self.host, "listDir").map_err(|e| js_err(&format!("{e:?}")))?;
         let js_path = JsValue::from_str(&path.to_string_lossy());
-        let promise = if lowercase_lookup {
-            list_fn.call2(&self.host, &js_path, &JsValue::TRUE)
+        // Keep the filter callable until the async host has finished enumerating names.
+        let include = include.map(|include| {
+            Closure::<dyn Fn(JsValue) -> bool>::new(move |name: JsValue| {
+                name.as_string().is_some_and(|name| include(&name))
+            })
+        });
+        let promise = if let Some(include) = &include {
+            list_fn.call3(&self.host, &js_path, &JsValue::TRUE, include.as_ref())
         } else {
             list_fn.call1(&self.host, &js_path)
         }
@@ -538,11 +544,15 @@ impl HostPlatform for JsHostPlatform {
     }
 
     async fn list_dir(&self, path: &Path) -> Result<Vec<String>, VaultError> {
-        self.list_files(path, false).await
+        self.list_files(path, None).await
     }
 
-    async fn list_dir_for_lowercase_lookup(&self, path: &Path) -> Result<Vec<String>, VaultError> {
-        self.list_files(path, true).await
+    async fn list_dir_for_lowercase_lookup(
+        &self,
+        path: &Path,
+        include: for<'name> fn(&'name str) -> bool,
+    ) -> Result<Vec<String>, VaultError> {
+        self.list_files(path, Some(include)).await
     }
 
     fn platform(&self) -> Platform {

@@ -13,7 +13,7 @@ import { describe, it } from 'node:test'
 import * as assert from 'node:assert/strict'
 import { createServer } from 'node:http'
 import type { AddressInfo } from 'node:net'
-import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, rm, stat, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createNodeHost } from '../node-host.js'
@@ -80,6 +80,39 @@ describe('directory inventory errors', () => {
       await rm(dir, { recursive: true, force: true })
     }
   })
+
+  it(
+    'filters canonical record names before resolving unrelated symlinks',
+    { skip: process.platform === 'win32' },
+    async () => {
+      const dir = await mkdtemp(join(tmpdir(), 'vk-list-'))
+      try {
+        const alpha = '616c706861.enc'
+        const beta = '62657461.enc'
+        await writeFile(join(dir, alpha), 'alpha entry')
+        await writeFile(join(dir, 'target'), 'beta entry')
+        await symlink('target', join(dir, beta))
+        const index = join(dir, 'metadata.json')
+        const overlongTarget = 'a'.repeat(300)
+        await symlink(overlongTarget, index)
+        await assert.rejects(stat(index), { code: 'ENAMETOOLONG' })
+        await symlink(overlongTarget, join(dir, 'unrelated.enc'))
+
+        const host = createNodeHost(dir)
+        const include = (name: string): boolean => /^(?:[0-9a-f]{2})*\.enc$/.test(name)
+        assert.deepEqual((await host.listDir(dir, true, include)).sort(), [alpha, beta])
+
+        const unreadableRecord = '63.enc'
+        await symlink(overlongTarget, join(dir, unreadableRecord))
+        await assert.rejects(host.listDir(dir, true, include), {
+          code: 'ENAMETOOLONG',
+          path: join(dir, unreadableRecord),
+        })
+      } finally {
+        await rm(dir, { recursive: true, force: true })
+      }
+    },
+  )
 })
 
 /** Loose shape of a value thrown across the WASM boundary (see `../errors.ts`). */

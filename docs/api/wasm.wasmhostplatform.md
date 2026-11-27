@@ -80,12 +80,12 @@ Perform an HTTP request through the host's networking stack (issue \#239). [crea
 </td></tr>
 <tr><td>
 
-[listDir(path, lowercaseLookup)](./wasm.wasmhostplatform.listdir.md)
+[listDir(path, lowercaseLookup, include)](./wasm.wasmhostplatform.listdir.md)
 
 
 </td><td>
 
-List directory entry names. A missing directory yields an empty list. With `lowercaseLookup`<!-- -->, return ASCII-lowercase names that resolve to regular files, including through symbolic links, and report directory enumeration failures. The Node host's ordinary listing returns an empty list when enumeration fails.
+List directory entry names. A missing directory yields an empty list. With `lowercaseLookup`<!-- -->, return ASCII-lowercase names that resolve to regular files, including through symbolic links, and report directory enumeration failures. In this mode, apply `include` to canonical names before resolving their paths. The callback is valid until the listing settles. The Node host's ordinary listing returns an empty list when enumeration fails.
 
 
 </td></tr>

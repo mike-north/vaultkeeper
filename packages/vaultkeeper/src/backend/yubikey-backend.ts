@@ -550,10 +550,23 @@ export class YubikeyBackend implements ListableBackend, PresenceCapableBackend {
     const legacyPath = await this.#legacyEntryPath(id)
 
     const hmacResponse = await this.challengeResponse(id)
-    const key = deriveKey(hmacResponse, id)
-    const encrypted = encryptGcm(key, secret, exactIdentity(id))
+    const encrypted = encryptGcm(deriveKey(hmacResponse, id), secret, exactIdentity(id))
 
-    await publishRecord(getEntryPath(storageDir, id), encrypted)
+    try {
+      await publishRecord(getEntryPath(storageDir, id), encrypted)
+    } catch (err) {
+      if (
+        legacyPath === undefined ||
+        !(err instanceof FilesystemError) ||
+        err.code !== 'ENAMETOOLONG'
+      ) {
+        throw err
+      }
+      // The index already identifies this record. Retain its readable envelope and filename
+      // when the filesystem cannot publish the exact spelling.
+      await publishRecord(legacyPath, encryptGcm(deriveKey(hmacResponse, id), secret))
+      return
+    }
     if (legacyPath !== undefined) {
       // Retire the superseded value only after its replacement has been published.
       await this.#deleteEntry(legacyPath)
@@ -587,9 +600,8 @@ export class YubikeyBackend implements ListableBackend, PresenceCapableBackend {
     const entryPath = getEntryPath(this.#storageDir, id)
     const legacyPath = await this.#legacyEntryPath(id)
     // Retire both generations of the same ID so deleting an upgraded record
-    // cannot restore an older credential. The legacy path is never written by
-    // upgraded ambiguous IDs, so a concurrent store of another spelling wins
-    // in its own namespace.
+    // cannot restore an older credential. A store of another spelling uses
+    // its own exact path and cannot overwrite this confirmed legacy record.
     const deletedLegacy = legacyPath !== undefined && (await this.#deleteEntry(legacyPath))
     if (!(await this.#deleteEntry(entryPath, deletedLegacy)) && !deletedLegacy) {
       throw new SecretNotFoundError(`Secret not found in YubiKey store: ${id}`)

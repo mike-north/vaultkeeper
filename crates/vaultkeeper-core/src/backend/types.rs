@@ -182,13 +182,19 @@ pub trait HostPlatform: Send + Sync {
     /// List ASCII-lowercase names that resolve to regular files, including
     /// through a symbolic link. This supports backends that derive
     /// lowercase lookup paths while accepting records from older writers.
+    /// Apply `include` to canonical names before resolving their paths so
+    /// entries outside the caller's inventory cannot affect its lookup.
     /// The default uses already-lowercase candidates from the ordinary listing.
-    async fn list_dir_for_lowercase_lookup(&self, path: &Path) -> Result<Vec<String>, VaultError> {
+    async fn list_dir_for_lowercase_lookup(
+        &self,
+        path: &Path,
+        include: for<'name> fn(&'name str) -> bool,
+    ) -> Result<Vec<String>, VaultError> {
         Ok(self
             .list_dir(path)
             .await?
             .into_iter()
-            .filter(|name| !name.bytes().any(|byte| byte.is_ascii_uppercase()))
+            .filter(|name| !name.bytes().any(|byte| byte.is_ascii_uppercase()) && include(name))
             .collect())
     }
 
