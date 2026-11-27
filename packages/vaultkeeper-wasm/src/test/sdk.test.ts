@@ -12,9 +12,19 @@
 
 import { describe, it } from 'node:test'
 import * as assert from 'node:assert/strict'
-import { createHash } from 'node:crypto'
+import { createCipheriv, createHash, hkdfSync, randomBytes } from 'node:crypto'
 import { promises } from 'node:fs'
-import { chmod, mkdir, mkdtemp, readdir, readFile, rm, symlink, writeFile } from 'node:fs/promises'
+import {
+  chmod,
+  mkdir,
+  mkdtemp,
+  readdir,
+  readFile,
+  rm,
+  symlink,
+  unlink,
+  writeFile,
+} from 'node:fs/promises'
 import { syncBuiltinESMExports } from 'node:module'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -78,6 +88,14 @@ async function createTestVault(dir: string): Promise<VaultKeeper> {
   await writeFile(join(dir, 'config.json'), JSON.stringify(config, null, 2) + '\n')
 
   return VaultKeeper.create({ skipDoctor: true }, dir)
+}
+
+/** Encode a fixture using the common AES-GCM file envelope. */
+function fileEnvelope(key: Buffer, value: string): string {
+  const iv = randomBytes(12)
+  const cipher = createCipheriv('aes-256-gcm', key, iv)
+  const ciphertext = Buffer.concat([cipher.update(value), cipher.final()])
+  return [iv, cipher.getAuthTag(), ciphertext].map((part) => part.toString('base64')).join(':')
 }
 
 /** SHA-256 hex digest of `content`, matching the core's executable hashing. */
@@ -476,6 +494,230 @@ describe('@vaultkeeper/wasm SDK', () => {
       vault.dispose()
     })
   })
+
+  it(
+    'keeps healthy default and configured stores available when signing is inaccessible',
+    { skip: !isPermissionTestable },
+    async () => {
+      for (const explicitPath of [false, true]) {
+        await withTempDir(async (dir) => {
+          const config = {
+            version: 1,
+            backends: [
+              {
+                type: 'file',
+                enabled: true,
+                ...(explicitPath ? { path: join(dir, 'isolated') } : {}),
+              },
+            ],
+            keyRotation: { gracePeriodDays: 7 },
+            defaults: { ttlMinutes: 60, trustTier: 3 },
+          }
+          await writeFile(join(dir, 'config.json'), JSON.stringify(config))
+          const vault = await VaultKeeper.create({ skipDoctor: true }, dir)
+          const blocked = join(dir, 'blocked')
+          const target = join(blocked, 'signing')
+          try {
+            await vault.store('existing', 'before')
+            await mkdir(target, { recursive: true })
+            await symlink(target, join(dir, 'signing'), 'dir')
+            await chmod(blocked, 0)
+
+            assert.equal(await vault.retrieve('existing'), 'before')
+            await vault.store('existing', 'after')
+            await vault.store('new', 'new-value')
+            assert.equal(await vault.retrieve('existing'), 'after')
+            assert.equal(await vault.retrieve('new'), 'new-value')
+            await vault.delete('existing')
+            await assert.rejects(() => vault.retrieve('existing'), SecretNotFoundError)
+            await chmod(blocked, 0o700)
+            assert.equal(await vault.retrieve('new'), 'new-value')
+          } finally {
+            await chmod(blocked, 0o700).catch(() => undefined)
+            vault.dispose()
+          }
+        })
+      }
+    },
+  )
+
+  it(
+    'preserves the entry when only the signing alias changes',
+    { skip: process.platform === 'win32' },
+    async () => {
+      await withTempDir(async (dir) => {
+        const storage = join(dir, 'isolated')
+        const signing = join(dir, 'signing')
+        await writeFile(
+          join(dir, 'config.json'),
+          JSON.stringify({
+            version: 1,
+            backends: [{ type: 'file', enabled: true, path: storage }],
+            keyRotation: { gracePeriodDays: 7 },
+            defaults: { ttlMinutes: 60, trustTier: 3 },
+          }),
+        )
+        const vault = await VaultKeeper.create({ skipDoctor: true }, dir)
+        try {
+          await vault.store('existing', 'before')
+          assert.equal(await vault.retrieve('existing'), 'before')
+          await symlink(storage, signing, 'dir')
+          assert.equal(await vault.retrieve('existing'), 'before')
+          await vault.store('existing', 'after')
+          assert.equal(await vault.retrieve('existing'), 'after')
+          assert.deepEqual((await readdir(storage)).sort(), [
+            '.keep',
+            '.key',
+            '6578697374696e67.enc',
+          ])
+
+          await vault.store('new', 'new-value')
+          await unlink(signing)
+          assert.equal(await vault.retrieve('new'), 'new-value')
+          await vault.delete('new')
+          await assert.rejects(() => vault.retrieve('new'), SecretNotFoundError)
+        } finally {
+          vault.dispose()
+        }
+      })
+    },
+  )
+
+  it('reads an existing TypeScript-format entry configured directly in the signing directory', async () => {
+    await withTempDir(async (dir) => {
+      const signing = join(dir, 'signing')
+      await mkdir(signing)
+      const key = randomBytes(32)
+      try {
+        await writeFile(join(signing, '.key'), key, { mode: 0o600 })
+        // The TypeScript file backend uses this envelope and hex-encoded entry name.
+        await writeFile(join(signing, '6c6567616379.enc'), fileEnvelope(key, 'typescript-value'))
+      } finally {
+        key.fill(0)
+      }
+      await writeFile(
+        join(dir, 'config.json'),
+        JSON.stringify({
+          version: 1,
+          backends: [{ type: 'file', enabled: true, path: signing }],
+          keyRotation: { gracePeriodDays: 7 },
+          defaults: { ttlMinutes: 60, trustTier: 3 },
+        }),
+      )
+      const vault = await VaultKeeper.create({ skipDoctor: true }, dir)
+      try {
+        assert.equal(await vault.retrieve('legacy'), 'typescript-value')
+        await vault.delete('legacy')
+        await assert.rejects(() => vault.retrieve('legacy'), SecretNotFoundError)
+        await assert.rejects(() => readFile(join(signing, '6c6567616379.enc')), { code: 'ENOENT' })
+      } finally {
+        vault.dispose()
+      }
+    })
+  })
+
+  it(
+    'reports corruption and allows repair while signing is inaccessible',
+    { skip: !isPermissionTestable },
+    async () => {
+      await withTempDir(async (dir) => {
+        const blocked = join(dir, 'blocked')
+        const target = join(blocked, 'signing')
+        const vault = await createTestVault(dir)
+        try {
+          await vault.store('legacy', 'before')
+          const entry = join(dir, 'file', '6c6567616379.enc')
+          await writeFile(entry, 'damaged envelope')
+          await mkdir(target, { recursive: true })
+          await symlink(target, join(dir, 'signing'), 'dir')
+          await chmod(blocked, 0)
+
+          await assert.rejects(() => vault.retrieve('legacy'), DecryptionError)
+          await vault.store('legacy', 'replacement')
+          assert.equal(await vault.retrieve('legacy'), 'replacement')
+          await vault.delete('legacy')
+          await chmod(blocked, 0o700)
+          await assert.rejects(() => vault.retrieve('legacy'), SecretNotFoundError)
+          await assert.rejects(() => readFile(entry), { code: 'ENOENT' })
+        } finally {
+          await chmod(blocked, 0o700).catch(() => undefined)
+          vault.dispose()
+        }
+      })
+    },
+  )
+
+  it(
+    'rejects malformed file envelopes without reading the signing wrapping key',
+    { skip: !isPermissionTestable },
+    async () => {
+      await withTempDir(async (dir) => {
+        const vault = await createTestVault(dir)
+        const wrapKeyPath = join(dir, '.keys.wrap')
+        try {
+          await vault.store('legacy', 'before')
+          await writeFile(join(dir, 'file', '6c6567616379.enc'), 'x:y:z')
+          await chmod(wrapKeyPath, 0)
+
+          await assert.rejects(() => vault.retrieve('legacy'), DecryptionError)
+          await vault.delete('legacy')
+          await assert.rejects(() => vault.retrieve('legacy'), SecretNotFoundError)
+        } finally {
+          await chmod(wrapKeyPath, 0o600).catch(() => undefined)
+          vault.dispose()
+        }
+      })
+    },
+  )
+
+  it(
+    'preserves signing ciphertext left behind when its alias is removed',
+    { skip: process.platform === 'win32' },
+    async () => {
+      await withTempDir(async (dir) => {
+        const storage = join(dir, 'isolated')
+        const signing = join(dir, 'signing')
+        const entry = join(storage, '736861726564.enc')
+        await mkdir(storage)
+        await symlink(storage, signing, 'dir')
+        await writeFile(
+          join(dir, 'config.json'),
+          JSON.stringify({
+            version: 1,
+            backends: [{ type: 'file', enabled: true, path: storage }],
+            keyRotation: { gracePeriodDays: 7 },
+            defaults: { ttlMinutes: 60, trustTier: 3 },
+          }),
+        )
+        const vault = await VaultKeeper.create({ skipDoctor: true }, dir)
+        try {
+          // Authenticate with the signing-domain key to distinguish real signing
+          // ciphertext from a malformed credential after the paths separate.
+          const wrapKey = await readFile(join(dir, '.keys.wrap'))
+          const sealKey = Buffer.from(
+            hkdfSync('sha256', wrapKey, '', 'vaultkeeper-core/backend/file/signing-key/v1', 32),
+          )
+          try {
+            await writeFile(entry, fileEnvelope(sealKey, 'authenticated signing fixture'))
+          } finally {
+            wrapKey.fill(0)
+            sealKey.fill(0)
+          }
+          const envelope = await readFile(entry, 'utf8')
+          await unlink(signing)
+
+          await assert.rejects(() => vault.retrieve('shared'), SecretNotFoundError)
+          await assert.rejects(() => vault.delete('shared'), SecretNotFoundError)
+          await vault.store('shared', 'secret')
+          assert.equal(await vault.retrieve('shared'), 'secret')
+          await vault.delete('shared')
+          assert.equal(await readFile(entry, 'utf8'), envelope)
+        } finally {
+          vault.dispose()
+        }
+      })
+    },
+  )
 
   it(
     'keeps signing entries intact through a symlinked secret directory',

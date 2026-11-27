@@ -14,16 +14,17 @@ use crate::types::{SigningAlgorithm, SigningPublicKey};
 use aes_gcm::aead::Aead;
 use aes_gcm::{Aes256Gcm, KeyInit, Nonce};
 use base64ct::{Base64, Encoding};
+use std::collections::HashSet;
 use std::fmt::Write;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use zeroize::Zeroizing;
 
 const KEY_FILE: &str = ".key";
-/// Established filename suffix outside the vault's signing directory.
+/// Established filename suffix, also used by the TypeScript file backend.
 const SECRET_SUFFIX: &str = ".enc";
-/// A nonoverlapping suffix when the vault's signing and secret directories coincide.
-const COLOCATED_SECRET_SUFFIX: &str = ".sec";
+/// Secret-only suffix for entries created when signing filenames may overlap.
+const SECRET_ONLY_SUFFIX: &str = ".sec";
 const GCM_IV_BYTES: usize = 12;
 const GCM_KEY_BYTES: usize = 32;
 
@@ -34,6 +35,37 @@ const GCM_KEY_BYTES: usize = 32;
 pub struct FileBackend {
     host: Arc<dyn HostPlatform>,
     storage_dir: Option<PathBuf>,
+}
+
+/// One operation's view of the secret directory and its relation to the
+/// current signing path. Older signing envelopes can outlive that relation.
+struct StorageLayout {
+    directory: PathBuf,
+    signing: SigningOverlap,
+}
+
+/// The relationship between the resolved secret directory and the signing path.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SigningOverlap {
+    Separate,
+    Shared,
+    Unresolved,
+}
+
+/// `.enc` names are shared by legacy secrets and signing identities.
+#[derive(PartialEq, Eq)]
+enum LegacyEntry {
+    Missing,
+    Secret,
+    Reserved,
+}
+
+impl StorageLayout {
+    /// Encode the caller's ID so it cannot change the entry's parent directory.
+    fn entry_path(&self, id: &str, suffix: &str) -> PathBuf {
+        let safe_id = hex_encode(id.as_bytes());
+        self.directory.join(format!("{safe_id}{suffix}"))
+    }
 }
 
 impl FileBackend {
@@ -66,13 +98,16 @@ impl FileBackend {
             .unwrap_or_else(|| self.host.config_dir().join("file"))
     }
 
-    /// Resolve the directory and its filename namespace together so an alias of
-    /// `signing/` cannot direct secret I/O to an enrolled identity.
-    async fn storage_layout(&self) -> Result<(PathBuf, &'static str), VaultError> {
+    /// Resolve the selected secret directory. An unresolved signing directory
+    /// leaves the legacy namespace ambiguous, but the secret store remains usable.
+    async fn storage_layout(&self) -> Result<StorageLayout, VaultError> {
         let requested = self.storage_dir();
         let Some(directory) = self.host.canonicalize_path(&requested).await? else {
             if self.storage_dir.is_none() {
-                return Ok((requested, SECRET_SUFFIX));
+                return Ok(StorageLayout {
+                    directory: requested,
+                    signing: SigningOverlap::Separate,
+                });
             }
             return Err(VaultError::Filesystem {
                 message: format!(
@@ -84,32 +119,90 @@ impl FileBackend {
                 code: Some("ENOTSUP".to_string()),
             });
         };
-        let signing = signing_store::signing_dir(self.host.as_ref());
-        if requested == signing
-            || self.host.canonicalize_path(&signing).await?.as_ref() == Some(&directory)
-        {
-            return Ok((directory, COLOCATED_SECRET_SUFFIX));
-        }
-        // Keep the ordinary default path spelling for its filesystem diagnostics.
-        Ok(if self.storage_dir.is_some() {
-            (directory, SECRET_SUFFIX)
+        let signing_path = signing_store::signing_dir(self.host.as_ref());
+        let signing = if requested == signing_path {
+            SigningOverlap::Shared
         } else {
-            (requested, SECRET_SUFFIX)
+            match self.host.canonicalize_path(&signing_path).await {
+                Ok(Some(resolved)) if resolved == directory => SigningOverlap::Shared,
+                Ok(Some(_)) => SigningOverlap::Separate,
+                Ok(None) | Err(_) => SigningOverlap::Unresolved,
+            }
+        };
+        Ok(StorageLayout {
+            // Preserve default-path spelling in ordinary filesystem diagnostics.
+            directory: if self.storage_dir.is_some() || signing == SigningOverlap::Shared {
+                directory
+            } else {
+                requested
+            },
+            signing,
         })
     }
 
-    /// Keep the encryption key and the entry in the same resolved directory.
+    /// Prefer the secret-only entry even after a signing alias moves away. In
+    /// a shared namespace, a legacy entry belongs to this store only if its
+    /// ciphertext authenticates with the secret store's own key.
     async fn entry_path(&self, id: &str) -> Result<PathBuf, VaultError> {
-        let (directory, suffix) = self.storage_layout().await?;
-        let safe_id = hex_encode(id.as_bytes());
-        Ok(directory.join(format!("{safe_id}{suffix}")))
+        let layout = self.storage_layout().await?;
+        self.select_entry(&layout, id).await
+    }
+
+    /// Select the existing entry, or the safe filename for the next write.
+    async fn select_entry(&self, layout: &StorageLayout, id: &str) -> Result<PathBuf, VaultError> {
+        let isolated = layout.entry_path(id, SECRET_ONLY_SUFFIX);
+        if self.host.file_exists(&isolated).await? {
+            return Ok(isolated);
+        }
+        let legacy = layout.entry_path(id, SECRET_SUFFIX);
+        match self.legacy_entry(&legacy, layout.signing).await? {
+            LegacyEntry::Secret => Ok(legacy),
+            LegacyEntry::Missing if layout.signing == SigningOverlap::Separate => Ok(legacy),
+            LegacyEntry::Missing | LegacyEntry::Reserved => Ok(isolated),
+        }
+    }
+
+    /// Resolve ownership with the two encryption domains. An unidentified
+    /// envelope in the live signing directory is reserved for signing recovery.
+    /// Elsewhere it retains the ordinary file store's corruption and repair semantics.
+    async fn legacy_entry(
+        &self,
+        path: &Path,
+        signing: SigningOverlap,
+    ) -> Result<LegacyEntry, VaultError> {
+        let Some(data) = self.read_if_present(path).await? else {
+            return Ok(LegacyEntry::Missing);
+        };
+        if let Ok(envelope) = std::str::from_utf8(&data)
+            && let Ok(entry) = EncryptedEntry::parse(envelope)
+        {
+            if let Some(key) = self.read_if_present(&path.with_file_name(KEY_FILE)).await? {
+                let key = Zeroizing::new(key);
+                if entry.decrypt(&key).is_ok() {
+                    return Ok(LegacyEntry::Secret);
+                }
+            }
+            // A former signing target can still hold identities that become
+            // active again if the alias is restored. Authenticate without
+            // creating or repairing key state during a secret operation.
+            if signing != SigningOverlap::Shared
+                && signing_store::authenticates_envelope(self.host.as_ref(), envelope).await?
+            {
+                return Ok(LegacyEntry::Reserved);
+            }
+        }
+        Ok(if signing == SigningOverlap::Shared {
+            LegacyEntry::Reserved
+        } else {
+            LegacyEntry::Secret
+        })
     }
 
     /// Verify that an override can be resolved before creating its directory.
     /// Store then resolves the layout again once that directory exists.
     async fn ensure_storage_dir(&self) -> Result<(), VaultError> {
         let directory = if self.storage_dir.is_some() {
-            self.storage_layout().await?.0
+            self.storage_layout().await?.directory
         } else {
             self.storage_dir()
         };
@@ -124,40 +217,39 @@ impl FileBackend {
     /// Load the encryption key beside the entry, and scrub its bytes on drop.
     async fn get_or_create_key(&self, entry_path: &Path) -> Result<Zeroizing<Vec<u8>>, VaultError> {
         let key_path = entry_path.with_file_name(KEY_FILE);
-
-        match self.host.read_file(&key_path).await {
-            Ok(data) => {
-                let key = Zeroizing::new(data);
-                if key.len() == GCM_KEY_BYTES {
-                    Ok(key)
-                } else {
-                    Err(VaultError::Other(format!(
-                        "Key file has wrong length: expected {GCM_KEY_BYTES}, got {}",
-                        key.len()
-                    )))
-                }
-            }
-            Err(read_err) => {
-                // Only create a new key if the key file does not exist.
-                // Transient read failures (permissions, IO errors) should be surfaced.
-                match self.host.file_exists(&key_path).await {
-                    Ok(false) => {
-                        // File doesn't exist — generate a new key
-                        let mut key = Zeroizing::new(vec![0u8; GCM_KEY_BYTES]);
-                        getrandom::fill(&mut key).map_err(|e| {
-                            VaultError::Other(format!("Failed to generate key: {e}"))
-                        })?;
-                        self.host.write_file(&key_path, &key, 0o600).await?;
-                        Ok(key)
-                    }
-                    // Whether the exists-probe found the key file or itself
-                    // failed, the definitive signal is the original read
-                    // failure — the probe is only a best-effort disambiguation
-                    // step and a probe failure must not mask or replace it.
-                    Ok(true) | Err(_) => Err(read_err),
-                }
-            }
+        if let Some(data) = self.read_if_present(&key_path).await? {
+            return validate_key(data);
         }
+        let mut key = Zeroizing::new(vec![0u8; GCM_KEY_BYTES]);
+        getrandom::fill(&mut key)
+            .map_err(|e| VaultError::Other(format!("Failed to generate key: {e}")))?;
+        self.host.write_file(&key_path, &key, 0o600).await?;
+        Ok(key)
+    }
+
+    /// An existence probe can establish absence. If it fails, the original
+    /// read error remains the most relevant diagnostic.
+    async fn read_if_present(&self, path: &Path) -> Result<Option<Vec<u8>>, VaultError> {
+        match self.host.read_file(path).await {
+            Ok(data) => Ok(Some(data)),
+            Err(read_err) => match self.host.file_exists(path).await {
+                Ok(false) => Ok(None),
+                Ok(true) | Err(_) => Err(read_err),
+            },
+        }
+    }
+}
+
+/// Check the AES-256 key length while ensuring malformed key bytes are cleared.
+fn validate_key(data: Vec<u8>) -> Result<Zeroizing<Vec<u8>>, VaultError> {
+    let key = Zeroizing::new(data);
+    if key.len() == GCM_KEY_BYTES {
+        Ok(key)
+    } else {
+        Err(VaultError::Other(format!(
+            "Key file has wrong length: expected {GCM_KEY_BYTES}, got {}",
+            key.len()
+        )))
     }
 }
 
@@ -187,48 +279,69 @@ fn encrypt_gcm(key: &[u8], plaintext: &str) -> Result<String, VaultError> {
     ))
 }
 
-fn decrypt_gcm(key: &[u8], encoded: &str) -> Result<String, VaultError> {
-    let parts: Vec<&str> = encoded.split(':').collect();
-    if parts.len() != 3 {
-        return Err(VaultError::Other(
-            "Invalid encrypted file format: expected iv:authTag:ciphertext".to_string(),
-        ));
+/// A structurally valid AES-GCM envelope with the tag appended for `aes-gcm`.
+/// Format validation needs no keys and does not establish ownership.
+struct EncryptedEntry {
+    iv: Vec<u8>,
+    ciphertext_with_tag: Vec<u8>,
+}
+
+impl EncryptedEntry {
+    /// Decode and validate the on-disk representation before consulting key state.
+    fn parse(encoded: &str) -> Result<Self, VaultError> {
+        let mut parts = encoded.split(':');
+        let (Some(iv), Some(auth_tag), Some(ciphertext), None) =
+            (parts.next(), parts.next(), parts.next(), parts.next())
+        else {
+            return Err(VaultError::Other(
+                "Invalid encrypted file format: expected iv:authTag:ciphertext".to_string(),
+            ));
+        };
+
+        let iv = Base64::decode_vec(iv)
+            .map_err(|e| VaultError::Other(format!("Invalid IV base64: {e}")))?;
+        if iv.len() != GCM_IV_BYTES {
+            return Err(VaultError::Other(format!(
+                "AES-GCM IV must be {} bytes, got {}",
+                GCM_IV_BYTES,
+                iv.len()
+            )));
+        }
+        let auth_tag = Base64::decode_vec(auth_tag)
+            .map_err(|e| VaultError::Other(format!("Invalid auth tag base64: {e}")))?;
+        if auth_tag.len() != 16 {
+            return Err(VaultError::Other(format!(
+                "AES-GCM auth tag must be 16 bytes, got {}",
+                auth_tag.len()
+            )));
+        }
+        let mut ciphertext_with_tag = Base64::decode_vec(ciphertext)
+            .map_err(|e| VaultError::Other(format!("Invalid ciphertext base64: {e}")))?;
+        ciphertext_with_tag.extend_from_slice(&auth_tag);
+        Ok(Self {
+            iv,
+            ciphertext_with_tag,
+        })
     }
 
-    let iv = Base64::decode_vec(parts[0])
-        .map_err(|e| VaultError::Other(format!("Invalid IV base64: {e}")))?;
-    if iv.len() != GCM_IV_BYTES {
-        return Err(VaultError::Other(format!(
-            "AES-GCM IV must be {} bytes, got {}",
-            GCM_IV_BYTES,
-            iv.len()
-        )));
+    /// Authenticate and decrypt, clearing plaintext even for ownership probes
+    /// that only use the authentication result.
+    fn decrypt(&self, key: &[u8]) -> Result<Zeroizing<Vec<u8>>, VaultError> {
+        let cipher = Aes256Gcm::new_from_slice(key)
+            .map_err(|e| VaultError::Other(format!("Invalid key: {e}")))?;
+        cipher
+            .decrypt(
+                Nonce::from_slice(&self.iv),
+                self.ciphertext_with_tag.as_slice(),
+            )
+            .map(Zeroizing::new)
+            .map_err(|e| VaultError::Other(format!("Decryption failed: {e}")))
     }
-    let auth_tag = Base64::decode_vec(parts[1])
-        .map_err(|e| VaultError::Other(format!("Invalid auth tag base64: {e}")))?;
-    if auth_tag.len() != 16 {
-        return Err(VaultError::Other(format!(
-            "AES-GCM auth tag must be 16 bytes, got {}",
-            auth_tag.len()
-        )));
-    }
-    let ciphertext = Base64::decode_vec(parts[2])
-        .map_err(|e| VaultError::Other(format!("Invalid ciphertext base64: {e}")))?;
+}
 
-    let cipher = Aes256Gcm::new_from_slice(key)
-        .map_err(|e| VaultError::Other(format!("Invalid key: {e}")))?;
-    let nonce = Nonce::from_slice(&iv);
-
-    // Reconstruct the ciphertext+tag format that aes-gcm expects
-    let mut combined = ciphertext;
-    combined.extend_from_slice(&auth_tag);
-
-    let plaintext = cipher
-        .decrypt(nonce, combined.as_slice())
-        .map_err(|e| VaultError::Other(format!("Decryption failed: {e}")))?;
-
-    String::from_utf8(plaintext)
-        .map_err(|e| VaultError::Other(format!("Decrypted data is not valid UTF-8: {e}")))
+/// Decrypt an entry after validating its envelope.
+fn decrypt_gcm(key: &[u8], encoded: &str) -> Result<Zeroizing<Vec<u8>>, VaultError> {
+    EncryptedEntry::parse(encoded)?.decrypt(key)
 }
 
 /// Hex-encode bytes (used for safe filenames). `pub(crate)` so the
@@ -241,8 +354,12 @@ pub(crate) fn hex_encode(data: &[u8]) -> String {
     hex
 }
 
-/// Hex-decode a string back to bytes.
+/// Decode an on-disk filename stem. ASCII validation makes every byte offset
+/// a character boundary before the decoder takes pairs of digits.
 fn hex_decode(hex: &str) -> Result<Vec<u8>, VaultError> {
+    if !hex.is_ascii() {
+        return Err(VaultError::Other("Hex string must be ASCII".to_string()));
+    }
     if !hex.len().is_multiple_of(2) {
         return Err(VaultError::Other("Invalid hex string length".to_string()));
     }
@@ -282,28 +399,10 @@ impl SecretBackend for FileBackend {
 
     async fn retrieve(&self, id: &str) -> Result<String, VaultError> {
         let entry_path = self.entry_path(id).await?;
-
-        // Only a genuine "entry does not exist" should surface as
-        // SecretNotFound. Any other read failure (e.g. EACCES/EPERM, surfaced
-        // by the host as a typed VaultError::Filesystem) must propagate
-        // unchanged so callers can tell "missing" apart from "unreadable".
-        //
-        // The exists-probe below exists solely to disambiguate; if the probe
-        // itself fails, that is not a more informative signal than the read
-        // failure we already have — the caller asked to read a secret, not
-        // to check for its existence, so a probe failure must not mask or
-        // replace the original read error.
-        let data = match self.host.read_file(&entry_path).await {
-            Ok(data) => data,
-            Err(read_err) => {
-                return match self.host.file_exists(&entry_path).await {
-                    Ok(false) => Err(VaultError::SecretNotFound {
-                        message: format!("Secret not found in file store: {id}"),
-                    }),
-                    Ok(true) | Err(_) => Err(read_err),
-                };
-            }
-        };
+        let data = self
+            .read_if_present(&entry_path)
+            .await?
+            .ok_or_else(|| secret_not_found(id))?;
 
         // A stored entry is always `iv:authTag:ciphertext` UTF-8 text (see
         // module docs); invalid UTF-8 means the on-disk entry is corrupted,
@@ -315,26 +414,46 @@ impl SecretBackend for FileBackend {
         })?;
 
         let key = self.get_or_create_key(&entry_path).await?;
-        decrypt_gcm(&key, &encoded).map_err(|e| VaultError::Decryption {
+        let plaintext = decrypt_gcm(&key, &encoded).map_err(|e| VaultError::Decryption {
             message: format!("Failed to decrypt secret: {e}"),
             path: entry_path.display().to_string(),
-        })
+        })?;
+        std::str::from_utf8(&plaintext)
+            .map(str::to_owned)
+            .map_err(|e| VaultError::Decryption {
+                message: format!("Decrypted data is not valid UTF-8: {e}"),
+                path: entry_path.display().to_string(),
+            })
     }
 
     async fn delete(&self, id: &str) -> Result<(), VaultError> {
-        let entry_path = self.entry_path(id).await?;
-        match self.host.file_exists(&entry_path).await {
-            Ok(true) => self.host.delete_file(&entry_path).await,
-            Ok(false) => Err(VaultError::SecretNotFound {
-                message: format!("Secret not found in file store: {id}"),
-            }),
-            Err(e) => Err(e),
+        let layout = self.storage_layout().await?;
+        let entry_path = self.select_entry(&layout, id).await?;
+        if !self.host.file_exists(&entry_path).await? {
+            return Err(secret_not_found(id));
         }
+        let legacy = layout.entry_path(id, SECRET_SUFFIX);
+        if entry_path != legacy
+            && self.legacy_entry(&legacy, layout.signing).await? == LegacyEntry::Secret
+        {
+            // A write under the previous layout could leave two versions.
+            // Delete the older copy first so a failed delete preserves the
+            // current value and a successful one cannot expose a stale value.
+            self.host.delete_file(&legacy).await?;
+        }
+        self.host.delete_file(&entry_path).await
     }
 
     async fn exists(&self, id: &str) -> Result<bool, VaultError> {
         let entry_path = self.entry_path(id).await?;
         self.host.file_exists(&entry_path).await
+    }
+}
+
+/// A missing secret is distinct from an unreadable file or a signing identity.
+fn secret_not_found(id: &str) -> VaultError {
+    VaultError::SecretNotFound {
+        message: format!("Secret not found in file store: {id}"),
     }
 }
 
@@ -379,15 +498,27 @@ impl SigningBackend for FileBackend {
 #[cfg_attr(not(target_arch = "wasm32"), async_trait::async_trait)]
 impl ListableBackend for FileBackend {
     async fn list(&self) -> Result<Vec<String>, VaultError> {
-        let (storage_dir, suffix) = self.storage_layout().await?;
-        let filenames = self.host.list_dir(&storage_dir).await?;
-
+        let layout = self.storage_layout().await?;
+        let mut filenames = self.host.list_dir(&layout.directory).await?;
+        // The unambiguous entry has priority for IDs represented by both formats.
+        filenames.sort_by_key(|filename| !filename.ends_with(SECRET_ONLY_SUFFIX));
+        let mut seen = HashSet::new();
         let mut names = Vec::new();
         for filename in &filenames {
-            if let Some(hex_name) = filename.strip_suffix(suffix)
+            let legacy = filename.ends_with(SECRET_SUFFIX);
+            if let Some(hex_name) = filename
+                .strip_suffix(SECRET_ONLY_SUFFIX)
+                .or_else(|| filename.strip_suffix(SECRET_SUFFIX))
                 && let Ok(bytes) = hex_decode(hex_name)
                 && let Ok(name) = String::from_utf8(bytes)
+                && !seen.contains(&name)
+                && (!legacy
+                    || self
+                        .legacy_entry(&layout.directory.join(filename), layout.signing)
+                        .await?
+                        == LegacyEntry::Secret)
             {
+                seen.insert(name.clone());
                 names.push(name);
             }
         }
@@ -405,7 +536,7 @@ mod tests {
         getrandom::fill(&mut key).unwrap();
         let encrypted = encrypt_gcm(&key, "hello secret").unwrap();
         let decrypted = decrypt_gcm(&key, &encrypted).unwrap();
-        assert_eq!(decrypted, "hello secret");
+        assert_eq!(decrypted.as_slice(), b"hello secret");
     }
 
     #[test]
@@ -479,6 +610,7 @@ mod tests {
         deny_read: Mutex<HashSet<PathBuf>>,
         deny_delete: Mutex<HashSet<PathBuf>>,
         deny_exists: Mutex<HashSet<PathBuf>>,
+        deny_canonicalize: Mutex<HashSet<PathBuf>>,
     }
 
     #[async_trait::async_trait]
@@ -556,6 +688,14 @@ mod tests {
         }
 
         async fn canonicalize_path(&self, path: &Path) -> Result<Option<PathBuf>, VaultError> {
+            if self.deny_canonicalize.lock().unwrap().contains(path) {
+                return Err(VaultError::Filesystem {
+                    message: format!("Permission denied resolving {}", path.display()),
+                    path: path.display().to_string(),
+                    permission: "read".to_string(),
+                    code: None,
+                });
+            }
             Ok(Some(path.to_path_buf()))
         }
         async fn delete_file(&self, path: &Path) -> Result<(), VaultError> {
@@ -603,6 +743,7 @@ mod tests {
             deny_read: Mutex::new(HashSet::new()),
             deny_delete: Mutex::new(HashSet::new()),
             deny_exists: Mutex::new(HashSet::new()),
+            deny_canonicalize: Mutex::new(HashSet::new()),
         })
     }
 
@@ -836,6 +977,23 @@ mod tests {
         assert_eq!(names, vec!["alpha", "beta"]);
     }
 
+    /// Configured storage can contain unrelated filenames. A secret suffix
+    /// alone does not make a non-ASCII filename an encoded credential ID.
+    #[tokio::test]
+    async fn file_backend_list_ignores_non_ascii_filenames() {
+        let host = make_test_host();
+        let storage = host.config_dir.join("isolated");
+        let mut config = crate::config::default_config();
+        config.backends[0].path = Some(storage.display().to_string());
+        let backend = FileBackend::from_config(host.clone(), &config);
+        backend.store("alpha", "value").await.unwrap();
+        host.write_file(&storage.join("aéb.sec"), b"unrelated", 0o600)
+            .await
+            .unwrap();
+
+        assert_eq!(backend.list().await.unwrap(), ["alpha"]);
+    }
+
     // -----------------------------------------------------------------
     // SigningBackend (issue #289)
     // -----------------------------------------------------------------
@@ -862,6 +1020,154 @@ mod tests {
         let after = backend.get_public_key("shared").await.unwrap();
         assert_eq!(before.public_key_pem, after.public_key_pem);
         backend.sign_with_key("shared", b"message").await.unwrap();
+    }
+
+    /// Legacy `.enc` credentials and signing keys must remain distinguishable
+    /// in a shared directory even though their envelope format is identical.
+    #[tokio::test]
+    async fn shared_store_lists_and_removes_only_authenticated_secrets() {
+        let host = make_test_host();
+        let signing = host.config_dir.join("signing");
+        let mut config = crate::config::default_config();
+        config.backends[0].path = Some(signing.display().to_string());
+        let backend = FileBackend::from_config(host.clone(), &config);
+        backend
+            .generate_signing_key("identity", SigningAlgorithm::EdDsa)
+            .await
+            .unwrap();
+        let key = Zeroizing::new([42; GCM_KEY_BYTES]);
+        host.write_file(&signing.join(KEY_FILE), key.as_ref(), 0o600)
+            .await
+            .unwrap();
+        let legacy = signing.join("6c6567616379.enc");
+        host.write_file(
+            &legacy,
+            encrypt_gcm(key.as_ref(), "value").unwrap().as_bytes(),
+            0o600,
+        )
+        .await
+        .unwrap();
+
+        assert!(backend.exists("legacy").await.unwrap());
+        assert_eq!(backend.list().await.unwrap(), ["legacy"]);
+        assert_eq!(backend.retrieve("legacy").await.unwrap(), "value");
+        backend.store("legacy", "updated").await.unwrap();
+        assert_eq!(backend.retrieve("legacy").await.unwrap(), "updated");
+        assert!(
+            !host
+                .file_exists(&legacy.with_extension("sec"))
+                .await
+                .unwrap()
+        );
+        backend.delete("legacy").await.unwrap();
+        assert!(!host.file_exists(&legacy).await.unwrap());
+        assert!(!backend.exists("identity").await.unwrap());
+        assert!(backend.list().await.unwrap().is_empty());
+        backend.sign_with_key("identity", b"message").await.unwrap();
+    }
+
+    /// Detached signing envelopes retain their ownership if the signing alias
+    /// later returns, even when a secret uses the same ID in the meantime.
+    #[tokio::test]
+    async fn detached_signing_envelope_stays_outside_secret_namespace() {
+        let host = make_test_host();
+        let original = FileBackend::new(host.clone());
+        original
+            .generate_signing_key("shared", SigningAlgorithm::EdDsa)
+            .await
+            .unwrap();
+        let public = original.get_public_key("shared").await.unwrap();
+        let signing_entry = host.config_dir.join("signing/736861726564.enc");
+        let storage = host.config_dir.join("isolated");
+        let detached_entry = storage.join("736861726564.enc");
+        // Model a former signing alias by keeping its sealed bytes in the
+        // selected store after they cease to resolve under `signing/`.
+        let envelope = host.read_file(&signing_entry).await.unwrap();
+        host.delete_file(&signing_entry).await.unwrap();
+        host.write_file(&detached_entry, &envelope, 0o600)
+            .await
+            .unwrap();
+        let mut config = crate::config::default_config();
+        config.backends[0].path = Some(storage.display().to_string());
+        let backend = FileBackend::from_config(host.clone(), &config);
+
+        assert!(!backend.exists("shared").await.unwrap());
+        assert!(backend.list().await.unwrap().is_empty());
+        assert!(matches!(
+            backend.delete("shared").await.unwrap_err(),
+            VaultError::SecretNotFound { .. }
+        ));
+        backend.store("shared", "secret").await.unwrap();
+        assert_eq!(backend.retrieve("shared").await.unwrap(), "secret");
+        backend.delete("shared").await.unwrap();
+        assert_eq!(host.read_file(&detached_entry).await.unwrap(), envelope);
+
+        host.write_file(&signing_entry, &envelope, 0o600)
+            .await
+            .unwrap();
+        assert_eq!(
+            original.get_public_key("shared").await.unwrap().kid,
+            public.kid
+        );
+    }
+
+    /// A signing lookup outage does not turn a damaged credential into a
+    /// missing one or block normal recovery through store and delete.
+    #[tokio::test]
+    async fn corrupt_legacy_secret_stays_repairable_when_signing_is_unresolvable() {
+        let host = make_test_host();
+        let backend = FileBackend::new(host.clone());
+        backend.store("legacy", "initial").await.unwrap();
+        let entry = host.config_dir.join("file/6c6567616379.enc");
+        let wrong_key = Zeroizing::new([42; GCM_KEY_BYTES]);
+        host.write_file(
+            &entry,
+            encrypt_gcm(wrong_key.as_ref(), "corruption")
+                .unwrap()
+                .as_bytes(),
+            0o600,
+        )
+        .await
+        .unwrap();
+        host.deny_canonicalize
+            .lock()
+            .unwrap()
+            .insert(host.config_dir.join("signing"));
+
+        assert!(matches!(
+            backend.retrieve("legacy").await.unwrap_err(),
+            VaultError::Decryption { .. }
+        ));
+        assert!(backend.exists("legacy").await.unwrap());
+        assert_eq!(backend.list().await.unwrap(), ["legacy"]);
+        backend.store("legacy", "replacement").await.unwrap();
+        assert_eq!(backend.retrieve("legacy").await.unwrap(), "replacement");
+        backend.delete("legacy").await.unwrap();
+        host.deny_canonicalize.lock().unwrap().clear();
+        assert!(!backend.exists("legacy").await.unwrap());
+    }
+
+    /// A structurally invalid envelope cannot be a signing identity and
+    /// therefore needs no wrapping-key lookup to diagnose or remove it.
+    #[tokio::test]
+    async fn malformed_legacy_secret_does_not_depend_on_the_wrapping_key() {
+        let host = make_test_host();
+        let backend = FileBackend::new(host.clone());
+        backend.store("legacy", "initial").await.unwrap();
+        let entry = host.config_dir.join("file/6c6567616379.enc");
+        host.write_file(&entry, b"x:y:z", 0o600).await.unwrap();
+        let wrap_key = host.config_dir.join(".keys.wrap");
+        host.write_file(&wrap_key, &[42; GCM_KEY_BYTES], 0o600)
+            .await
+            .unwrap();
+        host.deny_read.lock().unwrap().insert(wrap_key);
+
+        assert!(matches!(
+            backend.retrieve("legacy").await.unwrap_err(),
+            VaultError::Decryption { .. }
+        ));
+        backend.delete("legacy").await.unwrap();
+        assert!(!backend.exists("legacy").await.unwrap());
     }
 
     /// AC1/AC2: `sign_with_key` on `FileBackend` produces a signature

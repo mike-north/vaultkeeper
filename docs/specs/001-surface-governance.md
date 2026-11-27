@@ -244,10 +244,14 @@ SHA-256 hex digest; Dev-tier leases retain the `dev` sentinel.
 
 The Rust `FileBackend::from_config` constructor selects the first enabled
 file backend's configured path for encrypted secret storage, falling back to
-the host's default file directory when no path is configured. When the
-file storage path resolves to the vault's signing directory, secret files use a
-distinct suffix so existing signing identities retain their filenames and
-remain isolated from secret operations. Filesystem hosts resolve aliases via
+the host's default file directory when no path is configured. Where signing
+filenames may overlap, new entries use a secret-only suffix and existing
+entries in the live signing directory must authenticate under the secret
+store's key. Secret operations continue to find both kinds of secret entry
+after a signing alias changes and protect envelopes at a former signing path
+that authenticate with the vault's current signing seal key. An inaccessible
+signing path does not block access to a healthy secret store. Filesystem hosts
+resolve aliases via
 `HostPlatform::canonicalize_path` or `WasmHostPlatform.canonicalizePath` at the
 Node bridge. Explicit overrides require this capability. Virtual hosts with
 alias-free paths can implement it by returning the input path.
