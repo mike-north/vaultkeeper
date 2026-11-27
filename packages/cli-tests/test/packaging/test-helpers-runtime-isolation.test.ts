@@ -28,6 +28,8 @@ import * as os from 'node:os'
 import * as path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
+import { installTarballs } from './npm-install-fixture.js'
+
 const execFileAsync = promisify(execFile)
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
@@ -157,9 +159,7 @@ describe('@vaultkeeper/test-helpers — never a runtime dependency', () => {
       ),
     )
 
-    await execFileAsync('npm', ['install', '--no-save', '--no-audit', '--no-fund', tarball], {
-      cwd: projectDir,
-    })
+    await installTarballs(projectDir, tarball)
 
     const nodeModules = path.join(projectDir, 'node_modules')
     const entries = await readdir(nodeModules, { recursive: true })

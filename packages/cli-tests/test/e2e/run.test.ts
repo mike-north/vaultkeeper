@@ -18,7 +18,7 @@ import { fileURLToPath } from 'node:url'
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { createCliTestEnv } from '@vaultkeeper/cli-test-helpers'
 import type { CliTestEnv } from '@vaultkeeper/cli-test-helpers'
-import { VaultKeeper } from 'vaultkeeper'
+import { VaultError, VaultKeeper } from 'vaultkeeper'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
@@ -132,13 +132,33 @@ describe('run --token', () => {
     expect(result.exitCode).toBe(7)
   })
 
-  it('documents --token and --as in --help', async () => {
-    if (env === undefined) throw new Error('env not initialized')
-    const result = await env.run(['run', '--help'])
+  it.each(['--help', '-h'])('documents --token and --as with %s before --', async (helpFlag) => {
+    if (env === undefined) throw new VaultError('env not initialized')
+    const result = await env.run(['run', helpFlag, '--', '/no/such/command'])
     expect(result.exitCode).toBe(0)
     expect(result.stdout).toContain('--token')
     expect(result.stdout).toContain('--as')
     expect(result.stdout).toContain('VAULTKEEPER_SECRET')
+  })
+
+  it.each(['--help', '-h'])('forwards child help flag %s unchanged after --', async (helpFlag) => {
+    if (env === undefined) throw new VaultError('env not initialized')
+    const token = await mintToken(env.configDir, SECRET_NAME, SECRET_VALUE)
+
+    const result = await env.run([
+      'run',
+      '--token',
+      token,
+      '--',
+      'sh',
+      '-c',
+      'printf "%s" "$1"',
+      'child',
+      helpFlag,
+    ])
+
+    expect(result.exitCode).toBe(0)
+    expect(result.stdout).toBe(helpFlag)
   })
 
   it('rejects a spawn failure for a nonexistent wrapped command', async () => {

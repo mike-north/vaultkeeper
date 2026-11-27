@@ -321,7 +321,8 @@ pub enum VaultError {
     },
 
     // --- Cross-process exclusive locking (issue #322) ---
-    /// [`crate::backend::HostPlatform::try_create_lock_file`] is not
+    /// [`crate::backend::HostPlatform::try_create_lock_file`] or
+    /// [`crate::backend::HostPlatform::write_file_if_absent`] is not
     /// implemented by the active host platform.
     ///
     /// Deliberately its own variant rather than [`VaultError::Other`]: this

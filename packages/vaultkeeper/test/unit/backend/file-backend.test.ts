@@ -5,7 +5,15 @@ import * as os from 'node:os'
 vi.mock('node:fs/promises', () => ({
   mkdir: vi.fn(),
   access: vi.fn(),
-  unlink: vi.fn(),
+  unlink: vi.fn(() => Promise.resolve(undefined)),
+  open: vi.fn(() =>
+    Promise.resolve({
+      writeFile: vi.fn(() => Promise.resolve(undefined)),
+      chmod: vi.fn(() => Promise.resolve(undefined)),
+      close: vi.fn(() => Promise.resolve(undefined)),
+    }),
+  ),
+  link: vi.fn(() => Promise.resolve(undefined)),
   readFile: vi.fn(),
   readdir: vi.fn(),
   writeFile: vi.fn(),
@@ -78,11 +86,8 @@ describe('FileBackend', () => {
 
     it('should create storage directory and write the encrypted file', async () => {
       mockFs.mkdir.mockResolvedValue(undefined)
-      // getOrCreateKey: readFile for key → ENOENT → writeFile for key
-      const keyBytes = Buffer.alloc(32, 0xab)
       const noFileError = Object.assign(new Error('ENOENT'), { code: 'ENOENT' })
       mockFs.readFile.mockRejectedValueOnce(noFileError) // key not found
-      mockFs.writeFile.mockResolvedValueOnce(undefined) // write key
       mockFs.writeFile.mockResolvedValueOnce(undefined) // write encrypted file
 
       await backend.store('my-secret', 'secret-value')
@@ -93,15 +98,22 @@ describe('FileBackend', () => {
         defaultStorageDir,
         expect.objectContaining({ recursive: true }),
       )
-      expect(mockFs.writeFile).toHaveBeenCalledTimes(2)
-      // Second writeFile call is the encrypted entry
-      const encryptedWriteCall = mockFs.writeFile.mock.calls[1]
+      // The link must publish the private sibling opened exclusively for this key.
+      const [stage] = mockFs.open.mock.calls[0] ?? []
+      const keyPath = path.join(defaultStorageDir, '.key')
+      expect(typeof stage).toBe('string')
+      expect(path.dirname(String(stage))).toBe(defaultStorageDir)
+      expect(stage).not.toBe(keyPath)
+      expect(mockFs.open).toHaveBeenCalledWith(stage, 'wx', 0o600)
+      expect(mockFs.link).toHaveBeenCalledWith(stage, keyPath)
+      expect(mockFs.unlink).toHaveBeenCalledWith(stage)
+      expect(mockFs.writeFile).toHaveBeenCalledTimes(1)
+      const encryptedWriteCall = mockFs.writeFile.mock.calls[0]
       expect(encryptedWriteCall?.[0]).toEqual(expect.stringContaining('.enc'))
       // Stored value is a base64:base64:base64 string (iv:authTag:ciphertext)
       expect(encryptedWriteCall?.[1]).toEqual(
         expect.stringMatching(/^[A-Za-z0-9+/=]+:[A-Za-z0-9+/=]+:[A-Za-z0-9+/=]*$/),
       )
-      void keyBytes
     })
 
     it('should reuse an existing key file', async () => {

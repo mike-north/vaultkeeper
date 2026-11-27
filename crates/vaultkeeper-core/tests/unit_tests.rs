@@ -17,6 +17,91 @@ use vaultkeeper_core::vault::VaultKeeperOptions;
 use vaultkeeper_core::{InMemoryBackend, VaultKeeper};
 use zeroize::Zeroizing;
 
+/// Observe the synthetic claims value at deallocation, while its storage is
+/// still valid. The unusual length distinguishes its String allocation from
+/// the full JSON payload and other token data.
+mod claims_value_probe {
+    use std::alloc::{GlobalAlloc, Layout, System};
+    use std::cell::Cell;
+
+    pub(super) const VALUE_LEN: usize = 257;
+
+    #[derive(Clone, Copy)]
+    enum Observation {
+        Idle,
+        Armed,
+        Pending(*mut u8),
+        Released(bool),
+    }
+
+    // Only the thread making the synchronous authorization call is observed.
+    thread_local! {
+        static OBSERVATION: Cell<Observation> = const { Cell::new(Observation::Idle) };
+    }
+
+    struct ObservingAllocator;
+
+    #[global_allocator]
+    static ALLOCATOR: ObservingAllocator = ObservingAllocator;
+
+    // SAFETY: all storage comes from System and is returned with its original layout.
+    unsafe impl GlobalAlloc for ObservingAllocator {
+        unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+            if layout.size() == VALUE_LEN && layout.align() == 1 {
+                let observed = OBSERVATION.try_with(|state| {
+                    if !matches!(state.get(), Observation::Armed) {
+                        return None;
+                    }
+                    // SAFETY: the caller supplies a valid, nonzero layout. Initialize
+                    // the probe storage so even unwritten bytes are defined at release.
+                    let ptr = unsafe { System.alloc_zeroed(layout) };
+                    if !ptr.is_null() {
+                        state.set(Observation::Pending(ptr));
+                    }
+                    Some(ptr)
+                });
+                if let Ok(Some(ptr)) = observed {
+                    return ptr;
+                }
+            }
+            // SAFETY: GlobalAlloc's caller supplies the layout required by System.
+            unsafe { System.alloc(layout) }
+        }
+
+        unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+            if layout.size() == VALUE_LEN && layout.align() == 1 {
+                let _ = OBSERVATION.try_with(|state| {
+                    if let Observation::Pending(target) = state.get()
+                        && target == ptr
+                    {
+                        // SAFETY: ptr identifies the live, initialized allocation
+                        // selected above. String writes replace initialized bytes.
+                        let bytes = unsafe { std::slice::from_raw_parts(ptr, VALUE_LEN) };
+                        state.set(Observation::Released(bytes.iter().all(|&byte| byte == 0)));
+                    }
+                });
+            }
+            // SAFETY: the caller supplies the original pointer and layout.
+            unsafe { System.dealloc(ptr, layout) };
+        }
+    }
+
+    pub(super) fn arm() {
+        OBSERVATION.set(Observation::Armed);
+    }
+
+    pub(super) fn tracks(value: &str) -> bool {
+        matches!(OBSERVATION.get(), Observation::Pending(ptr) if ptr.cast_const() == value.as_ptr())
+    }
+
+    pub(super) fn released_zeroed() -> Option<bool> {
+        match OBSERVATION.replace(Observation::Idle) {
+            Observation::Released(zeroed) => Some(zeroed),
+            _ => None,
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Config validation tests
 // ---------------------------------------------------------------------------
@@ -1412,6 +1497,106 @@ mod vault_keeper {
             result.is_ok(),
             "init with file-only backend should succeed even if secret-tool would fail"
         );
+    }
+
+    /// An exhausted token remains denied after blocklist eviction, and the
+    /// denial must scrub the decrypted value before its allocation is freed.
+    #[tokio::test]
+    async fn finite_budget_survives_usage_and_blocklist_pressure() {
+        use crate::claims_value_probe::{VALUE_LEN, arm, released_zeroed, tracks};
+
+        let (host, mut vault) = dev_vault().await;
+        let opts = vaultkeeper_core::vault::SetupOptions {
+            use_limit: Some(1),
+            skip_trust: Some(true),
+            ..Default::default()
+        };
+        let value = "x".repeat(VALUE_LEN);
+        let first = vault
+            .setup(&host, "first", &value, Some(&opts))
+            .await
+            .unwrap();
+
+        // Verify that the probe selects the decrypted value for this token.
+        arm();
+        let (handle, _, _) = vault.authorize(&first).unwrap();
+        let secret = vault.read_secret(&handle).unwrap();
+        assert!(tracks(&secret));
+        drop(secret);
+        assert_eq!(released_zeroed(), Some(true));
+
+        for index in 0..10_000 {
+            let token = vault
+                .setup(&host, &format!("item-{index}"), "value", Some(&opts))
+                .await
+                .unwrap();
+            match vault.authorize(&token) {
+                Ok(_) | Err(VaultError::AuthorizationDenied { .. }) => (),
+                Err(error) => panic!("unexpected authorization failure: {error}"),
+            }
+        }
+        for index in 0..10_001 {
+            vaultkeeper_core::jwe::block_token(&format!("pressure-{index}"));
+        }
+        arm();
+        let denied = vault.authorize(&first);
+        let zeroed = released_zeroed();
+        assert!(
+            matches!(denied, Err(VaultError::UsageLimitExceeded { .. })),
+            "exhausted token replayed after pressure"
+        );
+        assert_eq!(zeroed, Some(true), "refused claim value must be scrubbed");
+    }
+
+    /// A capacity refusal must scrub the decrypted value before freeing it.
+    #[tokio::test]
+    async fn authorize_zeroizes_secret_when_finite_budget_table_is_full() {
+        use crate::claims_value_probe::{VALUE_LEN, arm, released_zeroed, tracks};
+        use vaultkeeper_core::identity::handles::HANDLE_TABLE_MAX_SIZE;
+
+        let (host, mut vault) = dev_vault().await;
+        let opts = vaultkeeper_core::vault::SetupOptions {
+            use_limit: Some(2),
+            skip_trust: Some(true),
+            ..Default::default()
+        };
+        let value = "x".repeat(VALUE_LEN);
+        let first = vault
+            .setup(&host, "first", &value, Some(&opts))
+            .await
+            .unwrap();
+
+        // Prove the probe selects the decrypted value on the successful path.
+        arm();
+        let (handle, _, _) = vault.authorize(&first).unwrap();
+        let secret = vault.read_secret(&handle).unwrap();
+        assert!(tracks(&secret));
+        drop(secret);
+        assert_eq!(released_zeroed(), Some(true));
+        vault.release_handle(&handle);
+
+        // Releasing handles leaves their live use-budget records in place.
+        for _ in 1..HANDLE_TABLE_MAX_SIZE {
+            let token = vault
+                .setup(&host, "filler", "short value", Some(&opts))
+                .await
+                .unwrap();
+            let (handle, _, _) = vault.authorize(&token).unwrap();
+            vault.release_handle(&handle);
+        }
+        let overflow = vault
+            .setup(&host, "overflow", &value, Some(&opts))
+            .await
+            .unwrap();
+
+        arm();
+        let denied = vault.authorize(&overflow);
+        let zeroed = released_zeroed();
+        assert!(matches!(
+            denied,
+            Err(VaultError::AuthorizationDenied { .. })
+        ));
+        assert_eq!(zeroed, Some(true), "refused claim value must be scrubbed");
     }
 
     #[tokio::test]
