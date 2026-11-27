@@ -24,6 +24,8 @@ const { readInventoryDir } = vi.hoisted(() => ({
 vi.mock('node:fs/promises', () => ({
   mkdir: vi.fn(),
   access: vi.fn(),
+  lstat: vi.fn(),
+  rename: vi.fn(),
   unlink: vi.fn(),
   readFile: vi.fn(),
   writeFile: vi.fn(),
@@ -120,6 +122,7 @@ describe('YubikeyBackend', () => {
   beforeEach(() => {
     backend = new YubikeyBackend()
     vi.clearAllMocks()
+    mockFs.lstat.mockRejectedValue(Object.assign(new Error('ENOENT'), { code: 'ENOENT' }))
   })
 
   // ---------------------------------------------------------------------------
@@ -163,8 +166,6 @@ describe('YubikeyBackend', () => {
       mockChallengeResponse(FAKE_HMAC_RESPONSE)
 
       mockFs.mkdir.mockResolvedValue(undefined)
-      // metadata load: file does not exist yet
-      mockFs.readFile.mockRejectedValue(Object.assign(new Error('ENOENT'), { code: 'ENOENT' }))
       mockFs.writeFile.mockResolvedValue(undefined)
 
       await backend.store('my-secret', 'secret-value')
@@ -181,11 +182,10 @@ describe('YubikeyBackend', () => {
 
       // Verify the encrypted payload written to the secret file is a valid
       // versioned GCM blob (1:<iv>:<authTag>:<ciphertext>).
-      const secretFileCall = mockFs.writeFile.mock.calls.find(
-        ([p]) => typeof p === 'string' && p.endsWith('.enc'),
-      )
-      expect(secretFileCall).toBeDefined()
-      const writtenContent = secretFileCall?.[1]
+      const stagedWrite = mockFs.writeFile.mock.calls[0]
+      expect(stagedWrite?.[2]).toEqual({ mode: 0o600, flag: 'wx' })
+      expect(mockFs.rename).toHaveBeenCalledWith(stagedWrite?.[0], expect.stringMatching(/\.enc$/))
+      const writtenContent = stagedWrite?.[1]
       expect(typeof writtenContent).toBe('string')
       if (typeof writtenContent === 'string') {
         const parts = writtenContent.split(':')
@@ -242,10 +242,10 @@ describe('YubikeyBackend', () => {
         customDir,
         expect.objectContaining({ recursive: true }),
       )
-      const secretFileCall = mockFs.writeFile.mock.calls.find(
-        ([p]) => typeof p === 'string' && p.endsWith('.enc'),
+      expect(mockFs.rename).toHaveBeenCalledWith(
+        mockFs.writeFile.mock.calls[0]?.[0],
+        path.join(customDir, '6d792d736563726574.enc'),
       )
-      expect(secretFileCall?.[0]).toEqual(expect.stringContaining(customDir))
     })
   })
 
@@ -495,15 +495,21 @@ describe('YubikeyBackend', () => {
   })
 
   describe('list', () => {
-    it('lists stored records even when the legacy inventory is unreadable', async () => {
+    it('needs readable metadata only for records with lossy legacy names', async () => {
       mockFs.readFile.mockImplementation((file) => {
         if (typeof file === 'string' && file.endsWith('metadata.json')) {
           return Promise.reject(new Error('injected metadata failure'))
         }
         return Promise.resolve(Buffer.from('1:::'))
       })
+      readInventoryDir.mockResolvedValue(regularEntries('616c706861.enc'))
+      await expect(new YubikeyBackend().list()).resolves.toEqual(['alpha'])
+      expect(mockFs.readFile).not.toHaveBeenCalledWith(
+        expect.stringContaining('metadata.json'),
+        'utf8',
+      )
       readInventoryDir.mockResolvedValue(regularEntries('616c706861.enc', 'efbfbd.enc'))
-      await expect(new YubikeyBackend().list()).resolves.toEqual(['alpha', '\ufffd'])
+      await expect(new YubikeyBackend().list()).rejects.toBeInstanceOf(DecryptionError)
       expect(mockFs.readFile).toHaveBeenCalledWith(expect.stringContaining('metadata.json'), 'utf8')
     })
     it('should return all entry keys from encrypted filenames', async () => {

@@ -125,7 +125,7 @@ function inventoryRecordId(entry: Buffer): string | null | undefined {
   return identity?.toString('utf16le')
 }
 
-/** Recover only IDs that legacy UTF-8 filenames could not represent losslessly. */
+/** Resolve uniquely indexed spellings for legacy filenames that have multiple possible IDs. */
 async function legacyInventoryAliases(
   storageDir: string,
   ids: ReadonlySet<string>,
@@ -139,7 +139,7 @@ async function legacyInventoryAliases(
   try {
     metadata = JSON.parse(await fs.readFile(path.join(storageDir, 'metadata.json'), 'utf8'))
   } catch {
-    // The legacy index can clarify spelling, but its availability cannot determine membership.
+    // The record survives without its index, but its spelling may be unrecoverable.
     return aliases
   }
   if (typeof metadata !== 'object' || metadata === null || !('entries' in metadata)) {
@@ -156,12 +156,72 @@ async function legacyInventoryAliases(
   }
   for (const id of Object.keys(entries)) {
     const canonical = Buffer.from(id, 'utf8').toString('utf8')
-    if (id !== canonical && ids.has(canonical) && !Object.hasOwn(entries, canonical)) {
-      // Multiple spellings can share one legacy filename. Keep its canonical ID if ambiguous.
+    if (ids.has(canonical)) {
+      // The index cannot distinguish which spelling last wrote the shared file.
       aliases.set(canonical, aliases.has(canonical) ? null : id)
     }
   }
   return aliases
+}
+
+/** A replacement character in a legacy filename is evidence of a record, not its spelling. */
+function legacySpelling(
+  canonical: string,
+  aliases: ReadonlyMap<string, string | null>,
+  entryPath: string,
+): string {
+  if (!canonical.includes('\ufffd')) {
+    return canonical
+  }
+  const id = aliases.get(canonical)
+  if (id == null) {
+    throw new DecryptionError(
+      'Ambiguous YubiKey legacy record ID. Restore its original metadata.',
+      entryPath,
+    )
+  }
+  return id
+}
+
+/** Publish a complete regular file without opening or mutating the existing directory entry. */
+async function publishRecord(entryPath: string, encrypted: string): Promise<void> {
+  const dir = path.dirname(entryPath)
+  const stageName = `.vk-${crypto.randomUUID()}.tmp`
+  const stage = path.join(dir, stageName)
+  try {
+    await fs.writeFile(stage, encrypted, { mode: 0o600, flag: 'wx' })
+  } catch (err) {
+    if (!(err instanceof Error && 'code' in err && err.code === 'EEXIST')) {
+      await fs.unlink(stage).catch(() => undefined)
+    }
+    throw toFilesystemError(err, 'YubiKey staged entry', stage, 'write')
+  }
+  try {
+    // A folding filesystem can retain the older spelling on a replacement.
+    // Probe the private stage to avoid moving a distinct file on a case-sensitive filesystem.
+    const foldsCase = await fs.lstat(path.join(dir, stageName.toUpperCase())).then(
+      () => true,
+      (err: unknown) => {
+        if (err instanceof Error && 'code' in err && err.code === 'ENOENT') {
+          return false
+        }
+        throw err
+      },
+    )
+    await fs.rename(stage, entryPath)
+    if (foldsCase) {
+      try {
+        await fs.rename(path.join(dir, path.basename(entryPath).toUpperCase()), entryPath)
+      } catch (err) {
+        if (!(err instanceof Error && 'code' in err && err.code === 'ENOENT')) {
+          throw err
+        }
+      }
+    }
+  } catch (err) {
+    await fs.unlink(stage).catch(() => undefined)
+    throw toFilesystemError(err, 'YubiKey inventory entry', entryPath, 'write')
+  }
 }
 
 /** Expected byte length of a YubiKey HMAC-SHA1 response (20 bytes = 40 hex chars). */
@@ -467,14 +527,22 @@ export class YubikeyBackend implements ListableBackend, PresenceCapableBackend {
     await this.requireDevice()
 
     const storageDir = this.#storageDir
-    await fs.mkdir(storageDir, { recursive: true, mode: 0o700 })
+    try {
+      await fs.mkdir(storageDir, { recursive: true, mode: 0o700 })
+    } catch (err) {
+      throw toFilesystemError(err, 'YubiKey inventory directory', storageDir, 'write')
+    }
+    const legacyPath = await this.#legacyEntryPath(id)
 
     const hmacResponse = await this.challengeResponse(id)
     const key = deriveKey(hmacResponse, id)
     const encrypted = encryptGcm(key, secret, exactIdentity(id))
 
-    const entryPath = getEntryPath(storageDir, id)
-    await fs.writeFile(entryPath, encrypted, { mode: 0o600 })
+    await publishRecord(getEntryPath(storageDir, id), encrypted)
+    if (legacyPath !== undefined) {
+      // Retire the superseded value only after its replacement has been published.
+      await this.#deleteEntry(legacyPath)
+    }
   }
 
   async retrieve(id: string): Promise<string> {
@@ -507,19 +575,22 @@ export class YubikeyBackend implements ListableBackend, PresenceCapableBackend {
     // cannot restore an older credential. The legacy path is never written by
     // upgraded ambiguous IDs, so a concurrent store of another spelling wins
     // in its own namespace.
-    let deleted = false
-    for (const candidate of legacyPath === undefined ? [entryPath] : [legacyPath, entryPath]) {
-      try {
-        await fs.unlink(candidate)
-        deleted = true
-      } catch (err) {
-        if (!(err instanceof Error && 'code' in err && err.code === 'ENOENT')) {
-          throw toFilesystemError(err, 'YubiKey inventory entry', candidate, 'write')
-        }
-      }
-    }
-    if (!deleted) {
+    const deletedLegacy = legacyPath !== undefined && (await this.#deleteEntry(legacyPath))
+    if (!(await this.#deleteEntry(entryPath)) && !deletedLegacy) {
       throw new SecretNotFoundError(`Secret not found in YubiKey store: ${id}`)
+    }
+  }
+
+  /** A record already removed by a concurrent writer needs no further cleanup. */
+  async #deleteEntry(entryPath: string): Promise<boolean> {
+    try {
+      await fs.unlink(entryPath)
+      return true
+    } catch (err) {
+      if (err instanceof Error && 'code' in err && err.code === 'ENOENT') {
+        return false
+      }
+      throw toFilesystemError(err, 'YubiKey inventory entry', entryPath, 'write')
     }
   }
 
@@ -541,6 +612,16 @@ export class YubikeyBackend implements ListableBackend, PresenceCapableBackend {
       return undefined
     }
     const legacyPath = getLegacyEntryPath(this.#storageDir, canonical)
+    const legacyName = path.basename(legacyPath)
+    // Use the inventory's regular-filename rule for legacy fallback and cleanup.
+    // Enumeration also avoids opening a legacy filename that exceeds path limits.
+    if (
+      !(await this.#listStorageEntries()).some(
+        (entry) => entry.isFile() && entry.name === legacyName,
+      )
+    ) {
+      return undefined
+    }
     try {
       const data = await fs.readFile(legacyPath)
       try {
@@ -551,43 +632,36 @@ export class YubikeyBackend implements ListableBackend, PresenceCapableBackend {
         data.fill(0)
       }
     } catch (err) {
-      // The digest path can fit a filesystem that cannot address the former
-      // UTF-8 path. Such a path cannot be an accessible legacy generation.
-      if (
-        err instanceof Error &&
-        'code' in err &&
-        (err.code === 'ENOENT' || err.code === 'ENAMETOOLONG')
-      ) {
+      if (err instanceof Error && 'code' in err && err.code === 'ENOENT') {
         return undefined
       }
       throw toFilesystemError(err, 'YubiKey legacy entry', legacyPath, 'read')
     }
     const aliases = await legacyInventoryAliases(this.#storageDir, new Set([canonical]))
-    return (aliases.get(canonical) ?? canonical) === id ? legacyPath : undefined
+    return legacySpelling(canonical, aliases, legacyPath) === id ? legacyPath : undefined
   }
 
   async exists(id: string): Promise<boolean> {
-    try {
-      return (await this.#existingEntryPath(id)) !== undefined
-    } catch {
-      return false
-    }
+    return (await this.#existingEntryPath(id)) !== undefined
   }
 
-  async list(): Promise<string[]> {
-    // Entry files are authoritative: the legacy shared index may be stale.
-    let entries: Dirent[]
+  /** An absent storage directory has no records. Other directory errors need attention. */
+  async #listStorageEntries(): Promise<Dirent[]> {
     try {
-      entries = await fs.readdir(this.#storageDir, { withFileTypes: true })
+      return await fs.readdir(this.#storageDir, { withFileTypes: true })
     } catch (err) {
       if (err instanceof Error && 'code' in err && err.code === 'ENOENT') {
         return []
       }
       throw toFilesystemError(err, 'YubiKey inventory directory', this.#storageDir, 'read')
     }
+  }
+
+  async list(): Promise<string[]> {
+    // Entry files are authoritative: the legacy shared index may be stale.
     const ids: string[] = []
     const legacyIds = new Set<string>()
-    for (const entry of entries) {
+    for (const entry of await this.#listStorageEntries()) {
       const isExactPath = /^id-[0-9a-f]{64}\.enc$/.test(entry.name)
       if (!entry.isFile() || (!isExactPath && !/^(?:[0-9a-f]{2})*\.enc$/.test(entry.name))) {
         continue
@@ -623,6 +697,9 @@ export class YubikeyBackend implements ListableBackend, PresenceCapableBackend {
     }
     const aliasCandidates = new Set([...legacyIds].filter((id) => id.includes('\ufffd')))
     const aliases = await legacyInventoryAliases(this.#storageDir, aliasCandidates)
-    return Array.from(new Set([...ids, ...Array.from(legacyIds, (id) => aliases.get(id) ?? id)]))
+    for (const id of legacyIds) {
+      ids.push(legacySpelling(id, aliases, getLegacyEntryPath(this.#storageDir, id)))
+    }
+    return Array.from(new Set(ids))
   }
 }

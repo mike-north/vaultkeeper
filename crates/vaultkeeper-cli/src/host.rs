@@ -1354,19 +1354,18 @@ mod tests {
 
     // ── StubTool through a real HostPlatform::exec (issue #313 AC2) ────────
     //
-    // Spawns the real `vk-stub-secret-tool` binary — not an in-process
-    // double — through `NativeHostPlatform::exec`, driven by the real
-    // `SecretToolBackend`. This exercises `SecretToolBackend`'s actual
-    // argv-build (`store --label <label> -- vaultkeeper-id <id>`),
-    // stdin-routing (the secret goes over stdin, never argv), stdout-parse
-    // (trailing-newline stripping), and error-classify (`SecretNotFound`
-    // via exit code) path against a real subprocess end to end.
+    // Exercise file and subprocess behavior through the native host. The paired
+    // secret-tool double covers argv, stdin, and error classification. The
+    // YubiKey fixture isolates pathname behavior from device availability.
     #[cfg(unix)]
-    mod stub_tool_secret_tool_ac2 {
+    mod stub_tool_backends {
         use super::*;
         use serial_test::serial;
-        use std::os::unix::fs::symlink;
-        use vaultkeeper_core::backend::{SecretBackend, SecretToolBackend};
+        use std::os::unix::fs::{PermissionsExt, symlink};
+        use std::sync::Arc;
+        use vaultkeeper_core::backend::{
+            ListableBackend, SecretBackend, SecretToolBackend, YubikeyBackend,
+        };
         use vaultkeeper_stub_tools::{SENTINEL_ENV_VAR, WORLD_PATH_ENV_VAR};
 
         /// Locates the compiled `vk-stub-secret-tool` binary the same way
@@ -1386,27 +1385,21 @@ mod tests {
             candidate.exists().then_some(candidate)
         }
 
-        /// Builds a `SecretToolBackend` whose `secret-tool` resolves (via
-        /// `PATH`) to the real `vk-stub-secret-tool` binary, and mutates
-        /// this test process's environment to make that so — hence
+        /// Exposes test tools on the test process's `PATH` and isolates the
+        /// paired double's persisted world. This mutates the environment, hence
         /// `#[serial]`: `NativeHostPlatform::exec` inherits the process
         /// environment wholesale (it has no per-call `PATH` override), so
         /// two of these tests running concurrently would race each other's
         /// `PATH`/sentinel mutation.
         struct Fixture {
-            _path_dir: tempfile::TempDir,
+            path_dir: tempfile::TempDir,
             _world_dir: tempfile::TempDir,
             previous_path: Option<String>,
         }
 
         impl Fixture {
-            fn new(stub_binary: &std::path::Path) -> Self {
+            fn new() -> Self {
                 let path_dir = tempfile::tempdir().unwrap();
-                // Guardrail 2 (issue #313): the binary is named
-                // `vk-stub-secret-tool`; only a symlink named `secret-tool`,
-                // scoped to this test-only PATH directory, ever resolves as
-                // the real tool name.
-                symlink(stub_binary, path_dir.path().join("secret-tool")).unwrap();
 
                 // The stub is a fresh process per `exec` call, so its
                 // `World` (the store `secret-tool store` writes into) must
@@ -1433,10 +1426,35 @@ mod tests {
                 }
 
                 Self {
-                    _path_dir: path_dir,
+                    path_dir,
                     _world_dir: world_dir,
                     previous_path,
                 }
+            }
+
+            /// Expose the paired double only under this fixture's test command name.
+            fn with_secret_tool(stub_binary: &Path) -> Self {
+                let fixture = Self::new();
+                symlink(stub_binary, fixture.path_dir.path().join("secret-tool")).unwrap();
+                fixture
+            }
+
+            /// Supply device responses so the inventory tests exercise the real filesystem.
+            fn with_yubikey() -> Self {
+                let fixture = Self::new();
+                let tool = fixture.path_dir.path().join("ykman");
+                fs::write(
+                    &tool,
+                    b"#!/bin/sh\n\
+                      case \"$1\" in\n\
+                      --version|list) echo test-device ;;\n\
+                      otp) echo deadbeefcafe01234567deadbeefcafe01234567 ;;\n\
+                      *) exit 1 ;;\n\
+                      esac\n",
+                )
+                .unwrap();
+                fs::set_permissions(tool, fs::Permissions::from_mode(0o700)).unwrap();
+                fixture
             }
         }
 
@@ -1465,7 +1483,7 @@ mod tests {
                 );
                 return;
             };
-            let _fixture = Fixture::new(&stub_binary);
+            let _fixture = Fixture::with_secret_tool(&stub_binary);
 
             let config_dir = tempfile::tempdir().unwrap();
             let host =
@@ -1494,7 +1512,7 @@ mod tests {
                 );
                 return;
             };
-            let _fixture = Fixture::new(&stub_binary);
+            let _fixture = Fixture::with_secret_tool(&stub_binary);
 
             let config_dir = tempfile::tempdir().unwrap();
             let host =
@@ -1509,6 +1527,85 @@ mod tests {
                 ),
                 "expected SecretNotFound, got {err:?}"
             );
+        }
+
+        /// Stores must publish the directory entry itself, leaving symlink targets alone.
+        #[tokio::test]
+        #[serial(stub_tool_path_env)]
+        async fn yubikey_overwrites_a_symlink_with_a_listed_regular_record() {
+            let _fixture = Fixture::with_yubikey();
+            let dir = tempfile::tempdir().unwrap();
+            let host = Arc::new(NativeHostPlatform::new(dir.path().to_path_buf()));
+            let storage = dir.path().join("yubikey");
+            fs::create_dir(&storage).unwrap();
+            let target = dir.path().join("unrelated");
+            fs::write(&target, b"keep this file").unwrap();
+            let record = storage.join("7a.enc");
+            symlink(&target, &record).unwrap();
+
+            YubikeyBackend::new(host.clone(), false)
+                .store("z", "value")
+                .await
+                .unwrap();
+
+            let reopened = YubikeyBackend::new(host, false);
+            assert_eq!(reopened.list().await.unwrap(), ["z"]);
+            assert_eq!(reopened.retrieve("z").await.unwrap(), "value");
+            assert!(fs::symlink_metadata(record).unwrap().is_file());
+            assert_eq!(fs::read(target).unwrap(), b"keep this file");
+        }
+
+        /// On a folding filesystem a case-only rename still aliases the canonical store path.
+        #[tokio::test]
+        #[serial(stub_tool_path_env)]
+        async fn yubikey_lists_a_successful_store_over_an_uppercase_record_name() {
+            let _fixture = Fixture::with_yubikey();
+            let dir = tempfile::tempdir().unwrap();
+            let host = Arc::new(NativeHostPlatform::new(dir.path().to_path_buf()));
+            let backend = YubikeyBackend::new(host.clone(), false);
+            backend.store("z", "old value").await.unwrap();
+            let storage = dir.path().join("yubikey");
+            let canonical = storage.join("7a.enc");
+            let uppercase = storage.join("7A.ENC");
+            fs::rename(&canonical, &uppercase).unwrap();
+            let case_sensitive = !canonical.exists();
+            let old_record = fs::read(&uppercase).unwrap();
+
+            backend.store("z", "new value").await.unwrap();
+
+            let reopened = YubikeyBackend::new(host, false);
+            assert_eq!(reopened.list().await.unwrap(), ["z"]);
+            assert_eq!(reopened.retrieve("z").await.unwrap(), "new value");
+            reopened.delete("z").await.unwrap();
+            assert!(reopened.list().await.unwrap().is_empty());
+            if case_sensitive {
+                assert_eq!(fs::read(uppercase).unwrap(), old_record);
+            }
+        }
+
+        /// Same-directory staging must fit wherever the canonical short record fits.
+        #[cfg(target_os = "macos")]
+        #[tokio::test]
+        #[serial(stub_tool_path_env)]
+        async fn yubikey_stores_short_ids_at_the_macos_path_boundary() {
+            let _fixture = Fixture::with_yubikey();
+            let dir = tempfile::tempdir().unwrap();
+            let mut config = dir.path().canonicalize().unwrap();
+            // /yubikey/7a.enc uses 15 of the 1023 path bytes.
+            while config.as_os_str().len() < 1008 {
+                let remaining = 1007 - config.as_os_str().len();
+                let component = if remaining == 201 { 199 } else { remaining.min(200) };
+                config.push("a".repeat(component));
+            }
+            let storage = config.join("yubikey");
+            fs::create_dir_all(&storage).unwrap();
+            fs::write(storage.join("7a.enc"), b"existing record path").unwrap();
+
+            let host = Arc::new(NativeHostPlatform::new(config));
+            YubikeyBackend::new(host.clone(), false).store("z", "value").await.unwrap();
+            let reopened = YubikeyBackend::new(host, false);
+            assert_eq!(reopened.list().await.unwrap(), ["z"]);
+            assert_eq!(reopened.retrieve("z").await.unwrap(), "value");
         }
     }
 }

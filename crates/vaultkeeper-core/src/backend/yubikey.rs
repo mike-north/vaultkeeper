@@ -103,16 +103,21 @@ impl<'de> Deserialize<'de> for LegacyId {
 }
 
 impl LegacyIndex {
-    /// Match TypeScript's preference for a canonical spelling or a sole alias.
-    fn identifies_typescript_alias(&self, id: &str) -> bool {
-        !self.entries.contains_key(&LegacyId(id.as_bytes().to_vec()))
-            && self
-                .entries
-                .keys()
-                .filter(|key| key.normalizes_to(id))
-                .take(2)
-                .count()
-                == 1
+    /// Only a unique index entry can establish ownership of a lossy filename.
+    /// A uniquely identified TypeScript surrogate is outside Rust's ID domain.
+    fn addresses(&self, canonical: &str, path: &Path) -> Result<bool, VaultError> {
+        let mut matches = self
+            .entries
+            .keys()
+            .filter(|key| key.0 == canonical.as_bytes() || key.normalizes_to(canonical));
+        match (matches.next(), matches.next()) {
+            (Some(key), None) => Ok(key.0 == canonical.as_bytes()),
+            _ => Err(VaultError::Decryption {
+                message: "Ambiguous YubiKey legacy record ID. Restore its original metadata."
+                    .to_string(),
+                path: path.display().to_string(),
+            }),
+        }
     }
 }
 
@@ -233,14 +238,14 @@ impl YubikeyBackend {
         else {
             return Ok(None);
         };
-        Ok((!self
+        Ok(self
             .read_legacy_index()
             .await
-            .identifies_typescript_alias(id))
-        .then_some((path, data)))
+            .addresses(id, &path)?
+            .then_some((path, data)))
     }
 
-    /// A missing or damaged spelling hint leaves UTF-8 legacy records reachable.
+    /// Missing metadata carries no spelling evidence for a lossy legacy filename.
     async fn read_legacy_index(&self) -> LegacyIndex {
         self.host
             .read_file(&self.storage_dir().join("metadata.json"))
@@ -259,6 +264,74 @@ impl YubikeyBackend {
                 Ok(true) | Err(_) => Err(error),
             },
         }
+    }
+
+    /// Stage a complete regular file so replacing a record never writes through its directory entry.
+    async fn publish_entry(&self, path: &Path, encrypted: &[u8]) -> Result<(), VaultError> {
+        let mut suffix = [0u8; 12];
+        getrandom::fill(&mut suffix).map_err(|e| {
+            VaultError::Other(format!("Failed to generate YubiKey stage name: {e}"))
+        })?;
+        let filename = format!(".vk-{}.tmp", hex_encode(&suffix));
+        let stage = path.with_file_name(&filename);
+        let staged = match self
+            .host
+            .write_file_if_absent(&stage, encrypted, 0o600)
+            .await
+        {
+            Err(VaultError::LockingNotSupported { .. }) => {
+                // Hosts without atomic create can still stage under a private random name.
+                if self.host.file_exists(&stage).await? {
+                    false
+                } else {
+                    if let Err(error) = self.host.write_file(&stage, encrypted, 0o600).await {
+                        let _ = self.host.delete_file(&stage).await;
+                        return Err(error);
+                    }
+                    true
+                }
+            }
+            result => result?,
+        };
+        if !staged {
+            return Err(VaultError::Filesystem {
+                message: "YubiKey staging path already exists".to_string(),
+                path: stage.display().to_string(),
+                permission: "write".to_string(),
+                code: Some("EEXIST".to_string()),
+            });
+        }
+
+        let result = self.publish_stage(&stage, path, &filename).await;
+        if result.is_err() {
+            let _ = self.host.delete_file(&stage).await;
+        }
+        result
+    }
+
+    /// A folding filesystem can preserve the old spelling when replacing an entry.
+    /// Probe the private staged file first so a case-only rename cannot move an unrelated file.
+    async fn publish_stage(
+        &self,
+        stage: &Path,
+        path: &Path,
+        filename: &str,
+    ) -> Result<(), VaultError> {
+        let folds_case = self
+            .host
+            .file_exists(&stage.with_file_name(filename.to_ascii_uppercase()))
+            .await?;
+        self.host.rename_file(stage, path).await?;
+        if folds_case {
+            let upper =
+                path.with_file_name(path.file_name().unwrap_or_default().to_ascii_uppercase());
+            if let Err(error) = self.host.rename_file(&upper, path).await
+                && self.host.file_exists(path).await?
+            {
+                return Err(error);
+            }
+        }
+        Ok(())
     }
 
     /// Perform the YubiKey HMAC-SHA1 challenge-response for `id` and return
@@ -651,19 +724,19 @@ impl SecretBackend for YubikeyBackend {
     async fn store(&self, id: &str, secret: &str) -> Result<(), VaultError> {
         self.require_device().await?;
 
+        let legacy_path = self.read_legacy_entry(id).await?.map(|(path, _)| path);
         let hmac_response = self.challenge_response(id).await?;
         let key = derive_key(&hmac_response, id)?;
         let identity = exact_identity(id);
         let encrypted = encrypt_gcm_versioned(&key, secret, identity.as_deref())?;
 
-        let entry_path = self.entry_path(id);
-        // `write_file` creates every missing ancestor directory owner-only
-        // (`0o700`) before writing (see `NativeHostPlatform::write_file`) —
-        // this is what satisfies "storage dir created with 0o700 via the
-        // host directory-creation path" without a `.keep` sentinel.
-        self.host
-            .write_file(&entry_path, encrypted.as_bytes(), 0o600)
-            .await
+        self.publish_entry(&self.entry_path(id), encrypted.as_bytes())
+            .await?;
+        if let Some(path) = legacy_path {
+            // Keep the old value until the exact replacement is published.
+            self.delete_entry(&path).await?;
+        }
+        Ok(())
     }
 
     async fn retrieve(&self, id: &str) -> Result<String, VaultError> {
@@ -774,13 +847,11 @@ impl ListableBackend for YubikeyBackend {
                     && let Ok(id) = String::from_utf8(bytes)
                 {
                     if id.contains('\u{fffd}') {
-                        if legacy_index.is_none() {
-                            legacy_index = Some(self.read_legacy_index().await);
-                        }
-                        if legacy_index
-                            .as_ref()
-                            .is_some_and(|index| index.identifies_typescript_alias(&id))
-                        {
+                        let index = match &legacy_index {
+                            Some(index) => index,
+                            None => legacy_index.insert(self.read_legacy_index().await),
+                        };
+                        if !index.addresses(&id, &storage_dir.join(&filename))? {
                             continue;
                         }
                     }
@@ -880,6 +951,12 @@ mod tests {
         args: Vec<String>,
     }
 
+    /// Pauses an inventory after it has captured the filesystem names.
+    struct DirectorySnapshot {
+        captured: tokio::sync::oneshot::Sender<()>,
+        release: tokio::sync::oneshot::Receiver<()>,
+    }
+
     /// Test double for `HostPlatform` that fakes both `ykman` subprocess
     /// behavior and the on-disk store, so tests run without hardware or a
     /// real filesystem.
@@ -901,6 +978,7 @@ mod tests {
         deny_delete: Mutex<HashSet<PathBuf>>,
         /// Synchronizes legacy index reads to expose lost read-modify-write updates.
         metadata_barrier: Mutex<Option<Arc<tokio::sync::Barrier>>>,
+        directory_snapshot: Mutex<Option<DirectorySnapshot>>,
     }
 
     const FAKE_HMAC_RESPONSE: &str = "deadbeefcafe01234567deadbeefcafe01234567";
@@ -917,6 +995,7 @@ mod tests {
                 deny_read: Mutex::new(HashSet::new()),
                 deny_delete: Mutex::new(HashSet::new()),
                 metadata_barrier: Mutex::new(None),
+                directory_snapshot: Mutex::new(None),
             })
         }
 
@@ -931,6 +1010,7 @@ mod tests {
                 deny_read: Mutex::new(HashSet::new()),
                 deny_delete: Mutex::new(HashSet::new()),
                 metadata_barrier: Mutex::new(None),
+                directory_snapshot: Mutex::new(None),
             })
         }
 
@@ -945,6 +1025,7 @@ mod tests {
                 deny_read: Mutex::new(HashSet::new()),
                 deny_delete: Mutex::new(HashSet::new()),
                 metadata_barrier: Mutex::new(None),
+                directory_snapshot: Mutex::new(None),
             })
         }
     }
@@ -1071,18 +1152,22 @@ mod tests {
             Ok(())
         }
         async fn list_dir(&self, path: &Path) -> Result<Vec<String>, VaultError> {
-            let files = self.files.lock().unwrap();
-            let prefix = path.to_path_buf();
-            Ok(files
+            let filenames = self.files.lock().unwrap()
                 .keys()
                 .filter_map(|k| {
-                    if k.parent() == Some(&prefix) {
+                    if k.parent() == Some(path) {
                         k.file_name().and_then(|n| n.to_str()).map(String::from)
                     } else {
                         None
                     }
                 })
-                .collect())
+                .collect();
+            let snapshot = self.directory_snapshot.lock().unwrap().take();
+            if let Some(snapshot) = snapshot {
+                snapshot.captured.send(()).unwrap();
+                snapshot.release.await.unwrap();
+            }
+            Ok(filenames)
         }
         fn platform(&self) -> Platform {
             Platform::Darwin
@@ -1333,6 +1418,121 @@ mod tests {
         );
     }
 
+    /// A lossy filename cannot establish ownership when the legacy index is damaged.
+    #[tokio::test]
+    async fn corrupt_legacy_index_does_not_reassign_a_typescript_alias() {
+        let host = TestHost::new();
+        let backend = YubikeyBackend::new(host.clone(), false);
+        let id = "\u{fffd}";
+        let legacy_path = backend.legacy_entry_path(id);
+        let key = derive_key(FAKE_HMAC_RESPONSE, id).unwrap();
+        let legacy = encrypt_gcm_versioned(&key, "legacy value", None).unwrap();
+        let metadata_path = backend.storage_dir().join("metadata.json");
+        host.files.lock().unwrap().extend([
+            (legacy_path.clone(), legacy.as_bytes().to_vec()),
+            (
+                metadata_path.clone(),
+                br#"{"entries":{"\ud800":"efbfbd.enc"}}"#.to_vec(),
+            ),
+        ]);
+        assert!(backend.list().await.unwrap().is_empty());
+        host.write_file(&metadata_path, b"{broken", 0o600)
+            .await
+            .unwrap();
+
+        let reopened = YubikeyBackend::new(host.clone(), false);
+        assert!(matches!(
+            reopened.list().await,
+            Err(VaultError::Decryption { .. })
+        ));
+        assert!(matches!(
+            reopened.exists(id).await,
+            Err(VaultError::Decryption { .. })
+        ));
+        assert!(matches!(
+            reopened.retrieve(id).await,
+            Err(VaultError::Decryption { .. })
+        ));
+        assert!(matches!(
+            reopened.delete(id).await,
+            Err(VaultError::Decryption { .. })
+        ));
+        assert_eq!(
+            host.read_file(&legacy_path).await.unwrap(),
+            legacy.as_bytes()
+        );
+    }
+
+    /// Replacing a confirmed legacy scalar record retires it before the index can be lost.
+    #[tokio::test]
+    async fn upgraded_legacy_replacement_character_does_not_leave_an_obsolete_record() {
+        let host = TestHost::new();
+        let backend = YubikeyBackend::new(host.clone(), false);
+        let id = "\u{fffd}";
+        let legacy_path = backend.legacy_entry_path(id);
+        let metadata_path = backend.storage_dir().join("metadata.json");
+        let key = derive_key(FAKE_HMAC_RESPONSE, id).unwrap();
+        let legacy = encrypt_gcm_versioned(&key, "legacy value", None).unwrap();
+        host.files.lock().unwrap().extend([
+            (legacy_path.clone(), legacy.as_bytes().to_vec()),
+            (
+                metadata_path.clone(),
+                br#"{"entries":{"\ufffd":"efbfbd.enc"}}"#.to_vec(),
+            ),
+        ]);
+        assert_eq!(backend.retrieve(id).await.unwrap(), "legacy value");
+        backend.store(id, "new value").await.unwrap();
+        assert!(!host.file_exists(&legacy_path).await.unwrap());
+        host.write_file(&metadata_path, b"{broken", 0o600)
+            .await
+            .unwrap();
+
+        let reopened = YubikeyBackend::new(host.clone(), false);
+        assert_eq!(reopened.list().await.unwrap(), [id]);
+        assert_eq!(reopened.retrieve(id).await.unwrap(), "new value");
+        reopened.delete(id).await.unwrap();
+        assert!(reopened.list().await.unwrap().is_empty());
+        assert!(!host.file_exists(&legacy_path).await.unwrap());
+    }
+
+    /// Stale path values cannot transfer ownership of a still-present legacy record.
+    #[tokio::test]
+    async fn legacy_index_with_wrong_filename_cannot_reassign_or_retire_a_record() {
+        let host = TestHost::new();
+        let backend = YubikeyBackend::new(host.clone(), false);
+        let id = "\u{fffd}";
+        let legacy_path = backend.legacy_entry_path(id);
+        host.files.lock().unwrap().extend([
+            (legacy_path.clone(), LEGACY_CBC_FIXTURE.to_vec()),
+            (backend.storage_dir().join("metadata.json"), br#"{"entries":{"\ufffd":"unrelated.enc"}}"#.to_vec()),
+        ]);
+
+        assert!(matches!(backend.list().await, Err(VaultError::Decryption { .. })));
+        assert!(matches!(backend.store(id, "value").await, Err(VaultError::Decryption { .. })));
+        assert_eq!(host.read_file(&legacy_path).await.unwrap(), LEGACY_CBC_FIXTURE);
+    }
+
+    /// Inventory may observe either generation during migration, while the ID stays present.
+    #[tokio::test]
+    async fn inventory_keeps_a_legacy_record_while_another_instance_upgrades_it() {
+        let host = TestHost::new();
+        let backend = YubikeyBackend::new(host.clone(), false);
+        let id = "\u{fffd}";
+        host.files.lock().unwrap().extend([
+            (backend.legacy_entry_path(id), LEGACY_CBC_FIXTURE.to_vec()),
+            (backend.storage_dir().join("metadata.json"), br#"{"entries":{"\ufffd":"efbfbd.enc"}}"#.to_vec()),
+        ]);
+        let (captured, ready) = tokio::sync::oneshot::channel();
+        let (resume, release) = tokio::sync::oneshot::channel();
+        *host.directory_snapshot.lock().unwrap() = Some(DirectorySnapshot { captured, release });
+        let inventory = tokio::spawn(async move { YubikeyBackend::new(host, false).list().await });
+        ready.await.unwrap();
+        backend.store(id, "value").await.unwrap();
+        resume.send(()).unwrap();
+
+        assert_eq!(inventory.await.unwrap().unwrap(), [id]);
+    }
+
     #[tokio::test]
     async fn deletes_an_exact_record_with_an_unaddressable_legacy_filename() {
         let host = TestHost::new();
@@ -1380,7 +1580,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn reads_a_metadata_and_entry_pair_written_by_the_ts_backend() {
+    async fn lists_and_retrieves_a_legacy_record_written_by_typescript() {
         let host = TestHost::new();
         *host.hmac_response.lock().unwrap() = TS_FIXTURE_HMAC_RESPONSE.to_string();
         let backend = YubikeyBackend::new(host.clone(), false);
@@ -1402,7 +1602,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn list_returns_all_ids_from_metadata_entries() {
+    async fn list_returns_all_stored_record_ids() {
         let host = TestHost::new();
         let backend = YubikeyBackend::new(host.clone(), false);
         backend.store("alpha", "val-a").await.unwrap();
@@ -1413,14 +1613,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn list_returns_empty_when_metadata_missing() {
+    async fn list_returns_empty_when_no_records_exist() {
         let host = TestHost::new();
         let backend = YubikeyBackend::new(host, false);
         assert_eq!(backend.list().await.unwrap(), Vec::<String>::new());
     }
 
     #[tokio::test]
-    async fn delete_removes_the_metadata_entry() {
+    async fn delete_removes_the_record_from_inventory() {
         let host = TestHost::new();
         let backend = YubikeyBackend::new(host.clone(), false);
         backend.store("gone-soon", "value").await.unwrap();
@@ -1496,7 +1696,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn missing_metadata_entry_remains_listed_and_retrievable() {
+    async fn ordinary_record_remains_listed_and_retrievable_without_metadata() {
         let host = TestHost::new();
         let backend = YubikeyBackend::new(host.clone(), false);
         let entry_path = backend.entry_path("orphan");

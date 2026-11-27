@@ -290,10 +290,15 @@ whether membership is intentional.
   `SetupChoice`, `SetupResult`).
   YubiKey inventories derive membership from regular files with canonical record names and a
   recognized YubiKey envelope. Listing needs neither a device touch nor a successful decryption.
-  TypeScript can recover a uniquely identified legacy spelling of an ID containing an unpaired
-  surrogate. Missing, corrupt, or stale legacy metadata cannot remove records from the inventory.
+  Stores publish a complete regular file at the canonical name, including when replacing a symbolic
+  link or when the filesystem folds case. The link target is left alone.
+  Ordinary legacy filenames identify their records independently of metadata. A legacy filename
+  containing U+FFFD can represent a literal replacement character or an unpaired surrogate. Its
+  original spelling requires a unique index entry. When no unique entry survives, inventory and
+  operations that rely on the legacy spelling report a typed decryption error with the affected path.
   New records with ambiguous UTF-8 spellings use the SHA-256 digest of the exact UTF-16LE ID
-  in a distinct filename and store that ID in an authenticated version 2 GCM envelope.
+  in a distinct filename and store that ID in an authenticated version 2 GCM envelope. An upgrade
+  retires the matching legacy record once the exact record is published.
   Lookup prefers the exact record and can fall back to a matching legacy record. Rust addresses
   Unicode scalar IDs. TypeScript can also address IDs containing unpaired surrogates. An older
   reader must upgrade to find or read a version 2 record.
