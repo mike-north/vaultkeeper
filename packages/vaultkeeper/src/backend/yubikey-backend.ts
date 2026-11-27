@@ -77,12 +77,66 @@ function exactIdentity(id: string): Buffer | undefined {
     : undefined
 }
 
-/** Hash the exact UTF-16 code units so ambiguous spellings occupy disjoint, bounded filenames. */
+/** The hashed spelling bounds filename length for IDs whose encoded bytes are long. */
+function hashedEntryName(identity: Buffer): string {
+  return `id-${crypto.createHash('sha256').update(identity).digest('hex')}.enc`
+}
+
+/**
+ * Hex-encoded WTF-8 keeps the same path budget as the old UTF-8 filename.
+ * A lone surrogate uses its own three-byte encoding, while scalar values use UTF-8.
+ * The separate extension prevents an exact record from taking a legacy path.
+ */
+function compactEntryName(id: string): string {
+  const hex = Array.from(id, (character) => {
+    const unit = character.charCodeAt(0)
+    if (character.length === 1 && unit >= 0xd800 && unit <= 0xdfff) {
+      return Buffer.from([0xed, 0x80 | ((unit >> 6) & 0x3f), 0x80 | (unit & 0x3f)]).toString('hex')
+    }
+    return Buffer.from(character, 'utf8').toString('hex')
+  }).join('')
+  return `${hex}.vk2`
+}
+
+/** Validate the canonical WTF-8 spelling before resolving a compact filename. */
+function compactRecordId(name: string): string | undefined {
+  if (!/^(?:[0-9a-f]{2}){3,33}\.vk2$/.test(name)) {
+    return undefined
+  }
+  const encoded = Buffer.from(name.slice(0, -4), 'hex').toString('latin1')
+  const id = encoded
+    .split(/(\xed[\xa0-\xbf][\x80-\xbf])/)
+    .map((part, index) => {
+      if (index % 2 === 0) {
+        return Buffer.from(part, 'latin1').toString('utf8')
+      }
+      // ED supplies the top four bits for a surrogate encoded as three UTF-8 bytes.
+      return String.fromCharCode(
+        0xd000 | ((part.charCodeAt(1) & 0x3f) << 6) | (part.charCodeAt(2) & 0x3f),
+      )
+    })
+    .join('')
+  return exactIdentity(id) !== undefined && compactEntryName(id) === name ? id : undefined
+}
+
+/** Choose one exact path by filename length so alternate paths to a directory agree. */
 function getEntryPath(storageDir: string, id: string): string {
   const identity = exactIdentity(id)
-  return identity === undefined
-    ? getLegacyEntryPath(storageDir, id)
-    : path.join(storageDir, `id-${crypto.createHash('sha256').update(identity).digest('hex')}.enc`)
+  if (identity === undefined) {
+    return getLegacyEntryPath(storageDir, id)
+  }
+  const compact = compactEntryName(id)
+  const hashed = hashedEntryName(identity)
+  return path.join(storageDir, compact.length < hashed.length ? compact : hashed)
+}
+
+/** Earlier exact records always used a hash, even for short spellings. */
+function olderExactEntryPath(storageDir: string, id: string): string | undefined {
+  const identity = exactIdentity(id)
+  if (identity !== undefined && getEntryPath(storageDir, id).endsWith('.vk2')) {
+    return path.join(storageDir, hashedEntryName(identity))
+  }
+  return undefined
 }
 
 /** Decode the byte-preserving ID field without letting permissive Base64 rewrite its value. */
@@ -97,8 +151,18 @@ function decodeIdentity(encoded: string): Buffer | undefined {
  * Identify YubiKey envelopes even when another backend uses the same filenames.
  * Null identifies a legacy record whose spelling may need its original index.
  */
-function inventoryRecordId(entry: Buffer): string | null | undefined {
+function inventoryRecordId(entry: Buffer, compactId?: string): string | null | undefined {
+  if (compactId !== undefined) {
+    // The canonical filename supplies the ID even if a v2 envelope loses its final field.
+    return entry[0] === IDENTITY_FORMAT_VERSION.charCodeAt(0) && entry[1] === 0x3a
+      ? compactId
+      : undefined
+  }
   if (entry.subarray(0, LEGACY_OPENSSL_MAGIC.length).equals(LEGACY_OPENSSL_MAGIC)) {
+    return null
+  }
+  // A v1 marker survives truncation and cannot be a FileBackend's 12-byte IV.
+  if (entry[0] === FORMAT_VERSION.charCodeAt(0) && entry[1] === 0x3a) {
     return null
   }
   const separator = 0x3a
@@ -548,28 +612,18 @@ export class YubikeyBackend implements ListableBackend, PresenceCapableBackend {
       throw toFilesystemError(err, 'YubiKey inventory directory', storageDir, 'write')
     }
     const legacyPath = await this.#legacyEntryPath(id)
+    const olderPath = await this.#olderPathForRetirement(id)
 
     const hmacResponse = await this.challengeResponse(id)
     const encrypted = encryptGcm(deriveKey(hmacResponse, id), secret, exactIdentity(id))
 
-    try {
-      await publishRecord(getEntryPath(storageDir, id), encrypted)
-    } catch (err) {
-      if (
-        legacyPath === undefined ||
-        !(err instanceof FilesystemError) ||
-        err.code !== 'ENAMETOOLONG'
-      ) {
-        throw err
-      }
-      // The index already identifies this record. Retain its readable envelope and filename
-      // when the filesystem cannot publish the exact spelling.
-      await publishRecord(legacyPath, encryptGcm(deriveKey(hmacResponse, id), secret))
-      return
-    }
+    await publishRecord(getEntryPath(storageDir, id), encrypted)
     if (legacyPath !== undefined) {
       // Retire the superseded value only after its replacement has been published.
       await this.#deleteEntry(legacyPath)
+    }
+    if (olderPath !== undefined) {
+      await this.#deleteEntry(olderPath, true)
     }
   }
 
@@ -599,17 +653,41 @@ export class YubikeyBackend implements ListableBackend, PresenceCapableBackend {
 
     const entryPath = getEntryPath(this.#storageDir, id)
     const legacyPath = await this.#legacyEntryPath(id)
+    const olderPath = await this.#olderPathForRetirement(id)
     // Retire both generations of the same ID so deleting an upgraded record
     // cannot restore an older credential. A store of another spelling uses
     // its own exact path and cannot overwrite this confirmed legacy record.
     const deletedLegacy = legacyPath !== undefined && (await this.#deleteEntry(legacyPath))
-    if (!(await this.#deleteEntry(entryPath, deletedLegacy)) && !deletedLegacy) {
+    const deletedOlder = olderPath !== undefined && (await this.#deleteEntry(olderPath, true))
+    if (!(await this.#deleteEntry(entryPath, deletedLegacy)) && !deletedLegacy && !deletedOlder) {
       throw new SecretNotFoundError(`Secret not found in YubiKey store: ${id}`)
     }
   }
 
-  /** A missing record or an impossible exact path after legacy deletion needs no further cleanup. */
-  async #deleteEntry(entryPath: string, deletedLegacy = false): Promise<boolean> {
+  /** Check for an older hash before modifying any generation of the record. */
+  async #olderPathForRetirement(id: string): Promise<string | undefined> {
+    const olderPath = olderExactEntryPath(this.#storageDir, id)
+    if (olderPath !== undefined) {
+      try {
+        await fs.lstat(olderPath)
+      } catch (err) {
+        if (
+          !(
+            err instanceof Error &&
+            'code' in err &&
+            (err.code === 'ENOENT' ||
+              (err.code === 'ENAMETOOLONG' && !(await this.#hasEntryName(olderPath))))
+          )
+        ) {
+          throw toFilesystemError(err, 'older YubiKey record', olderPath, 'write')
+        }
+      }
+    }
+    return olderPath
+  }
+
+  /** An overlong path confirms absence only when the filename is also absent from the directory. */
+  async #deleteEntry(entryPath: string, allowOverlong = false): Promise<boolean> {
     try {
       await fs.unlink(entryPath)
       return true
@@ -617,7 +695,8 @@ export class YubikeyBackend implements ListableBackend, PresenceCapableBackend {
       if (
         err instanceof Error &&
         'code' in err &&
-        (err.code === 'ENOENT' || (deletedLegacy && err.code === 'ENAMETOOLONG'))
+        (err.code === 'ENOENT' ||
+          (allowOverlong && err.code === 'ENAMETOOLONG' && !(await this.#hasEntryName(entryPath))))
       ) {
         return false
       }
@@ -628,12 +707,36 @@ export class YubikeyBackend implements ListableBackend, PresenceCapableBackend {
   /** Prefer the exact path. Legacy records fall back to their recoverable spelling. */
   async #existingEntryPath(id: string): Promise<string | undefined> {
     const entryPath = getEntryPath(this.#storageDir, id)
+    const olderPath = olderExactEntryPath(this.#storageDir, id)
+    return (
+      (await this.#accessibleEntryPath(entryPath)) ??
+      (olderPath === undefined ? undefined : await this.#accessibleEntryPath(olderPath)) ??
+      (await this.#legacyEntryPath(id))
+    )
+  }
+
+  /** An exact entry can be used only if its path is reachable. */
+  async #accessibleEntryPath(entryPath: string): Promise<string | undefined> {
     try {
       await fs.access(entryPath)
       return entryPath
-    } catch {
-      return this.#legacyEntryPath(id)
+    } catch (err) {
+      if (
+        err instanceof Error &&
+        'code' in err &&
+        err.code === 'ENAMETOOLONG' &&
+        (await this.#hasEntryName(entryPath))
+      ) {
+        throw toFilesystemError(err, 'YubiKey record', entryPath, 'read')
+      }
+      return undefined
     }
+  }
+
+  /** An overlong lookup path can still name an entry created through a shorter directory path. */
+  async #hasEntryName(entryPath: string): Promise<boolean> {
+    const filename = path.basename(entryPath)
+    return (await this.#listStorageEntries()).some((entry) => entry.name.toLowerCase() === filename)
   }
 
   /** A legacy path may be used only for the spelling recovered by inventory. */
@@ -643,11 +746,8 @@ export class YubikeyBackend implements ListableBackend, PresenceCapableBackend {
       return undefined
     }
     const legacyPath = getLegacyEntryPath(this.#storageDir, canonical)
-    const legacyName = path.basename(legacyPath)
     // Enumeration avoids opening a legacy filename that exceeds path limits.
-    if (
-      !(await this.#listStorageEntries()).some((entry) => entry.name.toLowerCase() === legacyName)
-    ) {
+    if (!(await this.#hasEntryName(legacyPath))) {
       return undefined
     }
     if ((await this.#readInventoryRecord(legacyPath)) !== null) {
@@ -658,14 +758,17 @@ export class YubikeyBackend implements ListableBackend, PresenceCapableBackend {
   }
 
   /** Read through the same canonical path as lookup, including old links to regular files. */
-  async #readInventoryRecord(entryPath: string): Promise<string | null | undefined> {
+  async #readInventoryRecord(
+    entryPath: string,
+    compactId?: string,
+  ): Promise<string | null | undefined> {
     try {
       if (!(await fs.stat(entryPath)).isFile()) {
         return undefined
       }
       const data = await fs.readFile(entryPath)
       try {
-        return inventoryRecordId(data)
+        return inventoryRecordId(data, compactId)
       } finally {
         data.fill(0)
       }
@@ -720,16 +823,29 @@ export class YubikeyBackend implements ListableBackend, PresenceCapableBackend {
       ids.add(legacySpelling(id, aliases, getLegacyEntryPath(this.#storageDir, id)))
     }
 
-    // Exact replacements are published before their legacy files are retired.
-    // Enumerate exact names after reading legacy records so a migration cannot fall between scans.
+    // Scan each layout after its predecessors. Publication always precedes retirement.
     for (const name of await this.#inventoryNames()) {
       if (!/^id-[0-9a-f]{64}\.enc$/.test(name)) {
         continue
       }
       const entryPath = path.join(this.#storageDir, name)
       const spelling = await this.#readInventoryRecord(entryPath)
-      if (typeof spelling === 'string' && getEntryPath(this.#storageDir, spelling) === entryPath) {
+      if (
+        typeof spelling === 'string' &&
+        (getEntryPath(this.#storageDir, spelling) === entryPath ||
+          olderExactEntryPath(this.#storageDir, spelling) === entryPath)
+      ) {
         ids.add(spelling)
+      }
+    }
+    for (const name of await this.#inventoryNames()) {
+      const compactId = compactRecordId(name)
+      if (
+        compactId !== undefined &&
+        (await this.#readInventoryRecord(path.join(this.#storageDir, name), compactId)) ===
+          compactId
+      ) {
+        ids.add(compactId)
       }
     }
     return [...ids]

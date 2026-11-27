@@ -190,9 +190,18 @@ impl YubikeyBackend {
 
     fn entry_path(&self, id: &str) -> PathBuf {
         match exact_identity(id) {
-            Some(identity) => self.storage_dir().join(exact_entry_name(&identity)),
+            Some(identity) => self
+                .storage_dir()
+                .join(compact_entry_name(id).unwrap_or_else(|| hashed_entry_name(&identity))),
             None => self.legacy_entry_path(id),
         }
+    }
+
+    /// Older exact records used the hashed layout even for short IDs.
+    fn older_exact_entry_path(&self, id: &str) -> Option<PathBuf> {
+        let identity = exact_identity(id)?;
+        compact_entry_name(id)?;
+        Some(self.storage_dir().join(hashed_entry_name(&identity)))
     }
 
     /// Older clients encoded every ID using the same UTF-8 filename scheme.
@@ -223,13 +232,16 @@ impl YubikeyBackend {
         }
         let path = self.legacy_entry_path(id);
         // The UTF-8 legacy name can exceed the filesystem's path limits even
-        // when the exact name fits. Only read legacy paths that actually exist.
-        if !self
+        // when the exact name fits. Resolve only the requested legacy name.
+        let name = path.file_name().unwrap_or_default().to_owned();
+        if self
             .host
-            .list_dir_for_lowercase_lookup(&self.storage_dir(), is_legacy_record_name)
+            .list_dir_for_lowercase_lookup(
+                &self.storage_dir(),
+                Box::new(move |entry| name == entry),
+            )
             .await?
-            .iter()
-            .any(|name| path.file_name() == Some(std::ffi::OsStr::new(name)))
+            .is_empty()
         {
             return Ok(None);
         }
@@ -245,6 +257,81 @@ impl YubikeyBackend {
             .await
             .addresses(id, &path)?
             .then_some((path, data)))
+    }
+
+    /// Read the direct record layouts in preference order. A generated path that cannot fit
+    /// carries no evidence that an older layout is absent.
+    async fn read_exact_entry(
+        &self,
+        id: &str,
+    ) -> Result<Option<(PathBuf, Zeroizing<Vec<u8>>)>, VaultError> {
+        for path in [Some(self.entry_path(id)), self.older_exact_entry_path(id)]
+            .into_iter()
+            .flatten()
+        {
+            match self.read_entry(&path).await {
+                Ok(Some(data)) => return Ok(Some((path, data))),
+                Err(error)
+                    if !self
+                        .unaddressable_exact_path_is_absent(id, &path, &error)
+                        .await? =>
+                {
+                    return Err(error);
+                }
+                _ => (),
+            }
+        }
+        Ok(None)
+    }
+
+    /// Check for an older hash before modifying any generation of the record.
+    async fn older_path_for_retirement(&self, id: &str) -> Result<Option<PathBuf>, VaultError> {
+        if let Some(path) = self.older_exact_entry_path(id) {
+            if let Err(error) = self.host.directory_entry_exists(&path).await
+                && !self
+                    .unaddressable_exact_path_is_absent(id, &path, &error)
+                    .await?
+            {
+                return Err(error);
+            }
+            return Ok(Some(path));
+        }
+        Ok(None)
+    }
+
+    /// A record at an overlong path can still have been created through a shorter spelling.
+    async fn unaddressable_exact_path_is_absent(
+        &self,
+        id: &str,
+        path: &Path,
+        error: &VaultError,
+    ) -> Result<bool, VaultError> {
+        if !id.contains('\u{fffd}')
+            || !matches!(error, VaultError::Filesystem { code: Some(code), .. } if code == "ENAMETOOLONG")
+        {
+            return Ok(false);
+        }
+        let filename = path.file_name().unwrap_or_default();
+        Ok(!self
+            .host
+            .list_dir(&self.storage_dir())
+            .await?
+            .iter()
+            .any(|name| filename.eq_ignore_ascii_case(name)))
+    }
+
+    /// Retire an older generation after publishing its replacement, or before deleting it.
+    async fn retire_exact_entry(&self, id: &str, path: &Path) -> Result<bool, VaultError> {
+        match self.delete_entry(path).await {
+            Err(error)
+                if self
+                    .unaddressable_exact_path_is_absent(id, path, &error)
+                    .await? =>
+            {
+                Ok(false)
+            }
+            result => result,
+        }
     }
 
     /// Missing metadata carries no spelling evidence for a lossy legacy filename.
@@ -491,9 +578,16 @@ fn exact_identity(id: &str) -> Option<Vec<u8>> {
     })
 }
 
-/// Exact identity names occupy a separate namespace and stay within path limits.
-fn exact_entry_name(identity: &[u8]) -> String {
+/// Hash long exact spellings so their filename size stays bounded.
+fn hashed_entry_name(identity: &[u8]) -> String {
     format!("id-{}.enc", hex_encode(&Sha256::digest(identity)))
+}
+
+/// A compact exact filename uses the same budget as the original hex and `.enc`.
+/// Rust scalar IDs have identical UTF-8 and WTF-8 bytes.
+fn compact_entry_name(id: &str) -> Option<String> {
+    // Only use the compact encoding when it beats `id-<64 hex digits>.enc`.
+    (id.len() <= 33).then(|| format!("{}.vk2", hex_encode(id.as_bytes())))
 }
 
 fn hex_decode(hex: &str) -> Result<Vec<u8>, VaultError> {
@@ -745,26 +839,20 @@ impl SecretBackend for YubikeyBackend {
         self.require_device().await?;
 
         let legacy_path = self.read_legacy_entry(id).await?.map(|(path, _)| path);
+        let older_path = self.older_path_for_retirement(id).await?;
         let hmac_response = self.challenge_response(id).await?;
         let key = derive_key(&hmac_response, id)?;
         let identity = exact_identity(id);
         let encrypted = encrypt_gcm_versioned(&key, secret, identity.as_deref())?;
 
-        let published = self
-            .publish_entry(&self.entry_path(id), encrypted.as_bytes())
-            .await;
-        if let (Some(path), Err(error)) = (&legacy_path, &published)
-            && unaddressable_exact_path(id, error)
-        {
-            // The index already identifies this record. Retain its readable envelope and filename
-            // when the filesystem cannot publish the exact spelling.
-            let encrypted = encrypt_gcm_versioned(&key, secret, None)?;
-            return self.publish_entry(path, encrypted.as_bytes()).await;
-        }
-        published?;
+        self.publish_entry(&self.entry_path(id), encrypted.as_bytes())
+            .await?;
         if let Some(path) = legacy_path {
             // Keep the old value until the exact replacement is published.
             self.delete_entry(&path).await?;
+        }
+        if let Some(path) = older_path {
+            self.retire_exact_entry(id, &path).await?;
         }
         Ok(())
     }
@@ -772,13 +860,8 @@ impl SecretBackend for YubikeyBackend {
     async fn retrieve(&self, id: &str) -> Result<String, VaultError> {
         self.require_device().await?;
 
-        let entry_path = self.entry_path(id);
-        let exact = match self.read_entry(&entry_path).await {
-            Err(error) if unaddressable_exact_path(id, &error) => None,
-            result => result?,
-        };
-        let (entry_path, data) = match exact {
-            Some(data) => (entry_path, data),
+        let (entry_path, data) = match self.read_exact_entry(id).await? {
+            Some(entry) => entry,
             None => {
                 self.read_legacy_entry(id)
                     .await?
@@ -822,6 +905,7 @@ impl SecretBackend for YubikeyBackend {
     async fn delete(&self, id: &str) -> Result<(), VaultError> {
         self.require_device().await?;
 
+        let older_path = self.older_path_for_retirement(id).await?;
         // Delete the older generation first so it cannot be revealed after
         // deleting the exact record. A store of another spelling uses its own
         // exact path and cannot overwrite this confirmed legacy record.
@@ -829,11 +913,17 @@ impl SecretBackend for YubikeyBackend {
             Some((path, _)) => self.delete_entry(&path).await?,
             None => false,
         };
-        let exact_deleted = match self.delete_entry(&self.entry_path(id)).await {
-            Err(error) if legacy_deleted && unaddressable_exact_path(id, &error) => false,
-            result => result?,
+        let older_deleted = match older_path {
+            Some(path) => self.retire_exact_entry(id, &path).await?,
+            None => false,
         };
-        if exact_deleted || legacy_deleted {
+        let current = self.entry_path(id);
+        let exact_deleted = if legacy_deleted || older_deleted {
+            self.retire_exact_entry(id, &current).await?
+        } else {
+            self.delete_entry(&current).await?
+        };
+        if exact_deleted || legacy_deleted || older_deleted {
             Ok(())
         } else {
             Err(VaultError::SecretNotFound {
@@ -843,23 +933,28 @@ impl SecretBackend for YubikeyBackend {
     }
 
     async fn exists(&self, id: &str) -> Result<bool, VaultError> {
-        let exact_exists = match self.host.file_exists(&self.entry_path(id)).await {
-            Err(error) if unaddressable_exact_path(id, &error) => false,
-            result => result?,
-        };
-        Ok(exact_exists || self.read_legacy_entry(id).await?.is_some())
+        for path in [Some(self.entry_path(id)), self.older_exact_entry_path(id)]
+            .into_iter()
+            .flatten()
+        {
+            match self.host.file_exists(&path).await {
+                Ok(true) => return Ok(true),
+                Err(error)
+                    if !self
+                        .unaddressable_exact_path_is_absent(id, &path, &error)
+                        .await? =>
+                {
+                    return Err(error);
+                }
+                _ => (),
+            }
+        }
+        Ok(self.read_legacy_entry(id).await?.is_some())
     }
 
     fn as_presence_capable(&self) -> Option<&dyn PresenceCapableBackend> {
         Some(self)
     }
-}
-
-/// A legacy spelling can fit a directory whose exact-ID filename cannot.
-/// The impossible exact path carries no evidence about the legacy record.
-fn unaddressable_exact_path(id: &str, error: &VaultError) -> bool {
-    id.contains('\u{fffd}')
-        && matches!(error, VaultError::Filesystem { code: Some(code), .. } if code == "ENAMETOOLONG")
 }
 
 #[cfg_attr(target_arch = "wasm32", async_trait::async_trait(?Send))]
@@ -873,7 +968,7 @@ impl ListableBackend for YubikeyBackend {
         let mut legacy_index = None;
         for filename in self
             .host
-            .list_dir_for_lowercase_lookup(&storage_dir, is_legacy_record_name)
+            .list_dir_for_lowercase_lookup(&storage_dir, Box::new(is_legacy_record_name))
             .await?
         {
             let Some(id) = legacy_record_id(&filename) else {
@@ -899,18 +994,20 @@ impl ListableBackend for YubikeyBackend {
             ids.push(id);
         }
 
-        // Exact replacements are published before retiring the legacy file.
-        // Enumerate exact names after reading legacy records so migration cannot fall between scans.
-        for filename in self
-            .host
-            .list_dir_for_lowercase_lookup(&storage_dir, is_exact_record_name)
-            .await?
-        {
-            if is_exact_record_name(&filename)
-                && let Some(entry) = self.read_entry(&storage_dir.join(&filename)).await?
-                && let Some(id) = exact_envelope_id(&entry, &filename)
+        // Scan each layout after its predecessors. Publication always precedes retirement.
+        let exact_layouts: [fn(&str) -> bool; 2] = [is_hashed_record_name, is_compact_record_name];
+        for include in exact_layouts {
+            for filename in self
+                .host
+                .list_dir_for_lowercase_lookup(&storage_dir, Box::new(include))
+                .await?
             {
-                ids.push(id);
+                if include(&filename)
+                    && let Some(entry) = self.read_entry(&storage_dir.join(&filename)).await?
+                    && let Some(id) = exact_envelope_id(&entry, &filename)
+                {
+                    ids.push(id);
+                }
             }
         }
         ids.sort();
@@ -931,10 +1028,23 @@ fn legacy_record_id(name: &str) -> Option<String> {
 }
 
 /// An exact filename encodes the SHA-256 digest of the original spelling.
-fn is_exact_record_name(name: &str) -> bool {
+fn is_hashed_record_name(name: &str) -> bool {
     name.strip_prefix("id-")
         .and_then(|name| name.strip_suffix(".enc"))
         .is_some_and(|hex| hex.len() == 64 && is_record_hex(hex))
+}
+
+/// Rust's compact records are named by a short, valid UTF-8 spelling containing U+FFFD.
+fn is_compact_record_name(name: &str) -> bool {
+    compact_record_id(name).is_some()
+}
+
+/// The compact filename can recover its exact scalar ID independently of the ciphertext.
+fn compact_record_id(name: &str) -> Option<String> {
+    name.strip_suffix(".vk2")
+        .filter(|hex| hex.len() <= 66 && is_record_hex(hex))
+        .and_then(|hex| String::from_utf8(hex_decode(hex).ok()?).ok())
+        .filter(|id| id.contains('\u{fffd}'))
 }
 
 /// Canonical record names encode whole bytes in lowercase hexadecimal.
@@ -948,7 +1058,8 @@ fn is_record_hex(hex: &str) -> bool {
 /// The version or legacy magic identifies ownership without a device touch or
 /// successful decryption. Other backends can use the same filename scheme.
 fn is_legacy_envelope(entry: &[u8]) -> bool {
-    if entry.starts_with(LEGACY_OPENSSL_MAGIC) {
+    // A v1 marker survives truncation and cannot be a FileBackend's 12-byte IV.
+    if entry.starts_with(LEGACY_OPENSSL_MAGIC) || entry.starts_with(b"1:") {
         return true;
     }
     let mut fields = entry.splitn(5, |&byte| byte == b':');
@@ -965,18 +1076,22 @@ fn is_legacy_envelope(entry: &[u8]) -> bool {
 /// Recover a representable ID only when its spelling agrees with the exact
 /// filename. Rust cannot address IDs with lone UTF-16 code units.
 fn exact_envelope_id(entry: &[u8], filename: &str) -> Option<String> {
-    let mut fields = entry.splitn(5, |&byte| byte == b':');
-    if fields.next()? != IDENTITY_FORMAT_VERSION.as_bytes() {
+    if !entry.starts_with(b"2:") {
         return None;
     }
-    let identity = Base64::decode_vec(std::str::from_utf8(fields.nth(3)?).ok()?).ok()?;
+    // A surviving version marker identifies a compact record even if it lost its AAD field.
+    if let Some(id) = compact_record_id(filename) {
+        return Some(id);
+    }
+    let encoded = entry.splitn(5, |&byte| byte == b':').nth(4)?;
+    let identity = Base64::decode_vec(std::str::from_utf8(encoded).ok()?).ok()?;
     let (units, remainder) = identity.as_chunks::<2>();
-    if units.is_empty() || !remainder.is_empty() || exact_entry_name(&identity) != filename {
+    if units.is_empty() || !remainder.is_empty() {
         return None;
     }
     let units: Vec<_> = units.iter().copied().map(u16::from_le_bytes).collect();
     let id = String::from_utf16(&units).ok()?;
-    id.contains('\u{fffd}').then_some(id)
+    (id.contains('\u{fffd}') && hashed_entry_name(&identity) == filename).then_some(id)
 }
 
 /// `presence_per_use` is `true` only when the configured slot enforces a
@@ -1460,16 +1575,31 @@ mod tests {
 
         assert!(encoded.starts_with("2:"));
         assert_eq!(encoded.split(':').next_back(), Some("/f8="));
-        assert!(
-            backend
-                .entry_path(id)
-                .file_name()
-                .unwrap()
-                .to_string_lossy()
-                .starts_with("id-")
-        );
+        assert_eq!(backend.entry_path(id).file_name().unwrap(), "efbfbd.vk2");
         assert_eq!(backend.list().await.unwrap(), [id]);
         assert_eq!(backend.retrieve(id).await.unwrap(), "value");
+    }
+
+    /// A compact record can replace an older hashed record without reviving its value on delete.
+    #[tokio::test]
+    async fn compact_entries_read_and_retire_older_hashed_records() {
+        let host = TestHost::new();
+        let backend = YubikeyBackend::new(host.clone(), false);
+        let id = "\u{fffd}";
+        let current_path = backend.entry_path(id);
+        let older_path = backend.older_exact_entry_path(id).unwrap();
+        backend.store(id, "old value").await.unwrap();
+        host.rename_file(&current_path, &older_path).await.unwrap();
+
+        let reopened = YubikeyBackend::new(host.clone(), false);
+        assert_eq!(reopened.list().await.unwrap(), [id]);
+        assert!(reopened.exists(id).await.unwrap());
+        assert_eq!(reopened.retrieve(id).await.unwrap(), "old value");
+        reopened.store(id, "new value").await.unwrap();
+        assert!(!host.file_exists(&older_path).await.unwrap());
+        assert_eq!(reopened.retrieve(id).await.unwrap(), "new value");
+        reopened.delete(id).await.unwrap();
+        assert!(!reopened.exists(id).await.unwrap());
     }
 
     #[tokio::test]

@@ -293,30 +293,37 @@ whether membership is intentional.
   filesystems and symbolic links to regular files. Listing needs neither a device touch nor successful
   decryption. Stores stage complete records within the canonical path budget and replace the directory
   entry atomically. Replacing or deleting a symbolic link leaves its target alone.
-  Ordinary legacy filenames identify their records independently of metadata. A legacy filename
+  Ordinary legacy filenames identify their records independently of metadata. A surviving `1:`
+  YubiKey version marker keeps a truncated record in inventory so it can still be removed. A legacy filename
   containing U+FFFD can represent a literal replacement character or an unpaired surrogate. Its
   original spelling requires a unique index entry with the matching legacy filename. When no unique
   entry survives, inventory and operations that rely on the legacy spelling report a typed decryption
   error with the affected path.
-  New records with ambiguous UTF-8 spellings use the SHA-256 digest of the exact UTF-16LE ID
-  in a distinct filename and store that ID in an authenticated version 2 GCM envelope. An upgrade
-  retires the matching legacy record once the exact record is published. Inventory reads legacy
-  records before enumerating exact filenames so concurrent upgrades keep their IDs visible.
-  Lookup prefers the exact record and can fall back to a matching legacy record, including where
-  the legacy filename fits and the exact filename exceeds filesystem limits. At that boundary, a
-  store can atomically replace an existing, uniquely identified legacy record with a version 1 GCM
-  envelope at its original filename, retaining its index spelling. Rust addresses Unicode scalar IDs. TypeScript
-  can also address IDs containing unpaired surrogates. An older reader must upgrade to find or read
-  a version 2 record.
+  New records with ambiguous UTF-8 spellings store the exact UTF-16LE ID in an authenticated
+  version 2 GCM envelope. The filename is the shorter of the hex WTF-8 spelling with a `.vk2`
+  suffix and `id-<SHA-256 digest of the UTF-16LE spelling>.enc`. WTF-8 encodes an unpaired surrogate
+  in three bytes and therefore fits anywhere the old UTF-8 filename fit. Both exact layouts are
+  readable. The compact filename supplies the exact ID when a truncated record retains its `2:`
+  marker. An upgrade retires older layouts once the current record is published. If the directory
+  contains an older hash that the configured path cannot address, store and delete report a typed
+  filesystem error before replacing or removing credentials. Inventory scans legacy, hashed,
+  then compact names so concurrent upgrades keep their IDs visible.
+  Lookup prefers the current record and can fall back to older layouts. Legacy point lookups
+  resolve only the requested filename. Rust addresses Unicode scalar IDs. TypeScript can also
+  address IDs containing unpaired surrogates. An older reader must upgrade to find or read a
+  version 2 record.
   Rust `HostPlatform::list_dir` and the default `WasmHostPlatform.listDir` enumerate directory entry
   names without following symbolic links. The ordinary Node host listing returns an empty list on
   enumeration failures. Rust hosts can implement `list_dir_for_lowercase_lookup` and WASM hosts can
   accept `listDir`'s optional `lowercaseLookup` flag for YubiKey-compatible enumeration. Both return
   ASCII-lowercase names reachable as regular files, including through symbolic links. They apply the
-  caller's `include` filter to canonical names before resolving paths. The WASM filter is optional
+  caller's `include` filter to canonical names before resolving paths. The Rust filter is an owned
+  predicate that can capture a specific filename. The WASM filter is optional
   and valid until the listing settles. A missing directory yields an empty inventory and failures
   reading the directory or resolving included candidates propagate. Ordinary inventory never
-  resolves the legacy index to establish record membership.
+  resolves the legacy index to establish record membership. For retirement, Rust's
+  `directory_entry_exists` and WASM's `fileExists(path, false)` can probe the entry without
+  following its final symbolic link, so an inaccessible target does not block removal of the link.
 - **Config & platform:** `VaultConfig`, `loadConfig`, `getDefaultConfigDir`, `getPlatformDefaultConfigDir`,
   `TrustTier`, `KeyStatus`, `Platform`.
 - **Doctor:** `runDoctor` / `VaultKeeper.doctor`, `RunDoctorOptions`, `PreflightResult`, `PreflightCheck`,

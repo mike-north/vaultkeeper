@@ -27,6 +27,24 @@ import {
 import type { HostSecretBackend } from '../types.js'
 
 describe('directory inventory errors', () => {
+  it(
+    'can probe an addressable link without resolving its unreadable target',
+    { skip: process.platform === 'win32' },
+    async () => {
+      const dir = await mkdtemp(join(tmpdir(), 'vk-list-'))
+      try {
+        const host = createNodeHost(dir)
+        const link = join(dir, 'link')
+        await symlink('a'.repeat(300), link)
+        await assert.rejects(host.fileExists(link), { code: 'ENAMETOOLONG', path: link })
+        assert.equal(await host.fileExists(link, false), true)
+        assert.equal(await host.fileExists(join(dir, 'missing'), false), false)
+      } finally {
+        await rm(dir, { recursive: true, force: true })
+      }
+    },
+  )
+
   it('returns regular filenames without including directories', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'vk-list-'))
     try {

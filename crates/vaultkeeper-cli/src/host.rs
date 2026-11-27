@@ -90,6 +90,23 @@ fn path_length_error_code(error: &std::io::Error) -> Option<String> {
     too_long.then(|| "ENAMETOOLONG".to_string())
 }
 
+/// Only a genuinely missing entry maps to false. An inaccessible path remains a typed failure.
+fn native_path_exists(
+    path: &Path,
+    metadata: std::io::Result<std::fs::Metadata>,
+) -> Result<bool, VaultError> {
+    match metadata {
+        Ok(_) => Ok(true),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(e) => Err(VaultError::Filesystem {
+            message: format!("Failed to check existence of {}: {e}", path.display()),
+            path: path.display().to_string(),
+            permission: "read".to_string(),
+            code: path_length_error_code(&e),
+        }),
+    }
+}
+
 /// Classify errors from linking an owned sibling. Linux filesystems can
 /// report EPERM when links are unavailable despite permitting ordinary I/O.
 fn hard_link_unavailable(error: &std::io::Error) -> bool {
@@ -365,21 +382,11 @@ impl HostPlatform for NativeHostPlatform {
     }
 
     async fn file_exists(&self, path: &Path) -> Result<bool, VaultError> {
-        // `Path::exists()` swallows every error (including EACCES) and
-        // reports `false`, which would let a permission failure masquerade
-        // as "does not exist" for callers (like FileBackend::retrieve) that
-        // rely on this to distinguish the two. Use `metadata` directly so
-        // only a genuine ENOENT-equivalent maps to `Ok(false)`.
-        match std::fs::metadata(path) {
-            Ok(_) => Ok(true),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(false),
-            Err(e) => Err(VaultError::Filesystem {
-                message: format!("Failed to check existence of {}: {e}", path.display()),
-                path: path.display().to_string(),
-                permission: "read".to_string(),
-                code: path_length_error_code(&e),
-            }),
-        }
+        native_path_exists(path, std::fs::metadata(path))
+    }
+
+    async fn directory_entry_exists(&self, path: &Path) -> Result<bool, VaultError> {
+        native_path_exists(path, std::fs::symlink_metadata(path))
     }
 
     async fn delete_file(&self, path: &Path) -> Result<(), VaultError> {
@@ -427,7 +434,7 @@ impl HostPlatform for NativeHostPlatform {
     async fn list_dir_for_lowercase_lookup(
         &self,
         path: &Path,
-        include: for<'name> fn(&'name str) -> bool,
+        include: Box<dyn for<'name> Fn(&'name str) -> bool + Send + Sync>,
     ) -> Result<Vec<String>, VaultError> {
         let mut names = std::collections::BTreeSet::new();
         for entry in read_directory_entries(path)? {
@@ -591,7 +598,7 @@ mod tests {
         names.sort();
         assert_eq!(names, ["616c706861.enc", "62657461.enc"]);
         assert_eq!(
-            host.list_dir_for_lowercase_lookup(dir.path(), |_| true)
+            host.list_dir_for_lowercase_lookup(dir.path(), Box::new(|_| true))
                 .await
                 .unwrap(),
             ["62657461.enc"]
@@ -1731,6 +1738,224 @@ mod tests {
             ));
         }
 
+        /// An index entry remains actionable when its file keeps the version marker but is truncated.
+        #[tokio::test]
+        #[serial(stub_tool_path_env)]
+        async fn yubikey_inventory_lists_truncated_indexed_records_for_cleanup() {
+            let _fixture = Fixture::with_yubikey();
+            let dir = tempfile::tempdir().unwrap();
+            let host = Arc::new(NativeHostPlatform::new(dir.path().to_path_buf()));
+            let backend = YubikeyBackend::new(host.clone(), false);
+            backend.store("alpha", "first value").await.unwrap();
+            backend.store("beta", "second value").await.unwrap();
+            let storage = dir.path().join("yubikey");
+            let beta = storage.join("62657461.enc");
+            fs::write(
+                storage.join("metadata.json"),
+                br#"{"entries":{"alpha":"616c706861.enc","beta":"62657461.enc"}}"#,
+            )
+            .unwrap();
+            fs::write(&beta, &fs::read(&beta).unwrap()[..12]).unwrap();
+
+            let reopened = YubikeyBackend::new(host, false);
+            assert!(reopened.exists("beta").await.unwrap());
+            assert!(matches!(
+                reopened.retrieve("beta").await,
+                Err(VaultError::Decryption { .. })
+            ));
+            assert_eq!(reopened.list().await.unwrap(), ["alpha", "beta"]);
+            reopened.delete("beta").await.unwrap();
+            assert_eq!(reopened.list().await.unwrap(), ["alpha"]);
+            assert!(!beta.exists());
+        }
+
+        /// A point operation resolves only the requested legacy name, while inventory audits all names.
+        #[tokio::test]
+        #[serial(stub_tool_path_env)]
+        async fn yubikey_legacy_point_operations_ignore_unrelated_unreadable_records() {
+            let _fixture = Fixture::with_yubikey();
+            let dir = tempfile::tempdir().unwrap();
+            let host = Arc::new(NativeHostPlatform::new(dir.path().to_path_buf()));
+            let storage = dir.path().join("yubikey");
+            fs::create_dir(&storage).unwrap();
+            let legacy = storage.join("efbfbd.enc");
+            // A v1 GCM record of "legacy value" under U+FFFD and the stub response.
+            fs::write(
+                &legacy,
+                b"1:QkJCQkJCQkJCQkJC:IMapKCVCjlaYD5Gw2sOsXg==:9FGC7UsZeOeNMJff",
+            )
+            .unwrap();
+            fs::write(
+                storage.join("metadata.json"),
+                br#"{"entries":{"\ufffd":"efbfbd.enc"}}"#,
+            )
+            .unwrap();
+
+            let id = "\u{fffd}";
+            let unrelated = storage.join("63.enc");
+            symlink("a".repeat(300), &unrelated).unwrap();
+            let reopened = YubikeyBackend::new(host, false);
+            assert!(reopened.exists(id).await.unwrap());
+            assert_eq!(reopened.retrieve(id).await.unwrap(), "legacy value");
+            reopened.store(id, "new value").await.unwrap();
+            assert_eq!(reopened.retrieve(id).await.unwrap(), "new value");
+            reopened.delete(id).await.unwrap();
+            assert!(!reopened.exists(id).await.unwrap());
+            assert!(matches!(
+                reopened.list().await,
+                Err(VaultError::Filesystem { path, .. }) if path == unrelated.to_string_lossy()
+            ));
+        }
+
+        /// The compact filename preserves the exact ID when ciphertext truncation removes its AAD.
+        #[tokio::test]
+        #[serial(stub_tool_path_env)]
+        async fn yubikey_inventory_lists_truncated_compact_records_for_cleanup() {
+            let _fixture = Fixture::with_yubikey();
+            let dir = tempfile::tempdir().unwrap();
+            let host = Arc::new(NativeHostPlatform::new(dir.path().to_path_buf()));
+            let id = "a\u{fffd}b";
+            YubikeyBackend::new(host.clone(), false)
+                .store(id, "value")
+                .await
+                .unwrap();
+            let record = dir.path().join("yubikey/61efbfbd62.vk2");
+            fs::write(&record, &fs::read(&record).unwrap()[..12]).unwrap();
+
+            let reopened = YubikeyBackend::new(host, false);
+            assert!(matches!(
+                reopened.retrieve(id).await,
+                Err(VaultError::Decryption { .. })
+            ));
+            assert_eq!(reopened.list().await.unwrap(), [id]);
+            reopened.delete(id).await.unwrap();
+            assert!(reopened.list().await.unwrap().is_empty());
+        }
+
+        /// An addressable older hash link can be retired even if its target is inaccessible.
+        #[tokio::test]
+        #[serial(stub_tool_path_env)]
+        async fn yubikey_retires_an_older_hash_link_with_an_overlong_target() {
+            let _fixture = Fixture::with_yubikey();
+            let dir = tempfile::tempdir().unwrap();
+            let host = Arc::new(NativeHostPlatform::new(dir.path().to_path_buf()));
+            let backend = YubikeyBackend::new(host, false);
+            let storage = dir.path().join("yubikey");
+            fs::create_dir(&storage).unwrap();
+            let old = storage
+                .join("id-15cc44da5e294721a0fc16c8fb952382d4dc51dbaa28950d9903acfbac0ccee5.enc");
+            let target = "a".repeat(300);
+            symlink(&target, &old).unwrap();
+            let id = "\u{fffd}";
+
+            backend.store(id, "value").await.unwrap();
+            assert_eq!(
+                old.symlink_metadata().unwrap_err().kind(),
+                std::io::ErrorKind::NotFound
+            );
+            assert_eq!(backend.retrieve(id).await.unwrap(), "value");
+            symlink(target, &old).unwrap();
+            backend.delete(id).await.unwrap();
+            assert_eq!(
+                old.symlink_metadata().unwrap_err().kind(),
+                std::io::ErrorKind::NotFound
+            );
+            assert!(!backend.exists(id).await.unwrap());
+        }
+
+        /// A fresh ambiguous ID fits wherever its original UTF-8 filename fit.
+        #[cfg(target_os = "macos")]
+        #[tokio::test]
+        #[serial(stub_tool_path_env)]
+        async fn yubikey_provisions_a_fresh_id_when_the_hashed_path_cannot_fit() {
+            let _fixture = Fixture::with_yubikey();
+            let dir = tempfile::tempdir().unwrap();
+            let mut config = dir.path().canonicalize().unwrap();
+            while config.as_os_str().len() < 995 {
+                let remaining = 994 - config.as_os_str().len();
+                let component = if remaining == 201 {
+                    199
+                } else {
+                    remaining.min(200)
+                };
+                config.push("a".repeat(component));
+            }
+            let host = Arc::new(NativeHostPlatform::new(config));
+            let backend = YubikeyBackend::new(host.clone(), false);
+            let id = "\u{fffd}";
+            backend.store("alpha", "first value").await.unwrap();
+            backend.store(id, "replacement").await.unwrap();
+
+            let reopened = YubikeyBackend::new(host, false);
+            assert_eq!(reopened.list().await.unwrap(), ["alpha", id]);
+            assert!(reopened.exists(id).await.unwrap());
+            assert_eq!(reopened.retrieve("alpha").await.unwrap(), "first value");
+            assert_eq!(reopened.retrieve(id).await.unwrap(), "replacement");
+            reopened.delete(id).await.unwrap();
+            assert!(!reopened.exists(id).await.unwrap());
+            assert_eq!(reopened.list().await.unwrap(), ["alpha"]);
+        }
+
+        /// Moving a store cannot make a present, unaddressable hash look safe to forget.
+        #[cfg(target_os = "macos")]
+        #[tokio::test]
+        #[serial(stub_tool_path_env)]
+        async fn yubikey_refuses_to_retire_a_present_older_hash_over_the_path_limit() {
+            let _fixture = Fixture::with_yubikey();
+            let dir = tempfile::tempdir().unwrap();
+            let root = dir.path().canonicalize().unwrap();
+            let short = root.join("short");
+            let short_storage = short.join("yubikey");
+            let old_name =
+                "id-15cc44da5e294721a0fc16c8fb952382d4dc51dbaa28950d9903acfbac0ccee5.enc";
+            let id = "\u{fffd}";
+            let backend =
+                YubikeyBackend::new(Arc::new(NativeHostPlatform::new(short.clone())), false);
+            backend.store(id, "old value").await.unwrap();
+            fs::rename(
+                short_storage.join("efbfbd.vk2"),
+                short_storage.join(old_name),
+            )
+            .unwrap();
+            assert_eq!(backend.retrieve(id).await.unwrap(), "old value");
+
+            let mut parent = root;
+            while parent.as_os_str().len() < 990 {
+                let remaining = 989 - parent.as_os_str().len();
+                let component = if remaining == 201 {
+                    199
+                } else {
+                    remaining.min(200)
+                };
+                parent.push("a".repeat(component));
+            }
+            fs::create_dir_all(&parent).unwrap();
+            let long = parent.join("long");
+            fs::rename(&short, &long).unwrap();
+            let long_storage = long.join("yubikey");
+            let cramped =
+                YubikeyBackend::new(Arc::new(NativeHostPlatform::new(long.clone())), false);
+            let exists = cramped.exists(id).await;
+            let retrieve = cramped.retrieve(id).await;
+            let store = cramped.store(id, "new value").await;
+            let delete = cramped.delete(id).await;
+            fs::rename(long, short).unwrap();
+
+            let blocked = |error: VaultError| {
+                assert!(
+                    matches!(error, VaultError::Filesystem { code: Some(code), path, .. }
+                    if code == "ENAMETOOLONG" && path == long_storage.join(old_name).to_string_lossy())
+                );
+            };
+            blocked(exists.unwrap_err());
+            blocked(retrieve.unwrap_err());
+            blocked(store.unwrap_err());
+            blocked(delete.unwrap_err());
+            assert!(!short_storage.join("efbfbd.vk2").exists());
+            assert_eq!(backend.list().await.unwrap(), [id]);
+            assert_eq!(backend.retrieve(id).await.unwrap(), "old value");
+        }
+
         /// A store can replace a confirmed legacy record when only that filename fits.
         #[cfg(target_os = "macos")]
         #[tokio::test]
@@ -1769,11 +1994,9 @@ mod tests {
             assert_eq!(reopened.retrieve(id).await.unwrap(), "new value");
             reopened.delete(id).await.unwrap();
             assert!(reopened.list().await.unwrap().is_empty());
-            assert!(matches!(
-                reopened.store(id, "new credential").await,
-                Err(VaultError::Filesystem { code: Some(code), .. }) if code == "ENAMETOOLONG"
-            ));
-            assert!(reopened.list().await.unwrap().is_empty());
+            reopened.store(id, "new credential").await.unwrap();
+            assert_eq!(reopened.list().await.unwrap(), [id]);
+            assert_eq!(reopened.retrieve(id).await.unwrap(), "new credential");
         }
 
         /// A legacy credential is addressable when the exact filename would exceed PATH_MAX.

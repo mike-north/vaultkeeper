@@ -10,6 +10,7 @@ import { randomBytes } from 'node:crypto'
 import {
   access,
   link,
+  lstat,
   open,
   mkdir,
   readdir,
@@ -225,9 +226,13 @@ export function createNodeHost(configDirOverride?: string): WasmHostPlatform {
       }
     },
 
-    async fileExists(path: string): Promise<boolean> {
+    async fileExists(path: string, followSymlinks = true): Promise<boolean> {
       try {
-        await access(path)
+        if (followSymlinks) {
+          await access(path)
+        } else {
+          await lstat(path)
+        }
         return true
       } catch (err) {
         // Mirror the native host's `file_exists` (crates/vaultkeeper-cli/src/host.rs):

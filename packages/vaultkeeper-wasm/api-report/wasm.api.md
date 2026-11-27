@@ -444,8 +444,7 @@ export interface WasmHostPlatform {
         stderr: Uint8Array;
         exitCode: number;
     }>;
-    // (undocumented)
-    fileExists(path: string): Promise<boolean>;
+    fileExists(path: string, followSymlinks?: boolean): Promise<boolean>;
     httpFetch(request: HttpFetchRequest): Promise<HttpFetchResponse>;
     listDir(path: string, lowercaseLookup?: boolean, include?: (name: string) => boolean): Promise<string[]>;
     // (undocumented)

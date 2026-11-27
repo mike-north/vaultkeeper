@@ -76,7 +76,8 @@ export interface WasmHostPlatform {
    * unavailable, so ordinary key-state storage can use its sequential fallback.
    */
   writeFileIfAbsent?(path: string, content: Uint8Array, mode: number): Promise<boolean>
-  fileExists(path: string): Promise<boolean>
+  /** Probe the path, following its final symlink by default. Pass `false` to probe the entry itself. */
+  fileExists(path: string, followSymlinks?: boolean): Promise<boolean>
   deleteFile(path: string): Promise<void>
   renameFile(from: string, to: string): Promise<void>
   /**

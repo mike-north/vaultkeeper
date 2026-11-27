@@ -60,10 +60,12 @@ Description
 </td></tr>
 <tr><td>
 
-[fileExists(path)](./wasm.wasmhostplatform.fileexists.md)
+[fileExists(path, followSymlinks)](./wasm.wasmhostplatform.fileexists.md)
 
 
 </td><td>
+
+Probe the path, following its final symlink by default. Pass `false` to probe the entry itself.
 
 
 </td></tr>

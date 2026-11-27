@@ -1,6 +1,6 @@
 /** Concurrent YubiKey writers share the encrypted-record inventory. */
 import { describe, expect, it, vi } from 'vitest'
-import { createCipheriv, hkdfSync } from 'node:crypto'
+import { createCipheriv, createHash, hkdfSync } from 'node:crypto'
 import {
   lstat,
   mkdir,
@@ -210,6 +210,72 @@ describe('YubiKey inventory', () => {
     }
   })
 
+  it('lists a truncated indexed record so cleanup can still delete it', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'vk-yubikey-inventory-'))
+    try {
+      const backend = new YubikeyBackend(dir)
+      await backend.store('alpha', 'first value')
+      await backend.store('beta', 'second value')
+      const beta = join(dir, '62657461.enc')
+      await writeFile(
+        join(dir, 'metadata.json'),
+        JSON.stringify({ entries: { alpha: join(dir, '616c706861.enc'), beta } }),
+      )
+      await writeFile(beta, (await readFile(beta)).subarray(0, 12))
+
+      const reopened = new YubikeyBackend(dir)
+      expect(await reopened.exists('beta')).toBe(true)
+      await expect(reopened.retrieve('beta')).rejects.toBeInstanceOf(DecryptionError)
+      expect((await reopened.list()).sort()).toEqual(['alpha', 'beta'])
+      await reopened.delete('beta')
+      expect(await reopened.list()).toEqual(['alpha'])
+      await expect(lstat(beta)).rejects.toMatchObject({ code: 'ENOENT' })
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('lists a truncated compact record by its exact filename for cleanup', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'vk-yubikey-inventory-'))
+    try {
+      const id = 'a\ud800\ufffdb'
+      const record = join(dir, '61eda080efbfbd62.vk2')
+      await new YubikeyBackend(dir).store(id, 'value')
+      await writeFile(record, (await readFile(record)).subarray(0, 12))
+      const reopened = new YubikeyBackend(dir)
+      await expect(reopened.retrieve(id)).rejects.toBeInstanceOf(DecryptionError)
+      expect(await reopened.list()).toEqual([id])
+      await reopened.delete(id)
+      expect(await reopened.list()).toEqual([])
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  it.skipIf(process.platform === 'win32')(
+    'resolves only possible compact record names during inventory',
+    async () => {
+      const dir = await mkdtemp(join(tmpdir(), 'vk-yubikey-inventory-'))
+      try {
+        const backend = new YubikeyBackend(dir)
+        await backend.store('alpha', 'value')
+        const overlong = 'a'.repeat(300)
+        await symlink(overlong, join(dir, '61.vk2'))
+        await symlink(overlong, join(dir, 'ffefbfbd.vk2'))
+        expect(await backend.list()).toEqual(['alpha'])
+
+        const candidate = join(dir, 'eda080.vk2')
+        await symlink(overlong, candidate)
+        await expect(backend.list()).rejects.toMatchObject({
+          code: 'ENAMETOOLONG',
+          path: candidate,
+        })
+      } finally {
+        await rm(dir, { recursive: true, force: true })
+      }
+    },
+  )
+
   it('preserves a legacy ID with an unpaired surrogate from metadata', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'vk-yubikey-inventory-'))
     try {
@@ -334,7 +400,37 @@ describe('YubiKey inventory', () => {
   )
 
   it.skipIf(process.platform !== 'darwin')(
-    'overwrites a confirmed legacy record when its exact path cannot fit',
+    'provisions fresh distinct IDs when their hashed paths cannot fit',
+    async () => {
+      const dir = await mkdtemp(join(tmpdir(), 'vk-yubikey-inventory-'))
+      try {
+        let storage = await realpath(dir)
+        while (Buffer.byteLength(storage) < 995) {
+          const remaining = 994 - Buffer.byteLength(storage)
+          storage = join(storage, 'a'.repeat(remaining === 201 ? 199 : Math.min(remaining, 200)))
+        }
+        const id = '\ufffd'
+        const alias = '\ud800'
+        const backend = new YubikeyBackend(storage)
+        await backend.store('alpha', 'first value')
+        await Promise.all([backend.store(id, 'replacement'), backend.store(alias, 'surrogate')])
+
+        const reopened = new YubikeyBackend(storage)
+        expect((await reopened.list()).sort()).toEqual(['alpha', alias, id].sort())
+        expect(await reopened.retrieve(id)).toBe('replacement')
+        expect(await reopened.retrieve(alias)).toBe('surrogate')
+        expect(await reopened.exists(id)).toBe(true)
+        await reopened.delete(id)
+        expect(await reopened.exists(id)).toBe(false)
+        expect(await reopened.retrieve(alias)).toBe('surrogate')
+      } finally {
+        await rm(dir, { recursive: true, force: true })
+      }
+    },
+  )
+
+  it.skipIf(process.platform !== 'darwin')(
+    'preserves a confirmed legacy ID while provisioning a distinct alias at the path boundary',
     async () => {
       const dir = await mkdtemp(join(tmpdir(), 'vk-yubikey-inventory-'))
       try {
@@ -346,10 +442,10 @@ describe('YubiKey inventory', () => {
         await mkdir(storage, { recursive: true })
         const id = await writeLegacyAlias(storage, '\ufffd')
         const backend = new YubikeyBackend(storage)
-        await expect(backend.store('\ud800', 'different ID')).rejects.toMatchObject({
-          code: 'ENAMETOOLONG',
-        })
+        await backend.store('\ud800', 'different ID')
         expect(await backend.retrieve(id)).toBe('value')
+        expect(await backend.retrieve('\ud800')).toBe('different ID')
+        await backend.delete('\ud800')
         await backend.store(id, 'new value')
 
         const reopened = new YubikeyBackend(storage)
@@ -357,10 +453,9 @@ describe('YubiKey inventory', () => {
         expect(await reopened.retrieve(id)).toBe('new value')
         await reopened.delete(id)
         expect(await reopened.list()).toEqual([])
-        await expect(reopened.store(id, 'new credential')).rejects.toMatchObject({
-          code: 'ENAMETOOLONG',
-        })
-        expect(await reopened.list()).toEqual([])
+        await reopened.store(id, 'new credential')
+        expect(await reopened.list()).toEqual([id])
+        expect(await reopened.retrieve(id)).toBe('new credential')
       } finally {
         await rm(dir, { recursive: true, force: true })
       }
@@ -402,6 +497,69 @@ describe('YubiKey inventory', () => {
       await rm(dir, { recursive: true, force: true })
     }
   })
+
+  it('reads and retires an older hashed record after publishing its compact replacement', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'vk-yubikey-inventory-'))
+    try {
+      const id = '\ufffd'
+      const digest = createHash('sha256').update(Buffer.from(id, 'utf16le')).digest('hex')
+      const olderPath = join(dir, `id-${digest}.enc`)
+      await new YubikeyBackend(dir).store(id, 'old value')
+      await rename(join(dir, 'efbfbd.vk2'), olderPath)
+
+      const reopened = new YubikeyBackend(dir)
+      expect(await reopened.list()).toEqual([id])
+      expect(await reopened.exists(id)).toBe(true)
+      expect(await reopened.retrieve(id)).toBe('old value')
+      await reopened.store(id, 'new value')
+      await expect(lstat(olderPath)).rejects.toMatchObject({ code: 'ENOENT' })
+      expect(await reopened.retrieve(id)).toBe('new value')
+      await reopened.delete(id)
+      expect(await reopened.exists(id)).toBe(false)
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  it.skipIf(process.platform !== 'darwin')(
+    'refuses to overwrite or delete an older record that is present beyond the path limit',
+    async () => {
+      const temp = await mkdtemp(join(tmpdir(), 'vk-yubikey-inventory-'))
+      try {
+        const dir = await realpath(temp)
+        const short = join(dir, 'short')
+        const id = '\ufffd'
+        const digest = createHash('sha256').update(Buffer.from(id, 'utf16le')).digest('hex')
+        const oldName = `id-${digest}.enc`
+        await new YubikeyBackend(short).store(id, 'old value')
+        await rename(join(short, 'efbfbd.vk2'), join(short, oldName))
+        let parent = dir
+        while (Buffer.byteLength(parent) < 990) {
+          const remaining = 989 - Buffer.byteLength(parent)
+          parent = join(parent, 'a'.repeat(remaining === 201 ? 199 : Math.min(remaining, 200)))
+        }
+        await mkdir(parent, { recursive: true })
+        const long = join(parent, 'long')
+        await rename(short, long)
+        try {
+          const cramped = new YubikeyBackend(long)
+          const failure = { code: 'ENAMETOOLONG', path: join(long, oldName) }
+          await expect(cramped.exists(id)).rejects.toMatchObject(failure)
+          await expect(cramped.retrieve(id)).rejects.toMatchObject(failure)
+          await expect(cramped.store(id, 'new value')).rejects.toMatchObject(failure)
+          await expect(cramped.delete(id)).rejects.toMatchObject(failure)
+          await expect(lstat(join(long, 'efbfbd.vk2'))).rejects.toMatchObject({ code: 'ENOENT' })
+        } finally {
+          await rename(long, short)
+        }
+        const reopened = new YubikeyBackend(short)
+        expect(await reopened.list()).toEqual([id])
+        expect(await reopened.retrieve(id)).toBe('old value')
+      } finally {
+        await rm(temp, { recursive: true, force: true })
+      }
+    },
+  )
 
   it('keeps a newly stored U+FFFD ID when stale legacy metadata maps its filename to an alias', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'vk-yubikey-inventory-'))

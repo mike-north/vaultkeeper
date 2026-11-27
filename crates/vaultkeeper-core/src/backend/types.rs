@@ -155,6 +155,12 @@ pub trait HostPlatform: Send + Sync {
     /// Check if a file exists.
     async fn file_exists(&self, path: &Path) -> Result<bool, VaultError>;
 
+    /// Check whether the directory entry can be addressed without following its final symlink.
+    /// Hosts without a no-follow probe can use their ordinary existence check.
+    async fn directory_entry_exists(&self, path: &Path) -> Result<bool, VaultError> {
+        self.file_exists(path).await
+    }
+
     /// Delete a file. Returns `Ok(())` if the file was deleted.
     async fn delete_file(&self, path: &Path) -> Result<(), VaultError>;
 
@@ -188,7 +194,7 @@ pub trait HostPlatform: Send + Sync {
     async fn list_dir_for_lowercase_lookup(
         &self,
         path: &Path,
-        include: for<'name> fn(&'name str) -> bool,
+        include: Box<dyn for<'name> Fn(&'name str) -> bool + Send + Sync>,
     ) -> Result<Vec<String>, VaultError> {
         Ok(self
             .list_dir(path)
