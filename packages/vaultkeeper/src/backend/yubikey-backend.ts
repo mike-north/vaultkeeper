@@ -147,47 +147,54 @@ function decodeIdentity(encoded: string): Buffer | undefined {
     : undefined
 }
 
-/**
- * Identify YubiKey envelopes even when another backend uses the same filenames.
- * Null identifies a legacy record whose spelling may need its original index.
- */
-function inventoryRecordId(entry: Buffer, compactId?: string): string | null | undefined {
-  if (compactId !== undefined) {
-    // The canonical filename supplies the ID even if a v2 envelope loses its final field.
-    return entry[0] === IDENTITY_FORMAT_VERSION.charCodeAt(0) && entry[1] === 0x3a
-      ? compactId
-      : undefined
-  }
+/** Preserve ownership evidence even when the exact envelope is truncated. */
+function hasExactEnvelope(entry: Buffer): boolean {
+  return entry[0] === IDENTITY_FORMAT_VERSION.charCodeAt(0) && entry[1] === 0x3a
+}
+
+/** Identify legacy YubiKey envelopes even when another backend uses the same filenames. */
+function isLegacyEnvelope(entry: Buffer): boolean {
   if (entry.subarray(0, LEGACY_OPENSSL_MAGIC.length).equals(LEGACY_OPENSSL_MAGIC)) {
-    return null
+    return true
   }
   // A v1 marker survives truncation and cannot be a FileBackend's 12-byte IV.
   if (entry[0] === FORMAT_VERSION.charCodeAt(0) && entry[1] === 0x3a) {
-    return null
+    return true
   }
   const separator = 0x3a
   const versionEnd = entry.indexOf(separator)
   if (
     versionEnd <= 0 ||
+    hasExactEnvelope(entry) ||
     !entry.subarray(0, versionEnd).every((byte) => byte >= 0x30 && byte <= 0x39)
   ) {
-    return undefined
+    return false
   }
   const ivEnd = entry.indexOf(separator, versionEnd + 1)
   const tagEnd = ivEnd === -1 ? -1 : entry.indexOf(separator, ivEnd + 1)
-  if (tagEnd === -1) {
-    return undefined // A FileBackend envelope has only three fields.
-  }
-  const version = entry.subarray(0, versionEnd).toString('latin1')
-  const ciphertextEnd = entry.indexOf(separator, tagEnd + 1)
-  if (version !== IDENTITY_FORMAT_VERSION) {
-    return ciphertextEnd === -1 ? null : undefined
-  }
-  if (ciphertextEnd === -1 || entry.indexOf(separator, ciphertextEnd + 1) !== -1) {
+  // A FileBackend envelope has only three fields.
+  return tagEnd !== -1 && entry.indexOf(separator, tagEnd + 1) === -1
+}
+
+/** A hash cannot recover an ID by itself. Confirm the stored spelling before listing it. */
+function hashedInventoryRecordId(entry: Buffer, entryPath: string): string | undefined {
+  if (!hasExactEnvelope(entry)) {
     return undefined
   }
-  const identity = decodeIdentity(entry.subarray(ciphertextEnd + 1).toString('latin1'))
-  return identity?.toString('utf16le')
+  const separator = 0x3a
+  const ivEnd = entry.indexOf(separator, 2)
+  const tagEnd = ivEnd === -1 ? -1 : entry.indexOf(separator, ivEnd + 1)
+  const ciphertextEnd = tagEnd === -1 ? -1 : entry.indexOf(separator, tagEnd + 1)
+  if (ciphertextEnd !== -1) {
+    const identity = decodeIdentity(entry.subarray(ciphertextEnd + 1).toString('latin1'))
+    if (identity !== undefined && hashedEntryName(identity) === path.basename(entryPath)) {
+      const id = identity.toString('utf16le')
+      if (exactIdentity(id) !== undefined) {
+        return id
+      }
+    }
+  }
+  throw new DecryptionError('Cannot identify the YubiKey hashed record.', entryPath)
 }
 
 /** Resolve uniquely indexed spellings for legacy filenames that have multiple possible IDs. */
@@ -750,28 +757,24 @@ export class YubikeyBackend implements ListableBackend, PresenceCapableBackend {
     if (!(await this.#hasEntryName(legacyPath))) {
       return undefined
     }
-    if ((await this.#readInventoryRecord(legacyPath)) !== null) {
+    if (!(await this.#readInventoryRecord(legacyPath, isLegacyEnvelope))) {
       return undefined
     }
     const aliases = await legacyInventoryAliases(this.#storageDir, new Set([canonical]))
     return legacySpelling(canonical, aliases, legacyPath) === id ? legacyPath : undefined
   }
 
-  /** Read through the same canonical path as lookup, including old links to regular files. */
-  async #readInventoryRecord(
+  /** Inspect only reachable regular files and keep format errors distinct from I/O errors. */
+  async #readInventoryRecord<T>(
     entryPath: string,
-    compactId?: string,
-  ): Promise<string | null | undefined> {
+    inspect: (entry: Buffer) => T,
+  ): Promise<T | undefined> {
+    let data: Buffer
     try {
       if (!(await fs.stat(entryPath)).isFile()) {
         return undefined
       }
-      const data = await fs.readFile(entryPath)
-      try {
-        return inventoryRecordId(data, compactId)
-      } finally {
-        data.fill(0)
-      }
+      data = await fs.readFile(entryPath)
     } catch (err) {
       if (
         err instanceof Error &&
@@ -781,6 +784,11 @@ export class YubikeyBackend implements ListableBackend, PresenceCapableBackend {
         return undefined
       }
       throw toFilesystemError(err, 'YubiKey inventory entry', entryPath, 'read')
+    }
+    try {
+      return inspect(data)
+    } finally {
+      data.fill(0)
     }
   }
 
@@ -812,7 +820,7 @@ export class YubikeyBackend implements ListableBackend, PresenceCapableBackend {
       const id = Buffer.from(hex, 'hex').toString('utf8')
       if (
         Buffer.from(id, 'utf8').toString('hex') === hex &&
-        (await this.#readInventoryRecord(path.join(this.#storageDir, name))) === null
+        (await this.#readInventoryRecord(path.join(this.#storageDir, name), isLegacyEnvelope))
       ) {
         legacyIds.add(id)
       }
@@ -829,12 +837,10 @@ export class YubikeyBackend implements ListableBackend, PresenceCapableBackend {
         continue
       }
       const entryPath = path.join(this.#storageDir, name)
-      const spelling = await this.#readInventoryRecord(entryPath)
-      if (
-        typeof spelling === 'string' &&
-        (getEntryPath(this.#storageDir, spelling) === entryPath ||
-          olderExactEntryPath(this.#storageDir, spelling) === entryPath)
-      ) {
+      const spelling = await this.#readInventoryRecord(entryPath, (entry) =>
+        hashedInventoryRecordId(entry, entryPath),
+      )
+      if (spelling !== undefined) {
         ids.add(spelling)
       }
     }
@@ -842,8 +848,7 @@ export class YubikeyBackend implements ListableBackend, PresenceCapableBackend {
       const compactId = compactRecordId(name)
       if (
         compactId !== undefined &&
-        (await this.#readInventoryRecord(path.join(this.#storageDir, name), compactId)) ===
-          compactId
+        (await this.#readInventoryRecord(path.join(this.#storageDir, name), hasExactEnvelope))
       ) {
         ids.add(compactId)
       }

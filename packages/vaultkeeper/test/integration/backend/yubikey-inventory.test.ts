@@ -252,6 +252,38 @@ describe('YubiKey inventory', () => {
     }
   })
 
+  it('reports a recognized hash whose exact spelling can no longer be verified', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'vk-yubikey-inventory-'))
+    try {
+      const id = `${'a'.repeat(31)}\ufffd`
+      const digest = createHash('sha256').update(Buffer.from(id, 'utf16le')).digest('hex')
+      const record = join(dir, `id-${digest}.enc`)
+      const backend = new YubikeyBackend(dir)
+      await backend.store('alpha', 'first value')
+      await backend.store(id, 'second value')
+
+      const reopened = new YubikeyBackend(dir)
+      expect((await reopened.list()).sort()).toEqual([id, 'alpha'])
+      expect(await reopened.retrieve(id)).toBe('second value')
+      const data = await readFile(record)
+      const wrongSpelling = Buffer.from('\ufffd', 'utf16le').toString('base64')
+      for (const corrupted of [
+        data.subarray(0, 12),
+        `${data.toString('utf8').split(':').slice(0, 4).join(':')}:${wrongSpelling}`,
+      ]) {
+        await writeFile(record, corrupted)
+        expect(await reopened.exists(id)).toBe(true)
+        await expect(reopened.retrieve(id)).rejects.toBeInstanceOf(DecryptionError)
+        await expect(reopened.list()).rejects.toBeInstanceOf(DecryptionError)
+        await expect(reopened.list()).rejects.toMatchObject({ path: record })
+      }
+      await reopened.delete(id)
+      expect(await reopened.list()).toEqual(['alpha'])
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
   it.skipIf(process.platform === 'win32')(
     'resolves only possible compact record names during inventory',
     async () => {

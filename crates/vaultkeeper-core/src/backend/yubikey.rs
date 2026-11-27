@@ -221,6 +221,31 @@ impl YubikeyBackend {
         }
     }
 
+    /// Existence-only host listings can include directories. Skip a positive
+    /// directory diagnosis and propagate failures reading actual record candidates.
+    async fn read_inventory_entry(
+        &self,
+        path: &Path,
+    ) -> Result<Option<Zeroizing<Vec<u8>>>, VaultError> {
+        match self.read_entry(path).await {
+            Err(VaultError::Filesystem {
+                code: Some(code), ..
+            }) if code == "EISDIR" => Ok(None),
+            // A host may omit errno. Strict directory enumeration can confirm a
+            // directory without hiding errors on regular files or inspecting children.
+            Err(VaultError::Filesystem { code: None, .. })
+                if self
+                    .host
+                    .list_dir_for_lowercase_lookup(path, Box::new(|_| false))
+                    .await
+                    .is_ok() =>
+            {
+                Ok(None)
+            }
+            result => result,
+        }
+    }
+
     /// Rust can address only the UTF-8 spelling of legacy names. Exact-format
     /// records and other backends' records cannot be used as a legacy fallback.
     async fn read_legacy_entry(
@@ -246,7 +271,7 @@ impl YubikeyBackend {
             return Ok(None);
         }
         let Some(data) = self
-            .read_entry(&path)
+            .read_inventory_entry(&path)
             .await?
             .filter(|entry| is_legacy_envelope(entry))
         else {
@@ -976,7 +1001,7 @@ impl ListableBackend for YubikeyBackend {
             };
             let path = storage_dir.join(&filename);
             if !self
-                .read_entry(&path)
+                .read_inventory_entry(&path)
                 .await?
                 .is_some_and(|entry| is_legacy_envelope(&entry))
             {
@@ -1002,11 +1027,13 @@ impl ListableBackend for YubikeyBackend {
                 .list_dir_for_lowercase_lookup(&storage_dir, Box::new(include))
                 .await?
             {
-                if include(&filename)
-                    && let Some(entry) = self.read_entry(&storage_dir.join(&filename)).await?
-                    && let Some(id) = exact_envelope_id(&entry, &filename)
-                {
-                    ids.push(id);
+                if include(&filename) {
+                    let path = storage_dir.join(&filename);
+                    if let Some(entry) = self.read_inventory_entry(&path).await?
+                        && let Some(id) = exact_envelope_id(&entry, &filename, &path)?
+                    {
+                        ids.push(id);
+                    }
                 }
             }
         }
@@ -1073,25 +1100,41 @@ fn is_legacy_envelope(entry: &[u8]) -> bool {
         && fields.count() == 3
 }
 
-/// Recover a representable ID only when its spelling agrees with the exact
-/// filename. Rust cannot address IDs with lone UTF-16 code units.
-fn exact_envelope_id(entry: &[u8], filename: &str) -> Option<String> {
+/// Recover the ID of a recognized exact record. A hash needs a verifiable
+/// spelling before inventory can distinguish corruption from a TypeScript-only ID.
+fn exact_envelope_id(
+    entry: &[u8],
+    filename: &str,
+    path: &Path,
+) -> Result<Option<String>, VaultError> {
     if !entry.starts_with(b"2:") {
-        return None;
+        return Ok(None);
     }
     // A surviving version marker identifies a compact record even if it lost its AAD field.
     if let Some(id) = compact_record_id(filename) {
-        return Some(id);
+        return Ok(Some(id));
     }
-    let encoded = entry.splitn(5, |&byte| byte == b':').nth(4)?;
-    let identity = Base64::decode_vec(std::str::from_utf8(encoded).ok()?).ok()?;
+    let unidentifiable = || VaultError::Decryption {
+        message: "Cannot identify the YubiKey hashed record.".to_string(),
+        path: path.display().to_string(),
+    };
+    let identity = entry
+        .splitn(5, |&byte| byte == b':')
+        .nth(4)
+        .and_then(|encoded| std::str::from_utf8(encoded).ok())
+        .and_then(|encoded| Base64::decode_vec(encoded).ok())
+        .ok_or_else(unidentifiable)?;
     let (units, remainder) = identity.as_chunks::<2>();
-    if units.is_empty() || !remainder.is_empty() {
-        return None;
+    if units.is_empty() || !remainder.is_empty() || hashed_entry_name(&identity) != filename {
+        return Err(unidentifiable());
     }
     let units: Vec<_> = units.iter().copied().map(u16::from_le_bytes).collect();
-    let id = String::from_utf16(&units).ok()?;
-    (id.contains('\u{fffd}') && hashed_entry_name(&identity) == filename).then_some(id)
+    // A hash-confirmed spelling with an unpaired surrogate is outside Rust's ID domain.
+    match String::from_utf16(&units) {
+        Ok(id) if id.contains('\u{fffd}') => Ok(Some(id)),
+        Ok(_) => Err(unidentifiable()),
+        Err(_) => Ok(None),
+    }
 }
 
 /// `presence_per_use` is `true` only when the configured slot enforces a
@@ -1169,6 +1212,10 @@ mod tests {
         /// disambiguation path from the "genuinely missing" path.
         deny_read: Mutex<HashSet<PathBuf>>,
         deny_delete: Mutex<HashSet<PathBuf>>,
+        /// Canonical lookup paths that resolve to a differently cased raw file name.
+        case_aliases: Mutex<HashMap<PathBuf, PathBuf>>,
+        /// Raw directory entries whose paths exist but cannot be read as files.
+        directories: Mutex<HashMap<PathBuf, Option<&'static str>>>,
         /// Synchronizes legacy index reads to expose lost read-modify-write updates.
         metadata_barrier: Mutex<Option<Arc<tokio::sync::Barrier>>>,
         directory_snapshot: Mutex<Option<DirectorySnapshot>>,
@@ -1187,6 +1234,8 @@ mod tests {
                 ykman_installed: true,
                 deny_read: Mutex::new(HashSet::new()),
                 deny_delete: Mutex::new(HashSet::new()),
+                case_aliases: Mutex::new(HashMap::new()),
+                directories: Mutex::new(HashMap::new()),
                 metadata_barrier: Mutex::new(None),
                 directory_snapshot: Mutex::new(None),
             })
@@ -1202,6 +1251,8 @@ mod tests {
                 ykman_installed: true,
                 deny_read: Mutex::new(HashSet::new()),
                 deny_delete: Mutex::new(HashSet::new()),
+                case_aliases: Mutex::new(HashMap::new()),
+                directories: Mutex::new(HashMap::new()),
                 metadata_barrier: Mutex::new(None),
                 directory_snapshot: Mutex::new(None),
             })
@@ -1217,9 +1268,21 @@ mod tests {
                 ykman_installed: false,
                 deny_read: Mutex::new(HashSet::new()),
                 deny_delete: Mutex::new(HashSet::new()),
+                case_aliases: Mutex::new(HashMap::new()),
+                directories: Mutex::new(HashMap::new()),
                 metadata_barrier: Mutex::new(None),
                 directory_snapshot: Mutex::new(None),
             })
+        }
+
+        /// Resolve a test's case-only rename without changing raw directory enumeration.
+        fn resolved_path(&self, path: &Path) -> PathBuf {
+            self.case_aliases
+                .lock()
+                .unwrap()
+                .get(path)
+                .cloned()
+                .unwrap_or_else(|| path.to_path_buf())
         }
     }
 
@@ -1275,12 +1338,21 @@ mod tests {
             })
         }
         async fn read_file(&self, path: &Path) -> Result<Vec<u8>, VaultError> {
+            let path = &self.resolved_path(path);
             if self.deny_read.lock().unwrap().contains(path) {
                 return Err(VaultError::Filesystem {
                     message: format!("Permission denied reading {}", path.display()),
                     path: path.display().to_string(),
                     permission: "read".to_string(),
                     code: None,
+                });
+            }
+            if let Some(code) = self.directories.lock().unwrap().get(path) {
+                return Err(VaultError::Filesystem {
+                    message: format!("Is a directory: {}", path.display()),
+                    path: path.display().to_string(),
+                    permission: "read".to_string(),
+                    code: code.map(String::from),
                 });
             }
             let result = self
@@ -1324,7 +1396,9 @@ mod tests {
                     code: None,
                 });
             }
-            Ok(self.files.lock().unwrap().contains_key(path))
+            let path = &self.resolved_path(path);
+            Ok(self.files.lock().unwrap().contains_key(path)
+                || self.directories.lock().unwrap().contains_key(path))
         }
         async fn delete_file(&self, path: &Path) -> Result<(), VaultError> {
             if self.deny_delete.lock().unwrap().contains(path) {
@@ -1345,11 +1419,26 @@ mod tests {
             Ok(())
         }
         async fn list_dir(&self, path: &Path) -> Result<Vec<String>, VaultError> {
+            // A successful listing distinguishes a directory from an existing regular file.
+            if self
+                .files
+                .lock()
+                .unwrap()
+                .contains_key(&self.resolved_path(path))
+            {
+                return Err(VaultError::Filesystem {
+                    message: format!("Not a directory: {}", path.display()),
+                    path: path.display().to_string(),
+                    permission: "read".to_string(),
+                    code: Some("ENOTDIR".to_string()),
+                });
+            }
             let filenames = self
                 .files
                 .lock()
                 .unwrap()
                 .keys()
+                .chain(self.directories.lock().unwrap().keys())
                 .filter_map(|k| {
                     if k.parent() == Some(path) {
                         k.file_name().and_then(|n| n.to_str()).map(String::from)
@@ -1562,6 +1651,106 @@ mod tests {
         let mut ids = backend.list().await.unwrap();
         ids.sort();
         assert_eq!(ids, ["current", "legacy"]);
+    }
+
+    /// A raw uppercase name belongs in inventory only when canonical lookup reaches it.
+    #[tokio::test]
+    async fn default_host_inventory_resolves_reachable_case_aliases() {
+        let host = TestHost::new();
+        let backend = YubikeyBackend::new(host.clone(), false);
+        backend.store("alpha", "first value").await.unwrap();
+        backend.store("beta", "second value").await.unwrap();
+        let canonical = backend.entry_path("beta");
+        let uppercase = backend.storage_dir().join("62657461.ENC");
+        host.rename_file(&canonical, &uppercase).await.unwrap();
+        assert_eq!(backend.list().await.unwrap(), ["alpha"]);
+
+        host.case_aliases
+            .lock()
+            .unwrap()
+            .insert(canonical, uppercase);
+        assert!(backend.exists("beta").await.unwrap());
+        assert_eq!(backend.retrieve("beta").await.unwrap(), "second value");
+        assert_eq!(backend.list().await.unwrap(), ["alpha", "beta"]);
+    }
+
+    /// A directory read can fail with or without errno while genuine file read errors propagate.
+    #[tokio::test]
+    async fn default_host_inventory_ignores_directories_named_like_records() {
+        let host = TestHost::new();
+        let backend = YubikeyBackend::new(host.clone(), false);
+        backend.store("alpha", "first value").await.unwrap();
+        backend.store("beta", "second value").await.unwrap();
+        let directory = backend.entry_path("c");
+        host.directories.lock().unwrap().extend([
+            (directory.clone(), Some("EISDIR")),
+            (backend.entry_path("d"), None),
+        ]);
+        assert!(host.file_exists(&directory).await.unwrap());
+
+        assert_eq!(backend.list().await.unwrap(), ["alpha", "beta"]);
+        let unreadable = backend.entry_path("beta");
+        host.deny_read.lock().unwrap().insert(unreadable.clone());
+        assert!(matches!(
+            backend.list().await,
+            Err(VaultError::Filesystem { path, .. }) if path == unreadable.to_string_lossy()
+        ));
+    }
+
+    /// A recognized hashed record can require operator cleanup after its spelling is damaged.
+    #[tokio::test]
+    async fn inventory_reports_an_unidentifiable_hashed_record() {
+        let host = TestHost::new();
+        let backend = YubikeyBackend::new(host.clone(), false);
+        let id = format!("{}\u{fffd}", "a".repeat(31));
+        backend.store("alpha", "first value").await.unwrap();
+        backend.store(&id, "second value").await.unwrap();
+        let record = backend.entry_path(&id);
+        assert!(is_hashed_record_name(
+            record.file_name().unwrap().to_str().unwrap()
+        ));
+
+        let reopened = YubikeyBackend::new(host.clone(), false);
+        assert_eq!(reopened.list().await.unwrap(), [id.as_str(), "alpha"]);
+        assert_eq!(reopened.retrieve(&id).await.unwrap(), "second value");
+        let data = Zeroizing::new(host.read_file(&record).await.unwrap());
+        let fields = std::str::from_utf8(&data).unwrap();
+        let (envelope, _) = fields.rsplit_once(':').unwrap();
+        let wrong_spelling = Zeroizing::new(format!("{envelope}:/f8="));
+        for damaged in [&data[..12], wrong_spelling.as_bytes()] {
+            host.write_file(&record, damaged, 0o600).await.unwrap();
+            assert!(reopened.exists(&id).await.unwrap());
+            assert!(matches!(
+                reopened.retrieve(&id).await,
+                Err(VaultError::Decryption { .. })
+            ));
+            let result = reopened.list().await;
+            assert!(
+                matches!(
+                    result,
+                    Err(VaultError::Decryption { ref path, .. }) if path == &record.to_string_lossy()
+                ),
+                "expected a typed error for the hashed path, got {result:?}"
+            );
+        }
+        reopened.delete(&id).await.unwrap();
+        assert_eq!(reopened.list().await.unwrap(), ["alpha"]);
+    }
+
+    /// A hash-verified TypeScript ID with an unpaired surrogate is outside Rust's ID domain.
+    #[tokio::test]
+    async fn rust_inventory_skips_identified_typescript_only_hashes() {
+        let host = TestHost::new();
+        let backend = YubikeyBackend::new(host.clone(), false);
+        backend.store("alpha", "value").await.unwrap();
+        let identity = 0xd800_u16.to_le_bytes();
+        let record = backend.storage_dir().join(hashed_entry_name(&identity));
+        let envelope = format!("2:iv:tag:ciphertext:{}", Base64::encode_string(&identity));
+        host.write_file(&record, envelope.as_bytes(), 0o600)
+            .await
+            .unwrap();
+
+        assert_eq!(backend.list().await.unwrap(), ["alpha"]);
     }
 
     #[tokio::test]

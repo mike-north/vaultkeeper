@@ -304,7 +304,9 @@ whether membership is intentional.
   suffix and `id-<SHA-256 digest of the UTF-16LE spelling>.enc`. WTF-8 encodes an unpaired surrogate
   in three bytes and therefore fits anywhere the old UTF-8 filename fit. Both exact layouts are
   readable. The compact filename supplies the exact ID when a truncated record retains its `2:`
-  marker. An upgrade retires older layouts once the current record is published. If the directory
+  marker. For a hashed file retaining that marker, inventory reports a typed decryption error with
+  the record path if the envelope no longer supplies an ID that matches the filename. An upgrade
+  retires older layouts once the current record is published. If the directory
   contains an older hash that the configured path cannot address, store and delete report a typed
   filesystem error before replacing or removing credentials. Inventory scans legacy, hashed,
   then compact names so concurrent upgrades keep their IDs visible.
@@ -318,7 +320,10 @@ whether membership is intentional.
   accept `listDir`'s optional `lowercaseLookup` flag for YubiKey-compatible enumeration. Both return
   ASCII-lowercase names reachable as regular files, including through symbolic links. They apply the
   caller's `include` filter to canonical names before resolving paths. The Rust filter is an owned
-  predicate that can capture a specific filename. The WASM filter is optional
+  predicate that can capture a specific filename. The default Rust implementation checks folded
+  names with `file_exists`. YubiKey inventory skips directories confirmed by an `EISDIR` read error
+  or a successful directory listing after a read error without errno. Hosts with file-type metadata should
+  override the default to exclude non-regular entries before a read. The WASM filter is optional
   and valid until the listing settles. A missing directory yields an empty inventory and failures
   reading the directory or resolving included candidates propagate. Ordinary inventory never
   resolves the legacy index to establish record membership. For retirement, Rust's
