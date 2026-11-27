@@ -2,7 +2,7 @@
 
 use crate::errors::VaultError;
 use crate::types::{SigningAlgorithm, SigningPublicKey};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// Output from a subprocess execution.
 #[derive(Debug, Clone)]
@@ -154,6 +154,15 @@ pub trait HostPlatform: Send + Sync {
 
     /// Check if a file exists.
     async fn file_exists(&self, path: &Path) -> Result<bool, VaultError>;
+
+    /// Resolve a path to its canonical filesystem location if it exists.
+    ///
+    /// Return the input for a missing path and `None` when this host does not
+    /// support alias resolution. Virtual hosts without aliases can return
+    /// their input directly. Explicit file stores require this capability.
+    async fn canonicalize_path(&self, _path: &Path) -> Result<Option<PathBuf>, VaultError> {
+        Ok(None)
+    }
 
     /// Delete a file. Returns `Ok(())` if the file was deleted.
     async fn delete_file(&self, path: &Path) -> Result<(), VaultError>;

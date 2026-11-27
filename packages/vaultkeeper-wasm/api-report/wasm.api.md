@@ -434,6 +434,7 @@ export interface VaultResponse {
 
 // @public
 export interface WasmHostPlatform {
+    canonicalizePath?(path: string): Promise<string>;
     // (undocumented)
     configDir(): string;
     // (undocumented)

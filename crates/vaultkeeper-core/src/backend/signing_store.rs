@@ -15,12 +15,12 @@
 //! distinct HKDF `info` label ([`HKDF_INFO`]) — a separate cryptographic
 //! namespace, not merely a separate directory. This is what lets a signing
 //! key and a stored secret share the same caller-facing `id` without any
-//! collision: they are sealed under unrelated derived keys and live under
-//! unrelated directories.
+//! collision: they are sealed under unrelated keys and use distinct filenames
+//! even if the configured secret directory resolves to `signing/`.
 //!
 //! Mirrors [`super::file::FileBackend`]'s `aes-gcm` + `base64ct` envelope
-//! discipline exactly: `iv:authTag:ciphertext` (each part base64), atomic
-//! atomic no-replace publication via [`HostPlatform::write_file_if_absent`]. Kept
+//! discipline exactly: `iv:authTag:ciphertext` (each part base64), with atomic
+//! no-replace publication via [`HostPlatform::write_file_if_absent`]. Kept
 //! self-contained (its own `encrypt_gcm`/`decrypt_gcm`, mirroring
 //! `crate::keys::storage`'s documented rationale) rather than reaching into
 //! `file.rs`'s private helpers, which keeps this module's on-disk contract
@@ -61,7 +61,8 @@ const GCM_TAG_BYTES: usize = 16;
 /// keys, not merely different directories.
 const HKDF_INFO: &[u8] = b"vaultkeeper-core/backend/file/signing-key/v1";
 
-fn signing_dir(host: &dyn HostPlatform) -> PathBuf {
+/// The reserved directory whose `.enc` entries belong to signing identities.
+pub(super) fn signing_dir(host: &dyn HostPlatform) -> PathBuf {
     host.config_dir().join(SIGNING_DIR)
 }
 
@@ -155,19 +156,10 @@ fn decrypt_gcm(key: &[u8], encoded: &str) -> Result<Zeroizing<String>, VaultErro
     }
 }
 
-/// Derive the signing-key seal key: HKDF-SHA256 over the shared `.keys.wrap`
-/// material (read-or-create, exactly like `crate::keys::storage`), expanded
-/// under [`HKDF_INFO`] — a namespace no other derivation in this codebase
-/// uses.
-async fn get_signing_seal_key(host: &dyn HostPlatform) -> Result<Vec<u8>, VaultError> {
-    let wrap_path = host.config_dir().join(KEY_WRAP_FILE);
-    let mut wrap_key =
-        get_or_create_wrap_key(host, &wrap_path, WrapKeyPublication::RequireAtomic).await?;
-
-    let hk = Hkdf::<Sha256>::new(None, &wrap_key);
-    wrap_key.zeroize();
-
-    let mut seal_key = vec![0u8; GCM_KEY_BYTES];
+/// Derive the seal key within the signing-only HKDF namespace.
+fn derive_signing_seal_key(wrap_key: &[u8]) -> Result<Zeroizing<Vec<u8>>, VaultError> {
+    let hk = Hkdf::<Sha256>::new(None, wrap_key);
+    let mut seal_key = Zeroizing::new(vec![0u8; GCM_KEY_BYTES]);
     // `expand` only fails when the requested output length exceeds HKDF's
     // 255*HashLen limit (8160 bytes for SHA-256); a fixed 32-byte request
     // can never hit that, so this is unreachable in practice but still
@@ -176,6 +168,39 @@ async fn get_signing_seal_key(host: &dyn HostPlatform) -> Result<Vec<u8>, VaultE
     hk.expand(HKDF_INFO, &mut seal_key)
         .map_err(|e| VaultError::Other(format!("HKDF expand failed: {e}")))?;
     Ok(seal_key)
+}
+
+/// Signing operations can initialize wrapping state when no key exists yet.
+async fn get_signing_seal_key(host: &dyn HostPlatform) -> Result<Zeroizing<Vec<u8>>, VaultError> {
+    let wrap_path = host.config_dir().join(KEY_WRAP_FILE);
+    let wrap_key = Zeroizing::new(
+        get_or_create_wrap_key(host, &wrap_path, WrapKeyPublication::RequireAtomic).await?,
+    );
+    derive_signing_seal_key(&wrap_key)
+}
+
+/// Identify a signing envelope that remains at a former signing path. This
+/// probe only reads the current wrapping key, and no private material leaves
+/// the signing store. A missing or invalid wrap key cannot authenticate it.
+pub(super) async fn authenticates_envelope(
+    host: &dyn HostPlatform,
+    envelope: &str,
+) -> Result<bool, VaultError> {
+    let wrap_path = host.config_dir().join(KEY_WRAP_FILE);
+    let wrap_key = match host.read_file(&wrap_path).await {
+        Ok(key) => Zeroizing::new(key),
+        Err(error) => {
+            return match host.file_exists(&wrap_path).await {
+                Ok(false) => Ok(false),
+                Ok(true) | Err(_) => Err(error),
+            };
+        }
+    };
+    if wrap_key.len() != GCM_KEY_BYTES {
+        return Ok(false);
+    }
+    let seal_key = derive_signing_seal_key(&wrap_key)?;
+    Ok(decrypt_gcm(&seal_key, envelope).is_ok())
 }
 
 /// Load and decrypt the PKCS#8 private key for `id`, or
@@ -205,10 +230,8 @@ async fn load_signing_key(host: &dyn HostPlatform, id: &str) -> Result<SigningKe
         path: path.display().to_string(),
     })?;
 
-    let mut seal_key = get_signing_seal_key(host).await?;
-    let pem = decrypt_gcm(&seal_key, &envelope);
-    seal_key.zeroize();
-    let pem: Zeroizing<String> = pem.map_err(|e| VaultError::Decryption {
+    let seal_key = get_signing_seal_key(host).await?;
+    let pem = decrypt_gcm(&seal_key, &envelope).map_err(|e| VaultError::Decryption {
         message: format!("Failed to decrypt signing key: {e}"),
         path: path.display().to_string(),
     })?;
@@ -263,10 +286,9 @@ pub(crate) async fn generate_signing_key(
         .to_pkcs8_pem(LineEnding::LF)
         .map_err(|e| VaultError::Other(format!("Failed to encode signing key: {e}")))?;
 
-    let mut seal_key = get_signing_seal_key(host).await?;
-    let envelope = encrypt_gcm(&seal_key, &pem);
-    seal_key.zeroize();
-    let envelope = envelope?;
+    let seal_key = get_signing_seal_key(host).await?;
+    let envelope = encrypt_gcm(&seal_key, &pem)?;
+    drop(seal_key);
 
     if host
         .write_file_if_absent(&path, envelope.as_bytes(), 0o600)
@@ -624,7 +646,8 @@ mod tests {
 
         assert_eq!(seal_key.len(), GCM_KEY_BYTES);
         assert_ne!(
-            seal_key, wrap_key,
+            seal_key.as_slice(),
+            wrap_key.as_slice(),
             "the HKDF-derived seal key must not equal the raw .keys.wrap bytes"
         );
 

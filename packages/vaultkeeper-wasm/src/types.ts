@@ -77,6 +77,12 @@ export interface WasmHostPlatform {
    */
   writeFileIfAbsent?(path: string, content: Uint8Array, mode: number): Promise<boolean>
   fileExists(path: string): Promise<boolean>
+  /**
+   * Resolve an existing path through filesystem aliases. Return the input for
+   * a missing path and reject other lookup failures. Custom hosts need this
+   * method to use an explicit file storage path.
+   */
+  canonicalizePath?(path: string): Promise<string>
   deleteFile(path: string): Promise<void>
   renameFile(from: string, to: string): Promise<void>
   listDir(path: string): Promise<string[]>

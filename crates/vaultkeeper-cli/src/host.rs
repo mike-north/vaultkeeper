@@ -337,6 +337,19 @@ impl HostPlatform for NativeHostPlatform {
         }
     }
 
+    async fn canonicalize_path(&self, path: &Path) -> Result<Option<PathBuf>, VaultError> {
+        match std::fs::canonicalize(path) {
+            Ok(resolved) => Ok(Some(resolved)),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Some(path.to_path_buf())),
+            Err(e) => Err(VaultError::Filesystem {
+                message: format!("Failed to resolve {}: {e}", path.display()),
+                path: path.display().to_string(),
+                permission: "read".to_string(),
+                code: None,
+            }),
+        }
+    }
+
     async fn delete_file(&self, path: &Path) -> Result<(), VaultError> {
         std::fs::remove_file(path).map_err(|e| VaultError::Filesystem {
             message: format!("Failed to delete {}: {e}", path.display()),

@@ -42,6 +42,78 @@ fn cli_test_env_no_config() -> (Command, TempDir) {
     (cmd, dir)
 }
 
+/// A configured file store must receive writes and support subsequent deletes.
+#[test]
+fn configured_file_path_is_used_for_store_and_delete() {
+    let (mut store, dir) = cli_test_env();
+    let storage = dir.path().join("isolated");
+    let config = serde_json::json!({
+        "version": 1,
+        "backends": [{ "type": "file", "enabled": true, "path": storage }],
+        "keyRotation": { "gracePeriodDays": 7 },
+        "defaults": { "ttlMinutes": 60, "trustTier": 3 }
+    });
+    fs::write(dir.path().join("config.json"), config.to_string()).unwrap();
+    store
+        .args(["store", "--name", "isolated"])
+        .write_stdin("value")
+        .assert()
+        .success();
+    assert!(storage.join("69736f6c61746564.enc").exists());
+    assert!(!dir.path().join("file").exists());
+    let mut delete = Command::cargo_bin("vaultkeeper").unwrap();
+    delete
+        .env("VAULTKEEPER_CONFIG_DIR", dir.path())
+        .args(["delete", "--name", "isolated"])
+        .assert()
+        .success();
+    assert!(!storage.join("69736f6c61746564.enc").exists());
+}
+
+/// An inaccessible config must not redirect writes to the default store.
+#[cfg(unix)]
+#[test]
+fn inaccessible_config_does_not_use_default_store() {
+    use std::os::unix::fs::{PermissionsExt, symlink};
+    let (mut store, dir) = cli_test_env();
+    let blocked = dir.path().join("blocked");
+    fs::create_dir(&blocked).unwrap();
+    fs::write(blocked.join("config.json"), b"{}").unwrap();
+    fs::remove_file(dir.path().join("config.json")).unwrap();
+    symlink(blocked.join("config.json"), dir.path().join("config.json")).unwrap();
+    fs::set_permissions(&blocked, fs::Permissions::from_mode(0o0)).unwrap();
+    // Privileged users bypass permission bits and cannot exercise this case.
+    if fs::metadata(blocked.join("config.json")).is_err() {
+        store
+            .args(["store", "--name", "test"])
+            .write_stdin("value")
+            .assert()
+            .failure();
+        assert!(!dir.path().join("file").exists());
+    }
+    fs::set_permissions(&blocked, fs::Permissions::from_mode(0o700)).unwrap();
+}
+
+/// A blank path must not redirect secrets into the process working directory.
+#[test]
+fn blank_file_path_is_rejected() {
+    let (mut store, dir) = cli_test_env();
+    let config = serde_json::json!({
+        "version": 1,
+        "backends": [{ "type": "file", "enabled": true, "path": "   " }],
+        "keyRotation": { "gracePeriodDays": 7 },
+        "defaults": { "ttlMinutes": 60, "trustTier": 3 }
+    });
+    fs::write(dir.path().join("config.json"), config.to_string()).unwrap();
+    store
+        .current_dir(dir.path())
+        .args(["store", "--name", "test"])
+        .write_stdin("value")
+        .assert()
+        .failure();
+    assert!(!dir.path().join("   ").exists());
+}
+
 // ─── Help and usage ──────────────────────────────────────────────
 
 mod help {
@@ -346,8 +418,7 @@ mod config {
             backend_type, "file",
             "zero-config default must be 'file' (#98)"
         );
-        // The path field must not appear in the generated config — the file backend
-        // manages its own storage location and ignores any path in config.
+        // The generated default leaves the optional storage override unset.
         let backend_obj = parsed["backends"][0]
             .as_object()
             .expect("backend entry should be a JSON object");

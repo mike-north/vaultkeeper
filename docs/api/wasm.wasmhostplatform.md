@@ -33,6 +33,17 @@ Description
 </th></tr></thead>
 <tbody><tr><td>
 
+[canonicalizePath(path)?](./wasm.wasmhostplatform.canonicalizepath.md)
+
+
+</td><td>
+
+_(Optional)_ Resolve an existing path through filesystem aliases. Return the input for a missing path and reject other lookup failures. Custom hosts need this method to use an explicit file storage path.
+
+
+</td></tr>
+<tr><td>
+
 [configDir()](./wasm.wasmhostplatform.configdir.md)
 
 

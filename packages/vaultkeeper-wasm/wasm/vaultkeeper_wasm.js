@@ -288,8 +288,7 @@ class WasmVaultKeeper {
     /**
      * Store a secret via the file backend.
      *
-     * FileBackend is stateless (holds only a host reference), so creating it
-     * per-call avoids lifetime complexity without performance cost.
+     * The resolved configuration selects the file store for every operation.
      * @param {string} id
      * @param {string} secret
      * @returns {Promise<void>}
@@ -840,7 +839,7 @@ function __wbg_get_imports() {
             return ret;
         },
         __wbindgen_cast_0000000000000001: function(arg0, arg1) {
-            // Cast intrinsic for `Closure(Closure { dtor_idx: 242, function: Function { arguments: [Externref], shim_idx: 243, ret: Result(Unit), inner_ret: Some(Result(Unit)) }, mutable: true }) -> Externref`.
+            // Cast intrinsic for `Closure(Closure { dtor_idx: 246, function: Function { arguments: [Externref], shim_idx: 247, ret: Result(Unit), inner_ret: Some(Result(Unit)) }, mutable: true }) -> Externref`.
             const ret = makeMutClosure(arg0, arg1, wasm.wasm_bindgen__closure__destroy__h1722208547e491cb, wasm_bindgen__convert__closures_____invoke__h8760ba3086f56474);
             return ret;
         },

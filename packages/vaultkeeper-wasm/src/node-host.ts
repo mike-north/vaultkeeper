@@ -13,6 +13,7 @@ import {
   open,
   mkdir,
   readdir,
+  realpath,
   readFile,
   rename,
   unlink,
@@ -208,6 +209,15 @@ export function createNodeHost(configDirOverride?: string): WasmHostPlatform {
         if (isErrnoException(err) && err.code === 'ENOENT') {
           return false
         }
+        throw toHostFilesystemError(err, path)
+      }
+    },
+
+    async canonicalizePath(path: string): Promise<string> {
+      try {
+        return await realpath(path)
+      } catch (err) {
+        if (isErrnoException(err) && err.code === 'ENOENT') return path
         throw toHostFilesystemError(err, path)
       }
     },

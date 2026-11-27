@@ -30,6 +30,7 @@ use vaultkeeper_core::{ClaimsKind, ExecutableTrustRequiredReason, VaultClaims, V
 /// - `writeFile(path, content, mode)` → `Promise<void>`
 /// - `writeFileIfAbsent?(path, content, mode)` → `Promise<boolean>`
 /// - `fileExists(path)` → `Promise<boolean>`
+/// - `canonicalizePath?(path)` → `Promise<string>` (required for explicit file paths)
 /// - `deleteFile(path)` → `Promise<void>`
 /// - `renameFile(from, to)` → `Promise<void>`
 /// - `listDir(path)` → `Promise<string[]>`
@@ -479,6 +480,27 @@ impl HostPlatform for JsHostPlatform {
             .map_err(|e| fs_rejection_to_vault_error(&e, path, "read"))?;
 
         Ok(result.as_bool().unwrap_or(false))
+    }
+
+    async fn canonicalize_path(&self, path: &Path) -> Result<Option<PathBuf>, VaultError> {
+        let callback = Reflect::get(&self.host, &JsValue::from_str("canonicalizePath"))
+            .map_err(|e| fs_rejection_to_vault_error(&e, path, "read"))?;
+        if callback.is_undefined() {
+            return Ok(None);
+        }
+        let callback = callback
+            .dyn_into::<Function>()
+            .map_err(|_| js_err("canonicalizePath is not a function"))?;
+        let promise = callback
+            .call1(&self.host, &JsValue::from_str(&path.to_string_lossy()))
+            .map_err(|e| fs_rejection_to_vault_error(&e, path, "read"))?;
+        let result = JsFuture::from(Promise::from(promise))
+            .await
+            .map_err(|e| fs_rejection_to_vault_error(&e, path, "read"))?;
+        result
+            .as_string()
+            .map(|resolved| Some(PathBuf::from(resolved)))
+            .ok_or_else(|| js_err("canonicalizePath must resolve to a string"))
     }
 
     async fn delete_file(&self, path: &Path) -> Result<(), VaultError> {
@@ -1513,10 +1535,9 @@ impl WasmVaultKeeper {
 
     /// Store a secret via the file backend.
     ///
-    /// FileBackend is stateless (holds only a host reference), so creating it
-    /// per-call avoids lifetime complexity without performance cost.
+    /// The resolved configuration selects the file store for every operation.
     pub async fn store(&self, id: &str, secret: &str) -> Result<(), JsValue> {
-        let backend = FileBackend::new(self.host.clone());
+        let backend = FileBackend::from_config(self.host.clone(), self.vault.config());
         backend
             .store(id, secret)
             .await
@@ -1525,7 +1546,7 @@ impl WasmVaultKeeper {
 
     /// Retrieve a secret via the file backend.
     pub async fn retrieve(&self, id: &str) -> Result<String, JsValue> {
-        let backend = FileBackend::new(self.host.clone());
+        let backend = FileBackend::from_config(self.host.clone(), self.vault.config());
         backend
             .retrieve(id)
             .await
@@ -1534,7 +1555,7 @@ impl WasmVaultKeeper {
 
     /// Delete a secret via the file backend.
     pub async fn delete(&self, id: &str) -> Result<(), JsValue> {
-        let backend = FileBackend::new(self.host.clone());
+        let backend = FileBackend::from_config(self.host.clone(), self.vault.config());
         backend.delete(id).await.map_err(|e| vault_error_to_js(&e))
     }
 }

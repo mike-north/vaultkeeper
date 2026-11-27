@@ -12,6 +12,8 @@
 
 use std::fs;
 use std::io::{Read, Write};
+use std::os::unix::fs::{PermissionsExt, symlink};
+use std::path::Path;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 use tempfile::TempDir;
@@ -87,6 +89,123 @@ fn empty_profile() -> serde_json::Value {
     serde_json::json!({ "version": 1, "name": "uat", "entries": {} })
 }
 
+/// Point the existing profile fixture at a caller-selected directory.
+fn configure_file_path(dir: &TempDir, storage: &Path) {
+    let config_path = dir.path().join("config.json");
+    let mut config: serde_json::Value =
+        serde_json::from_slice(&fs::read(&config_path).unwrap()).unwrap();
+    config["backends"][0]["path"] = serde_json::to_value(storage).unwrap();
+    fs::write(config_path, config.to_string()).unwrap();
+}
+
+/// Exercise the native reader through profile materialization in the child environment.
+fn assert_profile_secret(dir: &TempDir, expected: &[u8]) {
+    let output = Command::new(vk_bin())
+        .env("VAULTKEEPER_CONFIG_DIR", dir.path())
+        .args([
+            "run",
+            "--profile",
+            "uat",
+            "--",
+            "sh",
+            "-c",
+            "printf %s \"$GREETING\"",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(output.stdout, expected);
+}
+
+/// Optional signing storage must not make either kind of healthy file store unavailable.
+#[test]
+fn inaccessible_signing_path_does_not_block_secret_io() {
+    for explicit_path in [false, true] {
+        let dir = run_test_env(&single_secret_profile());
+        if explicit_path {
+            configure_file_path(&dir, &dir.path().join("isolated"));
+        }
+        store_secret(&dir, "greeting", "before");
+        let blocked = dir.path().join("blocked");
+        let target = blocked.join("signing");
+        fs::create_dir_all(&target).unwrap();
+        symlink(&target, dir.path().join("signing")).unwrap();
+        fs::set_permissions(&blocked, fs::Permissions::from_mode(0o0)).unwrap();
+        // A privileged process can still traverse the target.
+        if fs::canonicalize(&target).is_err() {
+            assert_profile_secret(&dir, b"before");
+            store_secret(&dir, "greeting", "after");
+            assert_profile_secret(&dir, b"after");
+        }
+        fs::set_permissions(&blocked, fs::Permissions::from_mode(0o700)).unwrap();
+    }
+}
+
+/// Taking a signing alias must preserve the established secret entry and its filename.
+#[test]
+fn signing_alias_change_preserves_an_existing_secret() {
+    let dir = run_test_env(&single_secret_profile());
+    let storage = dir.path().join("isolated");
+    configure_file_path(&dir, &storage);
+    store_secret(&dir, "greeting", "before");
+    assert_profile_secret(&dir, b"before");
+
+    let signing = dir.path().join("signing");
+    symlink(&storage, &signing).unwrap();
+    assert_profile_secret(&dir, b"before");
+    store_secret(&dir, "greeting", "after");
+    assert_profile_secret(&dir, b"after");
+    assert!(storage.join("6772656574696e67.enc").exists());
+    assert!(!storage.join("6772656574696e67.sec").exists());
+
+    let output = Command::new(vk_bin())
+        .env("VAULTKEEPER_CONFIG_DIR", dir.path())
+        .args(["delete", "--name", "greeting"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    assert!(!storage.join("6772656574696e67.enc").exists());
+}
+
+/// Profile resolution reads the configured store, leaving the default untouched.
+#[test]
+fn configured_file_path_is_used_for_profile_retrieval() {
+    let dir = run_test_env(&single_secret_profile());
+    let config = serde_json::json!({
+        "version": 1,
+        "backends": [{ "type": "file", "enabled": true, "path": dir.path().join("isolated") }],
+        "keyRotation": { "gracePeriodDays": 7 },
+        "defaults": { "ttlMinutes": 60, "trustTier": 3 }
+    });
+    fs::write(dir.path().join("config.json"), config.to_string()).unwrap();
+    store_secret(&dir, "greeting", "configured-value");
+    let output = Command::new(vk_bin())
+        .env("VAULTKEEPER_CONFIG_DIR", dir.path())
+        .args([
+            "run",
+            "--profile",
+            "uat",
+            "--",
+            "sh",
+            "-c",
+            "printf %s \"$GREETING\"",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(output.stdout, b"configured-value");
+    assert!(!dir.path().join("file").exists());
+}
+
+/// An ad hoc entry that inherits elevated trust must be refused before launch.
 #[test]
 fn elevated_default_set_refuses_before_launching_child() {
     let dir = run_test_env(&empty_profile());
