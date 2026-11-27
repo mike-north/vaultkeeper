@@ -133,6 +133,25 @@ pub trait HostPlatform: Send + Sync {
     /// On non-Unix platforms the mode hint may be ignored.
     async fn write_file(&self, path: &Path, content: &[u8], mode: u32) -> Result<(), VaultError>;
 
+    /// Publish a complete file only if its destination does not already exist.
+    ///
+    /// Returns `true` on publication or `false` if the destination is occupied.
+    /// A failed write must leave the destination untouched. The default
+    /// reports [`VaultError::LockingNotSupported`] without writing anything.
+    async fn write_file_if_absent(
+        &self,
+        path: &Path,
+        _content: &[u8],
+        _mode: u32,
+    ) -> Result<bool, VaultError> {
+        Err(VaultError::LockingNotSupported {
+            message: format!(
+                "Atomic file creation is not supported for {}",
+                path.display()
+            ),
+        })
+    }
+
     /// Check if a file exists.
     async fn file_exists(&self, path: &Path) -> Result<bool, VaultError>;
 

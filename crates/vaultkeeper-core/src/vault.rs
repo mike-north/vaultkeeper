@@ -1,6 +1,6 @@
 //! VaultKeeper main struct — wires together all vaultkeeper subsystems.
 
-use zeroize::Zeroizing;
+use zeroize::{Zeroize, Zeroizing};
 
 use crate::backend::{
     ApprovalContext, HostPlatform, PresenceOperation, SecretBackend, SigningBackend,
@@ -10,7 +10,7 @@ use crate::config;
 use crate::errors::{ExecutableTrustRequiredReason, VaultError};
 use crate::identity::handles::{HandleId, HandleTable};
 use crate::jwe::{
-    CreateTokenOptions, block_token, create_token, decrypt_token, extract_kid, validate_claims,
+    CreateTokenOptions, block_token, create_token, decrypt_token, extract_kid, validate_claims_at,
 };
 use crate::keys::KeyManager;
 use crate::types::{
@@ -178,7 +178,6 @@ pub(crate) fn build_and_mint_claims(
     // success or error — so this helper never leaves a second unzeroized
     // heap copy behind (the caller owns the lifetime of its own copy).
     if let Some(val) = claims.val.as_mut() {
-        use zeroize::Zeroize;
         val.zeroize();
     }
     token
@@ -615,7 +614,7 @@ impl VaultKeeper {
             .unwrap_or("file")
             .to_string();
 
-        let now = crate::util::time::now_secs();
+        let now = self.handle_table.expiry_time();
 
         let token = build_and_mint_claims(
             &self.key_manager,
@@ -850,7 +849,7 @@ impl VaultKeeper {
             .max(revocation.rev_state_gen);
         let kgen = revocation.min_generation_for(key_name);
 
-        let now = crate::util::time::now_secs();
+        let now = self.handle_table.expiry_time();
         let ttl_seconds = options
             .ttl_seconds
             .min(crate::profile::SIGNING_LEASE_MAX_TTL_SECONDS);
@@ -1042,6 +1041,38 @@ impl VaultKeeper {
         Ok(response)
     }
 
+    /// Validate the secret-token claims and charge their budget before issuing
+    /// a handle. The caller retains ownership of the decrypted value throughout
+    /// this fallible phase so it can scrub the value on any refusal.
+    fn approve_secret_claims(
+        &mut self,
+        claims: &VaultClaims,
+        is_current: bool,
+    ) -> Result<VaultResponse, VaultError> {
+        if claims.kty == Some(ClaimsKind::SigningKey) {
+            return Err(wrong_claims_kind_error("secret token", "signing-key lease"));
+        }
+
+        let now = self.handle_table.expiry_time();
+        let current_usage = self.handle_table.finite_usage(&claims.jti);
+        validate_claims_at(claims, current_usage, now)?;
+
+        // Preparing a replacement token can fail. Charge only authorizations
+        // whose response can be returned.
+        let response = self.prepare_response(claims, is_current)?;
+
+        if let Some(limit) = claims.use_limit {
+            let new_usage = self
+                .handle_table
+                .charge_finite_usage(&claims.jti, claims.exp, now)?;
+            if new_usage >= limit {
+                block_token(&claims.jti);
+            }
+        }
+
+        Ok(response)
+    }
+
     /// Decrypt a JWE token, validate its claims, and return an opaque
     /// capability [`HandleId`] together with the (secret-redacted) claims and
     /// key status. Tracks per-JTI usage counts and blocks tokens that exceed
@@ -1051,9 +1082,9 @@ impl VaultKeeper {
     /// — the raw secret never leaves core memory through this return value.
     /// It stays behind the returned handle, in a [`Zeroizing`] buffer, until
     /// [`VaultKeeper::read_secret`] consumes it exactly once. The handle's
-    /// lifetime is bound to the token's own `exp`/`use_limit` claims, not to
-    /// any interactive session — see `crate::identity::handles` for the full
-    /// eviction-policy rationale.
+    /// expiry comes from the token's `exp` claim. Its `use_limit` governs
+    /// future authorizations. See `crate::identity::handles` for the other
+    /// ways an issued handle can leave the table.
     ///
     /// Refuses a signing-key lease (`kty: SigningKey`) with
     /// [`VaultError::AuthorizationDenied`] (issue #300, AC5's "wrong kind, or
@@ -1066,26 +1097,13 @@ impl VaultKeeper {
         &mut self,
         jwe: &str,
     ) -> Result<(HandleId, VaultClaims, VaultResponse), VaultError> {
-        let (claims, is_current) = self.decrypt_claims(jwe)?;
+        let (mut claims, is_current) = self.decrypt_claims(jwe)?;
 
-        if claims.kty == Some(ClaimsKind::SigningKey) {
-            return Err(wrong_claims_kind_error("secret token", "signing-key lease"));
-        }
-
-        let current_usage = self.handle_table.current_usage(&claims.jti);
-        validate_claims(&claims, current_usage)?;
-
-        let response = self.prepare_response(&claims, is_current)?;
-
-        // Increment usage count
-        let new_usage = self.handle_table.record_usage(&claims.jti);
-
-        // If usage limit reached, block the token for future requests
-        if let Some(limit) = claims.use_limit
-            && new_usage >= limit
-        {
-            block_token(&claims.jti);
-        }
+        // A refusal skips the handoff to zeroizing handle storage. Scrub the
+        // value while this function still owns the decrypted allocation.
+        let response = self
+            .approve_secret_claims(&claims, is_current)
+            .inspect_err(|_| claims.val.zeroize())?;
 
         // The handle's expiry is bound to the token's own `exp` — a
         // long-lived, non-interactively-refreshed token (see the "Why
@@ -1153,7 +1171,7 @@ impl VaultKeeper {
     /// [`HandleId`] (issue #300) — the read side of the lease. `exp` and
     /// `use` are enforced by exactly one accounting authority, the same
     /// [`HandleTable`] [`VaultKeeper::authorize`] uses for secret tokens:
-    /// [`HandleTable::current_usage`]/[`HandleTable::record_usage`] track the
+    /// The handle table's expiry-aware finite-use records track the
     /// lease's `jti`-scoped use budget, and the handle this call installs
     /// carries the lease's own finite `exp` — there is no second,
     /// independently-maintained counter or expiry that could drift out of
@@ -1205,17 +1223,21 @@ impl VaultKeeper {
             return Err(wrong_claims_kind_error("signing-key lease", "secret token"));
         }
 
-        let current_usage = self.handle_table.current_usage(&claims.jti);
-        validate_claims(&claims, current_usage)?;
+        let now = self.handle_table.expiry_time();
+        let current_usage = self.handle_table.finite_usage(&claims.jti);
+        validate_claims_at(&claims, current_usage, now)?;
 
         self.validate_lease_revocation(host, &claims).await?;
 
         let response = self.prepare_response(&claims, is_current)?;
 
-        // Single accounting authority (AC6): the same `HandleTable` counter
-        // `authorize()` increments for secret tokens, keyed on this lease's
-        // own `jti` — there is no separate signing-lease-only counter.
-        let new_usage = self.handle_table.record_usage(&claims.jti);
+        // Secret tokens and signing leases share the expiry-aware budget table.
+        let new_usage = if claims.use_limit.is_some() {
+            self.handle_table
+                .charge_finite_usage(&claims.jti, claims.exp, now)?
+        } else {
+            0
+        };
         if let Some(limit) = claims.use_limit
             && new_usage >= limit
         {

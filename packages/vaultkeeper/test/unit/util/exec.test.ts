@@ -4,6 +4,7 @@ import * as os from 'node:os'
 import * as path from 'node:path'
 import { execCommand, execCommandFull } from '../../../src/util/exec.js'
 import { PluginNotFoundError, ExecError } from '../../../src/errors.js'
+import { splitUtf8Script, splitUtf8Text } from '../../helpers/split-utf8-fixture.js'
 
 describe('execCommand', () => {
   it('returns trimmed stdout on success', async () => {
@@ -37,6 +38,27 @@ describe('execCommand', () => {
 })
 
 describe('execCommandFull', () => {
+  it.each<'stdout' | 'stderr'>(['stdout', 'stderr'])(
+    'decodes UTF-8 split across %s chunks',
+    async (stream) => {
+      const result = await execCommandFull(process.execPath, [
+        '-e',
+        splitUtf8Script(),
+        '--',
+        stream,
+      ])
+      expect(result[stream]).toBe(splitUtf8Text)
+    },
+  )
+
+  it('flushes an incomplete UTF-8 sequence at the end of each stream', async () => {
+    const result = await execCommandFull(process.execPath, [
+      '-e',
+      'process.stdout.write(Buffer.from([0xf0])); process.stderr.write(Buffer.from([0xe2, 0x82]))',
+    ])
+    expect(result).toEqual({ stdout: '\ufffd', stderr: '\ufffd', exitCode: 0 })
+  })
+
   it('returns full result with stdout, stderr, and exitCode on success', async () => {
     const result = await execCommandFull('echo', ['hello'])
     expect(result.stdout.trim()).toBe('hello')

@@ -126,6 +126,37 @@ fn empty_profile() -> serde_json::Value {
     serde_json::json!({ "version": 1, "name": "uat", "entries": {} })
 }
 
+#[test]
+fn elevated_default_set_refuses_before_launching_child() {
+    let dir = run_test_env(&empty_profile());
+    store_secret(&dir, "greeting", "example-value");
+    let config_path = dir.path().join("config.json");
+    let mut config: serde_json::Value =
+        serde_json::from_slice(&fs::read(&config_path).unwrap()).unwrap();
+    config["defaults"]["trustTier"] = serde_json::json!(2);
+    fs::write(config_path, serde_json::to_vec(&config).unwrap()).unwrap();
+    let marker = dir.path().join("child-started");
+    let output = Command::new(vk_bin())
+        .env("VAULTKEEPER_CONFIG_DIR", dir.path())
+        .args([
+            "run",
+            "--profile",
+            "uat",
+            "--set",
+            "GREETING=greeting",
+            "--",
+            "touch",
+        ])
+        .arg(&marker)
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("GREETING"), "{stderr}");
+    assert!(stderr.contains("executable identity"), "{stderr}");
+    assert!(!marker.exists(), "refusal must precede child launch");
+}
+
 // ─── AC1: stdio round trip — byte-exact, both directions ─────────
 
 #[test]
