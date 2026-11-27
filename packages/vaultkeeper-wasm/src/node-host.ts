@@ -6,10 +6,14 @@
  */
 
 import { execFile } from 'node:child_process'
+import { randomBytes } from 'node:crypto'
 import {
   access,
+  link,
+  open,
   mkdir,
   readdir,
+  realpath,
   readFile,
   rename,
   unlink,
@@ -18,6 +22,7 @@ import {
 } from 'node:fs/promises'
 import { homedir, platform as osPlatform } from 'node:os'
 import { dirname, join } from 'node:path'
+import { LockingNotSupportedError } from './errors.js'
 import type { ExecOptions, HttpFetchRequest, HttpFetchResponse, WasmHostPlatform } from './types.js'
 
 /**
@@ -131,13 +136,64 @@ export function createNodeHost(configDirOverride?: string): WasmHostPlatform {
         }
       }
       try {
-        await writeFile(path, content)
+        // Private files must have their requested mode from the first write.
+        await writeFile(path, content, { mode })
         // chmod is a no-op on Windows; skip to avoid errors
         if (osPlatform() !== 'win32') {
           await chmod(path, mode)
         }
       } catch (err) {
         throw toHostFilesystemError(err, path)
+      }
+    },
+
+    async writeFileIfAbsent(path: string, content: Uint8Array, mode: number): Promise<boolean> {
+      const dir = dirname(path)
+      // Keep private siblings within the same path budget as short store filenames.
+      const temp = join(dir, `.vk-${randomBytes(9).toString('base64url')}`)
+      let file: Awaited<ReturnType<typeof open>>
+      try {
+        await mkdir(dir, { recursive: true, mode: 0o700 })
+        file = await open(temp, 'wx', mode)
+      } catch (err) {
+        throw toHostFilesystemError(err, path)
+      }
+      try {
+        try {
+          await file.writeFile(content)
+          if (osPlatform() !== 'win32') await file.chmod(mode)
+        } catch (err) {
+          await file.close().catch(() => undefined)
+          throw err
+        }
+        await file.close()
+        try {
+          await link(temp, path)
+        } catch (err) {
+          if (isErrnoException(err)) {
+            if (err.code === 'EEXIST') return false
+            // A filesystem can refuse a hard link while allowing a rename.
+            // libuv maps the Windows exFAT link failure to EISDIR.
+            if (
+              err.code === 'ENOTSUP' ||
+              err.code === 'EOPNOTSUPP' ||
+              err.code === 'ENOSYS' ||
+              err.code === 'EPERM' ||
+              (process.platform === 'win32' && err.code === 'EISDIR')
+            ) {
+              throw new LockingNotSupportedError(
+                `Cannot atomically publish ${path}: ${err.message}`,
+              )
+            }
+          }
+          throw err
+        }
+        return true
+      } catch (err) {
+        if (err instanceof LockingNotSupportedError) throw err
+        throw toHostFilesystemError(err, path)
+      } finally {
+        await unlink(temp).catch(() => undefined)
       }
     },
 
@@ -153,6 +209,15 @@ export function createNodeHost(configDirOverride?: string): WasmHostPlatform {
         if (isErrnoException(err) && err.code === 'ENOENT') {
           return false
         }
+        throw toHostFilesystemError(err, path)
+      }
+    },
+
+    async canonicalizePath(path: string): Promise<string> {
+      try {
+        return await realpath(path)
+      } catch (err) {
+        if (isErrnoException(err) && err.code === 'ENOENT') return path
         throw toHostFilesystemError(err, path)
       }
     },

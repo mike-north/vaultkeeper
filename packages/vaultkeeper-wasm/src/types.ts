@@ -69,7 +69,20 @@ export interface WasmHostPlatform {
   ): Promise<{ stdout: Uint8Array; stderr: Uint8Array; exitCode: number }>
   readFile(path: string): Promise<Uint8Array>
   writeFile(path: string, content: Uint8Array, mode: number): Promise<void>
+  /**
+   * Atomically publish a complete file. Resolves to false if the destination
+   * already exists. The caller retains ownership of the input bytes.
+   * Reject with `LockingNotSupportedError` when atomic publication is
+   * unavailable, so ordinary key-state storage can use its sequential fallback.
+   */
+  writeFileIfAbsent?(path: string, content: Uint8Array, mode: number): Promise<boolean>
   fileExists(path: string): Promise<boolean>
+  /**
+   * Resolve an existing path through filesystem aliases. Return the input for
+   * a missing path and reject other lookup failures. Custom hosts need this
+   * method to use an explicit file storage path.
+   */
+  canonicalizePath?(path: string): Promise<string>
   deleteFile(path: string): Promise<void>
   renameFile(from: string, to: string): Promise<void>
   listDir(path: string): Promise<string[]>

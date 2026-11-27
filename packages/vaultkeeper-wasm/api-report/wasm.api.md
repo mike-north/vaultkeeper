@@ -434,6 +434,7 @@ export interface VaultResponse {
 
 // @public
 export interface WasmHostPlatform {
+    canonicalizePath?(path: string): Promise<string>;
     // (undocumented)
     configDir(): string;
     // (undocumented)
@@ -458,6 +459,7 @@ export interface WasmHostPlatform {
     renameFile(from: string, to: string): Promise<void>;
     // (undocumented)
     writeFile(path: string, content: Uint8Array, mode: number): Promise<void>;
+    writeFileIfAbsent?(path: string, content: Uint8Array, mode: number): Promise<boolean>;
 }
 
 ```

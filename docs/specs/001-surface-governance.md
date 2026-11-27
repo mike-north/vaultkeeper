@@ -69,6 +69,13 @@ range. "Secrets" = does a secret value transit this command, and by what channel
 | `session mint` | `PROFILE` | `--entry <e>` | — | **JWE lease → stdout** | lease (capability, not secret) | 0 / 1 |
 | `session revoke` | — | `--jti <j>` \| `--key <k>` (xor) | — | confirmation | — | 0 / 1 |
 
+Native `run` does not yet verify the receiving executable, so it exits 1 for
+raw or lease entries requiring elevated trust, including `--set` entries
+inheriting an elevated default. Dry runs describe the plan without resolving.
+
+For `run` and `exec`, `--help` and `-h` before the `--` separator show Vaultkeeper help.
+After the separator, both flags pass unchanged to the child.
+
 **In review / designed, not landed** (env-epic-spec.md §4, lease lane #298–#300) — rows tracked here so the
 grammar review covers them before they land:
 
@@ -196,6 +203,13 @@ on reflection, recorded to close the question.
 
 ## Part 2 — Library Surface
 
+Rust profile resolution requires caller-supplied verified executable identity
+at least as strong as an entry's `minTrust` before retrieving an elevated-trust
+raw secret or lease. `ResolveOptions::executable_identity` carries the identity
+and achieved tier; the caller must authenticate the evidence and ensure it
+applies to the receiving executable. Elevated identities carry a lowercase
+SHA-256 hex digest; Dev-tier leases retain the `dev` sentinel.
+
 ### 2.1 Organizing principles (SHOULD BE, normative)
 
 - **L1 — Everything through `index.ts`.** The public API is exactly the re-exports of `src/index.ts`; a
@@ -205,6 +219,10 @@ on reflection, recorded to close the question.
   only through a one-time `SecretAccessor.read()`, a signing key never egresses (sign happens backend-side),
   and passing the wrong token kind to `getSecret`/`sign` is a typed refusal. This opacity is a load-bearing
   security property, not an ergonomic detail — no future API may add a token accessor that returns claims.
+  A TypeScript capability redeemed from a JWE retains its deadline. At or after that deadline,
+  `getSecret` and an outstanding accessor's first `read` refuse with `TokenExpiredError` before
+  releasing plaintext. Delegated `fetch` and `exec` refuse with the same error before dispatch
+  if any supplied capability has expired.
 - **L3 — Typed failures only.** Every thrown error is a subclass of `VaultError`. Plain `Error` is never
   thrown across the public boundary; new failure modes add a `VaultError` subclass, exported from `index.ts`.
 - **L4 — Minimal runtime dependency.** The `vaultkeeper` TS library's only runtime dependency is `jose`;
@@ -226,8 +244,13 @@ on reflection, recorded to close the question.
 
 The Rust `FileBackend::from_config` constructor selects the first enabled
 file backend's configured path for encrypted secret storage, falling back to
-the host's default file directory when no path is configured. Signing keys
-remain in their separate signing store.
+the host's default file directory when no path is configured. When the
+file storage path resolves to the vault's signing directory, secret files use a
+distinct suffix so existing signing identities retain their filenames and
+remain isolated from secret operations. Filesystem hosts resolve aliases via
+`HostPlatform::canonicalize_path` or `WasmHostPlatform.canonicalizePath` at the
+Node bridge. Explicit overrides require this capability. Virtual hosts with
+alias-free paths can implement it by returning the input path.
 
 The 88 `@public` symbols group into coherent concepts. The owner reviews whether each grouping is complete and
 whether membership is intentional.
@@ -245,6 +268,16 @@ whether membership is intentional.
   `ExecutableTrustRequiredError`, `IdentityMismatchError`.
 - **Secrets & access tokens:** `store`, `delete`, `secretExists`, `authorize`, `getSecret`, `CapabilityToken`,
   `SecretAccessor`, `SecretTokenMap`, `AccessorConsumedError`, `SecretNotFoundError`.
+  The TypeScript `authorize` shares volatile accounting for 10,000 finite-use tokens across vaults using the
+  same loaded module. It keeps tracked budgets through expiry and rejects a first finite-use authorization
+  with `AuthorizationDeniedError` when every slot is live. Unlimited-use authorizations require no slot.
+  JWE redemption, reclamation, and capability use share an expiry clock that honors fractional
+  seconds and advances with elapsed time when the wall clock is set back. Expired tokens stay
+  expired, and newly issued tokens continue to age. Separate processes maintain independent budgets.
+  The Rust core uses the same elapsed-time rule per vault for whole-second JWE claims and handles.
+  A JWE minted during clock correction carries the issuing instance's absolute timestamps. Other
+  processes evaluate those timestamps against their own clocks, so clock skew can change the
+  recipient's effective validity window.
 - **Delegated access patterns:** `fetch`; the delegated-launch verb **aligns to `run`** (CLI ubiquitous
   language — the library method today named `exec` and its `Exec*` request/result/error types rename to the
   `run` family at the tiering pass, §2.3, so the launcher is spelled `run` in both surfaces), `FetchRequest`,
@@ -255,6 +288,11 @@ whether membership is intentional.
 - **Signing & leases:** `createSigningKey`, `authorizeSigningKey`, `sign`, `exportPublicKey`,
   `VaultKeeper.verify`, `SigningAlgorithm`, `SigningPublicKey`, `SignRequest`, `SignResult`, `VerifyRequest`,
   `SigningBackend`, `isSigningBackend`, and the signing error family.
+  TypeScript in-process capabilities from `authorize` and `authorizeSigningKey` are bound to the
+  issuing `VaultKeeper` instance, including when instances share configuration or backend storage.
+  A different instance rejects them with `AuthorizationDeniedError` before evaluating their expiry,
+  selecting a backend, or dispatching delegated work. For `fetch` and `exec`, the issuer requirement
+  applies to every token in a map.
 - **Backends & registry:** `SecretBackend`, `ListableBackend`, `PresenceCapableBackend`, `BackendRegistry`,
   `BackendConfig`, `BackendFactory`, `BackendSetupFactory`, `BackendCapabilities`, `getBackendCapabilities`,
   `isListableBackend`, `isPresenceCapableBackend`, `defaultBackendType`, `platformNativeBackendType`,
@@ -268,6 +306,24 @@ whether membership is intentional.
   addition:** `UnreachableError` — its constructor accepts a `never`, so a missed `enum`/union arm becomes a
   **compile error at the switch site** (the value that should be `never` still has a type, and passing it
   fails to typecheck) rather than a silent fall-through at runtime.
+
+File-backed signing enrollment publishes the complete encrypted identity with
+atomic no-replace semantics. A competing enrollment for the same label receives
+the existing duplicate-key error. Rust hosts provide this operation through
+`HostPlatform::write_file_if_absent`. The default returns a typed unsupported
+error, so enrollment requires a host that implements atomic publication. The
+Node WASM host also provides this primitive through
+`WasmHostPlatform.writeFileIfAbsent` for shared wrapping-key initialization.
+Built-in hosts use same-directory hard links for no-replace publication.
+Ordinary file storage and key-state persistence retain sequential wrapping-key
+initialization when the host cannot publish atomically. Callers using that
+fallback must serialize access to shared storage externally. Signing enrollment
+requires atomic publication when a wrapping key must be created or repaired.
+On hosts with atomic publication, repair of a malformed wrapping key selects
+one complete candidate atomically. A later writer can finish an interrupted repair
+using that candidate after rechecking the active key. Each repairer installs a
+private staging file with the selected bytes, so reusing the shared candidate
+path cannot cause a delayed writer to install a different key.
 
 **Names under workshop (⚠ owner-flagged, decision deferred — no surface change yet):**
 

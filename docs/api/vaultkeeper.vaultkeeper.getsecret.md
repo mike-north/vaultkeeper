@@ -6,7 +6,7 @@
 
 Create a controlled-direct `SecretAccessor` from a capability token.
 
-The accessor wraps the secret in a single-use, auto-zeroing `Buffer`<!-- -->. The secret is accessible only through the `read()` callback and is zeroed immediately after the callback returns.
+The accessor wraps the secret in a single-use, auto-zeroing `Buffer`<!-- -->. The secret is accessible only through the `read()` callback while the JWE is live and is zeroed immediately after the callback returns.
 
 **Signature:**
 
@@ -59,4 +59,6 @@ A `SecretAccessor` that can be read exactly once.
 ## Exceptions
 
 {<!-- -->AuthorizationDeniedError<!-- -->} If `token` is invalid or was not created by this vault instance, or if it is a signing-key token — a signing key carries no secret and cannot be read through `getSecret()` (use `sign()`<!-- -->).
+
+{<!-- -->TokenExpiredError<!-- -->} If the token has reached its JWE deadline.
 

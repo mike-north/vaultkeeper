@@ -2,8 +2,7 @@
 //!
 //! Stores secrets encrypted with AES-256-GCM. Each secret is stored as an
 //! individual encrypted file under the configured directory, or `<config_dir>/file/`
-//! by default. A randomly generated
-//! 32-byte key stored in a protected file is used for encryption.
+//! by default. A protected 32-byte key in that directory encrypts the entries.
 //!
 //! Encrypted file format (all parts base64-encoded, colon-separated):
 //!   `<iv>:<authTag>:<ciphertext>`
@@ -16,10 +15,15 @@ use aes_gcm::aead::Aead;
 use aes_gcm::{Aes256Gcm, KeyInit, Nonce};
 use base64ct::{Base64, Encoding};
 use std::fmt::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use zeroize::Zeroizing;
 
 const KEY_FILE: &str = ".key";
+/// Established filename suffix outside the vault's signing directory.
+const SECRET_SUFFIX: &str = ".enc";
+/// A nonoverlapping suffix when the vault's signing and secret directories coincide.
+const COLOCATED_SECRET_SUFFIX: &str = ".sec";
 const GCM_IV_BYTES: usize = 12;
 const GCM_KEY_BYTES: usize = 32;
 
@@ -62,13 +66,54 @@ impl FileBackend {
             .unwrap_or_else(|| self.host.config_dir().join("file"))
     }
 
-    fn entry_path(&self, id: &str) -> PathBuf {
-        let safe_id = hex_encode(id.as_bytes());
-        self.storage_dir().join(format!("{safe_id}.enc"))
+    /// Resolve the directory and its filename namespace together so an alias of
+    /// `signing/` cannot direct secret I/O to an enrolled identity.
+    async fn storage_layout(&self) -> Result<(PathBuf, &'static str), VaultError> {
+        let requested = self.storage_dir();
+        let Some(directory) = self.host.canonicalize_path(&requested).await? else {
+            if self.storage_dir.is_none() {
+                return Ok((requested, SECRET_SUFFIX));
+            }
+            return Err(VaultError::Filesystem {
+                message: format!(
+                    "Host cannot resolve aliases for configured file store {}",
+                    requested.display()
+                ),
+                path: requested.display().to_string(),
+                permission: "read".to_string(),
+                code: Some("ENOTSUP".to_string()),
+            });
+        };
+        let signing = signing_store::signing_dir(self.host.as_ref());
+        if requested == signing
+            || self.host.canonicalize_path(&signing).await?.as_ref() == Some(&directory)
+        {
+            return Ok((directory, COLOCATED_SECRET_SUFFIX));
+        }
+        // Keep the ordinary default path spelling for its filesystem diagnostics.
+        Ok(if self.storage_dir.is_some() {
+            (directory, SECRET_SUFFIX)
+        } else {
+            (requested, SECRET_SUFFIX)
+        })
     }
 
+    /// Keep the encryption key and the entry in the same resolved directory.
+    async fn entry_path(&self, id: &str) -> Result<PathBuf, VaultError> {
+        let (directory, suffix) = self.storage_layout().await?;
+        let safe_id = hex_encode(id.as_bytes());
+        Ok(directory.join(format!("{safe_id}{suffix}")))
+    }
+
+    /// Verify that an override can be resolved before creating its directory.
+    /// Store then resolves the layout again once that directory exists.
     async fn ensure_storage_dir(&self) -> Result<(), VaultError> {
-        let sentinel = self.storage_dir().join(".keep");
+        let directory = if self.storage_dir.is_some() {
+            self.storage_layout().await?.0
+        } else {
+            self.storage_dir()
+        };
+        let sentinel = directory.join(".keep");
         if !self.host.file_exists(&sentinel).await.unwrap_or(false) {
             // Write a sentinel file, which forces the host to create parent dirs.
             self.host.write_file(&sentinel, b"", 0o600).await?;
@@ -76,22 +121,29 @@ impl FileBackend {
         Ok(())
     }
 
-    async fn get_or_create_key(&self) -> Result<Vec<u8>, VaultError> {
-        let key_path = self.storage_dir().join(KEY_FILE);
+    /// Load the encryption key beside the entry, and scrub its bytes on drop.
+    async fn get_or_create_key(&self, entry_path: &Path) -> Result<Zeroizing<Vec<u8>>, VaultError> {
+        let key_path = entry_path.with_file_name(KEY_FILE);
 
         match self.host.read_file(&key_path).await {
-            Ok(data) if data.len() == GCM_KEY_BYTES => Ok(data),
-            Ok(data) => Err(VaultError::Other(format!(
-                "Key file has wrong length: expected {GCM_KEY_BYTES}, got {}",
-                data.len()
-            ))),
+            Ok(data) => {
+                let key = Zeroizing::new(data);
+                if key.len() == GCM_KEY_BYTES {
+                    Ok(key)
+                } else {
+                    Err(VaultError::Other(format!(
+                        "Key file has wrong length: expected {GCM_KEY_BYTES}, got {}",
+                        key.len()
+                    )))
+                }
+            }
             Err(read_err) => {
                 // Only create a new key if the key file does not exist.
                 // Transient read failures (permissions, IO errors) should be surfaced.
                 match self.host.file_exists(&key_path).await {
                     Ok(false) => {
                         // File doesn't exist — generate a new key
-                        let mut key = vec![0u8; GCM_KEY_BYTES];
+                        let mut key = Zeroizing::new(vec![0u8; GCM_KEY_BYTES]);
                         getrandom::fill(&mut key).map_err(|e| {
                             VaultError::Other(format!("Failed to generate key: {e}"))
                         })?;
@@ -220,16 +272,16 @@ impl SecretBackend for FileBackend {
 
     async fn store(&self, id: &str, secret: &str) -> Result<(), VaultError> {
         self.ensure_storage_dir().await?;
-        let key = self.get_or_create_key().await?;
+        let entry_path = self.entry_path(id).await?;
+        let key = self.get_or_create_key(&entry_path).await?;
         let encrypted = encrypt_gcm(&key, secret)?;
-        let entry_path = self.entry_path(id);
         self.host
             .write_file(&entry_path, encrypted.as_bytes(), 0o600)
             .await
     }
 
     async fn retrieve(&self, id: &str) -> Result<String, VaultError> {
-        let entry_path = self.entry_path(id);
+        let entry_path = self.entry_path(id).await?;
 
         // Only a genuine "entry does not exist" should surface as
         // SecretNotFound. Any other read failure (e.g. EACCES/EPERM, surfaced
@@ -262,7 +314,7 @@ impl SecretBackend for FileBackend {
             path: entry_path.display().to_string(),
         })?;
 
-        let key = self.get_or_create_key().await?;
+        let key = self.get_or_create_key(&entry_path).await?;
         decrypt_gcm(&key, &encoded).map_err(|e| VaultError::Decryption {
             message: format!("Failed to decrypt secret: {e}"),
             path: entry_path.display().to_string(),
@@ -270,7 +322,7 @@ impl SecretBackend for FileBackend {
     }
 
     async fn delete(&self, id: &str) -> Result<(), VaultError> {
-        let entry_path = self.entry_path(id);
+        let entry_path = self.entry_path(id).await?;
         match self.host.file_exists(&entry_path).await {
             Ok(true) => self.host.delete_file(&entry_path).await,
             Ok(false) => Err(VaultError::SecretNotFound {
@@ -281,15 +333,15 @@ impl SecretBackend for FileBackend {
     }
 
     async fn exists(&self, id: &str) -> Result<bool, VaultError> {
-        let entry_path = self.entry_path(id);
+        let entry_path = self.entry_path(id).await?;
         self.host.file_exists(&entry_path).await
     }
 }
 
 /// Signing keys are a distinct resource from secrets (see [`SigningBackend`]'s
 /// docs): each Ed25519 private key is sealed as its own AES-256-GCM envelope
-/// under `<config_dir>/signing/`, never under this backend's `file/` secret
-/// storage or `keys.enc`, and never returned from `sign_with_key` — only
+/// under `<config_dir>/signing/`, with a filename reserved for signing keys.
+/// Private material never enters `keys.enc` or `sign_with_key` output. Only
 /// signature bytes leave this backend. See the private
 /// `crate::backend::signing_store` module for the storage implementation and
 /// its HKDF key-derivation rationale.
@@ -327,12 +379,12 @@ impl SigningBackend for FileBackend {
 #[cfg_attr(not(target_arch = "wasm32"), async_trait::async_trait)]
 impl ListableBackend for FileBackend {
     async fn list(&self) -> Result<Vec<String>, VaultError> {
-        let storage_dir = self.storage_dir();
+        let (storage_dir, suffix) = self.storage_layout().await?;
         let filenames = self.host.list_dir(&storage_dir).await?;
 
         let mut names = Vec::new();
         for filename in &filenames {
-            if let Some(hex_name) = filename.strip_suffix(".enc")
+            if let Some(hex_name) = filename.strip_suffix(suffix)
                 && let Ok(bytes) = hex_decode(hex_name)
                 && let Ok(name) = String::from_utf8(bytes)
             {
@@ -346,7 +398,6 @@ impl ListableBackend for FileBackend {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::Path;
 
     #[test]
     fn encrypt_decrypt_round_trip() {
@@ -472,6 +523,22 @@ mod tests {
                 .insert(path.to_path_buf(), content.to_vec());
             Ok(())
         }
+        async fn write_file_if_absent(
+            &self,
+            path: &Path,
+            content: &[u8],
+            _mode: u32,
+        ) -> Result<bool, VaultError> {
+            use std::collections::hash_map::Entry;
+
+            match self.files.lock().unwrap().entry(path.to_path_buf()) {
+                Entry::Occupied(_) => Ok(false),
+                Entry::Vacant(entry) => {
+                    entry.insert(content.to_vec());
+                    Ok(true)
+                }
+            }
+        }
         async fn file_exists(&self, path: &Path) -> Result<bool, VaultError> {
             if self.deny_exists.lock().unwrap().contains(path) {
                 // `permission` stays within VaultError::Filesystem's
@@ -486,6 +553,10 @@ mod tests {
                 });
             }
             Ok(self.files.lock().unwrap().contains_key(path))
+        }
+
+        async fn canonicalize_path(&self, path: &Path) -> Result<Option<PathBuf>, VaultError> {
+            Ok(Some(path.to_path_buf()))
         }
         async fn delete_file(&self, path: &Path) -> Result<(), VaultError> {
             if self.deny_delete.lock().unwrap().contains(path) {
@@ -580,7 +651,7 @@ mod tests {
         let host = make_test_host();
         let backend = FileBackend::new(host.clone());
         backend.store("locked-secret", "value").await.unwrap();
-        let entry_path = backend.entry_path("locked-secret");
+        let entry_path = backend.entry_path("locked-secret").await.unwrap();
         host.deny_read.lock().unwrap().insert(entry_path.clone());
 
         let err = backend.retrieve("locked-secret").await.unwrap_err();
@@ -607,7 +678,7 @@ mod tests {
         let host = make_test_host();
         let backend = FileBackend::new(host.clone());
         backend.store("probe-fails", "value").await.unwrap();
-        let entry_path = backend.entry_path("probe-fails");
+        let entry_path = backend.entry_path("probe-fails").await.unwrap();
         host.deny_read.lock().unwrap().insert(entry_path.clone());
         host.deny_exists.lock().unwrap().insert(entry_path.clone());
 
@@ -645,7 +716,8 @@ mod tests {
         host.deny_read.lock().unwrap().insert(key_path.clone());
         host.deny_exists.lock().unwrap().insert(key_path);
 
-        let err = backend.get_or_create_key().await.unwrap_err();
+        let entry_path = backend.entry_path("probe-fails").await.unwrap();
+        let err = backend.get_or_create_key(&entry_path).await.unwrap_err();
         match err {
             VaultError::Filesystem { message, .. } => {
                 assert!(
@@ -664,7 +736,7 @@ mod tests {
         let host = make_test_host();
         let backend = FileBackend::new(host.clone());
         backend.store("locked-delete", "value").await.unwrap();
-        let entry_path = backend.entry_path("locked-delete");
+        let entry_path = backend.entry_path("locked-delete").await.unwrap();
         host.deny_delete.lock().unwrap().insert(entry_path.clone());
 
         let err = backend.delete("locked-delete").await.unwrap_err();
@@ -687,7 +759,7 @@ mod tests {
         let host = make_test_host();
         let backend = FileBackend::new(host.clone());
         backend.store("corrupt-me", "value").await.unwrap();
-        let entry_path = backend.entry_path("corrupt-me");
+        let entry_path = backend.entry_path("corrupt-me").await.unwrap();
 
         // Flip a byte in the stored `iv:authTag:ciphertext` encoding so the
         // AES-GCM auth tag fails to verify on retrieve.
@@ -716,7 +788,7 @@ mod tests {
         let host = make_test_host();
         let backend = FileBackend::new(host.clone());
         backend.store("garbled", "value").await.unwrap();
-        let entry_path = backend.entry_path("garbled");
+        let entry_path = backend.entry_path("garbled").await.unwrap();
 
         // Overwrite with raw bytes that are not valid UTF-8 at all (0xFF is
         // never a valid UTF-8 lead or continuation byte).
@@ -773,17 +845,19 @@ mod tests {
     #[tokio::test]
     async fn configured_signing_directory_preserves_enrolled_key() {
         let host = make_test_host();
-        let backend = FileBackend {
-            storage_dir: Some(host.config_dir.join("signing")),
-            host,
-        };
+        let mut config = crate::config::default_config();
+        config.backends[0].path = Some(host.config_dir.join("signing").display().to_string());
+        let backend = FileBackend::from_config(host, &config);
         backend
             .generate_signing_key("shared", SigningAlgorithm::EdDsa)
             .await
             .unwrap();
         let before = backend.get_public_key("shared").await.unwrap();
+        assert!(!backend.exists("shared").await.unwrap());
+        assert!(backend.list().await.unwrap().is_empty());
         backend.store("shared", "secret").await.unwrap();
         assert_eq!(backend.retrieve("shared").await.unwrap(), "secret");
+        assert_eq!(backend.list().await.unwrap(), ["shared"]);
         backend.delete("shared").await.unwrap();
         let after = backend.get_public_key("shared").await.unwrap();
         assert_eq!(before.public_key_pem, after.public_key_pem);

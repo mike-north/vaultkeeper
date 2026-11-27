@@ -33,6 +33,17 @@ Description
 </th></tr></thead>
 <tbody><tr><td>
 
+[canonicalizePath(path)?](./wasm.wasmhostplatform.canonicalizepath.md)
+
+
+</td><td>
+
+_(Optional)_ Resolve an existing path through filesystem aliases. Return the input for a missing path and reject other lookup failures. Custom hosts need this method to use an explicit file storage path.
+
+
+</td></tr>
+<tr><td>
+
 [configDir()](./wasm.wasmhostplatform.configdir.md)
 
 
@@ -131,6 +142,17 @@ _(Optional)_ Optional interactive human-approval capability (issue \#239). Absen
 
 
 </td><td>
+
+
+</td></tr>
+<tr><td>
+
+[writeFileIfAbsent(path, content, mode)?](./wasm.wasmhostplatform.writefileifabsent.md)
+
+
+</td><td>
+
+_(Optional)_ Atomically publish a complete file. Resolves to false if the destination already exists. The caller retains ownership of the input bytes. Reject with `LockingNotSupportedError` when atomic publication is unavailable, so ordinary key-state storage can use its sequential fallback.
 
 
 </td></tr>

@@ -12,13 +12,15 @@
 
 import { describe, it } from 'node:test'
 import * as assert from 'node:assert/strict'
-import { mkdir, mkdtemp, rm, symlink } from 'node:fs/promises'
+import { createHash } from 'node:crypto'
+import { promises } from 'node:fs'
+import { chmod, mkdir, mkdtemp, readdir, readFile, rm, symlink, writeFile } from 'node:fs/promises'
+import { syncBuiltinESMExports } from 'node:module'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { chmod, readFile, writeFile } from 'node:fs/promises'
-import { createHash } from 'node:crypto'
 import {
   VaultKeeper,
+  createNodeHost,
   VaultError,
   SecretNotFoundError,
   DecryptionError,
@@ -28,6 +30,9 @@ import {
   AccessorConsumedError,
   ExecutableTrustRequiredError,
   IdentityMismatchError,
+  AuthorizationDeniedError,
+  TokenExpiredError,
+  UsageLimitExceededError,
 } from '../index.js'
 
 /**
@@ -135,6 +140,240 @@ describe('@vaultkeeper/wasm SDK', () => {
     })
   })
 
+  it('atomically publishes one complete file across independent Node hosts', async () => {
+    await withTempDir(async (dir) => {
+      const first = createNodeHost(dir)
+      const second = createNodeHost(dir)
+      const file = join(dir, 'published')
+      const firstContent = Buffer.from('first')
+      const secondContent = Buffer.from('second')
+
+      const [firstPublished, secondPublished] = await Promise.all([
+        first.writeFileIfAbsent?.(file, firstContent, 0o600),
+        second.writeFileIfAbsent?.(file, secondContent, 0o600),
+      ])
+      assert.equal(typeof firstPublished, 'boolean')
+      assert.equal(typeof secondPublished, 'boolean')
+      assert.notEqual(firstPublished, secondPublished)
+      assert.deepEqual(await readFile(file), firstPublished ? firstContent : secondContent)
+    })
+  })
+
+  it('publishes the initial wrapping key through the WASM host bridge', async () => {
+    await withTempDir(async (dir) => {
+      const { createVaultKeeper } = await import('../../wasm/vaultkeeper_wasm.js')
+      const host = createNodeHost(dir)
+      const writeFileIfAbsent = host.writeFileIfAbsent?.bind(host)
+      assert.ok(writeFileIfAbsent)
+      const publishedPaths: string[] = []
+
+      // Observe actual publication without retaining any wrapping-key bytes.
+      const vault = await createVaultKeeper(
+        {
+          ...host,
+          async writeFileIfAbsent(
+            path: string,
+            content: Uint8Array,
+            mode: number,
+          ): Promise<boolean> {
+            const published = await writeFileIfAbsent(path, content, mode)
+            if (published) {
+              publishedPaths.push(path)
+            }
+            return published
+          },
+        },
+        { skipDoctor: true },
+      )
+      try {
+        assert.deepEqual(publishedPaths, [join(dir, '.keys.wrap')])
+      } finally {
+        vault.free()
+      }
+    })
+  })
+
+  for (const code of ['ENOTSUP', 'EPERM', 'EISDIR']) {
+    it(`stores and repairs wrapping keys when the filesystem rejects hard links with ${code}`, async (t) => {
+      await withTempDir(async (dir) => {
+        const unsupported = Object.assign(new Error('hard links unavailable'), { code })
+        const link = t.mock.method(promises, 'link', async () => {
+          await Promise.reject(unsupported)
+        })
+        const platform = process.platform
+        // Simulate libuv's Windows exFAT error without an external volume.
+        if (code === 'EISDIR') Object.defineProperty(process, 'platform', { value: 'win32' })
+        syncBuiltinESMExports()
+        try {
+          const vault = await createTestVault(dir)
+          try {
+            await vault.store('example', 'value')
+          } finally {
+            vault.dispose()
+          }
+          const reopened = await createTestVault(dir)
+          try {
+            assert.equal(await reopened.retrieve('example'), 'value')
+            assert.ok(link.mock.callCount() > 0)
+          } finally {
+            reopened.dispose()
+          }
+
+          // Simulate a completed selection followed by an interruption before installation.
+          const repairDir = join(dir, 'repair')
+          await mkdir(repairDir)
+          const keyPath = join(repairDir, '.keys.wrap')
+          const candidatePath = `${keyPath}.r`
+          const candidate = Buffer.alloc(32, 0x42)
+          await writeFile(keyPath, Buffer.alloc(1), { mode: 0o600 })
+          await writeFile(candidatePath, candidate, { mode: 0o600 })
+          const repaired = await createTestVault(repairDir)
+          try {
+            assert.ok((await readFile(keyPath)).equals(candidate))
+            await assert.rejects(readFile(candidatePath), { code: 'ENOENT' })
+          } finally {
+            repaired.dispose()
+          }
+        } finally {
+          Object.defineProperty(process, 'platform', { value: platform })
+          link.mock.restore()
+          syncBuiltinESMExports()
+        }
+      })
+    })
+  }
+
+  it('keeps the active wrapping-key path clear after a partial fallback write', async () => {
+    await withTempDir(async (dir) => {
+      const { createVaultKeeper } = await import('../../wasm/vaultkeeper_wasm.js')
+      // A host without the optional atomic publisher uses sequential storage.
+      const host = createNodeHost(dir)
+      delete host.writeFileIfAbsent
+      await assert.rejects(
+        createVaultKeeper(
+          {
+            ...host,
+            async writeFile(path: string, content: Uint8Array, mode: number): Promise<void> {
+              await host.writeFile(path, content.subarray(0, 1), mode)
+              throw Object.assign(new Error('disk full'), { code: 'ENOSPC' })
+            },
+          },
+          { skipDoctor: true },
+        ),
+        { vaultErrorCode: 'filesystem', code: 'ENOSPC', message: /disk full/ },
+      )
+      assert.deepEqual(await readdir(dir), [])
+    })
+  })
+
+  it('reopens a vault whose host retains the bytes supplied to writeFile', async () => {
+    await withTempDir(async (dir) => {
+      const { createVaultKeeper } = await import('../../wasm/vaultkeeper_wasm.js')
+      const host = createNodeHost(dir)
+      delete host.writeFileIfAbsent
+      const files = new Map<string, Uint8Array>()
+      const open = () =>
+        createVaultKeeper(
+          {
+            ...host,
+            fileExists: (path: string) => Promise.resolve(files.has(path)),
+            readFile(path: string): Promise<Uint8Array> {
+              const content = files.get(path)
+              if (content !== undefined) return Promise.resolve(content)
+              return Promise.reject(Object.assign(new Error('missing file'), { code: 'ENOENT' }))
+            },
+            writeFile(path: string, content: Uint8Array): Promise<void> {
+              // A host can persist the array it receives without copying it again.
+              files.set(path, content)
+              return Promise.resolve()
+            },
+            renameFile(from: string, to: string): Promise<void> {
+              const content = files.get(from)
+              assert.ok(content)
+              files.set(to, content)
+              files.delete(from)
+              return Promise.resolve()
+            },
+          },
+          { skipDoctor: true },
+        )
+
+      try {
+        const first = await open()
+        let token: string
+        try {
+          token = await first.setup('example', 'value', { skipTrust: true })
+        } finally {
+          first.free()
+        }
+        const reopened = await open()
+        try {
+          const auth = reopened.authorize(token)
+          try {
+            assert.equal(auth.readSecret(), 'value')
+          } finally {
+            auth.free()
+          }
+        } finally {
+          reopened.free()
+        }
+      } finally {
+        for (const content of files.values()) content.fill(0)
+      }
+    })
+  })
+
+  for (const state of ['fresh', 'repair']) {
+    it(
+      `initializes a ${state} vault at the macOS path boundary`,
+      { skip: process.platform !== 'darwin' },
+      async () => {
+        await withTempDir(async (dir) => {
+          let target = dir
+          while (Buffer.byteLength(target) < 990) {
+            const remaining = 989 - Buffer.byteLength(target)
+            target = join(target, 'a'.repeat(remaining === 201 ? 199 : Math.min(remaining, 200)))
+          }
+          assert.equal(Buffer.byteLength(target), 990)
+          await mkdir(target, { recursive: true })
+          const keyPath = join(target, '.keys.wrap')
+          const candidate = Buffer.alloc(32, 0x42)
+          if (state === 'repair') {
+            await writeFile(keyPath, Buffer.alloc(1))
+            await writeFile(`${keyPath}.r`, candidate, { mode: 0o600 })
+          }
+          const vault = await createTestVault(target)
+          try {
+            const key = await readFile(keyPath)
+            assert.equal(key.byteLength, 32)
+            if (state === 'repair') assert.deepEqual(key, candidate)
+          } finally {
+            vault.dispose()
+          }
+        })
+      },
+    )
+  }
+
+  it('resumes an interrupted wrapping-key repair during WASM initialization', async () => {
+    await withTempDir(async (dir) => {
+      const keyPath = join(dir, '.keys.wrap')
+      const candidatePath = `${keyPath}.r`
+      const candidate = Buffer.alloc(32, 0x42)
+      // A prior writer published its complete candidate before installing it.
+      await writeFile(keyPath, Buffer.alloc(1), { mode: 0o600 })
+      await writeFile(candidatePath, candidate, { mode: 0o600 })
+
+      const vault = await createTestVault(dir)
+      try {
+        assert.deepEqual(await readFile(keyPath), candidate)
+        await assert.rejects(readFile(candidatePath), { code: 'ENOENT' })
+      } finally {
+        vault.dispose()
+      }
+    })
+  })
+
   it('reads config', async () => {
     await withTempDir(async (dir) => {
       const vault = await createTestVault(dir)
@@ -239,6 +478,111 @@ describe('@vaultkeeper/wasm SDK', () => {
   })
 
   it(
+    'keeps signing entries intact through a symlinked secret directory',
+    { skip: process.platform === 'win32' },
+    async () => {
+      await withTempDir(async (dir) => {
+        const signing = join(dir, 'signing')
+        const storage = join(dir, 'isolated')
+        const signingEntry = join(signing, '736861726564.enc')
+        const signingEnvelope = 'existing signing entry'
+        await mkdir(signing)
+        await writeFile(signingEntry, signingEnvelope)
+        await symlink(signing, storage, 'dir')
+        const config = {
+          version: 1,
+          backends: [{ type: 'file', enabled: true, path: storage }],
+          keyRotation: { gracePeriodDays: 7 },
+          defaults: { ttlMinutes: 60, trustTier: 3 },
+        }
+        await writeFile(join(dir, 'config.json'), JSON.stringify(config))
+        const vault = await VaultKeeper.create({ skipDoctor: true }, dir)
+        try {
+          await vault.store('shared', 'value')
+          assert.equal(await vault.retrieve('shared'), 'value')
+          assert.equal(await readFile(signingEntry, 'utf8'), signingEnvelope)
+          await vault.delete('shared')
+          await assert.rejects(() => vault.retrieve('shared'), SecretNotFoundError)
+          assert.equal(await readFile(signingEntry, 'utf8'), signingEnvelope)
+        } finally {
+          vault.dispose()
+        }
+      })
+    },
+  )
+
+  it(
+    'uses the same secret namespace with an implicit or explicit default directory',
+    { skip: process.platform === 'win32' },
+    async () => {
+      await withTempDir(async (dir) => {
+        const signing = join(dir, 'signing')
+        const storage = join(dir, 'file')
+        const signingEntry = join(signing, '736861726564.enc')
+        await mkdir(signing)
+        await writeFile(signingEntry, 'existing signing entry')
+        await symlink(signing, storage, 'dir')
+        const implicit = await createTestVault(dir)
+        try {
+          await implicit.store('shared', 'value')
+        } finally {
+          implicit.dispose()
+        }
+        const config = {
+          version: 1,
+          backends: [{ type: 'file', enabled: true, path: storage }],
+          keyRotation: { gracePeriodDays: 7 },
+          defaults: { ttlMinutes: 60, trustTier: 3 },
+        }
+        await writeFile(join(dir, 'config.json'), JSON.stringify(config))
+        const explicit = await VaultKeeper.create({ skipDoctor: true }, dir)
+        try {
+          assert.equal(await explicit.retrieve('shared'), 'value')
+          assert.equal(await readFile(signingEntry, 'utf8'), 'existing signing entry')
+        } finally {
+          explicit.dispose()
+        }
+      })
+    },
+  )
+
+  it(
+    'refuses a configured store on a custom host without path alias resolution',
+    { skip: process.platform === 'win32' },
+    async () => {
+      await withTempDir(async (dir) => {
+        const { createVaultKeeper } = await import('../../wasm/vaultkeeper_wasm.js')
+        const legacyHost = createNodeHost(dir)
+        delete legacyHost.canonicalizePath
+        const signing = join(dir, 'signing')
+        const storage = join(dir, 'isolated')
+        const signingEntry = join(signing, '736861726564.enc')
+        await mkdir(signing)
+        await writeFile(signingEntry, 'existing signing entry')
+        await symlink(signing, storage, 'dir')
+        const config = {
+          version: 1,
+          backends: [{ type: 'file', enabled: true, path: storage }],
+          keyRotation: { gracePeriodDays: 7 },
+          defaults: { ttlMinutes: 60, trustTier: 3 },
+        }
+        await writeFile(join(dir, 'config.json'), JSON.stringify(config))
+        const vault = await createVaultKeeper(legacyHost, { skipDoctor: true })
+        try {
+          await assert.rejects(() => vault.store('shared', 'value'), {
+            vaultErrorCode: 'filesystem',
+            code: 'ENOTSUP',
+          })
+          assert.deepEqual(await readdir(signing), ['736861726564.enc'])
+          assert.equal(await readFile(signingEntry, 'utf8'), 'existing signing entry')
+        } finally {
+          vault.free()
+        }
+      })
+    },
+  )
+
+  it(
     'does not use the default store when config is inaccessible',
     { skip: !isPermissionTestable },
     async () => {
@@ -326,6 +670,76 @@ describe('@vaultkeeper/wasm SDK', () => {
       const result = vault.authorize(token)
       assert.equal(result.claims.use, 3)
       vault.dispose()
+    })
+  })
+
+  it('retains exhausted finite-use budgets when the committed core reaches capacity', async () => {
+    await withTempDir(async (dir) => {
+      const vault = await createTestVault(dir)
+      try {
+        const mint = () =>
+          vault.setup('finite', 'synthetic-value', { skipTrust: true, useLimit: 1 })
+        const exhausted = await mint()
+        vault.authorize(exhausted)
+
+        // One consumed token plus 9,999 distinct admissions fills the live accounting table.
+        for (let index = 1; index < 10_000; index++) {
+          vault.authorize(await mint())
+        }
+
+        const overflow = await mint()
+        assert.throws(() => vault.authorize(overflow), AuthorizationDeniedError)
+        // A distinct table can admit another token and displace the original
+        // JTI in the shared blocklist. The original table must still deny it.
+        await withTempDir(async (otherDir) => {
+          const other = await createTestVault(otherDir)
+          try {
+            const extra = await other.setup('finite', 'synthetic-value', {
+              skipTrust: true,
+              useLimit: 1,
+            })
+            other.authorize(extra)
+          } finally {
+            other.dispose()
+          }
+        })
+        assert.throws(() => vault.authorize(exhausted), UsageLimitExceededError)
+      } finally {
+        vault.dispose()
+      }
+    })
+  })
+
+  it('ages new tokens while the corrected wall clock is behind', async (t) => {
+    await withTempDir(async (dir) => {
+      const vault = await createTestVault(dir)
+      try {
+        const start = Date.now()
+        let wallMs = start
+        let steadyMs = 0
+        t.mock.method(Date, 'now', () => wallMs)
+        t.mock.method(performance, 'now', () => steadyMs)
+        const mint = () =>
+          vault.setup('rollback', 'synthetic-value', { skipTrust: true, ttlMinutes: 1 })
+        const old = await mint()
+        vault.authorize(old)
+
+        wallMs += 120_000
+        assert.throws(() => vault.authorize(old), TokenExpiredError)
+        wallMs = start
+        assert.throws(() => vault.authorize(old), TokenExpiredError)
+        const fresh = await mint()
+        vault.authorize(fresh)
+
+        steadyMs += 59_000
+        wallMs += 59_000
+        vault.authorize(fresh)
+        steadyMs += 1_000
+        wallMs += 1_000
+        assert.throws(() => vault.authorize(fresh), TokenExpiredError)
+      } finally {
+        vault.dispose()
+      }
     })
   })
 
