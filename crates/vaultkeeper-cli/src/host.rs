@@ -1335,7 +1335,7 @@ mod tests {
     // `SecretToolBackend`. This exercises `SecretToolBackend`'s actual
     // argv-build (`store --label <label> -- vaultkeeper-id <id>`),
     // stdin-routing (the secret goes over stdin, never argv), stdout-parse
-    // (trailing-newline stripping), and error-classify (`SecretNotFound`
+    // (exact preservation of piped output), and error-classify (`SecretNotFound`
     // via exit code) path against a real subprocess end to end.
     #[cfg(unix)]
     mod stub_tool_secret_tool_ac2 {
@@ -1451,9 +1451,10 @@ mod tests {
             let id = "ac2-round-trip";
             assert!(!backend.exists(id).await.unwrap());
 
-            backend.store(id, "s3cret-value").await.unwrap();
+            let value = "s3cret-value \t\r\n";
+            backend.store(id, value).await.unwrap();
             assert!(backend.exists(id).await.unwrap());
-            assert_eq!(backend.retrieve(id).await.unwrap(), "s3cret-value");
+            assert_eq!(backend.retrieve(id).await.unwrap(), value);
 
             backend.delete(id).await.unwrap();
             assert!(!backend.exists(id).await.unwrap());

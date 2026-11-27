@@ -128,6 +128,9 @@ enum Commands {
         /// Secret name
         #[arg(long)]
         name: String,
+        /// Preserve UTF-8 stdin including any final line ending
+        #[arg(long)]
+        raw: bool,
         /// Require the active backend to force a fresh, per-use human presence
         /// action for this store. Refuses with a NotCapable error — before
         /// the backend is touched — if it cannot guarantee one.
@@ -268,8 +271,9 @@ async fn main() {
         Some(cmd) => match cmd {
             Commands::Store {
                 name,
+                raw,
                 require_presence_per_use,
-            } => cmd_store(&name, require_presence_per_use).await,
+            } => cmd_store(&name, raw, require_presence_per_use).await,
             Commands::Delete {
                 name,
                 require_presence_per_use,
@@ -316,16 +320,27 @@ fn print_help() {
     Cli::command().print_help().ok();
 }
 
-async fn cmd_store(name: &str, require_presence_per_use: bool) -> i32 {
+async fn cmd_store(name: &str, raw: bool, require_presence_per_use: bool) -> i32 {
     // Read secret from stdin
-    let mut secret = String::new();
+    let mut secret = Zeroizing::new(String::new());
     if let Err(e) = io::stdin().read_to_string(&mut secret) {
         eprintln!("Error: Failed to read stdin: {e}");
         return 1;
     }
-    let secret = secret.trim_end();
+    // Line mode consumes only the final line terminator supplied by tools such
+    // as echo; raw mode retains it for credentials where it is significant.
+    let secret = if raw {
+        secret.as_str()
+    } else {
+        secret
+            .strip_suffix("\r\n")
+            .or_else(|| secret.strip_suffix('\n'))
+            .unwrap_or(&secret)
+    };
 
-    if secret.is_empty() {
+    // Apply the token validator's nonblank requirement without changing the
+    // value handed to the backend.
+    if secret.trim().is_empty() {
         eprintln!("Error: No secret provided on stdin");
         return 1;
     }

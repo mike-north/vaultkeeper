@@ -6,11 +6,15 @@
  * will show that failure rather than testing the store/delete logic. This is
  * expected — the UATs exercise the real CLI path.
  */
-import { describe, it, expect, afterEach } from 'vitest'
+import { describe, it, expect, afterEach, vi } from 'vitest'
 import * as fs from 'node:fs/promises'
 import * as os from 'node:os'
 import * as path from 'node:path'
+import { spawnSync } from 'node:child_process'
+import { fileURLToPath } from 'node:url'
 import { createCliTestEnv } from '@vaultkeeper/cli-test-helpers'
+import { VaultKeeper } from 'vaultkeeper'
+import { FileBackend } from '../../../vaultkeeper/src/backend/file-backend.js'
 import type { CliTestEnv } from '@vaultkeeper/cli-test-helpers'
 
 describe('store and delete lifecycle', () => {
@@ -21,6 +25,128 @@ describe('store and delete lifecycle', () => {
       await env.cleanup()
       env = undefined
     }
+  })
+
+  it('preserves trailing characters and supports raw line endings', async () => {
+    env = await createCliTestEnv()
+    const backend = new FileBackend(undefined, env.configDir)
+    const cases: [string, boolean, string][] = [
+      ['value \t', false, 'value \t'],
+      ['value \t\r\n', false, 'value \t'],
+      ['value\n\n', false, 'value\n'],
+      ['value \t\r\n', true, 'value \t\r\n'],
+      ['\uFEFFvalue\r', true, '\uFEFFvalue\r'],
+    ]
+    for (const [input, raw, expected] of cases) {
+      const args = ['store', '--name', 'trailing', '--skip-doctor']
+      if (raw) args.push('--raw')
+      expect((await env.runWithStdin(args, input)).exitCode).toBe(0)
+      expect(await backend.retrieve('trailing')).toBe(expected)
+    }
+  })
+
+  it('rejects whitespace-only input in either mode without overwriting a usable secret', async () => {
+    env = await createCliTestEnv()
+    const args = ['store', '--name', 'trailing', '--skip-doctor']
+    expect((await env.runWithStdin(args, 'original')).exitCode).toBe(0)
+
+    // Token authorization requires a value with at least one non-whitespace character.
+    for (const { flags, input } of [
+      { flags: [], input: ' \t\n' },
+      { flags: ['--raw'], input: ' \t\u00A0\n' },
+    ]) {
+      const result = await env.runWithStdin([...args, ...flags], input)
+      expect(result.exitCode).toBe(2)
+      expect(result.stdout).toBe('')
+      expect(result.stderr).toContain('No secret provided on stdin')
+    }
+
+    const vault = await VaultKeeper.init({ configDir: env.configDir, skipDoctor: true })
+    const jwe = await vault.setup('trailing', { skipTrust: true })
+    const { token } = await vault.authorize(jwe)
+    vault.getSecret(token).read((value) => {
+      expect(value.toString('utf8')).toBe('original')
+    })
+  })
+
+  it.skipIf(process.platform === 'win32').each([
+    { mode: 'raw', input: 'value \t\r\n', flags: ['--raw'], expected: 'value \t\r\n' },
+    { mode: 'default', input: 'value\n\n', flags: [], expected: 'value\n' },
+  ])(
+    'round-trips $mode CLI store input through piped Secret Service lookup and authorization',
+    async ({ input, flags, expected }) => {
+      env = await createCliTestEnv({
+        config: {
+          version: 1,
+          backends: [{ type: 'secret-tool', enabled: true }],
+          keyRotation: { gracePeriodDays: 7 },
+          defaults: { ttlMinutes: 60, trustTier: 3 },
+        },
+      })
+      // Model the real tool's pipe contract: store consumes stdin and lookup
+      // adds a presentation newline only when its stdout is a terminal.
+      await fs.writeFile(
+        path.join(env.configDir, 'secret-tool'),
+        `#!/bin/sh
+case "$1" in
+  store) umask 077; cat > "$VK_TEST_SECRET_FILE" ;;
+  lookup)
+    cat "$VK_TEST_SECRET_FILE" || exit 1
+    if [ -t 1 ]; then printf '\\n'; fi
+    ;;
+  *) exit 1 ;;
+esac
+`,
+        { mode: 0o700 },
+      )
+      const secretFile = path.join(env.configDir, 'stored-secret')
+      const testEnv = {
+        ...process.env,
+        PATH: `${env.configDir}${path.delimiter}${process.env.PATH ?? ''}`,
+        VAULTKEEPER_CONFIG_DIR: env.configDir,
+        VK_TEST_SECRET_FILE: secretFile,
+      }
+      const bin = fileURLToPath(new URL('../../../cli/dist/bin.js', import.meta.url))
+      vi.stubEnv('PATH', testEnv.PATH)
+      vi.stubEnv('VK_TEST_SECRET_FILE', secretFile)
+      try {
+        const args = ['store', '--name', 'trailing', '--skip-doctor', ...flags]
+        const result = spawnSync(process.execPath, [bin, ...args], { env: testEnv, input })
+        expect(result.status, result.stderr.toString()).toBe(0)
+        expect(await fs.readFile(secretFile, 'utf8')).toBe(expected)
+
+        const vault = await VaultKeeper.init({ configDir: env.configDir, skipDoctor: true })
+        const jwe = await vault.setup('trailing', { skipTrust: true })
+        const { token } = await vault.authorize(jwe)
+        vault.getSecret(token).read((value) => {
+          expect(value.toString('utf8')).toBe(expected)
+        })
+      } finally {
+        vi.unstubAllEnvs()
+      }
+    },
+  )
+
+  it('rejects malformed UTF-8 without storing a modified value', async () => {
+    env = await createCliTestEnv()
+    const result = spawnSync(
+      process.execPath,
+      [
+        fileURLToPath(new URL('../../../cli/dist/bin.js', import.meta.url)),
+        'store',
+        '--name',
+        'invalid',
+        '--raw',
+        '--skip-doctor',
+      ],
+      {
+        env: { ...process.env, VAULTKEEPER_CONFIG_DIR: env.configDir },
+        input: Buffer.from([0xff]),
+      },
+    )
+    expect(result.status).toBe(1)
+    expect(result.stderr.toString()).toMatch(/encoded data|utf-8/i)
+    await expect(new FileBackend(undefined, env.configDir).retrieve('invalid')).rejects.toThrow()
   })
 
   // Regression: issue #118 — empty stdin previously exited 1 (runtime error)

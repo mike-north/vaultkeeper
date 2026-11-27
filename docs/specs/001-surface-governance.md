@@ -52,7 +52,7 @@ range. "Secrets" = does a secret value transit this command, and by what channel
 |---|---|---|---|---|---|---|
 | `exec` *(deprecated — hidden alias for `run --token`)* | `COMMAND…` (trailing) | `--token <jwe>` | inherited by child | child's | value → child env (`VAULTKEEPER_SECRET`) | child's code |
 | `run` | `COMMAND…` (trailing) | `--profile <n>` \| `--profile-file <p>` \| `--token <jwe>` (exactly one, native CLI; TS CLI: `--token` only), `--as <VAR>` (`--token` only, default `VAULTKEEPER_SECRET`), `--set <VAR=SECRET>` (native CLI only), `--dry-run` (native CLI only), `--require-presence-at-issuance` (per §3.3.1 r.5; `--profile` source only, native CLI only) | inherited by child (never read by `run` itself) | child's (`--dry-run` prints the plan to stdout instead of launching) | value → child env; `--token` redeems an already-minted JWE, `--profile`/`--set` mint/resolve | child's code (128+N on signal-kill) |
-| `store` | — | `--name <n>`, `--require-presence-per-use` | **secret value** | status line | value ← stdin | 0 / 1 |
+| `store` | — | `--name <n>`, `--raw`, `--require-presence-per-use` | **secret value** | status line | value ← stdin | 0 / 1 |
 | `delete` | — | `--name <n>`, `--require-presence-per-use` | — | status line | — | 0 / 1 |
 | `doctor` | — | — | — | check report | — | 0 ready / 1 not |
 | `approve` | — | `--path <p>` | — | confirmation | — | 0 / 1 |
@@ -68,6 +68,12 @@ range. "Secrets" = does a secret value transit this command, and by what channel
 | `profile lint` | `NAME?` | `--profile-file <p>` | — | warnings | never prints values | **always 0** (advisory) |
 | `session mint` | `PROFILE` | `--entry <e>` | — | **JWE lease → stdout** | lease (capability, not secret) | 0 / 1 |
 | `session revoke` | — | `--jti <j>` \| `--key <k>` (xor) | — | confirmation | — | 0 / 1 |
+
+`store` accepts UTF-8 text and rejects malformed input. By default it removes
+one final LF or CRLF. Both modes reject an empty or whitespace-only value
+before writing, consistent with secret token validation. For accepted input,
+the default mode preserves all remaining characters and `--raw` preserves the
+entire input, including a final line ending.
 
 Native `run` does not yet verify the receiving executable, so it exits 1 for
 raw or lease entries requiring elevated trust, including `--set` entries

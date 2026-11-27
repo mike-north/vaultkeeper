@@ -1,4 +1,4 @@
-//! User-acceptance tests for `vaultkeeper run` (issue #279).
+//! User-acceptance tests for `vaultkeeper run` and store-to-run round trips.
 //!
 //! These exercise the real subprocess paths end to end — the compiled
 //! `vaultkeeper` binary launching a real child process — never a mocked or
@@ -81,6 +81,82 @@ fn single_secret_profile() -> serde_json::Value {
             "GREETING": { "secret": "greeting", "materialize": "secret" }
         }
     })
+}
+
+#[test]
+fn store_preserves_significant_trailing_input() {
+    let dir = run_test_env(&single_secret_profile());
+    for (input, raw, expected) in [
+        ("value \t", false, "value \t"),
+        ("value \t\r\n", false, "value \t"),
+        ("value\n\n", false, "value\n"),
+        ("value \t\r\n", true, "value \t\r\n"),
+        ("\u{feff}value\r", true, "\u{feff}value\r"),
+    ] {
+        let mut command = Command::new(vk_bin());
+        command
+            .env("VAULTKEEPER_CONFIG_DIR", dir.path())
+            .args(["store", "--name", "greeting"]);
+        if raw {
+            command.arg("--raw");
+        }
+        let mut child = command
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .spawn()
+            .unwrap();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(input.as_bytes())
+            .unwrap();
+        assert!(child.wait().unwrap().success());
+        let output = Command::new(vk_bin())
+            .env("VAULTKEEPER_CONFIG_DIR", dir.path())
+            .args(["run", "--profile", "uat", "--", "printenv", "GREETING"])
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        assert_eq!(output.stdout, format!("{expected}\n").as_bytes());
+    }
+}
+
+#[test]
+fn store_rejects_whitespace_only_input_without_overwriting_a_usable_secret() {
+    let dir = run_test_env(&single_secret_profile());
+    store_secret(&dir, "greeting", "original");
+
+    // A value made entirely of whitespace cannot be authorized as a secret.
+    for (flags, input) in [(&[][..], " \t\n"), (&["--raw"][..], " \t\u{a0}\n")] {
+        let mut child = Command::new(vk_bin())
+            .env("VAULTKEEPER_CONFIG_DIR", dir.path())
+            .args(["store", "--name", "greeting"])
+            .args(flags)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(input.as_bytes())
+            .unwrap();
+        let output = child.wait_with_output().unwrap();
+        assert_eq!(output.status.code(), Some(1));
+        assert!(output.stdout.is_empty());
+        assert!(String::from_utf8_lossy(&output.stderr).contains("No secret provided on stdin"));
+    }
+
+    let output = Command::new(vk_bin())
+        .env("VAULTKEEPER_CONFIG_DIR", dir.path())
+        .args(["run", "--profile", "uat", "--", "printenv", "GREETING"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    assert_eq!(output.stdout, b"original\n");
 }
 
 fn empty_profile() -> serde_json::Value {

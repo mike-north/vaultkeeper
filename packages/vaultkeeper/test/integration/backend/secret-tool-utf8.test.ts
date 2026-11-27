@@ -17,7 +17,7 @@ describe.skipIf(process.platform === 'win32')('SecretToolBackend UTF-8 output', 
       vi.stubEnv('PATH', `${fixtureDir}${path.delimiter}${process.env.PATH ?? ''}`)
 
       const backend = new SecretToolBackend()
-      await expect(backend.retrieve('split-secret')).resolves.toBe(splitUtf8Text.slice(0, -1))
+      await expect(backend.retrieve('split-secret')).resolves.toBe(splitUtf8Text)
     } finally {
       vi.unstubAllEnvs()
       await fs.rm(fixtureDir, { recursive: true, force: true })

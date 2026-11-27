@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { VaultError } from 'vaultkeeper'
 
 const configDir = '/tmp/vaultkeeper-test-config-dir'
 
@@ -76,6 +77,21 @@ describe('storeCommand', () => {
   })
 
   describe('stdin validation', () => {
+    it('wipes buffered secret bytes when stdin fails after a chunk', async () => {
+      const chunk = Buffer.from('fixture secret')
+      vi.spyOn(process.stdin, Symbol.asyncIterator).mockImplementation(async function* () {
+        await Promise.resolve()
+        yield chunk
+        throw new VaultError('stdin read failed')
+      })
+      const { storeCommand } = await import('../../../src/commands/store.js')
+      const code = await storeCommand(['--name', 'my-secret'], configDir)
+      expect(code).toBe(1)
+      expect(stderrOutput).toContain('stdin read failed')
+      expect(chunk.equals(Buffer.alloc(chunk.length))).toBe(true)
+      expect(mockInit).not.toHaveBeenCalled()
+    })
+
     // Regression: issue #118 — empty stdin previously returned exit 1 (a
     // runtime error), while an empty/missing --name returns 2 (a usage
     // error) for the exact same underlying problem: no usable secret input.

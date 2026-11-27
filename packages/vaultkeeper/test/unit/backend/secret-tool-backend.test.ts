@@ -83,11 +83,11 @@ describe('SecretToolBackend', () => {
   })
 
   describe('retrieve', () => {
-    it('should strip exactly one trailing newline on success', async () => {
+    it('should preserve a final newline in piped lookup output', async () => {
       mockExecCommandFull.mockResolvedValue(makeResult(0, 'secret-value\n'))
 
       const result = await backend.retrieve('my-secret')
-      expect(result).toBe('secret-value')
+      expect(result).toBe('secret-value\n')
     })
 
     it('should throw SecretNotFoundError when exitCode is non-zero', async () => {
@@ -96,11 +96,9 @@ describe('SecretToolBackend', () => {
       await expect(backend.retrieve('missing')).rejects.toBeInstanceOf(SecretNotFoundError)
     })
 
-    // issue #297 AC2: not-found must be determined solely by exit code, not
-    // by whether the (post-newline-strip) stdout is empty — a stored secret
-    // may legitimately be empty or whitespace-only.
+    // Exit status distinguishes a missing entry from an empty stored value.
     it('should return the empty string, not throw, for a legitimately empty stored value', async () => {
-      mockExecCommandFull.mockResolvedValue(makeResult(0, '\n'))
+      mockExecCommandFull.mockResolvedValue(makeResult(0, ''))
 
       await expect(backend.retrieve('empty-secret')).resolves.toBe('')
     })
@@ -108,11 +106,11 @@ describe('SecretToolBackend', () => {
     it('should preserve a whitespace-only stored value verbatim, not throw', async () => {
       mockExecCommandFull.mockResolvedValue(makeResult(0, '   \n'))
 
-      await expect(backend.retrieve('whitespace-secret')).resolves.toBe('   ')
+      await expect(backend.retrieve('whitespace-secret')).resolves.toBe('   \n')
     })
 
-    it('should preserve leading/trailing spaces that are not the trailing newline', async () => {
-      mockExecCommandFull.mockResolvedValue(makeResult(0, '  padded value  \n'))
+    it('should preserve leading and trailing spaces', async () => {
+      mockExecCommandFull.mockResolvedValue(makeResult(0, '  padded value  '))
 
       await expect(backend.retrieve('padded-secret')).resolves.toBe('  padded value  ')
     })

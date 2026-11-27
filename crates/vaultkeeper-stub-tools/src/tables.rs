@@ -201,8 +201,9 @@ pub fn secret_tool() -> BehaviorTable {
                 ],
                 mutation: None,
                 emit: Emit {
+                    // The captured stream has no terminal presentation newline.
                     stdout: EmitBody::Template {
-                        template: "{item.secret}\n".to_string(),
+                        template: "{item.secret}".to_string(),
                         id_capture: Some("id".to_string()),
                     },
                     stderr: EmitBody::Empty,
