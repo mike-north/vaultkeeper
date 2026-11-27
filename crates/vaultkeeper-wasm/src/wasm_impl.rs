@@ -116,6 +116,29 @@ impl JsHostPlatform {
             platform,
         })
     }
+
+    /// Ordinary listings preserve the single-argument callback used by older hosts.
+    async fn list_files(
+        &self,
+        path: &Path,
+        lowercase_lookup: bool,
+    ) -> Result<Vec<String>, VaultError> {
+        let list_fn = get_method(&self.host, "listDir").map_err(|e| js_err(&format!("{e:?}")))?;
+        let js_path = JsValue::from_str(&path.to_string_lossy());
+        let promise = if lowercase_lookup {
+            list_fn.call2(&self.host, &js_path, &JsValue::TRUE)
+        } else {
+            list_fn.call1(&self.host, &js_path)
+        }
+        .map_err(|e| js_err(&format!("listDir() call failed: {e:?}")))?;
+        let result = JsFuture::from(Promise::from(promise))
+            .await
+            .map_err(|e| fs_rejection_to_vault_error(&e, path, "read"))?;
+        let entries = js_sys::Array::from(&result);
+        Ok((0..entries.length())
+            .filter_map(|index| entries.get(index).as_string())
+            .collect())
+    }
 }
 
 fn get_method(obj: &JsValue, name: &str) -> Result<Function, JsError> {
@@ -515,25 +538,11 @@ impl HostPlatform for JsHostPlatform {
     }
 
     async fn list_dir(&self, path: &Path) -> Result<Vec<String>, VaultError> {
-        let list_fn = get_method(&self.host, "listDir").map_err(|e| js_err(&format!("{e:?}")))?;
+        self.list_files(path, false).await
+    }
 
-        let js_path = JsValue::from_str(&path.to_string_lossy());
-        let promise = list_fn
-            .call1(&self.host, &js_path)
-            .map_err(|e| js_err(&format!("listDir() call failed: {e:?}")))?;
-
-        let result = JsFuture::from(Promise::from(promise))
-            .await
-            .map_err(|e| fs_rejection_to_vault_error(&e, path, "read"))?;
-
-        let arr = js_sys::Array::from(&result);
-        let mut names = Vec::new();
-        for i in 0..arr.length() {
-            if let Some(s) = arr.get(i).as_string() {
-                names.push(s);
-            }
-        }
-        Ok(names)
+    async fn list_dir_for_lowercase_lookup(&self, path: &Path) -> Result<Vec<String>, VaultError> {
+        self.list_files(path, true).await
     }
 
     fn platform(&self) -> Platform {

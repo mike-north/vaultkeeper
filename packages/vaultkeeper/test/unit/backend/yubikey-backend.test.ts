@@ -17,18 +17,30 @@ vi.mock('../../../src/util/exec.js', () => ({
   execCommandFull: vi.fn(),
 }))
 
-const { readInventoryDir } = vi.hoisted(() => ({
+const { openStage, writeStage, closeStage, readInventoryDir } = vi.hoisted(() => ({
+  openStage: vi.fn<
+    (
+      filename: string,
+      flags: string,
+      mode: number,
+    ) => Promise<{
+      writeFile: (content: string) => Promise<void>
+      close: () => Promise<void>
+    }>
+  >(),
+  writeStage: vi.fn<(_content: string) => Promise<void>>(),
+  closeStage: vi.fn<() => Promise<void>>(),
   readInventoryDir: vi.fn<(path: string, options: { withFileTypes: true }) => Promise<Dirent[]>>(),
 }))
 
 vi.mock('node:fs/promises', () => ({
   mkdir: vi.fn(),
   access: vi.fn(),
-  lstat: vi.fn(),
+  open: openStage,
+  stat: vi.fn(() => Promise.resolve({ isFile: () => true })),
   rename: vi.fn(),
   unlink: vi.fn(),
   readFile: vi.fn(),
-  writeFile: vi.fn(),
   readdir: readInventoryDir,
 }))
 
@@ -122,7 +134,9 @@ describe('YubikeyBackend', () => {
   beforeEach(() => {
     backend = new YubikeyBackend()
     vi.clearAllMocks()
-    mockFs.lstat.mockRejectedValue(Object.assign(new Error('ENOENT'), { code: 'ENOENT' }))
+    openStage.mockReset().mockResolvedValue({ writeFile: writeStage, close: closeStage })
+    writeStage.mockResolvedValue(undefined)
+    closeStage.mockResolvedValue(undefined)
   })
 
   // ---------------------------------------------------------------------------
@@ -166,7 +180,6 @@ describe('YubikeyBackend', () => {
       mockChallengeResponse(FAKE_HMAC_RESPONSE)
 
       mockFs.mkdir.mockResolvedValue(undefined)
-      mockFs.writeFile.mockResolvedValue(undefined)
 
       await backend.store('my-secret', 'secret-value')
 
@@ -178,14 +191,15 @@ describe('YubikeyBackend', () => {
         expect.any(String),
       ])
 
-      expect(mockFs.writeFile).toHaveBeenCalledTimes(1)
+      expect(writeStage).toHaveBeenCalledTimes(1)
+      expect(closeStage).toHaveBeenCalledTimes(1)
 
       // Verify the encrypted payload written to the secret file is a valid
       // versioned GCM blob (1:<iv>:<authTag>:<ciphertext>).
-      const stagedWrite = mockFs.writeFile.mock.calls[0]
-      expect(stagedWrite?.[2]).toEqual({ mode: 0o600, flag: 'wx' })
-      expect(mockFs.rename).toHaveBeenCalledWith(stagedWrite?.[0], expect.stringMatching(/\.enc$/))
-      const writtenContent = stagedWrite?.[1]
+      const stagePath = openStage.mock.calls[0]?.[0]
+      expect(openStage).toHaveBeenCalledWith(stagePath, 'wx', 0o600)
+      expect(mockFs.rename).toHaveBeenCalledWith(stagePath, expect.stringMatching(/\.enc$/))
+      const writtenContent = writeStage.mock.calls[0]?.[0]
       expect(typeof writtenContent).toBe('string')
       if (typeof writtenContent === 'string') {
         const parts = writtenContent.split(':')
@@ -199,13 +213,38 @@ describe('YubikeyBackend', () => {
       mockChallengeResponse(FAKE_HMAC_RESPONSE)
       mockFs.mkdir.mockResolvedValue(undefined)
       mockFs.readFile.mockRejectedValue(Object.assign(new Error('ENOENT'), { code: 'ENOENT' }))
-      mockFs.writeFile.mockResolvedValue(undefined)
 
       await backend.store('my-secret', 'secret-value')
 
       // execCommandFull should only have been called for ykman, never for openssl.
       const opensslCall = mockExecCommandFull.mock.calls.find(([cmd]) => cmd === 'openssl')
       expect(opensslCall).toBeUndefined()
+    })
+
+    it('does not remove a stage after an exclusive open failure', async () => {
+      mockDeviceAvailable()
+      mockChallengeResponse(FAKE_HMAC_RESPONSE)
+      const error = Object.assign(new Error('stage open failed'), { code: 'EACCES' })
+      openStage.mockRejectedValueOnce(error)
+
+      await expect(backend.store('z', 'value')).rejects.toMatchObject({ code: 'EACCES' })
+      expect(mockFs.unlink).not.toHaveBeenCalled()
+      expect(mockFs.rename).not.toHaveBeenCalled()
+    })
+
+    it('retries a stage collision and only writes through the acquired handle', async () => {
+      mockDeviceAvailable()
+      mockChallengeResponse(FAKE_HMAC_RESPONSE)
+      openStage.mockRejectedValueOnce(Object.assign(new Error('occupied'), { code: 'EEXIST' }))
+
+      await backend.store('z', 'value')
+      expect(openStage).toHaveBeenCalledTimes(2)
+      expect(writeStage).toHaveBeenCalledTimes(1)
+      expect(mockFs.rename).toHaveBeenCalledWith(
+        openStage.mock.calls[1]?.[0],
+        expect.stringMatching(/7a\.enc$/),
+      )
+      expect(mockFs.unlink).not.toHaveBeenCalled()
     })
 
     it('should throw PluginNotFoundError when ykman is not installed', async () => {
@@ -234,7 +273,6 @@ describe('YubikeyBackend', () => {
       mockChallengeResponse(FAKE_HMAC_RESPONSE)
       mockFs.mkdir.mockResolvedValue(undefined)
       mockFs.readFile.mockRejectedValue(Object.assign(new Error('ENOENT'), { code: 'ENOENT' }))
-      mockFs.writeFile.mockResolvedValue(undefined)
 
       await customBackend.store('my-secret', 'secret-value')
 
@@ -243,7 +281,7 @@ describe('YubikeyBackend', () => {
         expect.objectContaining({ recursive: true }),
       )
       expect(mockFs.rename).toHaveBeenCalledWith(
-        mockFs.writeFile.mock.calls[0]?.[0],
+        openStage.mock.calls[0]?.[0],
         path.join(customDir, '6d792d736563726574.enc'),
       )
     })
@@ -457,7 +495,6 @@ describe('YubikeyBackend', () => {
 
       mockFs.unlink.mockResolvedValue(undefined)
       mockFs.readFile.mockRejectedValue(Object.assign(new Error('ENOENT'), { code: 'ENOENT' }))
-      mockFs.writeFile.mockResolvedValue(undefined)
 
       await backend.delete('my-secret')
 

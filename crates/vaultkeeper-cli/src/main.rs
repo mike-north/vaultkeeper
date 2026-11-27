@@ -1607,7 +1607,7 @@ async fn cmd_profile(action: ProfileAction) -> i32 {
     match action {
         ProfileAction::Init { name, profile_file } => cmd_profile_init(&name, profile_file).await,
         ProfileAction::Show { name, profile_file } => cmd_profile_show(name, profile_file).await,
-        ProfileAction::List => cmd_profile_list(),
+        ProfileAction::List => cmd_profile_list().await,
         ProfileAction::Lint { name, profile_file } => cmd_profile_lint(name, profile_file).await,
     }
 }
@@ -1743,14 +1743,13 @@ async fn cmd_profile_show(name: Option<String>, profile_file: Option<String>) ->
     }
 }
 
-fn cmd_profile_list() -> i32 {
+async fn cmd_profile_list() -> i32 {
     let host = make_host();
     let profiles_dir = host
         .config_dir()
         .join(vaultkeeper_core::profile::PROFILES_DIR_NAME);
 
-    // Profile lookup accepts links, so list the same names it can resolve.
-    let entries = match host::read_directory_entries(&profiles_dir) {
+    let entries = match host.list_dir(&profiles_dir).await {
         Ok(e) => e,
         Err(e) => {
             eprintln!("Error: {e}");
@@ -1762,8 +1761,6 @@ fn cmd_profile_list() -> i32 {
         .into_iter()
         .filter_map(|entry| {
             entry
-                .file_name()
-                .to_str()?
                 .strip_suffix(vaultkeeper_core::profile::PROFILE_FILE_EXTENSION)
                 .map(str::to_string)
         })

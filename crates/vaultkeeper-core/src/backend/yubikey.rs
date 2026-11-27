@@ -32,7 +32,6 @@
 //! This port matches that behavior exactly (see issue #293 discussion).
 
 use std::collections::BTreeMap;
-use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -106,10 +105,13 @@ impl LegacyIndex {
     /// Only a unique index entry can establish ownership of a lossy filename.
     /// A uniquely identified TypeScript surrogate is outside Rust's ID domain.
     fn addresses(&self, canonical: &str, path: &Path) -> Result<bool, VaultError> {
-        let mut matches = self
-            .entries
-            .keys()
-            .filter(|key| key.0 == canonical.as_bytes() || key.normalizes_to(canonical));
+        let mut matches = self.entries.iter().filter_map(|(key, indexed_path)| {
+            // Path prefixes can survive a move or come from another platform.
+            let filename = indexed_path.rsplit(['/', '\\']).next();
+            (filename.map(std::ffi::OsStr::new) == path.file_name()
+                && (key.0 == canonical.as_bytes() || key.normalizes_to(canonical)))
+            .then_some(key)
+        });
         match (matches.next(), matches.next()) {
             (Some(key), None) => Ok(key.0 == canonical.as_bytes()),
             _ => Err(VaultError::Decryption {
@@ -224,10 +226,10 @@ impl YubikeyBackend {
         // when the exact name fits. Only read legacy paths that actually exist.
         if !self
             .host
-            .list_dir(&self.storage_dir())
+            .list_dir_for_lowercase_lookup(&self.storage_dir())
             .await?
             .iter()
-            .any(|name| path.file_name() == Some(OsStr::new(name)))
+            .any(|name| path.file_name() == Some(std::ffi::OsStr::new(name)))
         {
             return Ok(None);
         }
@@ -268,70 +270,88 @@ impl YubikeyBackend {
 
     /// Stage a complete regular file so replacing a record never writes through its directory entry.
     async fn publish_entry(&self, path: &Path, encrypted: &[u8]) -> Result<(), VaultError> {
-        let mut suffix = [0u8; 12];
-        getrandom::fill(&mut suffix).map_err(|e| {
-            VaultError::Other(format!("Failed to generate YubiKey stage name: {e}"))
-        })?;
-        let filename = format!(".vk-{}.tmp", hex_encode(&suffix));
-        let stage = path.with_file_name(&filename);
-        let staged = match self
+        // The shortest canonical name is `.enc`. Leave room for the `.s`
+        // prefix within that same path budget and retry exclusive collisions.
+        let suffix_len = path.file_name().unwrap_or_default().len() - 2;
+        for _ in 0..16 {
+            let mut suffix = [0u8; 12];
+            getrandom::fill(&mut suffix).map_err(|e| {
+                VaultError::Other(format!("Failed to generate YubiKey stage name: {e}"))
+            })?;
+            let suffix = hex_encode(&suffix);
+            let Some(stage) = self
+                .stage_entry(path, encrypted, &suffix, suffix_len)
+                .await?
+            else {
+                continue;
+            };
+            // Inventory uses the same canonical lookup path even when the
+            // filesystem retains an older case spelling after the rename.
+            let result = self.host.rename_file(&stage, path).await;
+            if result.is_err() {
+                let _ = self.host.delete_file(&stage).await;
+            }
+            return result;
+        }
+        Err(VaultError::Filesystem {
+            message: "Could not reserve a YubiKey staging path".to_string(),
+            path: path.display().to_string(),
+            permission: "write".to_string(),
+            code: Some("EEXIST".to_string()),
+        })
+    }
+
+    /// Short names require exclusive creation. A legacy host without it keeps
+    /// the full random suffix to preserve the private staging namespace.
+    async fn stage_entry(
+        &self,
+        path: &Path,
+        encrypted: &[u8],
+        suffix: &str,
+        suffix_len: usize,
+    ) -> Result<Option<PathBuf>, VaultError> {
+        let stage = path.with_file_name(format!(".s{}", &suffix[..suffix_len.min(suffix.len())]));
+        // This exclusive-create primitive can write a private stage directly.
+        // No additional sibling and no hard-link support are needed.
+        match self.host.try_create_lock_file(&stage, encrypted).await {
+            Ok(()) => return Ok(Some(stage)),
+            Err(VaultError::Filesystem {
+                code: Some(code), ..
+            }) if code == "EEXIST" => return Ok(None),
+            Err(VaultError::LockingNotSupported { .. }) => (),
+            Err(VaultError::Filesystem {
+                message,
+                path,
+                code,
+                ..
+            }) => {
+                return Err(VaultError::Filesystem {
+                    message,
+                    path,
+                    permission: "write".to_string(),
+                    code,
+                });
+            }
+            Err(error) => return Err(error),
+        }
+        match self
             .host
             .write_file_if_absent(&stage, encrypted, 0o600)
             .await
         {
             Err(VaultError::LockingNotSupported { .. }) => {
-                // Hosts without atomic create can still stage under a private random name.
+                let stage = path.with_file_name(format!(".s{suffix}"));
                 if self.host.file_exists(&stage).await? {
-                    false
-                } else {
-                    if let Err(error) = self.host.write_file(&stage, encrypted, 0o600).await {
-                        let _ = self.host.delete_file(&stage).await;
-                        return Err(error);
-                    }
-                    true
+                    return Ok(None);
                 }
+                if let Err(error) = self.host.write_file(&stage, encrypted, 0o600).await {
+                    let _ = self.host.delete_file(&stage).await;
+                    return Err(error);
+                }
+                Ok(Some(stage))
             }
-            result => result?,
-        };
-        if !staged {
-            return Err(VaultError::Filesystem {
-                message: "YubiKey staging path already exists".to_string(),
-                path: stage.display().to_string(),
-                permission: "write".to_string(),
-                code: Some("EEXIST".to_string()),
-            });
+            result => result.map(|created| created.then_some(stage)),
         }
-
-        let result = self.publish_stage(&stage, path, &filename).await;
-        if result.is_err() {
-            let _ = self.host.delete_file(&stage).await;
-        }
-        result
-    }
-
-    /// A folding filesystem can preserve the old spelling when replacing an entry.
-    /// Probe the private staged file first so a case-only rename cannot move an unrelated file.
-    async fn publish_stage(
-        &self,
-        stage: &Path,
-        path: &Path,
-        filename: &str,
-    ) -> Result<(), VaultError> {
-        let folds_case = self
-            .host
-            .file_exists(&stage.with_file_name(filename.to_ascii_uppercase()))
-            .await?;
-        self.host.rename_file(stage, path).await?;
-        if folds_case {
-            let upper =
-                path.with_file_name(path.file_name().unwrap_or_default().to_ascii_uppercase());
-            if let Err(error) = self.host.rename_file(&upper, path).await
-                && self.host.file_exists(path).await?
-            {
-                return Err(error);
-            }
-        }
-        Ok(())
     }
 
     /// Perform the YubiKey HMAC-SHA1 challenge-response for `id` and return
@@ -743,7 +763,11 @@ impl SecretBackend for YubikeyBackend {
         self.require_device().await?;
 
         let entry_path = self.entry_path(id);
-        let (entry_path, data) = match self.read_entry(&entry_path).await? {
+        let exact = match self.read_entry(&entry_path).await {
+            Err(error) if unaddressable_exact_path(id, &error) => None,
+            result => result?,
+        };
+        let (entry_path, data) = match exact {
             Some(data) => (entry_path, data),
             None => {
                 self.read_legacy_entry(id)
@@ -794,7 +818,11 @@ impl SecretBackend for YubikeyBackend {
             Some((path, _)) => self.delete_entry(&path).await?,
             None => false,
         };
-        if self.delete_entry(&self.entry_path(id)).await? || legacy_deleted {
+        let exact_deleted = match self.delete_entry(&self.entry_path(id)).await {
+            Err(error) if legacy_deleted && unaddressable_exact_path(id, &error) => false,
+            result => result?,
+        };
+        if exact_deleted || legacy_deleted {
             Ok(())
         } else {
             Err(VaultError::SecretNotFound {
@@ -804,13 +832,23 @@ impl SecretBackend for YubikeyBackend {
     }
 
     async fn exists(&self, id: &str) -> Result<bool, VaultError> {
-        Ok(self.host.file_exists(&self.entry_path(id)).await?
-            || self.read_legacy_entry(id).await?.is_some())
+        let exact_exists = match self.host.file_exists(&self.entry_path(id)).await {
+            Err(error) if unaddressable_exact_path(id, &error) => false,
+            result => result?,
+        };
+        Ok(exact_exists || self.read_legacy_entry(id).await?.is_some())
     }
 
     fn as_presence_capable(&self) -> Option<&dyn PresenceCapableBackend> {
         Some(self)
     }
+}
+
+/// A legacy spelling can fit a directory whose exact-ID filename cannot.
+/// The impossible exact path carries no evidence about the legacy record.
+fn unaddressable_exact_path(id: &str, error: &VaultError) -> bool {
+    id.contains('\u{fffd}')
+        && matches!(error, VaultError::Filesystem { code: Some(code), .. } if code == "ENAMETOOLONG")
 }
 
 #[cfg_attr(target_arch = "wasm32", async_trait::async_trait(?Send))]
@@ -820,44 +858,59 @@ impl ListableBackend for YubikeyBackend {
         // The entry files are authoritative; the old shared index can be
         // stale after concurrent writes or an interrupted metadata update.
         let storage_dir = self.storage_dir();
-        let filenames = self.host.list_dir(&storage_dir).await?;
         let mut ids = Vec::new();
         let mut legacy_index = None;
-        for filename in filenames {
-            let Some(stem) = filename.strip_suffix(".enc") else {
+        for filename in self
+            .host
+            .list_dir_for_lowercase_lookup(&storage_dir)
+            .await?
+        {
+            let Some(hex) = filename
+                .strip_suffix(".enc")
+                .filter(|hex| is_record_hex(hex))
+            else {
                 continue;
             };
-            let hex = stem.strip_prefix("id-").unwrap_or(stem);
-            if !hex.len().is_multiple_of(2)
-                || !hex
-                    .bytes()
-                    .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+            let Some(id) = hex_decode(hex)
+                .ok()
+                .and_then(|bytes| String::from_utf8(bytes).ok())
+            else {
+                continue;
+            };
+            let path = storage_dir.join(&filename);
+            if !self
+                .read_entry(&path)
+                .await?
+                .is_some_and(|entry| is_legacy_envelope(&entry))
             {
                 continue;
             }
-            if stem != hex && hex.len() != 64 {
-                continue;
-            }
-            let Some(entry) = self.read_entry(&storage_dir.join(&filename)).await? else {
-                continue;
-            };
-            if stem == hex {
-                if is_legacy_envelope(&entry)
-                    && let Ok(bytes) = hex_decode(hex)
-                    && let Ok(id) = String::from_utf8(bytes)
-                {
-                    if id.contains('\u{fffd}') {
-                        let index = match &legacy_index {
-                            Some(index) => index,
-                            None => legacy_index.insert(self.read_legacy_index().await),
-                        };
-                        if !index.addresses(&id, &storage_dir.join(&filename))? {
-                            continue;
-                        }
-                    }
-                    ids.push(id);
+            if id.contains('\u{fffd}') {
+                let index = match &legacy_index {
+                    Some(index) => index,
+                    None => legacy_index.insert(self.read_legacy_index().await),
+                };
+                if !index.addresses(&id, &path)? {
+                    continue;
                 }
-            } else if let Some(id) = exact_envelope_id(&entry, &filename) {
+            }
+            ids.push(id);
+        }
+
+        // Exact replacements are published before retiring the legacy file.
+        // Enumerate exact names after reading legacy records so migration cannot fall between scans.
+        for filename in self
+            .host
+            .list_dir_for_lowercase_lookup(&storage_dir)
+            .await?
+        {
+            if filename
+                .strip_prefix("id-")
+                .and_then(|name| name.strip_suffix(".enc"))
+                .is_some_and(|hex| hex.len() == 64 && is_record_hex(hex))
+                && let Some(entry) = self.read_entry(&storage_dir.join(&filename)).await?
+                && let Some(id) = exact_envelope_id(&entry, &filename)
+            {
                 ids.push(id);
             }
         }
@@ -865,6 +918,14 @@ impl ListableBackend for YubikeyBackend {
         ids.dedup();
         Ok(ids)
     }
+}
+
+/// Canonical record names encode whole bytes in lowercase hexadecimal.
+fn is_record_hex(hex: &str) -> bool {
+    hex.len().is_multiple_of(2)
+        && hex
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }
 
 /// The version or legacy magic identifies ownership without a device touch or
@@ -1152,7 +1213,10 @@ mod tests {
             Ok(())
         }
         async fn list_dir(&self, path: &Path) -> Result<Vec<String>, VaultError> {
-            let filenames = self.files.lock().unwrap()
+            let filenames = self
+                .files
+                .lock()
+                .unwrap()
                 .keys()
                 .filter_map(|k| {
                     if k.parent() == Some(path) {
@@ -1504,12 +1568,24 @@ mod tests {
         let legacy_path = backend.legacy_entry_path(id);
         host.files.lock().unwrap().extend([
             (legacy_path.clone(), LEGACY_CBC_FIXTURE.to_vec()),
-            (backend.storage_dir().join("metadata.json"), br#"{"entries":{"\ufffd":"unrelated.enc"}}"#.to_vec()),
+            (
+                backend.storage_dir().join("metadata.json"),
+                br#"{"entries":{"\ufffd":"unrelated.enc"}}"#.to_vec(),
+            ),
         ]);
 
-        assert!(matches!(backend.list().await, Err(VaultError::Decryption { .. })));
-        assert!(matches!(backend.store(id, "value").await, Err(VaultError::Decryption { .. })));
-        assert_eq!(host.read_file(&legacy_path).await.unwrap(), LEGACY_CBC_FIXTURE);
+        assert!(matches!(
+            backend.list().await,
+            Err(VaultError::Decryption { .. })
+        ));
+        assert!(matches!(
+            backend.store(id, "value").await,
+            Err(VaultError::Decryption { .. })
+        ));
+        assert_eq!(
+            host.read_file(&legacy_path).await.unwrap(),
+            LEGACY_CBC_FIXTURE
+        );
     }
 
     /// Inventory may observe either generation during migration, while the ID stays present.
@@ -1520,7 +1596,10 @@ mod tests {
         let id = "\u{fffd}";
         host.files.lock().unwrap().extend([
             (backend.legacy_entry_path(id), LEGACY_CBC_FIXTURE.to_vec()),
-            (backend.storage_dir().join("metadata.json"), br#"{"entries":{"\ufffd":"efbfbd.enc"}}"#.to_vec()),
+            (
+                backend.storage_dir().join("metadata.json"),
+                br#"{"entries":{"\ufffd":"efbfbd.enc"}}"#.to_vec(),
+            ),
         ]);
         let (captured, ready) = tokio::sync::oneshot::channel();
         let (resume, release) = tokio::sync::oneshot::channel();

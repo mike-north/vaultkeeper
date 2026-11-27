@@ -1,7 +1,17 @@
 /** Concurrent YubiKey writers share the encrypted-record inventory. */
 import { describe, expect, it, vi } from 'vitest'
 import { createCipheriv, hkdfSync } from 'node:crypto'
-import { lstat, mkdir, mkdtemp, readFile, realpath, rename, rm, symlink, writeFile } from 'node:fs/promises'
+import {
+  lstat,
+  mkdir,
+  mkdtemp,
+  readFile,
+  realpath,
+  rename,
+  rm,
+  symlink,
+  writeFile,
+} from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -124,6 +134,32 @@ describe('YubiKey inventory', () => {
     },
   )
 
+  it.skipIf(process.platform === 'win32')(
+    'lists a legacy record stored through a symlink',
+    async () => {
+      const dir = await mkdtemp(join(tmpdir(), 'vk-yubikey-inventory-'))
+      try {
+        const target = join(dir, 'legacy-target')
+        const record = join(dir, '7a.enc')
+        await new YubikeyBackend(dir).store('z', 'value')
+        await rename(record, target)
+        await symlink(target, record)
+        await symlink(dir, join(dir, '61.enc'))
+        await symlink(join(dir, 'missing'), join(dir, '62.enc'))
+        await symlink(join(target, 'child'), join(dir, '63.enc'))
+
+        const reopened = new YubikeyBackend(dir)
+        expect(await reopened.retrieve('z')).toBe('value')
+        expect(await reopened.list()).toEqual(['z'])
+        await reopened.delete('z')
+        expect(await reopened.list()).toEqual([])
+        expect((await lstat(target)).isFile()).toBe(true)
+      } finally {
+        await rm(dir, { recursive: true, force: true })
+      }
+    },
+  )
+
   it('lists a successful overwrite after the record was renamed to uppercase', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'vk-yubikey-inventory-'))
     try {
@@ -140,6 +176,11 @@ describe('YubiKey inventory', () => {
         },
       )
       const oldRecord = await readFile(uppercase)
+      const beforeOverwrite = new YubikeyBackend(dir)
+      if (!caseSensitive) {
+        expect(await beforeOverwrite.retrieve('z')).toBe('old value')
+      }
+      expect(await beforeOverwrite.list()).toEqual(caseSensitive ? [] : ['z'])
       await backend.store('z', 'new value')
 
       const reopened = new YubikeyBackend(dir)
@@ -232,7 +273,10 @@ describe('YubiKey inventory', () => {
       await writeLegacyAlias(dir)
       const record = join(dir, 'efbfbd.enc')
       const original = await readFile(record)
-      await writeFile(join(dir, 'metadata.json'), JSON.stringify({ entries: { '\ufffd': 'unrelated.enc' } }))
+      await writeFile(
+        join(dir, 'metadata.json'),
+        JSON.stringify({ entries: { '\ufffd': 'unrelated.enc' } }),
+      )
       const backend = new YubikeyBackend(dir)
       await expect(backend.list()).rejects.toBeInstanceOf(DecryptionError)
       await expect(backend.store('\ufffd', 'new value')).rejects.toBeInstanceOf(DecryptionError)
@@ -248,8 +292,12 @@ describe('YubiKey inventory', () => {
     try {
       const id = await writeLegacyAlias(dir)
       let captured: () => void = () => undefined
-      const ready = new Promise<void>((resolve) => { captured = resolve })
-      const release = new Promise<void>((resolve) => { resume = resolve })
+      const ready = new Promise<void>((resolve) => {
+        captured = resolve
+      })
+      const release = new Promise<void>((resolve) => {
+        resume = resolve
+      })
       directoryRace.snapshot = { dir, captured, release }
       const inventory = new YubikeyBackend(dir).list()
       await ready
@@ -263,25 +311,51 @@ describe('YubiKey inventory', () => {
     }
   })
 
-  it.skipIf(process.platform !== 'darwin')('stores short IDs at the macOS path boundary', async () => {
-    const dir = await mkdtemp(join(tmpdir(), 'vk-yubikey-inventory-'))
-    try {
-      const maxDirBytes = 1016 // The canonical /7a.enc suffix uses seven of 1023 bytes.
-      let storage = await realpath(dir)
-      while (Buffer.byteLength(storage) < maxDirBytes) {
-        const remaining = maxDirBytes - Buffer.byteLength(storage) - 1
-        storage = join(storage, 'a'.repeat(remaining === 201 ? 199 : Math.min(remaining, 200)))
+  it.skipIf(process.platform !== 'darwin')(
+    'stores short IDs at the macOS path boundary',
+    async () => {
+      const dir = await mkdtemp(join(tmpdir(), 'vk-yubikey-inventory-'))
+      try {
+        const maxDirBytes = 1016 // The canonical /7a.enc suffix uses seven of 1023 bytes.
+        let storage = await realpath(dir)
+        while (Buffer.byteLength(storage) < maxDirBytes) {
+          const remaining = maxDirBytes - Buffer.byteLength(storage) - 1
+          storage = join(storage, 'a'.repeat(remaining === 201 ? 199 : Math.min(remaining, 200)))
+        }
+        await mkdir(storage, { recursive: true })
+        await writeFile(join(storage, '7a.enc'), 'existing record path')
+        await new YubikeyBackend(storage).store('z', 'value')
+        const reopened = new YubikeyBackend(storage)
+        expect(await reopened.list()).toEqual(['z'])
+        expect(await reopened.retrieve('z')).toBe('value')
+      } finally {
+        await rm(dir, { recursive: true, force: true })
       }
-      await mkdir(storage, { recursive: true })
-      await writeFile(join(storage, '7a.enc'), 'existing record path')
-      await new YubikeyBackend(storage).store('z', 'value')
-      const reopened = new YubikeyBackend(storage)
-      expect(await reopened.list()).toEqual(['z'])
-      expect(await reopened.retrieve('z')).toBe('value')
-    } finally {
-      await rm(dir, { recursive: true, force: true })
-    }
-  })
+    },
+  )
+
+  it.skipIf(process.platform !== 'darwin')(
+    'deletes a legacy record when its exact path cannot fit',
+    async () => {
+      const dir = await mkdtemp(join(tmpdir(), 'vk-yubikey-inventory-'))
+      try {
+        let storage = await realpath(dir)
+        while (Buffer.byteLength(storage) < 1008) {
+          const remaining = 1007 - Buffer.byteLength(storage)
+          storage = join(storage, 'a'.repeat(remaining === 201 ? 199 : Math.min(remaining, 200)))
+        }
+        await mkdir(storage, { recursive: true })
+        const id = await writeLegacyAlias(storage)
+        const backend = new YubikeyBackend(storage)
+        expect(await backend.list()).toEqual([id])
+        expect(await backend.retrieve(id)).toBe('value')
+        await expect(backend.delete(id)).resolves.toBeUndefined()
+        expect(await backend.list()).toEqual([])
+      } finally {
+        await rm(dir, { recursive: true, force: true })
+      }
+    },
+  )
 
   it('lists the exact spelling of a newly stored unpaired surrogate without legacy metadata', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'vk-yubikey-inventory-'))

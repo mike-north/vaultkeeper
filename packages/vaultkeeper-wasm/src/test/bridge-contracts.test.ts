@@ -13,7 +13,7 @@ import { describe, it } from 'node:test'
 import * as assert from 'node:assert/strict'
 import { createServer } from 'node:http'
 import type { AddressInfo } from 'node:net'
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createNodeHost } from '../node-host.js'
@@ -32,20 +32,50 @@ describe('directory inventory errors', () => {
     try {
       await mkdir(join(dir, '616c706861.enc'))
       await writeFile(join(dir, '62657461.enc'), 'entry')
-      assert.deepEqual(await createNodeHost(dir).listDir(dir), ['62657461.enc'])
+      const host = createNodeHost(dir)
+      assert.deepEqual((await host.listDir(dir)).sort(), ['616c706861.enc', '62657461.enc'])
+      assert.deepEqual(await host.listDir(dir, true), ['62657461.enc'])
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
   })
 
+  it(
+    'includes only regular-file links when the caller uses lowercase lookup',
+    { skip: process.platform === 'win32' },
+    async () => {
+      const dir = await mkdtemp(join(tmpdir(), 'vk-list-'))
+      try {
+        const target = join(dir, 'target')
+        await writeFile(target, 'entry')
+        await symlink(target, join(dir, '61.enc'))
+        await symlink(dir, join(dir, '62.enc'))
+        await symlink(join(dir, 'missing'), join(dir, '63.enc'))
+        await symlink(join(target, 'child'), join(dir, '64.enc'))
+        const host = createNodeHost(dir)
+        assert.deepEqual((await host.listDir(dir)).sort(), [
+          '61.enc',
+          '62.enc',
+          '63.enc',
+          '64.enc',
+          'target',
+        ])
+        assert.deepEqual((await host.listDir(dir, true)).sort(), ['61.enc', 'target'])
+      } finally {
+        await rm(dir, { recursive: true, force: true })
+      }
+    },
+  )
+
   it('distinguishes a missing directory from an unreadable inventory', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'vk-list-'))
     try {
       const host = createNodeHost(dir)
-      assert.deepEqual(await host.listDir(join(dir, 'missing')), [])
+      assert.deepEqual(await host.listDir(join(dir, 'missing'), true), [])
       const file = join(dir, 'file')
       await writeFile(file, 'not a directory')
-      await assert.rejects(host.listDir(file), { code: 'ENOTDIR' })
+      assert.deepEqual(await host.listDir(file), [])
+      await assert.rejects(host.listDir(file, true), { code: 'ENOTDIR' })
     } finally {
       await rm(dir, { recursive: true, force: true })
     }

@@ -288,23 +288,30 @@ whether membership is intentional.
   `isListableBackend`, `isPresenceCapableBackend`, `defaultBackendType`, `platformNativeBackendType`,
   `PresenceOperation`, `PresenceRequirementOptions`, the `Setup*` interactive types (`SetupQuestion`,
   `SetupChoice`, `SetupResult`).
-  YubiKey inventories derive membership from regular files with canonical record names and a
-  recognized YubiKey envelope. Listing needs neither a device touch nor a successful decryption.
-  Stores publish a complete regular file at the canonical name, including when replacing a symbolic
-  link or when the filesystem folds case. The link target is left alone.
+  YubiKey inventories derive membership from recognized YubiKey envelopes in regular files reachable
+  through their canonical lookup paths. Compatible legacy paths include case aliases on folding
+  filesystems and symbolic links to regular files. Listing needs neither a device touch nor successful
+  decryption. Stores stage complete records within the canonical path budget and replace the directory
+  entry atomically. Replacing or deleting a symbolic link leaves its target alone.
   Ordinary legacy filenames identify their records independently of metadata. A legacy filename
   containing U+FFFD can represent a literal replacement character or an unpaired surrogate. Its
-  original spelling requires a unique index entry. When no unique entry survives, inventory and
-  operations that rely on the legacy spelling report a typed decryption error with the affected path.
+  original spelling requires a unique index entry with the matching legacy filename. When no unique
+  entry survives, inventory and operations that rely on the legacy spelling report a typed decryption
+  error with the affected path.
   New records with ambiguous UTF-8 spellings use the SHA-256 digest of the exact UTF-16LE ID
   in a distinct filename and store that ID in an authenticated version 2 GCM envelope. An upgrade
-  retires the matching legacy record once the exact record is published.
-  Lookup prefers the exact record and can fall back to a matching legacy record. Rust addresses
-  Unicode scalar IDs. TypeScript can also address IDs containing unpaired surrogates. An older
-  reader must upgrade to find or read a version 2 record.
-  Rust `HostPlatform::list_dir` and `WasmHostPlatform.listDir` enumerate regular filenames without
-  following symbolic links. A missing directory yields an empty inventory and other listing failures
-  propagate.
+  retires the matching legacy record once the exact record is published. Inventory reads legacy
+  records before enumerating exact filenames so concurrent upgrades keep their IDs visible.
+  Lookup prefers the exact record and can fall back to a matching legacy record, including where
+  the legacy filename fits and the exact filename exceeds filesystem limits. Rust addresses Unicode
+  scalar IDs. TypeScript can also address IDs containing unpaired surrogates. An older reader must
+  upgrade to find or read a version 2 record.
+  Rust `HostPlatform::list_dir` and the default `WasmHostPlatform.listDir` enumerate directory entry
+  names without following symbolic links. The ordinary Node host listing returns an empty list on
+  enumeration failures. Rust hosts can implement `list_dir_for_lowercase_lookup` and WASM hosts can
+  accept `listDir`'s optional `lowercaseLookup` flag for YubiKey-compatible enumeration. Both return
+  ASCII-lowercase names reachable as regular files, including through symbolic links. A missing
+  directory yields an empty inventory and other listing failures propagate.
 - **Config & platform:** `VaultConfig`, `loadConfig`, `getDefaultConfigDir`, `getPlatformDefaultConfigDir`,
   `TrustTier`, `KeyStatus`, `Platform`.
 - **Doctor:** `runDoctor` / `VaultKeeper.doctor`, `RunDoctorOptions`, `PreflightResult`, `PreflightCheck`,

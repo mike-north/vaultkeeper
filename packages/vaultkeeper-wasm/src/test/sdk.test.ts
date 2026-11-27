@@ -13,7 +13,7 @@
 import { describe, it } from 'node:test'
 import * as assert from 'node:assert/strict'
 import { promises } from 'node:fs'
-import { mkdir, mkdtemp, readdir, rm } from 'node:fs/promises'
+import { mkdir, mkdtemp, readdir, realpath, rm } from 'node:fs/promises'
 import { syncBuiltinESMExports } from 'node:module'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -159,6 +159,27 @@ describe('@vaultkeeper/wasm SDK', () => {
       assert.deepEqual(await readFile(file), firstPublished ? firstContent : secondContent)
     })
   })
+
+  it(
+    'publishes a short destination at the macOS path limit',
+    { skip: process.platform !== 'darwin' },
+    async () => {
+      await withTempDir(async (dir) => {
+        let target = await realpath(dir)
+        while (Buffer.byteLength(target) < 1018) {
+          const remaining = 1017 - Buffer.byteLength(target)
+          target = join(target, 'a'.repeat(remaining === 201 ? 199 : Math.min(remaining, 200)))
+        }
+        const destination = join(target, '.s00')
+        const content = Buffer.from('publication fixture')
+        const host = createNodeHost(target)
+        assert.equal(Buffer.byteLength(destination), 1023)
+        assert.equal(await host.writeFileIfAbsent?.(destination, content, 0o600), true)
+        assert.deepEqual(await readFile(destination), content)
+        assert.deepEqual(await readdir(target), ['.s00'])
+      })
+    },
+  )
 
   it('publishes the initial wrapping key through the WASM host bridge', async () => {
     await withTempDir(async (dir) => {

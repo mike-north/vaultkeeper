@@ -175,18 +175,31 @@ pub trait HostPlatform: Send + Sync {
         self.delete_file(from).await
     }
 
-    /// List regular filenames in a directory without following symlinks.
+    /// List directory entry names without following symlinks.
     /// A missing directory yields an empty vec; other failures propagate.
     async fn list_dir(&self, path: &Path) -> Result<Vec<String>, VaultError>;
+
+    /// List ASCII-lowercase names that resolve to regular files, including
+    /// through a symbolic link. This supports backends that derive
+    /// lowercase lookup paths while accepting records from older writers.
+    /// The default uses already-lowercase candidates from the ordinary listing.
+    async fn list_dir_for_lowercase_lookup(&self, path: &Path) -> Result<Vec<String>, VaultError> {
+        Ok(self
+            .list_dir(path)
+            .await?
+            .into_iter()
+            .filter(|name| !name.bytes().any(|byte| byte.is_ascii_uppercase()))
+            .collect())
+    }
 
     /// Atomically create `path` if and only if it does not already exist
     /// (POSIX `O_EXCL` semantics), writing `content` as its bytes. This is
     /// the sole primitive an advisory cross-process lock is built on (issue
     /// #322): "holding the lock" *is* "having successfully created this
     /// file"; releasing it is an ordinary [`HostPlatform::delete_file`] call
-    /// on the same path. [`crate::keys::storage`]'s revocation-state
-    /// read-modify-write (`mutate_revocation_state`/`save_key_state`) is the
-    /// first, and currently only, caller.
+    /// on the same path. It also reserves private YubiKey record stages
+    /// whose contents are published later by rename. Hosts should create
+    /// the file with owner-only permissions where supported.
     ///
     /// # Contention
     ///

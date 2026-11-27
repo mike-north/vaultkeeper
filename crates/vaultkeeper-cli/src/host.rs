@@ -42,8 +42,8 @@ fn dirs_fallback() -> PathBuf {
         .unwrap_or_else(|_| PathBuf::from("/tmp"))
 }
 
-/// Enumerate native entries without imposing record-file rules on profile lookup.
-pub(crate) fn read_directory_entries(path: &Path) -> Result<Vec<std::fs::DirEntry>, VaultError> {
+/// Enumerate native entries before imposing backend-specific record rules.
+fn read_directory_entries(path: &Path) -> Result<Vec<std::fs::DirEntry>, VaultError> {
     match std::fs::read_dir(path) {
         Ok(entries) => entries
             .map(|entry| entry.map_err(|error| list_directory_error(path, error)))
@@ -61,6 +61,33 @@ fn list_directory_error(path: &Path, error: std::io::Error) -> VaultError {
         permission: "read".to_string(),
         code: None,
     }
+}
+
+/// An unresolved or cyclic alias cannot be opened through a canonical lookup path.
+fn unreachable_file_alias(error: &std::io::Error) -> bool {
+    if matches!(
+        error.kind(),
+        std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
+    ) {
+        return true;
+    }
+    #[cfg(unix)]
+    return error.raw_os_error() == Some(libc::ELOOP);
+    #[cfg(windows)]
+    return error.raw_os_error() == Some(1921); // ERROR_CANT_RESOLVE_FILENAME
+    #[cfg(not(any(unix, windows)))]
+    false
+}
+
+/// Backends can distinguish an impossible generated filename from an I/O failure.
+fn path_length_error_code(error: &std::io::Error) -> Option<String> {
+    #[cfg(unix)]
+    let too_long = error.raw_os_error() == Some(libc::ENAMETOOLONG);
+    #[cfg(windows)]
+    let too_long = error.raw_os_error() == Some(206); // ERROR_FILENAME_EXCED_RANGE
+    #[cfg(not(any(unix, windows)))]
+    let too_long = false;
+    too_long.then(|| "ENAMETOOLONG".to_string())
 }
 
 /// Classify errors from linking an owned sibling. Linux filesystems can
@@ -215,10 +242,7 @@ impl HostPlatform for NativeHostPlatform {
             message: format!("Failed to read {}: {e}", path.display()),
             path: path.display().to_string(),
             permission: "read".to_string(),
-            // The native host does not yet derive a symbolic errno code from
-            // `std::io::Error` (out of scope here — see issue #138); only the
-            // WASM host bridge currently populates `code`.
-            code: None,
+            code: path_length_error_code(&e),
         })
     }
 
@@ -353,7 +377,7 @@ impl HostPlatform for NativeHostPlatform {
                 message: format!("Failed to check existence of {}: {e}", path.display()),
                 path: path.display().to_string(),
                 permission: "read".to_string(),
-                code: None,
+                code: path_length_error_code(&e),
             }),
         }
     }
@@ -363,7 +387,7 @@ impl HostPlatform for NativeHostPlatform {
             message: format!("Failed to delete {}: {e}", path.display()),
             path: path.display().to_string(),
             permission: "write".to_string(),
-            code: None,
+            code: path_length_error_code(&e),
         })
     }
 
@@ -390,18 +414,44 @@ impl HostPlatform for NativeHostPlatform {
     }
 
     async fn list_dir(&self, path: &Path) -> Result<Vec<String>, VaultError> {
-        let mut names = Vec::new();
+        match std::fs::read_dir(path) {
+            Ok(entries) => Ok(entries
+                .filter_map(Result::ok)
+                .filter_map(|entry| entry.file_name().into_string().ok())
+                .collect()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
+            Err(error) => Err(list_directory_error(path, error)),
+        }
+    }
+
+    async fn list_dir_for_lowercase_lookup(&self, path: &Path) -> Result<Vec<String>, VaultError> {
+        let mut names = std::collections::BTreeSet::new();
         for entry in read_directory_entries(path)? {
-            if entry
-                .file_type()
-                .map_err(|error| list_directory_error(path, error))?
-                .is_file()
-                && let Some(name) = entry.file_name().to_str()
-            {
-                names.push(name.to_string());
+            let name = entry.file_name();
+            let Some(name) = name.to_str() else { continue };
+            let file_type = match entry.file_type() {
+                Ok(file_type) => file_type,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(error) => return Err(list_directory_error(path, error)),
+            };
+            let canonical = name.to_ascii_lowercase();
+            if file_type.is_file() && name == canonical {
+                names.insert(canonical);
+            } else if file_type.is_file() || file_type.is_symlink() {
+                // Probe the spelling the backend opens. An uppercase name on
+                // a case-sensitive volume and a dangling link are unreachable.
+                let candidate = path.join(&canonical);
+                match std::fs::metadata(&candidate) {
+                    Ok(metadata) if metadata.is_file() => {
+                        names.insert(canonical);
+                    }
+                    Ok(_) => (),
+                    Err(error) if unreachable_file_alias(&error) => (),
+                    Err(error) => return Err(list_directory_error(&candidate, error)),
+                }
             }
         }
-        Ok(names)
+        Ok(names.into_iter().collect())
     }
 
     /// Real `O_EXCL`-based exclusive create, overriding the trait's
@@ -412,7 +462,7 @@ impl HostPlatform for NativeHostPlatform {
     /// against a subsequent create.
     async fn try_create_lock_file(&self, path: &Path, content: &[u8]) -> Result<(), VaultError> {
         if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent).map_err(|e| VaultError::Filesystem {
+            create_dir_all_secure(parent).map_err(|e| VaultError::Filesystem {
                 message: format!("Failed to create directory {}: {e}", parent.display()),
                 path: parent.display().to_string(),
                 permission: "lock".to_string(),
@@ -420,11 +470,15 @@ impl HostPlatform for NativeHostPlatform {
             })?;
         }
 
-        let file = match std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(path)
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        // Lock markers and unpublished record stages are private from creation.
+        #[cfg(unix)]
         {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let file = match options.open(path) {
             Ok(file) => file,
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
                 return Err(VaultError::Filesystem {
@@ -519,13 +573,21 @@ mod tests {
 
     /// Record inventories consume filenames, so a matching directory must never be opened.
     #[tokio::test]
-    async fn list_dir_returns_regular_files_only() {
+    async fn file_lookup_lists_regular_files_and_generic_listing_keeps_directory_names() {
         let dir = tempfile::tempdir().unwrap();
         let host = NativeHostPlatform::new(dir.path().to_path_buf());
         fs::create_dir(dir.path().join("616c706861.enc")).unwrap();
         fs::write(dir.path().join("62657461.enc"), b"entry").unwrap();
 
-        assert_eq!(host.list_dir(dir.path()).await.unwrap(), ["62657461.enc"]);
+        let mut names = host.list_dir(dir.path()).await.unwrap();
+        names.sort();
+        assert_eq!(names, ["616c706861.enc", "62657461.enc"]);
+        assert_eq!(
+            host.list_dir_for_lowercase_lookup(dir.path())
+                .await
+                .unwrap(),
+            ["62657461.enc"]
+        );
     }
 
     /// Ordinary persistence can recover from a missing link primitive.
@@ -1555,6 +1617,42 @@ mod tests {
             assert_eq!(fs::read(target).unwrap(), b"keep this file");
         }
 
+        /// Reopening a legacy symlink keeps the credential visible and cleanup removes only the link.
+        #[tokio::test]
+        #[serial(stub_tool_path_env)]
+        async fn yubikey_lists_a_legacy_record_stored_through_a_symlink() {
+            let _fixture = Fixture::with_yubikey();
+            let dir = tempfile::tempdir().unwrap();
+            let host = Arc::new(NativeHostPlatform::new(dir.path().to_path_buf()));
+            let storage = dir.path().join("yubikey");
+            let record = storage.join("7a.enc");
+            let target = storage.join("legacy-target");
+            YubikeyBackend::new(host.clone(), false)
+                .store("z", "value")
+                .await
+                .unwrap();
+            fs::rename(&record, &target).unwrap();
+            symlink(&target, &record).unwrap();
+            symlink(&storage, storage.join("61.enc")).unwrap();
+            symlink(storage.join("missing"), storage.join("62.enc")).unwrap();
+            symlink("63.enc", storage.join("63.enc")).unwrap();
+            symlink(target.join("child"), storage.join("64.enc")).unwrap();
+
+            assert!(
+                host.list_dir(&storage)
+                    .await
+                    .unwrap()
+                    .iter()
+                    .any(|name| name == "7a.enc")
+            );
+            let reopened = YubikeyBackend::new(host, false);
+            assert_eq!(reopened.retrieve("z").await.unwrap(), "value");
+            assert_eq!(reopened.list().await.unwrap(), ["z"]);
+            reopened.delete("z").await.unwrap();
+            assert!(reopened.list().await.unwrap().is_empty());
+            assert!(target.is_file());
+        }
+
         /// On a folding filesystem a case-only rename still aliases the canonical store path.
         #[tokio::test]
         #[serial(stub_tool_path_env)]
@@ -1571,6 +1669,13 @@ mod tests {
             let case_sensitive = !canonical.exists();
             let old_record = fs::read(&uppercase).unwrap();
 
+            let reopened = YubikeyBackend::new(host.clone(), false);
+            if case_sensitive {
+                assert!(reopened.list().await.unwrap().is_empty());
+            } else {
+                assert_eq!(reopened.retrieve("z").await.unwrap(), "old value");
+                assert_eq!(reopened.list().await.unwrap(), ["z"]);
+            }
             backend.store("z", "new value").await.unwrap();
 
             let reopened = YubikeyBackend::new(host, false);
@@ -1581,6 +1686,44 @@ mod tests {
             if case_sensitive {
                 assert_eq!(fs::read(uppercase).unwrap(), old_record);
             }
+        }
+
+        /// A legacy credential is addressable when the exact filename would exceed PATH_MAX.
+        #[cfg(target_os = "macos")]
+        #[tokio::test]
+        #[serial(stub_tool_path_env)]
+        async fn yubikey_keeps_legacy_lookup_and_delete_when_the_exact_path_cannot_fit() {
+            let _fixture = Fixture::with_yubikey();
+            let dir = tempfile::tempdir().unwrap();
+            let mut config = dir.path().canonicalize().unwrap();
+            while config.as_os_str().len() < 1000 {
+                let remaining = 999 - config.as_os_str().len();
+                let component = if remaining == 201 {
+                    199
+                } else {
+                    remaining.min(200)
+                };
+                config.push("a".repeat(component));
+            }
+            let storage = config.join("yubikey");
+            fs::create_dir_all(&storage).unwrap();
+            fs::write(storage.join("efbfbd.enc"), b"Salted__older cipher fixture").unwrap();
+            fs::write(
+                storage.join("metadata.json"),
+                br#"{"entries":{"\ufffd":"efbfbd.enc"}}"#,
+            )
+            .unwrap();
+
+            let host = Arc::new(NativeHostPlatform::new(config));
+            let backend = YubikeyBackend::new(host, false);
+            let id = "\u{fffd}";
+            assert_eq!(backend.list().await.unwrap(), [id]);
+            assert!(backend.exists(id).await.unwrap());
+            assert!(
+                matches!(backend.retrieve(id).await, Err(VaultError::Decryption { message, .. }) if message.contains("AES-256-CBC"))
+            );
+            backend.delete(id).await.unwrap();
+            assert!(backend.list().await.unwrap().is_empty());
         }
 
         /// Same-directory staging must fit wherever the canonical short record fits.
@@ -1594,7 +1737,11 @@ mod tests {
             // /yubikey/7a.enc uses 15 of the 1023 path bytes.
             while config.as_os_str().len() < 1008 {
                 let remaining = 1007 - config.as_os_str().len();
-                let component = if remaining == 201 { 199 } else { remaining.min(200) };
+                let component = if remaining == 201 {
+                    199
+                } else {
+                    remaining.min(200)
+                };
                 config.push("a".repeat(component));
             }
             let storage = config.join("yubikey");
@@ -1602,7 +1749,10 @@ mod tests {
             fs::write(storage.join("7a.enc"), b"existing record path").unwrap();
 
             let host = Arc::new(NativeHostPlatform::new(config));
-            YubikeyBackend::new(host.clone(), false).store("z", "value").await.unwrap();
+            YubikeyBackend::new(host.clone(), false)
+                .store("z", "value")
+                .await
+                .unwrap();
             let reopened = YubikeyBackend::new(host, false);
             assert_eq!(reopened.list().await.unwrap(), ["z"]);
             assert_eq!(reopened.retrieve("z").await.unwrap(), "value");
