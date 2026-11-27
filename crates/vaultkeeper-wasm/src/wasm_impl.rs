@@ -32,7 +32,7 @@ use vaultkeeper_core::{ClaimsKind, ExecutableTrustRequiredReason, VaultClaims, V
 /// - `fileExists(path)` → `Promise<boolean>`
 /// - `deleteFile(path)` → `Promise<void>`
 /// - `renameFile(from, to)` → `Promise<void>`
-/// - `listDir(path)` → `Promise<string[]>`
+/// - `listDir(path, lowercaseLookup?, include?)` → `Promise<string[]>`
 /// - `platform()` → `string` ("darwin"|"linux"|"win32")
 /// - `configDir()` → `string`
 /// - `httpFetch(request)` → `Promise<{status, headers, body}>` (issue #239)
@@ -115,6 +115,58 @@ impl JsHostPlatform {
             config_dir: PathBuf::from(config_dir_str),
             platform,
         })
+    }
+
+    /// Ordinary probes preserve the single-argument callback used by older JS hosts.
+    async fn check_file_exists(
+        &self,
+        path: &Path,
+        follow_symlinks: bool,
+    ) -> Result<bool, VaultError> {
+        let exists_fn =
+            get_method(&self.host, "fileExists").map_err(|e| js_err(&format!("{e:?}")))?;
+        let js_path = JsValue::from_str(&path.to_string_lossy());
+        let promise = if follow_symlinks {
+            exists_fn.call1(&self.host, &js_path)
+        } else {
+            exists_fn.call2(&self.host, &js_path, &JsValue::FALSE)
+        }
+        .map_err(|e| js_err(&format!("fileExists() call failed: {e:?}")))?;
+
+        // The Node host collapses only genuine absence to false. A rejection retains its errno.
+        let result = JsFuture::from(Promise::from(promise))
+            .await
+            .map_err(|e| fs_rejection_to_vault_error(&e, path, "read"))?;
+        Ok(result.as_bool().unwrap_or(false))
+    }
+
+    /// Ordinary listings preserve the single-argument callback used by older hosts.
+    async fn list_files(
+        &self,
+        path: &Path,
+        include: Option<Box<dyn for<'name> Fn(&'name str) -> bool + Send + Sync>>,
+    ) -> Result<Vec<String>, VaultError> {
+        let list_fn = get_method(&self.host, "listDir").map_err(|e| js_err(&format!("{e:?}")))?;
+        let js_path = JsValue::from_str(&path.to_string_lossy());
+        // Keep the filter callable until the async host has finished enumerating names.
+        let include = include.map(|include| {
+            Closure::<dyn Fn(JsValue) -> bool>::new(move |name: JsValue| {
+                name.as_string().is_some_and(|name| include(&name))
+            })
+        });
+        let promise = if let Some(include) = &include {
+            list_fn.call3(&self.host, &js_path, &JsValue::TRUE, include.as_ref())
+        } else {
+            list_fn.call1(&self.host, &js_path)
+        }
+        .map_err(|e| js_err(&format!("listDir() call failed: {e:?}")))?;
+        let result = JsFuture::from(Promise::from(promise))
+            .await
+            .map_err(|e| fs_rejection_to_vault_error(&e, path, "read"))?;
+        let entries = js_sys::Array::from(&result);
+        Ok((0..entries.length())
+            .filter_map(|index| entries.get(index).as_string())
+            .collect())
     }
 }
 
@@ -460,25 +512,11 @@ impl HostPlatform for JsHostPlatform {
     }
 
     async fn file_exists(&self, path: &Path) -> Result<bool, VaultError> {
-        let exists_fn =
-            get_method(&self.host, "fileExists").map_err(|e| js_err(&format!("{e:?}")))?;
+        self.check_file_exists(path, true).await
+    }
 
-        let js_path = JsValue::from_str(&path.to_string_lossy());
-        let promise = exists_fn
-            .call1(&self.host, &js_path)
-            .map_err(|e| js_err(&format!("fileExists() call failed: {e:?}")))?;
-
-        // Mirror the native host's `file_exists` (crates/vaultkeeper-cli/src/host.rs):
-        // the JS bridge (`toHostFilesystemError` in node-host.ts) already
-        // collapses a genuine "does not exist" to a resolved `false`, so any
-        // rejection reaching here is a real failure (e.g. EACCES) that must
-        // surface as `VaultError::Filesystem`, not be swallowed to `false`
-        // the way a bare `Path::exists()`-style check would.
-        let result = JsFuture::from(Promise::from(promise))
-            .await
-            .map_err(|e| fs_rejection_to_vault_error(&e, path, "read"))?;
-
-        Ok(result.as_bool().unwrap_or(false))
+    async fn directory_entry_exists(&self, path: &Path) -> Result<bool, VaultError> {
+        self.check_file_exists(path, false).await
     }
 
     async fn delete_file(&self, path: &Path) -> Result<(), VaultError> {
@@ -515,25 +553,15 @@ impl HostPlatform for JsHostPlatform {
     }
 
     async fn list_dir(&self, path: &Path) -> Result<Vec<String>, VaultError> {
-        let list_fn = get_method(&self.host, "listDir").map_err(|e| js_err(&format!("{e:?}")))?;
+        self.list_files(path, None).await
+    }
 
-        let js_path = JsValue::from_str(&path.to_string_lossy());
-        let promise = list_fn
-            .call1(&self.host, &js_path)
-            .map_err(|e| js_err(&format!("listDir() call failed: {e:?}")))?;
-
-        let result = JsFuture::from(Promise::from(promise))
-            .await
-            .map_err(|e| js_err(&format!("listDir() rejected: {e:?}")))?;
-
-        let arr = js_sys::Array::from(&result);
-        let mut names = Vec::new();
-        for i in 0..arr.length() {
-            if let Some(s) = arr.get(i).as_string() {
-                names.push(s);
-            }
-        }
-        Ok(names)
+    async fn list_dir_for_lowercase_lookup(
+        &self,
+        path: &Path,
+        include: Box<dyn for<'name> Fn(&'name str) -> bool + Send + Sync>,
+    ) -> Result<Vec<String>, VaultError> {
+        self.list_files(path, Some(include)).await
     }
 
     fn platform(&self) -> Platform {

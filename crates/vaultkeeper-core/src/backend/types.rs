@@ -2,6 +2,7 @@
 
 use crate::errors::VaultError;
 use crate::types::{SigningAlgorithm, SigningPublicKey};
+use std::collections::BTreeSet;
 use std::path::Path;
 
 /// Output from a subprocess execution.
@@ -155,6 +156,12 @@ pub trait HostPlatform: Send + Sync {
     /// Check if a file exists.
     async fn file_exists(&self, path: &Path) -> Result<bool, VaultError>;
 
+    /// Check whether the directory entry can be addressed without following its final symlink.
+    /// Hosts without a no-follow probe can use their ordinary existence check.
+    async fn directory_entry_exists(&self, path: &Path) -> Result<bool, VaultError> {
+        self.file_exists(path).await
+    }
+
     /// Delete a file. Returns `Ok(())` if the file was deleted.
     async fn delete_file(&self, path: &Path) -> Result<(), VaultError>;
 
@@ -175,17 +182,51 @@ pub trait HostPlatform: Send + Sync {
         self.delete_file(from).await
     }
 
-    /// List filenames in a directory. Returns an empty vec if the dir doesn't exist.
+    /// List directory entry names without following symlinks.
+    /// A missing directory yields an empty vec. An existing non-directory or
+    /// any other enumeration failure yields an error.
     async fn list_dir(&self, path: &Path) -> Result<Vec<String>, VaultError>;
+
+    /// List ASCII-lowercase names that resolve to regular files, including
+    /// through a symbolic link. This supports backends that derive
+    /// lowercase lookup paths while accepting records from older writers.
+    /// Apply `include` to canonical names before resolving their paths so
+    /// entries outside the caller's inventory cannot affect its lookup.
+    /// The default folds the ordinary listing and checks canonical paths with
+    /// [`HostPlatform::file_exists`]. If the existence check includes directories,
+    /// YubiKey inventory can skip them using `EISDIR` from `read_file` or a
+    /// successful directory listing when the read error has no code.
+    /// Override this method when metadata can distinguish regular files without
+    /// opening entries, especially if the filesystem can contain special files.
+    async fn list_dir_for_lowercase_lookup(
+        &self,
+        path: &Path,
+        include: Box<dyn for<'name> Fn(&'name str) -> bool + Send + Sync>,
+    ) -> Result<Vec<String>, VaultError> {
+        let candidates: BTreeSet<_> = self
+            .list_dir(path)
+            .await?
+            .into_iter()
+            .map(|name| name.to_ascii_lowercase())
+            .filter(|name| include(name))
+            .collect();
+        let mut reachable = Vec::new();
+        for name in candidates {
+            if self.file_exists(&path.join(&name)).await? {
+                reachable.push(name);
+            }
+        }
+        Ok(reachable)
+    }
 
     /// Atomically create `path` if and only if it does not already exist
     /// (POSIX `O_EXCL` semantics), writing `content` as its bytes. This is
     /// the sole primitive an advisory cross-process lock is built on (issue
     /// #322): "holding the lock" *is* "having successfully created this
     /// file"; releasing it is an ordinary [`HostPlatform::delete_file`] call
-    /// on the same path. [`crate::keys::storage`]'s revocation-state
-    /// read-modify-write (`mutate_revocation_state`/`save_key_state`) is the
-    /// first, and currently only, caller.
+    /// on the same path. It also reserves private YubiKey record stages
+    /// whose contents are published later by rename. Hosts should create
+    /// the file with owner-only permissions where supported.
     ///
     /// # Contention
     ///

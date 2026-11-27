@@ -10,17 +10,19 @@ import { randomBytes } from 'node:crypto'
 import {
   access,
   link,
+  lstat,
   open,
   mkdir,
   readdir,
   readFile,
   rename,
+  stat,
   unlink,
   writeFile,
   chmod,
 } from 'node:fs/promises'
 import { homedir, platform as osPlatform } from 'node:os'
-import { dirname, join } from 'node:path'
+import { basename, dirname, join } from 'node:path'
 import { LockingNotSupportedError } from './errors.js'
 import type { ExecOptions, HttpFetchRequest, HttpFetchResponse, WasmHostPlatform } from './types.js'
 
@@ -61,6 +63,35 @@ function toHostFilesystemError(err: unknown, path: string): HostFilesystemError 
   const message = err instanceof Error ? err.message : String(err)
   const code = isErrnoException(err) && typeof err.code === 'string' ? err.code : undefined
   return new HostFilesystemError(message, path, code)
+}
+
+/** Exclusively reserve an unpublished sibling within the destination's path budget. */
+async function openPublicationStage(
+  destination: string,
+  mode: number,
+): Promise<{ temp: string; file: Awaited<ReturnType<typeof open>> }> {
+  const targetName = basename(destination)
+  const suffixLength = Math.max(2, Buffer.byteLength(targetName) - 2)
+  for (let attempt = 0; attempt < 16; attempt++) {
+    // Separate internal publication files from the caller's own `.s` stages.
+    const name = `.v${randomBytes(12).toString('base64url').slice(0, suffixLength)}`
+    if (name.toLowerCase() === targetName.toLowerCase()) {
+      continue
+    }
+    const temp = join(dirname(destination), name)
+    try {
+      return { temp, file: await open(temp, 'wx', mode) }
+    } catch (err) {
+      if (!isErrnoException(err) || err.code !== 'EEXIST') {
+        throw err
+      }
+    }
+  }
+  throw new HostFilesystemError(
+    'Could not reserve a publication staging path',
+    destination,
+    'EEXIST',
+  )
 }
 
 /**
@@ -148,15 +179,14 @@ export function createNodeHost(configDirOverride?: string): WasmHostPlatform {
 
     async writeFileIfAbsent(path: string, content: Uint8Array, mode: number): Promise<boolean> {
       const dir = dirname(path)
-      // Keep private siblings within the same path budget as short store filenames.
-      const temp = join(dir, `.vk-${randomBytes(9).toString('base64url')}`)
-      let file: Awaited<ReturnType<typeof open>>
+      let stage: Awaited<ReturnType<typeof openPublicationStage>>
       try {
         await mkdir(dir, { recursive: true, mode: 0o700 })
-        file = await open(temp, 'wx', mode)
+        stage = await openPublicationStage(path, mode)
       } catch (err) {
         throw toHostFilesystemError(err, path)
       }
+      const { temp, file } = stage
       try {
         try {
           await file.writeFile(content)
@@ -196,9 +226,13 @@ export function createNodeHost(configDirOverride?: string): WasmHostPlatform {
       }
     },
 
-    async fileExists(path: string): Promise<boolean> {
+    async fileExists(path: string, followSymlinks = true): Promise<boolean> {
       try {
-        await access(path)
+        if (followSymlinks) {
+          await access(path)
+        } else {
+          await lstat(path)
+        }
         return true
       } catch (err) {
         // Mirror the native host's `file_exists` (crates/vaultkeeper-cli/src/host.rs):
@@ -228,11 +262,55 @@ export function createNodeHost(configDirOverride?: string): WasmHostPlatform {
       }
     },
 
-    async listDir(path: string): Promise<string[]> {
+    async listDir(
+      path: string,
+      lowercaseLookup = false,
+      include?: (name: string) => boolean,
+    ): Promise<string[]> {
+      if (!lowercaseLookup) {
+        // Ordinary Node host consumers have always received an empty list on errors.
+        return readdir(path).catch(() => [])
+      }
       try {
-        return await readdir(path)
-      } catch {
-        return []
+        const entries = await readdir(path, { withFileTypes: true })
+        const names = new Set<string>()
+        for (const entry of entries) {
+          if (!entry.isFile() && !entry.isSymbolicLink()) {
+            continue
+          }
+          const canonical = entry.name.replace(/[A-Z]/g, (letter) => letter.toLowerCase())
+          // Unrelated links must not participate in record lookup or its failure modes.
+          if (include !== undefined && !include(canonical)) {
+            continue
+          }
+          if (entry.isFile() && canonical === entry.name) {
+            names.add(canonical)
+            continue
+          }
+          // Probe the path the core will open rather than assuming case folding.
+          const candidate = join(path, canonical)
+          try {
+            if ((await stat(candidate)).isFile()) {
+              names.add(canonical)
+            }
+          } catch (err) {
+            if (
+              !isErrnoException(err) ||
+              (err.code !== 'ENOENT' && err.code !== 'ENOTDIR' && err.code !== 'ELOOP')
+            ) {
+              throw toHostFilesystemError(err, candidate)
+            }
+          }
+        }
+        return [...names]
+      } catch (err) {
+        if (err instanceof HostFilesystemError) {
+          throw err
+        }
+        if (isErrnoException(err) && err.code === 'ENOENT') {
+          return []
+        }
+        throw toHostFilesystemError(err, path)
       }
     },
 

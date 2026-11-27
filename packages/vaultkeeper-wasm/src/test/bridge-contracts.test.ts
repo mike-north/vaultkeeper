@@ -13,7 +13,7 @@ import { describe, it } from 'node:test'
 import * as assert from 'node:assert/strict'
 import { createServer } from 'node:http'
 import type { AddressInfo } from 'node:net'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdir, mkdtemp, rm, stat, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createNodeHost } from '../node-host.js'
@@ -25,6 +25,113 @@ import {
   AuthorizationDeniedError,
 } from '../errors.js'
 import type { HostSecretBackend } from '../types.js'
+
+describe('directory inventory errors', () => {
+  it(
+    'can probe an addressable link without resolving its unreadable target',
+    { skip: process.platform === 'win32' },
+    async () => {
+      const dir = await mkdtemp(join(tmpdir(), 'vk-list-'))
+      try {
+        const host = createNodeHost(dir)
+        const link = join(dir, 'link')
+        await symlink('a'.repeat(300), link)
+        await assert.rejects(host.fileExists(link), { code: 'ENAMETOOLONG', path: link })
+        assert.equal(await host.fileExists(link, false), true)
+        assert.equal(await host.fileExists(join(dir, 'missing'), false), false)
+      } finally {
+        await rm(dir, { recursive: true, force: true })
+      }
+    },
+  )
+
+  it('returns regular filenames without including directories', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'vk-list-'))
+    try {
+      await mkdir(join(dir, '616c706861.enc'))
+      await writeFile(join(dir, '62657461.enc'), 'entry')
+      const host = createNodeHost(dir)
+      assert.deepEqual((await host.listDir(dir)).sort(), ['616c706861.enc', '62657461.enc'])
+      assert.deepEqual(await host.listDir(dir, true), ['62657461.enc'])
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  it(
+    'includes only regular-file links when the caller uses lowercase lookup',
+    { skip: process.platform === 'win32' },
+    async () => {
+      const dir = await mkdtemp(join(tmpdir(), 'vk-list-'))
+      try {
+        const target = join(dir, 'target')
+        await writeFile(target, 'entry')
+        await symlink(target, join(dir, '61.enc'))
+        await symlink(dir, join(dir, '62.enc'))
+        await symlink(join(dir, 'missing'), join(dir, '63.enc'))
+        await symlink(join(target, 'child'), join(dir, '64.enc'))
+        const host = createNodeHost(dir)
+        assert.deepEqual((await host.listDir(dir)).sort(), [
+          '61.enc',
+          '62.enc',
+          '63.enc',
+          '64.enc',
+          'target',
+        ])
+        assert.deepEqual((await host.listDir(dir, true)).sort(), ['61.enc', 'target'])
+      } finally {
+        await rm(dir, { recursive: true, force: true })
+      }
+    },
+  )
+
+  it('distinguishes a missing directory from an unreadable inventory', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'vk-list-'))
+    try {
+      const host = createNodeHost(dir)
+      assert.deepEqual(await host.listDir(join(dir, 'missing'), true), [])
+      const file = join(dir, 'file')
+      await writeFile(file, 'not a directory')
+      assert.deepEqual(await host.listDir(file), [])
+      await assert.rejects(host.listDir(file, true), { code: 'ENOTDIR' })
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  it(
+    'filters canonical record names before resolving unrelated symlinks',
+    { skip: process.platform === 'win32' },
+    async () => {
+      const dir = await mkdtemp(join(tmpdir(), 'vk-list-'))
+      try {
+        const alpha = '616c706861.enc'
+        const beta = '62657461.enc'
+        await writeFile(join(dir, alpha), 'alpha entry')
+        await writeFile(join(dir, 'target'), 'beta entry')
+        await symlink('target', join(dir, beta))
+        const index = join(dir, 'metadata.json')
+        const overlongTarget = 'a'.repeat(300)
+        await symlink(overlongTarget, index)
+        await assert.rejects(stat(index), { code: 'ENAMETOOLONG' })
+        await symlink(overlongTarget, join(dir, 'unrelated.enc'))
+
+        const host = createNodeHost(dir)
+        const include = (name: string): boolean => /^(?:[0-9a-f]{2})*\.enc$/.test(name)
+        assert.deepEqual((await host.listDir(dir, true, include)).sort(), [alpha, beta])
+
+        const unreadableRecord = '63.enc'
+        await symlink(overlongTarget, join(dir, unreadableRecord))
+        await assert.rejects(host.listDir(dir, true, include), {
+          code: 'ENAMETOOLONG',
+          path: join(dir, unreadableRecord),
+        })
+      } finally {
+        await rm(dir, { recursive: true, force: true })
+      }
+    },
+  )
+})
 
 /** Loose shape of a value thrown across the WASM boundary (see `../errors.ts`). */
 interface BridgeErrorShape {

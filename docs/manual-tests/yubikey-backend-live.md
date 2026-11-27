@@ -20,12 +20,12 @@ verification).
 
 1. Using the Rust core (via a small harness binary or the native CLI once wired
    to select `yubikey`), `store` a known secret under a fixed id.
-2. Confirm `<config_dir>/yubikey/metadata.json` and a `<hex-id>.enc` entry exist,
+2. Confirm a `<config_dir>/yubikey/<hex-id>.enc` entry exists,
    and that the entry starts with the `1:` version prefix (base64 `iv:authTag:ciphertext`
    after it).
 3. `retrieve` the same id — confirm it returns the exact original secret.
-4. `delete` the id — confirm the entry file and its `metadata.json` entry are both
-   gone, and a subsequent `retrieve` fails with `SecretNotFound`.
+4. `delete` the id — confirm the entry file is gone, the id is no longer listed,
+   and a subsequent `retrieve` fails with `SecretNotFound`.
 5. Unplug the YubiKey (or use a different one) and attempt `retrieve` — confirm a
    `DeviceNotPresent` error, not a hang or a decrypt failure.
 

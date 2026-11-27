@@ -8,6 +8,7 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import * as crypto from 'node:crypto'
+import type { Dirent } from 'node:fs'
 import * as path from 'node:path'
 import type { ExecCommandResult } from '../../../src/util/exec.js'
 
@@ -16,12 +17,31 @@ vi.mock('../../../src/util/exec.js', () => ({
   execCommandFull: vi.fn(),
 }))
 
+const { openStage, writeStage, closeStage, readInventoryDir } = vi.hoisted(() => ({
+  openStage: vi.fn<
+    (
+      filename: string,
+      flags: string,
+      mode: number,
+    ) => Promise<{
+      writeFile: (content: string) => Promise<void>
+      close: () => Promise<void>
+    }>
+  >(),
+  writeStage: vi.fn<(_content: string) => Promise<void>>(),
+  closeStage: vi.fn<() => Promise<void>>(),
+  readInventoryDir: vi.fn<(path: string, options: { withFileTypes: true }) => Promise<Dirent[]>>(),
+}))
+
 vi.mock('node:fs/promises', () => ({
   mkdir: vi.fn(),
   access: vi.fn(),
+  open: openStage,
+  stat: vi.fn(() => Promise.resolve({ isFile: () => true })),
+  rename: vi.fn(),
   unlink: vi.fn(),
   readFile: vi.fn(),
-  writeFile: vi.fn(),
+  readdir: readInventoryDir,
 }))
 
 import * as fs from 'node:fs/promises'
@@ -38,6 +58,22 @@ import {
 
 const mockExecCommandFull = vi.mocked(execCommandFull)
 const mockFs = vi.mocked(fs)
+
+/** Model names returned by readdir for ordinary encrypted record files. */
+function regularEntries(...names: string[]): Dirent[] {
+  return names.map((name) => ({
+    name,
+    path: '',
+    parentPath: '',
+    isFile: () => true,
+    isDirectory: () => false,
+    isBlockDevice: () => false,
+    isCharacterDevice: () => false,
+    isSymbolicLink: () => false,
+    isFIFO: () => false,
+    isSocket: () => false,
+  }))
+}
 
 function makeResult(exitCode: number, stdout = '', stderr = ''): ExecCommandResult {
   return { exitCode, stdout, stderr }
@@ -98,6 +134,9 @@ describe('YubikeyBackend', () => {
   beforeEach(() => {
     backend = new YubikeyBackend()
     vi.clearAllMocks()
+    openStage.mockReset().mockResolvedValue({ writeFile: writeStage, close: closeStage })
+    writeStage.mockResolvedValue(undefined)
+    closeStage.mockResolvedValue(undefined)
   })
 
   // ---------------------------------------------------------------------------
@@ -141,9 +180,6 @@ describe('YubikeyBackend', () => {
       mockChallengeResponse(FAKE_HMAC_RESPONSE)
 
       mockFs.mkdir.mockResolvedValue(undefined)
-      // metadata load: file does not exist yet
-      mockFs.readFile.mockRejectedValue(Object.assign(new Error('ENOENT'), { code: 'ENOENT' }))
-      mockFs.writeFile.mockResolvedValue(undefined)
 
       await backend.store('my-secret', 'secret-value')
 
@@ -155,17 +191,15 @@ describe('YubikeyBackend', () => {
         expect.any(String),
       ])
 
-      // writeFile should have been called twice: once for the secret file,
-      // once for the metadata file.
-      expect(mockFs.writeFile).toHaveBeenCalledTimes(2)
+      expect(writeStage).toHaveBeenCalledTimes(1)
+      expect(closeStage).toHaveBeenCalledTimes(1)
 
       // Verify the encrypted payload written to the secret file is a valid
       // versioned GCM blob (1:<iv>:<authTag>:<ciphertext>).
-      const secretFileCall = mockFs.writeFile.mock.calls.find(
-        ([p]) => typeof p === 'string' && p.endsWith('.enc'),
-      )
-      expect(secretFileCall).toBeDefined()
-      const writtenContent = secretFileCall?.[1]
+      const stagePath = openStage.mock.calls[0]?.[0]
+      expect(openStage).toHaveBeenCalledWith(stagePath, 'wx', 0o600)
+      expect(mockFs.rename).toHaveBeenCalledWith(stagePath, expect.stringMatching(/\.enc$/))
+      const writtenContent = writeStage.mock.calls[0]?.[0]
       expect(typeof writtenContent).toBe('string')
       if (typeof writtenContent === 'string') {
         const parts = writtenContent.split(':')
@@ -179,13 +213,38 @@ describe('YubikeyBackend', () => {
       mockChallengeResponse(FAKE_HMAC_RESPONSE)
       mockFs.mkdir.mockResolvedValue(undefined)
       mockFs.readFile.mockRejectedValue(Object.assign(new Error('ENOENT'), { code: 'ENOENT' }))
-      mockFs.writeFile.mockResolvedValue(undefined)
 
       await backend.store('my-secret', 'secret-value')
 
       // execCommandFull should only have been called for ykman, never for openssl.
       const opensslCall = mockExecCommandFull.mock.calls.find(([cmd]) => cmd === 'openssl')
       expect(opensslCall).toBeUndefined()
+    })
+
+    it('does not remove a stage after an exclusive open failure', async () => {
+      mockDeviceAvailable()
+      mockChallengeResponse(FAKE_HMAC_RESPONSE)
+      const error = Object.assign(new Error('stage open failed'), { code: 'EACCES' })
+      openStage.mockRejectedValueOnce(error)
+
+      await expect(backend.store('z', 'value')).rejects.toMatchObject({ code: 'EACCES' })
+      expect(mockFs.unlink).not.toHaveBeenCalled()
+      expect(mockFs.rename).not.toHaveBeenCalled()
+    })
+
+    it('retries a stage collision and only writes through the acquired handle', async () => {
+      mockDeviceAvailable()
+      mockChallengeResponse(FAKE_HMAC_RESPONSE)
+      openStage.mockRejectedValueOnce(Object.assign(new Error('occupied'), { code: 'EEXIST' }))
+
+      await backend.store('z', 'value')
+      expect(openStage).toHaveBeenCalledTimes(2)
+      expect(writeStage).toHaveBeenCalledTimes(1)
+      expect(mockFs.rename).toHaveBeenCalledWith(
+        openStage.mock.calls[1]?.[0],
+        expect.stringMatching(/7a\.enc$/),
+      )
+      expect(mockFs.unlink).not.toHaveBeenCalled()
     })
 
     it('should throw PluginNotFoundError when ykman is not installed', async () => {
@@ -214,7 +273,6 @@ describe('YubikeyBackend', () => {
       mockChallengeResponse(FAKE_HMAC_RESPONSE)
       mockFs.mkdir.mockResolvedValue(undefined)
       mockFs.readFile.mockRejectedValue(Object.assign(new Error('ENOENT'), { code: 'ENOENT' }))
-      mockFs.writeFile.mockResolvedValue(undefined)
 
       await customBackend.store('my-secret', 'secret-value')
 
@@ -222,10 +280,10 @@ describe('YubikeyBackend', () => {
         customDir,
         expect.objectContaining({ recursive: true }),
       )
-      const secretFileCall = mockFs.writeFile.mock.calls.find(
-        ([p]) => typeof p === 'string' && p.endsWith('.enc'),
+      expect(mockFs.rename).toHaveBeenCalledWith(
+        openStage.mock.calls[0]?.[0],
+        path.join(customDir, '6d792d736563726574.enc'),
       )
-      expect(secretFileCall?.[0]).toEqual(expect.stringContaining(customDir))
     })
   })
 
@@ -437,7 +495,6 @@ describe('YubikeyBackend', () => {
 
       mockFs.unlink.mockResolvedValue(undefined)
       mockFs.readFile.mockRejectedValue(Object.assign(new Error('ENOENT'), { code: 'ENOENT' }))
-      mockFs.writeFile.mockResolvedValue(undefined)
 
       await backend.delete('my-secret')
 
@@ -475,25 +532,42 @@ describe('YubikeyBackend', () => {
   })
 
   describe('list', () => {
-    it('should return all entry keys from metadata file', async () => {
-      const metadata = { entries: { 'my-secret': '/path/a.enc', 'another-secret': '/path/b.enc' } }
-      mockFs.readFile.mockResolvedValue(JSON.stringify(metadata))
+    it('needs readable metadata only for records with lossy legacy names', async () => {
+      mockFs.readFile.mockImplementation((file) => {
+        if (typeof file === 'string' && file.endsWith('metadata.json')) {
+          return Promise.reject(new Error('injected metadata failure'))
+        }
+        return Promise.resolve(Buffer.from('1:::'))
+      })
+      readInventoryDir.mockResolvedValue(regularEntries('616c706861.enc'))
+      await expect(new YubikeyBackend().list()).resolves.toEqual(['alpha'])
+      expect(mockFs.readFile).not.toHaveBeenCalledWith(
+        expect.stringContaining('metadata.json'),
+        'utf8',
+      )
+      readInventoryDir.mockResolvedValue(regularEntries('616c706861.enc', 'efbfbd.enc'))
+      await expect(new YubikeyBackend().list()).rejects.toBeInstanceOf(DecryptionError)
+      expect(mockFs.readFile).toHaveBeenCalledWith(expect.stringContaining('metadata.json'), 'utf8')
+    })
+    it('should return all entry keys from encrypted filenames', async () => {
+      mockFs.readFile.mockImplementation(() => Promise.resolve(Buffer.from('1:::')))
+      readInventoryDir.mockResolvedValue(
+        regularEntries('6d792d736563726574.enc', '616e6f746865722d736563726574.enc'),
+      )
 
       const result = await backend.list()
       expect(result).toEqual(['my-secret', 'another-secret'])
     })
 
-    it('should return empty array when metadata file does not exist', async () => {
-      // loadMetadata catches errors and returns { entries: {} }
-      mockFs.readFile.mockRejectedValue(Object.assign(new Error('ENOENT'), { code: 'ENOENT' }))
+    it('should return empty array when storage directory does not exist', async () => {
+      readInventoryDir.mockRejectedValue(Object.assign(new Error('ENOENT'), { code: 'ENOENT' }))
 
       const result = await backend.list()
       expect(result).toEqual([])
     })
 
-    it('should return empty array when metadata has no entries', async () => {
-      const metadata = { entries: {} }
-      mockFs.readFile.mockResolvedValue(JSON.stringify(metadata))
+    it('should return empty array when directory has no entries', async () => {
+      readInventoryDir.mockResolvedValue([])
 
       const result = await backend.list()
       expect(result).toEqual([])

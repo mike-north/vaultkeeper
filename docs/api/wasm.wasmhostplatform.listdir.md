@@ -4,10 +4,12 @@
 
 ## WasmHostPlatform.listDir() method
 
+List directory entry names. A missing directory yields an empty list. With `lowercaseLookup`<!-- -->, return ASCII-lowercase names that resolve to regular files, including through symbolic links, and report directory enumeration failures. In this mode, apply `include` to canonical names before resolving their paths. The callback is valid until the listing settles. The Node host's ordinary listing returns an empty list when enumeration fails.
+
 **Signature:**
 
 ```typescript
-listDir(path: string): Promise<string[]>;
+listDir(path: string, lowercaseLookup?: boolean, include?: (name: string) => boolean): Promise<string[]>;
 ```
 
 ## Parameters
@@ -39,6 +41,38 @@ string
 
 
 </td><td>
+
+
+</td></tr>
+<tr><td>
+
+lowercaseLookup
+
+
+</td><td>
+
+boolean
+
+
+</td><td>
+
+_(Optional)_
+
+
+</td></tr>
+<tr><td>
+
+include
+
+
+</td><td>
+
+(name: string) =&gt; boolean
+
+
+</td><td>
+
+_(Optional)_
 
 
 </td></tr>

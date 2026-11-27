@@ -758,6 +758,22 @@ mod profile {
             .stdout(predicate::eq("github-mcp\n"));
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn list_retains_symlinked_profile_names() {
+        let (mut cmd, dir) = cli_test_env();
+        let profiles = dir.path().join("profiles");
+        fs::create_dir(&profiles).unwrap();
+        fs::write(dir.path().join("shared.json"), "{}").unwrap();
+        std::os::unix::fs::symlink(dir.path().join("shared.json"), profiles.join("linked.json"))
+            .unwrap();
+
+        cmd.args(["profile", "list"])
+            .assert()
+            .success()
+            .stdout(predicate::eq("linked\n"));
+    }
+
     #[test]
     fn show_exits_1_when_profile_does_not_exist() {
         let (mut cmd, _dir) = cli_test_env();

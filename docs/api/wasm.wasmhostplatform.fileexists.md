@@ -4,10 +4,12 @@
 
 ## WasmHostPlatform.fileExists() method
 
+Probe the path, following its final symlink by default. Pass `false` to probe the entry itself.
+
 **Signature:**
 
 ```typescript
-fileExists(path: string): Promise<boolean>;
+fileExists(path: string, followSymlinks?: boolean): Promise<boolean>;
 ```
 
 ## Parameters
@@ -39,6 +41,22 @@ string
 
 
 </td><td>
+
+
+</td></tr>
+<tr><td>
+
+followSymlinks
+
+
+</td><td>
+
+boolean
+
+
+</td><td>
+
+_(Optional)_
 
 
 </td></tr>
